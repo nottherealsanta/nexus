@@ -93,6 +93,7 @@ pub fn key(name: &str) -> KeyEvent {
         "right" => KeyCode::Right,
         "backspace" => KeyCode::Backspace,
         "pagedown" => KeyCode::PageDown,
+        "home" => KeyCode::Home,
         "end" => KeyCode::End,
         "pageup" => KeyCode::PageUp,
         "f6" => KeyCode::F(6),

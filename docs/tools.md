@@ -9,6 +9,10 @@ control tools: they are defined in `nexus/workspace.py`, executed by the daemon,
 and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
 `DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code)`.
+The [terminal dock authority boundary](terminals.md#agent-control-boundary)
+keeps interactive input user-only. A background job appearing in that dock does
+not grant an agent raw keystroke access or broaden a `bash` approval.
+
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
 disabled individually), because a background command needs a way to be read and
 stopped. Agents may also name a job tool explicitly; disabling `bash` removes

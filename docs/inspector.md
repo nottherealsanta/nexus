@@ -10,7 +10,17 @@ connections. Close it with Esc to return to the same session and draft.
 The six views are **Timing**, **Conversation**, **Steps**, **Requests**,
 **Raw** and **Questions**. Conversation contains canonical saved message JSON;
 Steps contains durable turns, model requests, usage, HTTP/first-byte
-measurements, attempts and tool results; Requests includes the snapshot, next
+measurements, attempts and tool results. Timing tool details and Steps tool bundles
+also carry bounded diagnostic `resource_spans` for terminals linked to the exact
+recorded session/turn/tool call (see [terminal provenance](terminals.md#diagnostic-provenance-not-model-context)).
+These are metadata only, not terminal output, model context or usage. Both clients
+also show terminal lifecycle bars on the shared Timing axis (`terminal` filter,
+`~` legend), including resources that outlive the launching turn. Full record
+loading returns sanitized terminal metadata. `terminal.updated` diagnostic events
+invalidate the existing inspector head after lifecycle/control changes, without
+periodic polling. Paging follows launching turns, not an independent terminal
+history; manual terminals without an exact recorded tool have no lane.
+Requests includes the snapshot, next
 request and retained redacted wire requests/responses; Raw contains the session
 record, event counts and retained event JSON; Questions lists pending and replied
 `ask` requests with links to their turn and tool call. Kernels and shells

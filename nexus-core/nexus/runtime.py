@@ -129,13 +129,16 @@ MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
 MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
 # A fork's task message starts with this fixed text (only the parent id varies), so forks taken from the same point
-# share their request prefix up to the task itself.
+# share their request prefix up to the task itself. The `fork` tool description, which the fork also has, says what a
+# fork is; the marker only says that this session is one, and that it is read-only.
+FORK_MAX_STEPS = 20  # a fork is a minor task: each turn of it gets at most this many steps
 FORK_MARKER = (
-    "[Nexus fork] You are a fork of session {parent}: you have its context up to here. Do only the task below, then "
-    "reply with your report and stop; the report lists every file you changed. Do not continue the parent's own "
-    "work, and edit only the files your task gives you. You cannot launch subagents or forks: "
-    "your `session`, `fork` and `message_session` calls are refused, so do the task yourself.\n\nTask: "
+    "[Nexus fork] You are in a forked session of {parent}. It is read-only: `edit`, `write`, `patch`, MCP tools "
+    "that may change state, and workspace changes are refused, and you may run only shell commands that change "
+    f"no files. Do only the task below, in at most {FORK_MAX_STEPS} steps, then reply with your report.\n\nTask: "
 )
+# Refused inside a fork, whatever the parent may do: the fork is read-only, and the definitions stay for the cache.
+FORK_REFUSED = frozenset({"edit", "write", "patch", *workspace_control.CONTROL_NAMES})
 FORK_MIN_FREE = 0.10  # a fork needs this share of the model's context window left for its task
 TITLE_TIMEOUT_S = 20
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
@@ -799,14 +802,14 @@ class Runtime:
         return {
             "name": agent_files.FORK_TOOL,
             "description": (
-                "Fork yourself: a copy of you with your full context so far does one task in a sub agent the user can "
-                "open, then reports back. Cheap (it shares your prompt cache), and it needs no briefing beyond the "
-                "task. Prefer `session` with a named agent for an independent opinion, since a fork inherits your "
-                "assumptions. A fork cannot launch subagents or forks itself. Forks share your workspace (no worktree "
-                "of their own), so give each fork that writes files of its own: never let two running forks, or a "
-                "fork and you, edit the same file, and name the files it owns in its prompt. Forks leave their changes "
-                "uncommitted: when you report, say which fork changed which files, so later work does not mistake "
-                "them for the user's. wait=true (default) returns its report; "
+                "Fork yourself for a minor task: a copy of you with your full context so far answers one question or does "
+                "one small read-only job, then reports back, like a tool call that can take a few steps. It reuses "
+                "your prompt cache, so it needs no briefing beyond the task and costs little. Use it for side checks "
+                "and lookups that would clutter your own context. A fork is read-only (no file edits or workspace "
+                "changes) and gets at most "
+                f"{FORK_MAX_STEPS} steps; it cannot launch subagents or forks. Do edits yourself; for long or "
+                "exploratory work, or an independent opinion (a fork inherits your assumptions), use `session` with "
+                "a named agent. wait=true (default) returns its report; "
                 "wait=false returns at once and the report arrives as a message when it finishes; you may end your "
                 "turn then, and you are called again when it does, so never sleep or poll to wait. The first "
                 "successful call also exposes the `message_session` tool, which sends a further message to a child you "
@@ -2113,10 +2116,15 @@ class Runtime:
         if not isinstance(command, str) or not command.strip():
             raise ToolError("command must be a non-empty string")
         timeout = bash_tool.timeout_value(args.get("timeout"))
+        source = self.store.db.execute(
+            "select x.turn_id from turn_tool x join turn t on t.id = x.turn_id "
+            "where x.session_id = ? and x.call_id = ? and t.status = 'running' "
+            "order by x.started desc limit 1", (session.id, ctx.call_id)).fetchone() if ctx.call_id else None
         try:
             job = await self.jobs.start(session_id=session.id, root=root.id, command=command,
                                         directory=ctx.workspace, timeout=timeout, on_finish=self._job_finished,
-                                        project_id=session.project_id)
+                                        project_id=session.project_id, turn_id=source[0] if source else None,
+                                        tool_call_id=ctx.call_id if source else None)
         except Conflict as exc:
             raise ToolError(str(exc)) from exc
         self.bus.publish("bash.started", job.json(), session_id=session.id)
@@ -2291,7 +2299,8 @@ class Runtime:
             provider, model=model, workspace=workspace,
             tools=tuple(tools),
             instructions=snapshot["system_prompt"],
-            reasoning_effort=self.resolve_effort(session, snapshot, ref)[0], max_steps=spec["steps"] or MAX_STEPS,
+            reasoning_effort=self.resolve_effort(session, snapshot, ref)[0],
+            max_steps=min(spec["steps"] or MAX_STEPS, FORK_MAX_STEPS) if session.fork else spec["steps"] or MAX_STEPS,
             model_efforts={item: self.resolve_effort(session, snapshot, item)[0] for item, *_ in fallback_models},
             messages=[m.message for m in self.store.messages(session.id)],
             # A fork keys its prompt cache like its parent, whose prefix it repeats.
@@ -3238,12 +3247,18 @@ class Runtime:
                 raise
             return True
         name, quiet = call.name, call.name in AUTO_APPROVED
+        if session.fork and call.name in FORK_REFUSED:
+            raise ToolError(f"refused: a fork is read-only, so `{call.name}` is unavailable. Report the change you "
+                            "would make, and the session that forked you makes it.")
         if call.name == mcp_files.MCP_CALL:
             # Rules and the read-only hint apply to the target (`mcp__server__tool`), not to the proxy.
             target = args.get("tool")
             text = target if isinstance(target, str) else ""
             scope, _ = self._mcp_scope(session, text.partition("/")[0])
             name, quiet = scope.approval(text)
+            if session.fork and not quiet:
+                raise ToolError(f"refused: a fork is read-only, and {text or 'this MCP tool'} is not marked "
+                                "read-only. Report what you would call, and the session that forked you calls it.")
         verdict = self.permission_verdict(session, name, args if name == call.name else {})
         if verdict is not None and verdict.action == "deny":
             raise ToolError(f"{name} was refused by {verdict.reason}; do not retry it, "

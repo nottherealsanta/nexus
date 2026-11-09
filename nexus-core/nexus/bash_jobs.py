@@ -136,13 +136,16 @@ class Jobs:
             raise ToolError(f"background bash job limit ({MAX_JOBS}) reached; kill one or wait for output to be reaped")
 
     async def start(self, *, session_id: str, root: str, command: str, directory: Path,
-                    timeout: float | None, on_finish: OnFinish, project_id: str | None = None) -> Job:
+                    timeout: float | None, on_finish: OnFinish, project_id: str | None = None,
+                    turn_id: str | None = None, tool_call_id: str | None = None) -> Job:
         async with self.start_lock:
             return await self._start(session_id=session_id, root=root, command=command,
-                                     directory=directory, timeout=timeout, on_finish=on_finish, project_id=project_id)
+                                     directory=directory, timeout=timeout, on_finish=on_finish, project_id=project_id,
+                                     turn_id=turn_id, tool_call_id=tool_call_id)
 
     async def _start(self, *, session_id: str, root: str, command: str, directory: Path,
-                     timeout: float | None, on_finish: OnFinish, project_id: str | None) -> Job:
+                     timeout: float | None, on_finish: OnFinish, project_id: str | None,
+                     turn_id: str | None, tool_call_id: str | None) -> Job:
         if self.closing:
             raise ToolError("the daemon is shutting down")
         if sum(1 for job in self.items.values() if job.finished is None) >= MAX_LIVE:
@@ -153,7 +156,8 @@ class Jobs:
             job = Job(job_id, session_id, root, command, str(directory), None, time.time(), timeout)
             term = self.terminal_service.create(project_id=project_id, workspace=str(directory), creator="background bash",
                                                 session_id=session_id, rows=24, cols=80, command=command,
-                                                background_job_id=job_id, output_listener=job.retain)
+                                                background_job_id=job_id, output_listener=job.retain,
+                                                turn_id=turn_id, tool_call_id=tool_call_id)
             job.process, job.terminal = term.process, term
             label = " ".join("".join(c if not unicodedata.category(c).startswith("C") else " "
                                      for c in command).split())[:80] or "Background bash"

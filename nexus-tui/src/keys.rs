@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Canonical name of a key event, or `None` for releases and unnamed keys.
 /// Modifier order is `cmd ctrl alt shift`, then the key; `shift` is implicit in
-/// printable characters.
+/// printable characters without Ctrl, Alt or Cmd.
 pub fn name(ev: &KeyEvent) -> Option<String> {
     if ev.kind == KeyEventKind::Release {
         return None;
@@ -14,7 +14,9 @@ pub fn name(ev: &KeyEvent) -> Option<String> {
     let key = match ev.code {
         KeyCode::Char(' ') => "space".to_owned(),
         KeyCode::Char(c) => {
-            m.remove(KeyModifiers::SHIFT);
+            if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                m.remove(KeyModifiers::SHIFT);
+            }
             c.to_lowercase().collect()
         }
         KeyCode::Enter => "enter".into(),
@@ -175,6 +177,26 @@ mod tests {
         );
         assert_eq!(name(&ev(KeyCode::F(1), KeyModifiers::NONE)).unwrap(), "f1");
         assert_eq!(name(&ev(KeyCode::Esc, KeyModifiers::NONE)).unwrap(), "esc");
+    }
+
+    #[test]
+    fn shifted_shortcuts_keep_shift_for_modified_printable_keys() {
+        for (modifiers, expected) in [
+            (KeyModifiers::CONTROL, "ctrl+shift+p"),
+            (KeyModifiers::ALT, "alt+shift+p"),
+            (KeyModifiers::SUPER, "cmd+shift+p"),
+        ] {
+            for character in ['p', 'P'] {
+                assert_eq!(
+                    name(&ev(
+                        KeyCode::Char(character),
+                        modifiers | KeyModifiers::SHIFT
+                    ))
+                    .as_deref(),
+                    Some(expected)
+                );
+            }
+        }
     }
 
     #[test]

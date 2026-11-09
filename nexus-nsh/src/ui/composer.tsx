@@ -943,7 +943,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   return (
     <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
-      <If when={question()}><Text class={`${T.meta} pl-4 pr-4 pt-2`}>Scroll or Page Up/Down to read questions and choices</Text></If>
+      <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class="pl-4 pr-4 py-3 gap-2.5">
           <View>

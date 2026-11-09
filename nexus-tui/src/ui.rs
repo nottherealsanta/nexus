@@ -349,6 +349,11 @@ pub enum Confirmed {
         path: String,
     },
     CloseTerminal(String),
+    AttachTerminalEvidence {
+        draft: String,
+        payload: String,
+        offset: usize,
+    },
     ResumeArchived {
         session: String,
         mode: Option<String>,
@@ -692,6 +697,7 @@ pub enum Target {
     TerminalClose(usize),
     TerminalNew,
     TerminalCopy,
+    TerminalAttach,
     TerminalTakeControl,
     TerminalReleaseControl,
     TerminalRename,

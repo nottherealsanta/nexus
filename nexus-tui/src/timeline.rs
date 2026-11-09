@@ -1501,7 +1501,9 @@ impl Builder<'_> {
                             "tool_call" => {
                                 let call_id = json_str(&p["id"]);
                                 let name = json_str(&p["name"]);
-                                if name == "session" || name == "fork" || name == "message_session" {
+                                // A `fork` is a minor task run like a tool
+                                // call: a tool row (below), not a child card.
+                                if name == "session" || name == "message_session" {
                                     self.activity_group(
                                         &mut activity,
                                         &results,
@@ -1510,12 +1512,7 @@ impl Builder<'_> {
                                         busy,
                                         false,
                                     );
-                                    let mut args = json_str(&p["arguments"]);
-                                    if name == "fork" {
-                                        let mut a = arg_json(&args).unwrap_or(Value::Null);
-                                        a["agent"] = Value::from("fork");
-                                        args = a.to_string();
-                                    }
+                                    let args = json_str(&p["arguments"]);
                                     self.child_card(
                                         &call_id,
                                         &args,
@@ -2820,7 +2817,8 @@ impl Builder<'_> {
                         "ask" => "question",
                         "web_search" => "search",
                         "web_fetch" => "page",
-                        "session" | "fork" => "session",
+                        "session" => "session",
+                        "fork" => "fork",
                         _ => "tool",
                     }
                 }
@@ -3206,6 +3204,20 @@ impl Builder<'_> {
             );
         }
         let rows = detail.rows;
+        // An open fork row ends with a link to the fork's own session: its own
+        // block, so Enter or a click on it opens the session (as a child card's does).
+        let fork_child = (name == "fork" && open && !rows.is_empty())
+            .then(|| {
+                self.app.viewed_id().and_then(|parent| {
+                    self.app.state.model.sessions.values().find(|s| {
+                        s.parent_id.as_deref() == Some(parent)
+                            && s.parent_call_id.as_deref() == Some(call_id)
+                    })
+                })
+            })
+            .flatten()
+            .map(|s| s.id.clone());
+        let linked = fork_child.is_some();
         let key = key.to_owned();
         let name = name.to_owned();
         let denied_word = self.t.status("denied").0.to_owned();
@@ -3232,6 +3244,7 @@ impl Builder<'_> {
                 "ask" => "Ask",
                 "web_search" => "Search",
                 "web_fetch" => "Fetch",
+                "fork" => "Fork",
                 _ => &name,
             };
             // The status glyph replaces the verb glyph for running, error,
@@ -3336,7 +3349,7 @@ impl Builder<'_> {
                 };
                 let last = rows.len() - 1;
                 for (i, row) in rows.iter().enumerate() {
-                    let rail = if i == last { &corner } else { &vbar };
+                    let rail = if i == last && !linked { &corner } else { &vbar };
                     let mut spans = vec![Span::styled(
                         format!("{}{rail} ", " ".repeat(ACTIVITY_INDENT)),
                         strong,
@@ -3349,6 +3362,22 @@ impl Builder<'_> {
         if clipped {
             if let Some(block) = self.blocks.last_mut() {
                 block.clipped = true;
+            }
+        }
+        if let Some(id) = fork_child {
+            self.block(format!("{key}:open"), BlockKind::Child, turn, false, |b| {
+                let corner = if b.t.opts.ascii { "`" } else { "\u{2570}" };
+                let arrow = if b.t.opts.ascii { "->" } else { "\u{2197}" };
+                b.line(vec![
+                    Span::styled(
+                        format!("{}{corner} ", " ".repeat(ACTIVITY_INDENT)),
+                        b.st("border.strong", CANVAS),
+                    ),
+                    Span::styled(format!("open fork {arrow}"), b.st(ACCENT, CANVAS)),
+                ]);
+            });
+            if let Some(last) = self.blocks.last_mut() {
+                last.target = Some(id);
             }
         }
     }
@@ -3438,6 +3467,7 @@ impl Builder<'_> {
                 let command = match name {
                     "bash" => a["command"].as_str(),
                     "code" => a["code"].as_str(),
+                    "fork" => a["prompt"].as_str(),
                     _ => None,
                 };
                 if let Some(command) = command {
@@ -4384,6 +4414,12 @@ fn tool_summary(
             .map(|c| c.lines().next().unwrap_or("").to_owned())
             .unwrap_or_default(),
         "code" => String::new(),
+        "fork" => a["title"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| a["prompt"].as_str())
+            .map(|t| preview_80(t.lines().next().unwrap_or("")))
+            .unwrap_or_default(),
         "ask" => a["questions"]
             .as_array()
             .and_then(|q| q.first())

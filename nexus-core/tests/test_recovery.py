@@ -1039,6 +1039,7 @@ def test_subprocess_crash_and_restart_smoke(tmp_path):
     env = dict(os.environ)
     env.update({
         "NEXUS10_HOME": str(home),
+        "NEXUS_HOST": "127.0.0.1",
         "NEXUS_PORT": str(port),
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
     })

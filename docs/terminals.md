@@ -24,7 +24,10 @@ Opening or creating a terminal takes control if available and focuses its screen
 otherwise a read-only banner offers **Take control**. Closing the dock detaches;
 the tab close action terminates. Closing a running terminal first asks
 `Close running terminal?` with **Close terminal** and **Cancel**. An exited
-terminal can be closed without that warning.
+terminal can be closed without that warning. Closed resources are omitted from the
+list; opening the dock prefers a running resource, falling back to an ended one.
+An exit frame immediately marks its tab ended and disables input, even if an
+older successful control request is still completing.
 
 The screen receives input only while focused and while this attachment holds
 control. Taking control never steals it from another attachment. A failed control
@@ -46,6 +49,28 @@ write the clipboard or open URLs or files by themselves. Resizing the screen
 resizes the PTY only while this attachment has control. Interactive terminal contents
 are never automatically added to model context; linked background jobs keep their
 existing captured-output and completion-notice paths described below.
+
+### Explicit evidence capture
+
+Both desktop clients offer **Attach selected output** beside Copy. The action
+freezes selected rendered text, not raw escape-bearing output. A scrollable preview
+shows the exact eventual draft payload, resource ID/name, project/workspace and
+stream-sequence watermark, an untrusted-data warning and exact included/omitted
+UTF-8 byte counts. When the resource records them, provenance also includes its
+originating session, turn, tool-call and background-job IDs; missing links are
+omitted, never inferred from the current draft. At most 16 KiB of selected text is included, cut only at a code
+point boundary. Counts refer to the selection; unavailable earlier terminal history
+is disclosed without inventing raw-byte omission counts. Text is JSON-string encoded
+so embedded fences or closing tags cannot masquerade as provenance. DEL/C1
+characters are escaped too, keeping the preview byte-identical through composer
+control-character filtering.
+
+**Add to draft** appends that immutable payload, never replacing selected draft
+text or sending it. An empty draft gets no leading separator. Cancel is inert;
+normal Send/Queue/Steer uses the existing canonical message path. A changed or
+read-only destination fails visibly, and late NSH selection replies from another
+resource generation are discarded. Output, rename, close or reconnect cannot change
+a preview or evidence already in a draft. This action grants no agent control.
 
 ## Resource and authority
 
@@ -87,6 +112,31 @@ described above, they are not session events or model context. A
 future explicit user attachment must become a normal visible message with
 provenance and clipping, not a hidden context injection. No agent may attach as
 controller or type in this version.
+
+## Agent-control boundary
+
+The terminal dock is a user-controlled surface, not an additional agent tool.
+The existing approved `bash`, `bash_output` and `bash_kill` tools remain the
+agent's execution path. A background job appearing in the dock does not grant
+the model interactive input authority; a user may explicitly take control of
+that job through the ordinary single-writer attachment.
+
+| Operation | Current authority and scope |
+| --- | --- |
+| Start a command with `bash` | Existing tool permission checks, visible arguments and result; one invocation, not a terminal-control grant |
+| Read or stop a background job | Existing job ownership/tree scope and visible tool result |
+| Send raw keystrokes, paste or signals through the dock | User controller only; attachment-scoped, revoked on detach, overflow, disconnect or Core restart |
+| Acquire another viewer's writer control | Rejected; the current controller must release it first |
+| Clipboard, files, URLs or credentials requested by terminal output | Output grants no authority; clipboard copy requires an explicit user action, other actions are not executed by the terminal renderer |
+| Destructive commands or credential-bearing input | Same host-user powers as a local shell; neither PTY parsing nor command allow patterns make interactive input safe |
+
+Do not expose raw agent input by wrapping it in the `bash` permission matcher:
+an interactive program can interpret arbitrary bytes, shell state can change,
+and approval of one command cannot authorize an indefinite shell session.
+Any future agent-control feature needs a separate reviewed grant contract
+(resource/session scope, expiry, revocation, takeover, credential handling and
+visible arguments/results). No such grant is implemented here. Captured output
+is untrusted data, never instructions or implicit permission.
 
 ## HTTP operations
 
@@ -145,7 +195,11 @@ A stream begins with replay strictly after `after`, and then
 continues live with no race between snapshot and subscription.
 
 Core retains a bounded raw output ring, cut at UTF-8 and parser boundaries;
-pyte is only an optional text snapshot, not a reconnect checkpoint. A client
+pyte is only an optional text snapshot, not a reconnect checkpoint. Its diagnostic
+parser caps control sequences at 4,096 characters: oversized sequences are ignored
+until their terminator without accumulating their payload or announcing a false
+safe replay boundary. This does not modify raw output delivered to clients or
+retained in the ring; diagnostic titles and snapshots may omit oversized controls. A client
 that retains its parser state can resume after its last sequence. A fresh client
 replays from the ring start. If output was discarded, the `gap` frame announces
 the discarded byte count and carries base64 RIS (`ESC c`) plus current rows and
@@ -156,10 +210,38 @@ program may need to redraw. The ring does not imply unlimited scrollback.
 
 When a requested sequence has been discarded, or a viewer falls behind the
 bounded outgoing queue, resynchronize from the retained ring. A `gap` carries
-the retained floor, head and discard count. A slow viewer is disconnected and
-must reattach; it does not block PTY reads or other viewers. Core restart marks
+the retained floor, head and discard count. A slow viewer is immediately revoked, including its writer control, and its
+stream receives an end sentinel that later output cannot overwrite. It must
+reattach; it does not block PTY reads or other viewers. Core restart marks
 persisted running metadata `ended`, with reason `core_restart`; it does not
-resume a PTY, attachment, or input acknowledgment.
+resume a PTY, attachment, or input acknowledgment. Persisted controller identities
+are cleared for every resource on restart, including already-exited resources.
+
+## Diagnostic provenance (not model context)
+
+Background-job terminals may carry `turn_id` and `tool_call_id` only when Core
+finds that actual tool call in a running turn of the originating session. Manual
+terminals and unrecorded nested calls do not guess a turn from the session's latest
+activity. Lifecycle timestamps and aggregate control acquisition/release counts
+are persisted with the resource. Sanitized `terminal.updated` diagnostic events
+announce changes to exactly linked resources, advancing the inspector head and
+invalidating both clients without polling or adding canonical messages. Events
+contain IDs, status, timestamps and counts, never terminal bytes, input, command
+labels, workspace paths or controller identities. Repeated acquisition by the
+same controller is not another acquisition or diagnostic update.
+
+The inspector's Timing tool detail and Steps tool bundle include bounded
+`resource_spans` for exact session/turn/tool matches. These diagnostic spans have
+the terminal/job IDs, recorded start/end, status, exit code/signal and control
+counts. They exclude terminal bytes, input, command labels, workspace paths and
+controller identities, and create no model requests, tool calls or token usage.
+At most 200 terminal spans are projected per inspector page, with an omission
+notice. Retention follows terminal metadata; detached resources are not copied
+into the canonical timeline. Both clients render terminal lifecycle bars on the
+shared Timing axis, with a `terminal` kind filter and full sanitized record view.
+A terminal may remain live after its launching turn ends. Paging remains scoped
+to launching turns; terminal-only filtering may yield an empty page with older
+pages available. Manual terminals without actual tool provenance have no lane.
 
 ## Safety and lifecycle requirements
 
@@ -177,13 +259,16 @@ in **both** renderers; raw output is not authorization. Core must not execute
 these actions while parsing checkpoints. The shell runs with the user's
 permissions and is not a sandbox.
 
-`TERM=xterm-256color`. Limits are 16 resources per daemon, 16 attachments per
-resource, 16 KiB per input, a 1 MiB raw ring, 4,096 retained frames and 256
+`TERM=xterm-256color`. Limits are 16 running resources and 64 retained PTYs per
+daemon, 16 attachments per resource, 16 KiB per input, a 1 MiB raw ring,
+4,096 retained frames and 256
 queued frames per viewer. An attachment that has not connected expires after
 30 seconds. There is no idle timeout for a running shell. Explicit Close and
 normal daemon shutdown signal the shell and current foreground process groups,
 reap the shell and close descriptors. On abrupt Core death, closure of the PTY
-master sends SIGHUP to its foreground group. A subprocess test verifies that a
-foreground shell exits when Core is killed on macOS; a separately grouped job
-and other platforms are **not verified**. Stray `nohup` and `setsid` processes
+master sends SIGHUP to its foreground group. Subprocess tests verify that a
+foreground shell exits and a separately grouped foreground job receives SIGHUP
+when Core is killed on macOS. Other platforms are **not verified**. This is a
+kernel hangup guarantee, not forced termination of jobs that ignore SIGHUP on
+abrupt Core death. Stray `nohup` and `setsid` processes
 are out of scope. Ended metadata survives restart; output does not.

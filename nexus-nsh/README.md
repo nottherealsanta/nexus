@@ -22,7 +22,9 @@ app-controlled. Deferred follow commands are scoped to the session that queued t
 **Open inspector** stays inside NSH, using the same authenticated transport as the
 session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
 same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,
-zoom/pan/Fit, first-byte markers only where recorded, "end unknown" spans), Conversation,
+zoom/pan/Fit, first-byte markers only where recorded, "end unknown" spans, and `~`
+terminal lifecycle bars for exactly tool-linked resources, including those outliving
+the launching turn), Conversation,
 Steps, Requests, Raw and Questions. Rows show Core's `summary`; pressing one expands its exact
 `detail` JSON, and "Load full record" fetches `/inspect/record` when it was clipped. Older/Newer
 use cursors; the Sessions chips (or `[`/`]`) inspect another session of the tree; the search box,
@@ -55,6 +57,20 @@ Question cards scroll to reveal all questions, choices and option previews. Free
 drafts stay with their question when the card is reopened.
 
 ## Workspace terminals
+
+**Attach selected output** freezes the rendered selection and previews the exact text
+that **Add to draft** will insert. The scrollable preview includes terminal ID/name,
+project/workspace, the acknowledged stream sequence at capture request, an untrusted-data
+warning and exact included/omitted UTF-8 byte counts (16 KiB selection cap). Earlier
+history may be unavailable; these counts describe selected text, not raw PTY history.
+Actual source session/turn/tool/job IDs are retained when recorded, never guessed.
+Confirmation appends without replacing selected draft text. Cancel changes nothing. Only normal composer send adds the draft to model context;
+new output never updates an existing preview or draft. Switching drafts before
+confirmation fails visibly rather than attaching to another session.
+
+Closed resources are hidden and opening the dock prefers a running terminal.
+Exit immediately disables input and updates the tab; a late control acknowledgment
+cannot make an ended terminal writable again.
 
 Desktop and web expose Core-owned terminals in a bottom dock toggled by the terminal shell indicator in the activity strip; the separate **kernel** indicator has no count. Tabs show each terminal's name and status, with **×** to close it. The compact toolbar offers new, rename, close, take/release control, copy output and hide, in that order; hover an icon for its label. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Hiding the dock detaches; closing a terminal terminates it, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
 
@@ -149,9 +165,14 @@ app registers them before rendering. Child cards label background calls,
 distinguish failed and running status, and allow the full tool result to be
 expanded without navigating away from the parent session.
 
-A fork child (the `fork` agent, PLAN.md section 10; session JSON `fork: {parent_id,
-inherited}`) reads `Fork` instead of its inherited agent name on its child card and
-strip tab. Its timeline folds the first `inherited` messages (copied from the parent)
+A parent's `fork` call (PLAN.md section 10, F6) is a minor task run like a tool
+call, so it is a tool row, not a child card: `Fork ‹title›` in its activity group,
+counted as `N forks`; opened, it shows the task (as a command's rows) and then the
+report the parent received, and ends with an `open fork ↗` link
+(`tool-open-fork-<call id>`) to the fork's session once it is known. As in the TUI.
+
+A fork child (session JSON `fork: {parent_id, inherited}`) reads `Fork` instead of
+its inherited agent name on its strip tab. Its timeline folds the first `inherited` messages (copied from the parent)
 into one row at the top, `Forked from ‹parent title› · N messages` (the parent's id
 while its title is unknown), collapsed by default and opened or closed by its chevron
 row like an activity group; open, the copied messages follow as ordinary timeline
@@ -613,6 +634,46 @@ local-network keys must be in `Info.plist` *before* that, so package without
    Security message means the build was patched after signing (redo steps 3–4
    in order); a plain timeout means the phone cannot route to the Mac.
 
+### Remote iPhone updates over Tailscale (pending verification)
+
+Using Core over Tailscale and installing the app are separate operations. Merely
+connecting both devices to Tailscale does not make the phone available to Xcode:
+Bonjour/mDNS discovery does not cross the tailnet.
+
+The third-party [Xcode Tailscale Bridge](https://github.com/petejkim/xcode-tailscale-bridge)
+relays Apple's device connection, but needs a one-time **local-network capture**
+in addition to pairing. It relies on undocumented Apple behavior; remote Nexus
+installation through it is **not yet verified**.
+
+Resume checklist:
+
+1. Put the iPhone and build Mac on the **same Wi-Fi/local network**. Keep the
+   phone unlocked and awake.
+2. In Xcode's **Window → Devices and Simulators** (Device Hub on newer Xcode),
+   pair/trust the phone if needed and enable **Connect via network**, if offered.
+3. Build the bridge using its upstream instructions. Choose **Capture Devices on
+   This Network…**, or run its executable with `--capture`. Confirm `--diagnose`
+   lists a captured device, not just a paired device. Capture again after re-pairing.
+4. Leave the bridge running. Move the phone to a different Wi-Fi and keep
+   Tailscale connected on both devices. Cellular operation remains unverified.
+5. Check `xcrun devicectl list devices`. Only once the phone becomes available,
+   repeat the package → patch → sign → install steps above using its device ID.
+   Verify the updated app launches and still reaches Core over Tailscale.
+
+Investigation on 2026-11-09: the phone was online in Tailscale, paired to the Mac,
+and had Developer Mode enabled, but `devicectl` reported it unavailable. The
+bridge built successfully in a temporary directory. Diagnostics found no captured
+devices, and `--capture` returned `No _remotepairing._tcp adverts seen`. No app
+was installed or updated. The next action is step 1, not another remote capture
+attempt. The temporary checkout may not survive; rebuild it if missing.
+
+The inspected build had a seven-day Personal Team provisioning profile expiring
+**2026-11-14**; re-check the actual profile before the next install. Do not assume
+an HTTPS `itms-services` link can install a free Personal Team build. Paid-account
+ad-hoc distribution or TestFlight are alternative workflows to investigate, not
+configured Nexus features. Do not uninstall the existing app to fix discovery:
+that removes its saved data and does not supply the missing capture record.
+
 ## Images and context notes
 
 Paste images into the composer using the platform paste shortcut. The draft
@@ -668,11 +729,15 @@ estimate.
 - **Cache warning (K9).** Choosing a model or agent for an existing session asks
   `…/switch-cost` first; when `cache_lost` it confirms with the reasons and the cached token count.
   A failed check never blocks the switch.
-- **Editor (K10).** A project file opens read-only; Edit (`cmd+e`) makes it an editor over the
-  text with the `revision` it was read at. Save (`cmd+s`) is `PUT …/file`; a stale write
-  (`stale_file`) keeps the text and marks the file `changed on disk · reload`; Reload re-reads
-  (asking first when dirty); `files.changed` reloads a clean editor and warns a dirty one. Esc
-  asks before dropping changes. Not built: find (`editor.find`), syntax highlighting.
+- **Editor (K10).** A project file opens directly as editable source, including Markdown;
+  Preview switches Markdown to prose without dropping the draft. Save (`cmd+s`) is
+  `PUT …/file` with the `revision` it was read at; a stale write (`stale_file`) keeps
+  the draft and marks the file `changed on disk · reload`. Reload asks first when dirty;
+  `files.changed` reloads a clean editor and warns a dirty one. Find supports match-case,
+  previous/next matches and replace/replace-all; closing Find returns focus to the editor.
+  The editor owns clipboard and undo/redo shortcuts. Esc closes Find first, then closes
+  the file with confirmation before dropping unsaved changes. Syntax highlighting and
+  a draft-versus-disk diff are available.
 - **Provider usage (K11).** `/usage` (palette: Show provider usage) shows every connected provider from
   `GET /api/usage`, in a table of used gauge, percent left, reserve (for periods of at least seven days)
   and expiry. Window detail, Codex limit-reached and xAI per-product credit notes are hidden, as are xAI prepaid credits

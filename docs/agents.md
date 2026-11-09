@@ -263,16 +263,17 @@ fails with a clear error and never substitutes another agent.
 `fork {prompt, wait?, title?}` is its own control tool, granted by an agent
 file's `control: [fork]` (built-in `build` has it). It is not an agent file and
 not a `session` agent value (a file brings its own prompt, which would break the
-shared prefix). Its description says: a copy of you with your full context so
-far does one task and reports back; cheap (shares your prompt cache); prefer a
-named agent for an independent opinion, since a fork inherits your assumptions;
-a fork cannot launch subagents or forks; forks share your workspace, so give
-each fork that writes files of its own (never two running forks, or a fork and
-you, on one file) and name them in its prompt; forks leave changes
-uncommitted, so say in your report which fork changed which files, so later
-work does not mistake them for the user's. `session` called with `agent: "fork"`
-is refused with a pointer to the tool. A fork is a child whose request repeats
-the parent's prefix, so its first request can be a prompt-cache hit:
+shared prefix). A fork is a **minor, read-only task run like a tool call**: a
+copy of the caller with its full context answers one question or does one small
+job in a few steps and reports back, reusing the caller's prompt cache. Its
+description says so (`runtime.Runtime._fork_definition`): use it for side checks
+and lookups that would clutter the caller's context; the fork is read-only and
+gets at most `FORK_MAX_STEPS` (20) steps; it cannot launch subagents or forks;
+edits stay with the caller; long or exploratory work, or an independent opinion
+(a fork inherits the caller's assumptions), goes to a named agent with `session`.
+`session` called with `agent: "fork"` is refused with a pointer to the tool. A
+fork is a child whose request repeats the parent's prefix, so its first request
+can be a prompt-cache hit:
 
 - **Snapshot:** a copy of the parent's (rendered prompt, tool definitions with
   `fork` itself, skills, MCP, workspace and messaging state), origin `fork`.
@@ -286,29 +287,41 @@ the parent's prefix, so its first request can be a prompt-cache hit:
   result) is copied into the fork's own messages; the parent's unfinished
   `session` call is left out. The task follows as a user message that starts
   with the fixed marker `runtime.FORK_MARKER` (only the parent id varies, so
-  forks from one point share the prefix up to their task):
-  `[Nexus fork] You are a fork of session ‹id›: you have its context up to here.
-  Do only the task below, then reply with your report and stop; the report lists
-  every file you changed. Do not continue the parent's own work, and edit only
-  the files your task gives you. You cannot launch subagents or forks: your `session`,
-  `fork` and `message_session` calls are refused, so do the task yourself.` followed by a blank line and `Task: ‹prompt›`.
-- **No subagents at all:** the marker tells the fork it cannot launch any, and
-  the daemon refuses its `session` and `fork` calls ("refused: a fork cannot
+  forks from one point share the prefix up to their task). The `fork` tool
+  description, which the fork has too, already says what a fork is, so the
+  marker only says that this session is one and that it is read-only:
+  `[Nexus fork] You are in a forked session of ‹id›. It is read-only: `edit`,
+  `write`, `patch`, MCP tools that may change state, and workspace changes are
+  refused, and you may run only shell commands that change no files. Do only the
+  task below, in at most 20 steps, then reply with your report.` followed by a
+  blank line and `Task: ‹prompt›`.
+- **Read-only:** the approval gate refuses a fork's `edit`, `write`, `patch`
+  and workspace control calls (`runtime.FORK_REFUSED`), inside `code` cells too,
+  and every `mcp_call` whose target is not marked `readOnlyHint` ("refused: a
+  fork is read-only …", with advice to report the change so the parent makes
+  it). The definitions stay for the cache. `bash` stays available for reading
+  commands and tests; like the permission rules this is a guard against
+  mistakes, not a sandbox, and the marker asks for shell commands that change
+  no files. `code` cells have no filesystem.
+- **Step budget:** each fork turn runs at most `FORK_MAX_STEPS` (20) steps (or
+  the agent's own `steps` when lower), with the loop's usual 80% notice and
+  final text-only step.
+- **No subagents at all:** the fork cannot launch any, and the daemon refuses its `session` and `fork` calls ("refused: a fork cannot
   launch subagents or forks …") and its `message_session` calls ("refused: a
   fork cannot message other sessions …"), with advice to do the task itself
   and report back. The definitions stay for the cache.
 - **Context size:** the call is refused when the parent's context (measured
   input, else the estimate) leaves less than 10% of the model's window, with a
   hint to brief a named sub agent instead.
-- **Parallel writes:** a fork has the parent's tools and workspace, write tools
-  included, and no worktree of its own. A fork that edits while the parent (or
-  another fork) edits the same files can conflict; the per-file lock serialises
-  single writes, not whole tasks. The tool description and the marker carry
-  the rules that follow from this: one owner per file across running forks,
-  named in the task; each fork reports the files it changed; the parent says
-  which fork changed what, since the changes stay uncommitted. Added
-  2026-11-08 after a session ran two forks on `nexus-tui/src/app.rs` and a
-  later session took one session's fork edits for user work.
+- **Why read-only (2026-11-09, user):** a fork is a minor task, like a tool
+  call. Before, forks could write; a session ran two forks on
+  `nexus-tui/src/app.rs` and a later session took a fork's uncommitted edits
+  for user work. Read-only forks cannot conflict with the parent or each other,
+  so the one-owner-per-file rules are gone.
+- **In the parent's timeline** a `fork` call is an ordinary tool row
+  (`Fork ‹title›`, counted as `N forks` in its activity group), not a child
+  card; opened, it shows the task and then the report, and ends with an
+  `open fork ↗` link to the fork's session (both clients).
 
 When to prefer a named agent: an independent second opinion, since a fork
 inherits the parent's assumptions and mistakes.

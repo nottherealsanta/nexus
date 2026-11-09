@@ -1,0 +1,27 @@
+  ◧      [Sessions] [Files]        ⢿ readability ×    +                           ◆ waiting for you                   □
+     │                            readability
+▏1   │                        ▣    │  readability                                                       #2 · 1:52 PM
+▏ Q  │ ⌕ Search sessions ctrl+k    │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏    │
+     │▏◆ readability         1m    ┃
+     │▏                            ┃  ◆ Nexus asks
+  +  │                             ┃  waiting on you · question 1 of 2
+     │ + New session               ┃
+     │                             ┃  Which approach should we use for this migration?
+     │                             ┃▸ 1 Use the conservative migration with a staged rollout
+     │                             ┃        Keep the old path available until all checks have passed, and only then
+     │                             ┃        remove the compatibility layer.
+     │                             ┃
+     │                             ┃  ▸ Add context, or type your own answer…
+     │                             ┃
+     │                             ┃  alt+←→ pages · alt+a text · ↑↓ move · enter next · esc stop
+     │                             ┃
+     │                             ┃
+     │
+     │
+     │                                Type a message…
+     │
+     │                                Build · m scripted · default                                              ~47
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/nexus-question-capture/ws                             Working · 50s
+     │  Settings         ctrl+,    ───────────────────────────────────────────────────────────────────────────────────

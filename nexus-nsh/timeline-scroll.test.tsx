@@ -71,8 +71,9 @@ describe("timeline scrolling", () => {
     await app.waitFor("text:Long session");
     await app.press("id:session-ses_1");
     await app.waitFor("id:timeline-row");
-    await app.wait(350);
-    expect(app.shows("id:timeline-scrollbar")).toBe(false);
+    // Measured rows can finish settling after the opening grace period under load.
+    // Wait for the quiet state, rather than assuming layout and fade finish in 350 ms.
+    await app.waitUntil(() => !app.shows("id:timeline-scrollbar"));
     await app.scroll("id:timeline", -300);
     await app.waitFor("id:timeline-scrollbar");
     await app.waitUntil(() => !app.shows("id:timeline-scrollbar"));

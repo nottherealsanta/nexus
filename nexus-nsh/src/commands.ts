@@ -31,6 +31,7 @@ import { rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
+import { terminalEvidenceAction } from "./terminal-evidence";
 import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalRename, terminalSelected } from "./terminal-panel";
 
 export interface Cmd {
@@ -163,6 +164,7 @@ on("terminal.new", newTerminal);
 on("terminal.rename", beginRenameTerminal);
 on("terminal.close", requestTerminalClose);
 on("terminal.copy", requestTerminalCopy);
+on("terminal.attach", () => terminalEvidenceAction.run?.());
 on("terminal.focus_list", focusTerminalList);
 on("terminal.acquire", () => controlTerminal("acquire"));
 on("terminal.release", () => controlTerminal("release"));

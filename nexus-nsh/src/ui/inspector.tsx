@@ -100,7 +100,7 @@ function InspectorBody() {
               <Btn label="Fit" onPress={fit} testID="inspect-fit" />
               <Text class={T.meta} testID="inspect-axis">{`${page().zoom}× · view ${stamp(win().start - win().origin)} to ${stamp(win().start + win().span - win().origin)} of ${win().total.toFixed(2)}s`}</Text>
             </View>
-            <Text class={T.meta}>{`model · tool · turn / attempt · live · failed · ? end unknown${hasTtfb() ? " · | first byte" : ""}`}</Text>
+            <Text class={T.meta}>{`model · tool · terminal · turn / attempt · live · failed · ? end unknown${hasTtfb() ? " · | first byte" : ""}`}</Text>
           </If>
           <If when={view() === 0 && rows().length > 0}>
               <View class="flex-row gap-2"><View style={{ width: labelWidth() }} /><View class="flex-1 gap-0.5" testID="inspect-ruler">
@@ -155,7 +155,7 @@ function InspectorBody() {
               <Btn label="Fit" onPress={fit} testID="inspect-fit" />
               <Text class={T.meta} testID="inspect-axis">{`${page().zoom}× · view ${stamp(win().start - win().origin)} to ${stamp(win().start + win().span - win().origin)} of ${win().total.toFixed(2)}s`}</Text>
             </View>
-            <Text class={T.meta}>{`model · tool · turn / attempt · live · failed · ? end unknown${hasTtfb() ? " · | first byte" : ""}`}</Text>
+            <Text class={T.meta}>{`model · tool · terminal · turn / attempt · live · failed · ? end unknown${hasTtfb() ? " · | first byte" : ""}`}</Text>
           </If>
           <If when={view() === 0 && rows().length > 0}>
               <View class="flex-row gap-2"><View style={{ width: labelWidth() }} /><View class="flex-1 gap-0.5" testID="inspect-ruler">

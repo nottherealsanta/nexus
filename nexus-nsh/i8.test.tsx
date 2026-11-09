@@ -104,10 +104,11 @@ describe("waiting card (D14)", () => {
   });
 
   test("long questions, option labels and previews remain in the scrollable card", async () => {
-    const app = await view(snapshot({ questions: [readability] }));
+    const app = await open("./App.tsx", { network: network({}, snapshot({ questions: [readability] })), width: 1024, height: 480, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:waiting-scroll");
+    expect(app.shows("id:waiting-reading-hint")).toBe(true);
     for (const item of readability.questions) {
       expect(app.texts().includes(item.question)).toBe(true);
       for (const option of item.options) {

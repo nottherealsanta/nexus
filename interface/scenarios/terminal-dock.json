@@ -48,6 +48,7 @@
       "icon": "unlock",
       "icon_controlled": "lock"
     },
+    { "id": "attach", "label": "Attach selected output", "icon": "plus" },
     { "id": "copy", "label": "Copy output", "icon": "copy" },
     { "id": "hide", "label": "Hide terminal panel", "icon": "chevron-down" }
   ],

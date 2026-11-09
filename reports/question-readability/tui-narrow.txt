@@ -1,0 +1,24 @@
+  □   readability                         ◆ waiting for you                   □
+       │  readability                                           #2 · 1:52 PM
+▏1     │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏ Q
+▏      ┃
+       ┃  For the second question, explain how the deployment should behave
+       ┃  when a partial failure occurs after the first phase has completed
+  +    ┃  and before the remaining services have finished updating. Should
+       ┃  the operation automatically roll back, or wait for an operator to
+       ┃  review the state?
+       ┃▸ 1 Automatically roll back all completed changes and restore
+       ┃        the previous service configuration
+       ┃        The rollback includes previously migrated services and
+       ┃  pgup/dn scroll · alt+←→ pages · alt+a text · ↑↓ move
+       ┃  enter review · esc stop
+       ┃
+
+
+          Type a message…
+
+          Build · m scripted · default                                  ~47
+       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+       /private/tmp/nexus-question-capture/ws                 Working · 58s
+       ───────────────────────────────────────────────────────────────────────

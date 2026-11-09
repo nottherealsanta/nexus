@@ -1,0 +1,24 @@
+  □   readability                         ◆ waiting for you                   □
+       │  readability                                           #2 · 1:52 PM
+▏1     │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 3 lines of this turn above
+▏ Q
+▏      ┃  review the state?
+       ┃  1 Automatically roll back all completed changes and restore
+       ┃        the previous service configuration
+  +    ┃        The rollback includes previously migrated services and
+       ┃        records the reason for the failure so that an operator can
+       ┃        investigate the complete sequence afterward.
+       ┃▸ 2 Pause and wait for an operator to review the deployment
+       ┃        Leave the completed work intact and present the remaining
+       ┃        steps for an explicit decision.
+       ┃  pgup/dn scroll · alt+←→ pages · alt+a text · ↑↓ move
+       ┃  enter review · esc stop
+       ┃
+
+
+          Type a message…
+
+          Build · m scripted · default                                  ~47
+       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+       /private/tmp/nexus-question-capture/ws              Working · 1m 09s
+       ───────────────────────────────────────────────────────────────────────

@@ -231,6 +231,8 @@ export class Model {
         v.turns = upsertTurn(v.turns, e.data as TurnSummary);
         v.scratch = [];
       } else {
+        // A live provider error goes once the turn continues or another message arrives.
+        if (e.type === "step_start" || e.type === "message.added") v.scratch = v.scratch.filter((x) => x.type !== "session.error" && x.type !== "retry_exhausted");
         const kept = scratchOf(e);
         if (kept) v.scratch.push(kept);
       }

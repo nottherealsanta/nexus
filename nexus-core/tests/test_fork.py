@@ -109,7 +109,7 @@ async def test_fork_repeats_the_parents_request_prefix(env):
     parent_messages = (await client.get(f"/api/session/{parent['id']}/message")).json()
     fork_messages = (await client.get(f"/api/session/{child['id']}/message")).json()
     assert [m["parts"] for m in fork_messages[:3]] == [m["parts"] for m in parent_messages[:3]]
-    assert fork_messages[3]["parts"][0]["text"].startswith("[Nexus fork] You are a fork of session ")
+    assert fork_messages[3]["parts"][0]["text"].startswith("[Nexus fork] You are in a forked session of ")
     assert fork_messages[-1]["parts"][0]["text"] == "fork report"
 
     output = next(o for o in _outputs(rt, parent["id"]) if o.startswith("Sub agent"))
@@ -206,3 +206,42 @@ def test_fork_column_is_added_to_an_existing_database(tmp_path, monkeypatch):
     store = Store(path)
     assert "fork" in {r["name"] for r in store.db.execute("pragma table_info(session)")}
     store.close()
+
+
+async def test_a_fork_is_read_only(env):
+    rt, client, provider, workspace, _ = env
+    provider.replies = [
+        [_call("c1", agent="fork", prompt="try to write")],
+        [_call("f1", "write", path="new.txt", content="x"),
+         _call("f2", "edit", path="README.md", old_string="hello", new_string="bye"),
+         _call("f3", "read", path="README.md")],
+        [Text("reported")],
+        [Text("parent done")],
+    ]
+    parent = await _parent(client, workspace)
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    await _idle(rt)
+    [child] = rt.store.children(parent["id"])
+    parts = [p for m in rt.store.messages(child.id)[1:] if m.message.role == "tool" for p in m.message.parts]
+    refused = [p for p in parts if p.is_error]
+    assert len(refused) == 2 and all("a fork is read-only" in p.output for p in refused)
+    assert any(not p.is_error and "hello" in p.output for p in parts)  # reading still works
+    assert not (workspace / "new.txt").exists() and (workspace / "README.md").read_text() == "hello\n"
+
+
+async def test_a_fork_has_a_small_step_budget(env, monkeypatch):
+    rt, client, provider, workspace, _ = env
+    monkeypatch.setattr(runtime_module, "FORK_MAX_STEPS", 3)
+    provider.replies = [
+        [_call("c1", agent="fork", prompt="loop")],
+        [_call("f1", "ls", path=".")], [_call("f2", "ls", path=".")], [Text("out of steps")],
+        [Text("parent done")],
+    ]
+    parent = await _parent(client, workspace)
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    await _idle(rt)
+    [child] = rt.store.children(parent["id"])
+    texts = [p.text for m in rt.store.messages(child.id) if m.message.role == "user" for p in m.message.parts
+             if isinstance(p, Text)]
+    assert any(t.startswith("[Nexus notice: step limit]") for t in texts)
+    assert provider.replies == []

@@ -9,9 +9,17 @@ const browser = await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT
 try {
   const page = await browser.newPage({viewport:{width:1440,height:900}});
   await page.goto(url);
-  await page.getByTestId("location-shell").click({timeout:20000});
-  const streams = new Set(), acquired = new Set();
+  if (process.env.NEXUS_TERMINAL_SESSION) await page.getByTestId(`session-${process.env.NEXUS_TERMINAL_SESSION}`).click();
+  await page.getByTestId("composer-panel").waitFor({timeout:20000});
+  if (await page.getByTestId("location-shell").count()) await page.getByTestId("location-shell").click();
+  else {
+    await page.keyboard.press("Meta+p");
+    await page.getByTestId("palette-input").locator("input").fill("Terminal");
+    await page.getByTestId("cmd-terminal.open").click();
+  }
+  const streams = new Set(), acquired = new Set(), terminalResponses = [];
   page.on("response", r => {
+    if (r.url().includes("/api/terminal/")) terminalResponses.push([r.status(), r.url(), r.request().postData()]);
     const match = r.url().match(/\/api\/terminal\/([^/]+)\/(stream|control)(?:\?|$)/);
     if (!match || r.status() !== 200) return;
     if (match[2] === "stream") streams.add(match[1]);
@@ -23,7 +31,7 @@ try {
   const id = terminal.id;
   await page.waitForTimeout(100);
   for (let i = 0; i < 100 && (!streams.has(id) || !acquired.has(id)); i++) await page.waitForTimeout(100);
-  assert(streams.has(id) && acquired.has(id), "new terminal did not attach and acquire control");
+  assert(streams.has(id) && acquired.has(id), `new terminal did not attach and acquire control: ${JSON.stringify(terminalResponses)}`);
   await page.getByRole("button", {name:"Release control"}).waitFor({timeout:10000});
   let previousX = -1;
   for (const action of scenario.actions) {
@@ -78,6 +86,35 @@ try {
   await page.keyboard.press("Enter");
   await screen.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('NEXUS_TERMINAL_SMOKE'), null, {timeout:15000});
   await page.keyboard.press("Control+]");
+  if (process.env.NEXUS_TERMINAL_SCREENSHOT) await page.screenshot({path:process.env.NEXUS_TERMINAL_SCREENSHOT});
+  let evidenceSends = 0;
+  page.on("request", request => { if (request.method() === "POST" && /\/api\/session\/[^/]+\/(prompt|input)$/.test(new URL(request.url()).pathname)) evidenceSends++; });
+  await screen.evaluate(() => {
+    const marker = "NEXUS_TERMINAL_SMOKE";
+    for (let row = term.buffer.active.length - 1; row >= 0; row--) {
+      const column = term.buffer.active.getLine(row)?.translateToString(true).indexOf(marker) ?? -1;
+      if (column >= 0) { term.select(column, row, marker.length); return; }
+    }
+    throw new Error("terminal marker missing from selectable buffer");
+  });
+  await page.getByTestId("terminal-attach").click();
+  await page.getByTestId("confirm-dialog").waitFor();
+  const evidencePreview = await page.getByTestId("confirm-dialog").innerText();
+  assert(evidencePreview.replace(/\s/g, "").includes(id), evidencePreview);
+  await page.getByTestId("confirm-body-scroll").hover();
+  await page.mouse.wheel(0, 1500);
+  await page.waitForTimeout(200);
+  const scrolledPreview = await page.getByTestId("confirm-dialog").innerText();
+  assert(scrolledPreview.includes("NEXUS_TERMINAL_SMOKE"), scrolledPreview);
+  if (process.env.NEXUS_TERMINAL_EVIDENCE_SCREENSHOT) await page.screenshot({path:process.env.NEXUS_TERMINAL_EVIDENCE_SCREENSHOT});
+  await page.getByTestId("confirm-cancel").click();
+  await page.getByTestId("terminal-attach").click();
+  await page.getByTestId("confirm-dialog").waitFor();
+  await page.getByTestId("confirm-ok").click();
+  const composer = page.getByTestId("composer-input").locator("textarea");
+  assert((await composer.inputValue()).includes("Untrusted terminal output"));
+  assert((await composer.inputValue()).includes("NEXUS_TERMINAL_SMOKE"));
+  assert.equal(evidenceSends, 0, "evidence must edit the draft, never send automatically");
   await page.getByTestId("terminal-close").click();
   await page.getByText("Close running terminal?").waitFor();
   const closed = page.waitForResponse(r => r.request().method() === "DELETE" && r.url().includes("/api/terminal/"));

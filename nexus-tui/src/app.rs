@@ -1060,6 +1060,8 @@ impl App {
             return;
         }
         self.terminal_panel.generation += 1;
+        self.terminal_panel.reconnect_at = None;
+        self.terminal_panel.acquire_on_attach = true;
         self.terminal_controlled = false;
         self.terminal_panel.next_input = 1;
         self.terminal_panel.input_busy = false;
@@ -1151,7 +1153,9 @@ impl App {
                 attachment,
             } if generation == self.terminal_panel.generation && self.terminal_open => {
                 self.terminal_panel.attachment = Some(attachment);
-                self.execute("terminal.acquire");
+                if self.terminal_panel.acquire_on_attach {
+                    self.execute("terminal.acquire");
+                }
             }
             TerminalEvent::Frame { generation, frame }
                 if generation == self.terminal_panel.generation && self.terminal_open =>
@@ -1160,15 +1164,47 @@ impl App {
                     self.toast(Level::Error, format!("Terminal stream: {error}"));
                     self.effects.push(Effect::TerminalStop);
                     self.terminal_panel.attachment = None;
+                    self.terminal_controlled = false;
+                    self.terminal_panel.input_queue.clear();
+                } else if frame["type"] == "exit" {
+                    self.terminal_controlled = false;
+                    self.terminal_panel.input_queue.clear();
+                    if let Some(item) = self
+                        .terminal_panel
+                        .terminals
+                        .iter_mut()
+                        .find(|item| Some(&item.id) == self.terminal_panel.selected.as_ref())
+                    {
+                        item.status = match frame["status"].as_str() {
+                            Some("closed") => "closed",
+                            Some("ended") => "ended",
+                            _ => "exited",
+                        }
+                        .into();
+                        item.controller = None;
+                    }
                 }
             }
             TerminalEvent::Ended { generation, error }
                 if generation == self.terminal_panel.generation && self.terminal_open =>
             {
-                self.terminal_panel.attachment = None;
+                let was_attached = self.terminal_panel.attachment.take().is_some();
                 self.terminal_controlled = false;
                 self.terminal_panel.input_queue.clear();
-                self.toast(Level::Error, format!("Terminal stream: {error}"));
+                if self.terminal_panel.input_busy {
+                    self.toast(
+                        Level::Warning,
+                        "Terminal input outcome may be indeterminate after disconnecting",
+                    );
+                }
+                if was_attached {
+                    self.terminal_panel.reconnect_at =
+                        Some(Instant::now() + std::time::Duration::from_millis(500));
+                }
+                self.toast(
+                    Level::Error,
+                    format!("Terminal disconnected: {error}. Take control again to type."),
+                );
             }
             _ => {}
         }
@@ -2544,7 +2580,11 @@ impl App {
     fn ask_scroll(&mut self, down: bool) {
         if let Some(cur) = self.ask_current() {
             let draft = self.ask_picks(&cur.wait.id, cur.total);
-            draft.scroll = if down { (draft.scroll + 1).min(draft.scroll_max) } else { draft.scroll.saturating_sub(1) };
+            draft.scroll = if down {
+                (draft.scroll + 1).min(draft.scroll_max)
+            } else {
+                draft.scroll.saturating_sub(1)
+            };
         }
     }
 
@@ -6067,6 +6107,43 @@ impl App {
                     });
                 }
             }
+            "terminal.attach" => {
+                let text = self
+                    .terminal_panel
+                    .selection
+                    .as_ref()
+                    .filter(|s| s.dragged())
+                    .map(|s| s.text())
+                    .unwrap_or_default();
+                if !text.is_empty() && self.writable() && !self.manager_debug_view() {
+                    if let Some(source) = self
+                        .terminal_panel
+                        .terminals
+                        .iter()
+                        .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
+                    {
+                        let payload = crate::terminal_panel::terminal_evidence_with_context(
+                            source,
+                            &text,
+                            self.terminal_panel.screen.seq,
+                        );
+                        self.ui.dialog = Some(Dialog {
+                            title: "Attach terminal output".into(),
+                            body: payload.lines().map(str::to_owned).collect(),
+                            cancel: "Cancel".into(),
+                            confirm: "Add to draft".into(),
+                            danger: false,
+                            button: 1,
+                            action: Confirmed::AttachTerminalEvidence {
+                                draft: self.draft_key(),
+                                payload,
+                                offset: 0,
+                            },
+                            restore: self.restore_point(),
+                        });
+                    }
+                }
+            }
             "terminal.copy" => {
                 if let Some(selection) = &self.terminal_panel.selection {
                     if selection.dragged() {
@@ -7083,6 +7160,20 @@ impl App {
                     to: None,
                 }),
                 Confirmed::CloseTerminal(id) => self.api(ApiCall::TerminalClose { id }),
+                Confirmed::AttachTerminalEvidence { draft, payload, .. } => {
+                    if self.draft_key() == draft && self.writable() && !self.manager_debug_view() {
+                        let composer = self.composer();
+                        let end = composer.text().len();
+                        composer.select_range(end, end);
+                        let separator = if end == 0 { "" } else { "\n\n" };
+                        composer.insert_str(&format!("{separator}{payload}"));
+                    } else {
+                        self.toast(
+                            Level::Warning,
+                            "Draft changed or is read-only; capture terminal output again.",
+                        );
+                    }
+                }
                 Confirmed::ResumeArchived { session, mode } => {
                     if self.viewed_id() == Some(session.as_str()) {
                         self.send_mode_confirmed(mode.as_deref(), true);
@@ -8187,8 +8278,13 @@ impl App {
                     self.terminal_panel.control_busy = false;
                     match done.result {
                         Ok(_) => {
-                            self.terminal_controlled = acquire;
-                            if !acquire {
+                            self.terminal_controlled = acquire
+                                && self.terminal_panel.attachment.is_some()
+                                && self.terminal_panel.terminals.iter().any(|item| {
+                                    Some(&item.id) == self.terminal_panel.selected.as_ref()
+                                        && item.status == "running"
+                                });
+                            if !self.terminal_controlled {
                                 self.terminal_panel.input_queue.clear();
                             }
                             self.terminal_panel.size = None;
@@ -8247,10 +8343,21 @@ impl App {
                     self.terminal_panel.loading = false;
                     match done.result {
                         Ok(result) => {
-                            self.terminal_panel.terminals = result.terminals.unwrap_or_default();
+                            self.terminal_panel.terminals = result
+                                .terminals
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|item| item.status != "closed")
+                                .collect();
                             if !self.terminal_panel.terminals.is_empty() {
-                                self.terminal_panel.cursor = 1;
-                                self.terminal_select(0);
+                                let index = self
+                                    .terminal_panel
+                                    .terminals
+                                    .iter()
+                                    .position(|item| item.status == "running")
+                                    .unwrap_or(0);
+                                self.terminal_panel.cursor = index + 1;
+                                self.terminal_select(index);
                             }
                         }
                         Err(error) => {
@@ -9329,6 +9436,20 @@ impl App {
         self.clock = now;
         self.renew_file_watch(now);
         let mut changed = false;
+        if self.terminal_panel.reconnect_at.is_some_and(|at| now >= at) {
+            self.terminal_panel.reconnect_at = None;
+            if self.terminal_open {
+                if let Some(index) = self.terminal_panel.terminals.iter().position(|item| {
+                    Some(&item.id) == self.terminal_panel.selected.as_ref()
+                        && item.status != "closed"
+                }) {
+                    self.terminal_panel.input_busy = false;
+                    self.terminal_select(index);
+                    self.terminal_panel.acquire_on_attach = false;
+                    changed = true;
+                }
+            }
+        }
         // The scroll bar fades out on the shared tick, then erases itself.
         if self.ui.scroll_mark.is_some() {
             changed = true;
@@ -9570,6 +9691,10 @@ impl App {
     /// Keys of the editor (K10). Returns whether the key was taken; keys it does not
     /// know (global shortcuts) fall through.
     fn file_edit_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if name == "ctrl+shift+p" && self.file_is_markdown() {
+            self.toggle_file_preview();
+            return true;
+        }
         if name == "ctrl+s" {
             self.save_file();
             return true;
@@ -10058,6 +10183,20 @@ impl App {
                 _ => {}
             }
         }
+        if self.ui.file_edit.is_some()
+            && !self.file_preview()
+            && self.ui.file_search.is_none()
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && matches!(
+                name.as_str(),
+                "ctrl+c" | "ctrl+x" | "ctrl+v" | "ctrl+z" | "ctrl+shift+z" | "ctrl+y"
+            )
+            && self.file_edit_key(&ev, &name)
+        {
+            return;
+        }
         if self.ui.focus == Focus::Composer
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
@@ -10299,7 +10438,9 @@ impl App {
         match name.as_str() {
             "f6" => return self.cycle_focus(false),
             "shift+f6" => return self.cycle_focus(true),
-            "pageup" | "pagedown" if self.ui.focus == Focus::Waiting && self.ask_current().is_some() => {
+            "pageup" | "pagedown"
+                if self.ui.focus == Focus::Waiting && self.ask_current().is_some() =>
+            {
                 self.ask_scroll(name == "pagedown");
                 return;
             }
@@ -10382,6 +10523,45 @@ impl App {
     }
 
     fn dialog_key(&mut self, name: &str) {
+        if let Some(Dialog {
+            action:
+                Confirmed::AttachTerminalEvidence {
+                    offset, payload, ..
+                },
+            ..
+        }) = self.ui.dialog.as_mut()
+        {
+            let width = 60_u16.min(self.size.0.saturating_sub(4)).saturating_sub(4) as usize;
+            let rows = payload
+                .lines()
+                .flat_map(|line| crate::text::wrap(line, width))
+                .count();
+            let max = rows.saturating_sub(self.size.1.saturating_sub(8) as usize);
+            *offset = (*offset).min(max);
+            match name {
+                "down" | "j" => {
+                    *offset = (*offset + 1).min(max);
+                    return;
+                }
+                "up" | "k" => {
+                    *offset = offset.saturating_sub(1);
+                    return;
+                }
+                "pagedown" => {
+                    *offset = (*offset + 10).min(max);
+                    return;
+                }
+                "pageup" => {
+                    *offset = offset.saturating_sub(10);
+                    return;
+                }
+                "home" => {
+                    *offset = 0;
+                    return;
+                }
+                _ => {}
+            }
+        }
         match name {
             "left" | "right" | "tab" | "shift+tab" | "h" | "l" => {
                 if let Some(d) = self.ui.dialog.as_mut() {
@@ -14791,6 +14971,7 @@ impl App {
             Target::TerminalReleaseControl => self.execute("terminal.release"),
             Target::TerminalPanelClose => self.close_panel(),
             Target::TerminalCopy => self.execute("terminal.copy"),
+            Target::TerminalAttach => self.execute("terminal.attach"),
             Target::TerminalTab(index) => {
                 self.terminal_panel.cursor = index + 1;
                 self.terminal_select(index);

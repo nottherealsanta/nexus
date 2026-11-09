@@ -1,5 +1,6 @@
-// Fork subagents (PLAN.md section 10), as in the TUI: a fork child reads `fork` wherever its agent name shows
-// (the child card, the subagent strip), and its timeline folds the messages copied from the parent into one
+// Fork subagents (PLAN.md section 10), as in the TUI: the parent's `fork` call is a tool row (a minor task run
+// like a tool call), not a child card; a fork child reads `fork` wherever its agent name shows (the subagent
+// strip), and its timeline folds the messages copied from the parent into one
 // `Forked from ‹parent› · N messages` row, collapsed by default and opened like an activity group. The
 // `[Nexus fork]` task message after it is an ordinary user message.
 import { describe, expect, open, test } from "nsh/test";
@@ -68,31 +69,44 @@ function network(sessions: unknown[] = [parent, fork]) {
   };
 }
 
-async function openFork() {
+async function openParent() {
   const app = await open("./App.tsx", { network: network(), width: 1024, height: 768, platform: "web" });
   await app.waitFor("id:session-ses_1");
   await app.press("id:session-ses_1");
-  await app.waitFor("id:child-card");
+  await app.waitFor("text:1 fork");
+  return app;
+}
+
+async function openFork() {
+  const app = await openParent();
+  await app.press("text:1 fork");
+  await app.press("id:tool-row-call_1");
+  await app.press("id:tool-open-fork-call_1");
+  await app.waitFor("text:fork report");
   return app;
 }
 
 describe("fork subagent", () => {
-  test("the child card and the subagent strip label a fork `fork`, not its inherited agent", async () => {
+  test("the parent's fork call is a tool row, not a child card", async () => {
+    const app = await openParent();
+    expect(app.count("id:child-card")).toBe(0);
+    // Opened, the group shows `Fork ‹title›`; opened again, the row shows the task, then what the parent received.
+    await app.press("text:1 fork");
+    await app.waitFor("text:Fork");
+    await app.press("text:Check tests");
+    await app.waitFor("text:  Check the tests");
+    await app.waitFor("id:tool-open-fork-call_1");
+  });
+
+  test("the subagent strip labels a fork `fork`, not its inherited agent", async () => {
     const app = await openFork();
-    // The card: `Fork` then the title (the composer below still names the parent's own agent).
-    const card = app.texts();
-    expect(card[card.indexOf("Check tests") - 1]).toBe("Fork");
-    await app.press("id:child-card");
     await app.waitFor("id:subagent-strip");
-    await app.waitFor("text:fork report");
     const t = app.texts();
     expect(t[t.lastIndexOf("Check tests") - 1]).toBe("Fork");
   });
 
   test("a fork's inherited messages fold into one row, collapsed by default, opened and closed by its chevron row", async () => {
     const app = await openFork();
-    await app.press("id:child-card");
-    await app.waitFor("text:fork report");
     expect(app.texts()).toContain("Forked from Parent work · 2 messages");
     expect(app.texts().some((s) => s.includes("inherited question"))).toBe(false);
     expect(app.texts().some((s) => s.includes("inherited answer"))).toBe(false);

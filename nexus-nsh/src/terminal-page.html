@@ -34,6 +34,7 @@ window.addEventListener('message', e => {
     case 'theme': term.options.theme = {background:m.background, foreground:m.foreground, cursor:m.foreground}; document.body.style.background = m.background; document.getElementById('terminal').style.background = m.background; break;
     case 'focus': term.focus(); break;
     case 'copy': send('selection', {data: term.getSelection()}); break;
+    case 'capture': send('capture', {request:m.request, data:term.getSelection()}); break;
     case 'fit': fitScreen(); break;
   }
 });

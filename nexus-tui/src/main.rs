@@ -801,6 +801,20 @@ async fn wait_live(handle: &mut sync::SyncHandle, app: &mut App, limit: Duration
 /// Time given to Core's replies after each `--keys` token.
 const KEY_SETTLE: Duration = Duration::from_millis(350);
 
+struct DumpTerminal {
+    tx: mpsc::UnboundedSender<nexus_tui::terminal_panel::TerminalEvent>,
+    rx: mpsc::UnboundedReceiver<nexus_tui::terminal_panel::TerminalEvent>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for DumpTerminal {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
 /// Run the app's effects and apply Core's replies for `limit`, as the
 /// interactive loop does between key presses.
 async fn pump(
@@ -809,6 +823,7 @@ async fn pump(
     home: &std::path::Path,
     done_tx: &mpsc::UnboundedSender<ActionDone>,
     done_rx: &mut mpsc::UnboundedReceiver<ActionDone>,
+    terminal: &mut DumpTerminal,
     limit: Duration,
 ) {
     let deadline = Instant::now() + limit;
@@ -825,6 +840,53 @@ async fn pump(
                         let _ = tx.send(actions::run(api, call).await);
                     });
                 }
+                Effect::TerminalStop => {
+                    if let Some(task) = terminal.task.take() {
+                        task.abort();
+                    }
+                }
+                Effect::TerminalAttach {
+                    id,
+                    client,
+                    generation,
+                } => {
+                    if let Some(task) = terminal.task.take() {
+                        task.abort();
+                    }
+                    let api = actions::api_for(home)
+                        .map(|api| nexus_tui::terminal_api::TerminalApi(api.http));
+                    let tx = terminal.tx.clone();
+                    terminal.task = Some(tokio::spawn(async move {
+                        use nexus_tui::terminal_panel::TerminalEvent;
+                        let result: Result<(), String> = async {
+                            let api = api.ok_or("Core is not reachable")?;
+                            let attachment =
+                                api.attach(&id, &client).await.map_err(|e| e.to_string())?;
+                            let mut stream = api
+                                .stream(&id, &attachment, None)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            let _ = tx.send(TerminalEvent::Attached {
+                                generation,
+                                attachment,
+                            });
+                            while let Some(frame) =
+                                stream.next().await.map_err(|e| e.to_string())?
+                            {
+                                let frame = serde_json::from_str(&frame.data)
+                                    .map_err(|e| format!("Invalid terminal frame: {e}"))?;
+                                if tx.send(TerminalEvent::Frame { generation, frame }).is_err() {
+                                    return Ok(());
+                                }
+                            }
+                            Err("connection ended".into())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = tx.send(TerminalEvent::Ended { generation, error });
+                        }
+                    }));
+                }
                 _ => {}
             }
         }
@@ -837,6 +899,7 @@ async fn pump(
                 None => break,
             },
             Some(done) = done_rx.recv() => app.apply_done(done),
+            Some(event) = terminal.rx.recv() => app.terminal_event(event),
             _ = tokio::time::sleep(left) => {}
         }
         app.tick(Instant::now());
@@ -899,6 +962,8 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
         let (w, h) = args.dump[0];
         app.set_size(w, h);
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut terminal = DumpTerminal { tx, rx, task: None };
         let home = discovery::home().unwrap_or_default();
         for token in &args.keys {
             // A frame first, so keys that need the last layout (scrolling,
@@ -913,6 +978,7 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
                 &home,
                 &done_tx,
                 &mut done_rx,
+                &mut terminal,
                 KEY_SETTLE,
             )
             .await;
@@ -923,6 +989,7 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
             &home,
             &done_tx,
             &mut done_rx,
+            &mut terminal,
             KEY_SETTLE * 2,
         )
         .await;

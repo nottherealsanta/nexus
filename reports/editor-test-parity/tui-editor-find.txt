@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · New session ×    +                                                               ◨
+     │                            New session
+▏
+▏ X   ‹ Back  /work/nexus-home/ws/hello.md                                           editing  ctrl+shift+p preview
+▏  1      1  ▼ # Editor parity
+          2
+          3    needle Needle needle
+  +       4    End inserts after the last character.
+          5
+                                                                                                                    a38
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      Find needle  2 matches Aa:on ↑ ↓ Close
+      Replace thread  Replace All
+
+     │                             /work/nexus-home/ws
+     │  Settings         ctrl+,    ─────────────────────────────────────────────────────

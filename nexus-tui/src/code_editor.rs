@@ -179,6 +179,7 @@ impl CodeEditor {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            KeyCode::Char('z' | 'Z') if ctrl && shift => self.editor.apply(Redo),
             KeyCode::Char('z') if ctrl => self.editor.apply(Undo),
             KeyCode::Char('y') if ctrl => self.editor.apply(Redo),
             KeyCode::Char('c') if ctrl => self.editor.apply(Copy),
@@ -299,7 +300,7 @@ impl CodeEditor {
         let (line, _) = code.point(cursor);
         let start = code.line_to_char(line);
         let target = if end {
-            start + code.line_len(line).saturating_sub(1)
+            start + code.line_len(line)
         } else {
             let text = code.slice(start, start + code.line_len(line));
             let indent = text.len() - text.trim_start_matches([' ', '\t']).len();
@@ -504,6 +505,22 @@ mod tests {
             area,
         );
         assert_eq!(editor.text(), "abcone two\n");
+    }
+
+    #[test]
+    fn end_inserts_after_the_last_character_with_or_without_a_newline() {
+        let area = Rect::new(0, 0, 60, 10);
+        for (source, expected) in [
+            ("abc\n", "abc!\n"),
+            ("abc", "abc!"),
+            ("界é\n", "界é!\n"),
+            ("\n", "!\n"),
+        ] {
+            let mut editor = CodeEditor::new("test.txt", source, false).unwrap();
+            editor.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), area);
+            editor.key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE), area);
+            assert_eq!(editor.text(), expected);
+        }
     }
 
     #[test]

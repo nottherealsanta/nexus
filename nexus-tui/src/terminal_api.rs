@@ -11,6 +11,8 @@ pub struct TerminalResource {
     pub id: String,
     pub name: String,
     pub workspace: String,
+    #[serde(default)]
+    pub project_id: String,
     pub status: String,
     pub controller: Option<String>,
     pub rows: u16,
@@ -22,6 +24,10 @@ pub struct TerminalResource {
     /// The session the terminal was created for, when any.
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Clone)]

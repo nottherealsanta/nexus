@@ -1,6 +1,6 @@
 import { describe, expect, test } from "nsh/test";
 import { setApiBase } from "./src/core/transport";
-import { closeTerminalPanel, controlTerminal, inputTerminal, refreshTerminals, requestTerminalClose, resizeTerminal, selectTerminal, setTerminalSender, terminalControlled, terminalError, terminalItems, terminalNotice, terminalSelected } from "./src/terminal-panel";
+import { closeTerminalPanel, controlTerminal, inputTerminal, refreshTerminals, requestTerminalClose, resizeTerminal, selectTerminal, setTerminalSender, terminalControlled, terminalError, terminalItems, terminalNotice, terminalSelected, selectCreatedTerminal } from "./src/terminal-panel";
 import { confirmDialog, currentProject } from "./src/store";
 
 const resource = {id:"t",name:"Shell",project_id:"p",workspace:"/work",session_id:null,creator:"test",status:"running" as const,created:1,ended:null,rows:24,cols:80,exit_code:null,signal:null,controller:null};
@@ -8,6 +8,53 @@ const reply = (body: unknown) => new Response(JSON.stringify(body), {status:200}
 const tick = () => new Promise(r => setTimeout(r, 25));
 
 describe("terminal controller", () => {
+  test("new terminal acquires control even when a list refresh omits its metadata", async () => {
+    setApiBase("http://nexus.test"); currentProject.set("p"); terminalItems.set([]);
+    const original = globalThis.fetch;
+    globalThis.fetch = async url => {
+      const path = String(url);
+      if (path.includes("?project_id=")) return reply([]);
+      if (path.endsWith("/attach")) return reply({attachment_id:"new"});
+      if (path.endsWith("/control")) return reply({...resource,controller:"test"});
+      if (path.includes("/stream?")) return {ok:true,status:200,body:{getReader:() => ({read:() => new Promise(() => {}),cancel:async () => {}})}} as any;
+      return reply({});
+    };
+    try {
+      await refreshTerminals();
+      await selectCreatedTerminal(resource, "p");
+      expect(terminalSelected()).toBe("t");
+      expect(terminalItems()[0].id).toBe("t");
+      expect(terminalControlled()).toBe(true);
+    } finally {
+      closeTerminalPanel(); globalThis.fetch = original;
+    }
+  });
+  test("exit revokes input even when an earlier control response arrives late", async () => {
+    setApiBase("http://nexus.test"); currentProject.set("p"); terminalItems.set([resource]);
+    const original = globalThis.fetch;
+    let finishControl!: (response: Response) => void;
+    let emit!: (value: ReadableStreamReadResult<Uint8Array>) => void;
+    const messages: any[] = [], calls: string[] = [];
+    globalThis.fetch = async (url) => {
+      const path = String(url); calls.push(path);
+      if (path.endsWith("/attach")) return reply({attachment_id:"a"});
+      if (path.endsWith("/control")) return new Promise<Response>(resolve => { finishControl = resolve; });
+      if (path.includes("/stream?")) return {ok:true,status:200,body:{getReader:() => ({read:() => new Promise(resolve => { emit = resolve; }),cancel:async () => {}})}} as any;
+      if (path.includes("?project_id=")) return reply([{...resource,status:"exited"}]);
+      return reply({});
+    };
+    setTerminalSender(message => { messages.push(message); });
+    try {
+      const selecting = selectTerminal("t"); await tick();
+      emit({done:false,value:new TextEncoder().encode('event: exit\ndata: {"version":1,"seq":1,"type":"exit","status":"exited"}\n\n')});
+      await tick(); finishControl(reply({...resource,controller:"test"})); await selecting;
+      expect(terminalControlled()).toBe(false);
+      expect(terminalItems()[0].status).toBe("exited");
+      inputTerminal("must not send"); await tick();
+      expect(calls.some(path => path.endsWith("/input"))).toBe(false);
+      expect(messages.filter(message => message.type === "writable").every(message => !message.value)).toBe(true);
+    } finally { closeTerminalPanel(); setTerminalSender(null); globalThis.fetch = original; }
+  });
   test("closing a running resource requires the shared confirmation", () => {
     terminalItems.set([resource]); terminalSelected.set("t"); confirmDialog.set(null);
     requestTerminalClose();

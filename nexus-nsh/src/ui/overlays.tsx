@@ -252,7 +252,7 @@ export function Confirm() {
           <View testID="confirm-dialog" role="alert" accessibilityLabel={d().title} class="gap-3">
             <ModalTitle title={d().title} />
             <View class="gap-2">
-              <Text class={T.sec}>{d().body}</Text>
+              <If when={d().scrollBody} else={<Text class={T.sec}>{d().body}</Text>}><Scroll style={{maxHeight:Math.min(280, modalBodyHeight(48))}} testID="confirm-body-scroll"><Text class={T.sec}>{d().body}</Text></Scroll></If>
               <If when={d().error}><Text class={`${TS.base} text-error`}>{"✕ " + d().error}</Text></If>
             </View>
             <View class="flex-row justify-end gap-2">

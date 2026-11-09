@@ -184,6 +184,10 @@ class Scripted:
             yield PartDone(Reasoning("The user wants a directory listing; I will run ls."))
             yield PartDone(ToolCall("call_1", "bash", json.dumps({"command": "ls -la src/ && echo done", "timeout": 20})))
             yield Done("tool_calls")
+        elif "readability" in prompt:
+            fixture = json.loads((Path(__file__).resolve().parents[2] / "interface/scenarios/question-readability.json").read_text())
+            yield PartDone(ToolCall("call_q", "ask", json.dumps({"questions": fixture["questions"]})))
+            yield Done("tool_calls")
         elif "ask" in prompt:
             yield PartDone(ToolCall("call_q", "ask", json.dumps({"questions": [{"id": "db", "question": "Which database should the migration target?", "options": [{"id": "pg", "label": "PostgreSQL"}, {"id": "sq", "label": "SQLite"}], "multiple": False, "allow_free_text": False}]})))
             yield Done("tool_calls")

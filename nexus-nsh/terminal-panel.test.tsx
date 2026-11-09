@@ -4,7 +4,7 @@ import scenario from "../interface/scenarios/terminal-dock.json";
 
 describe("terminal panel", () => {
   test("shows terminal tabs and control actions", async () => {
-    const app = await open("./TerminalFixture.tsx", {width:1200,height:800,platform:"web"});
+    const app = await open("./TerminalFixture.tsx", {width:1200,height:800,platform:"web",colorScheme:"dark"});
     await app.waitFor("id:terminal-panel");
     const text = app.texts().join("\n");
     for (const fact of scenario.expect) expect(text).toContain(fact);
@@ -15,6 +15,7 @@ describe("terminal panel", () => {
     }
     expect(text).toContain("Read-only");
     expect(text).toContain("Enter open  c take control  r release  Esc close");
+    await app.screenshot("../reports/terminal-evidence/nsh-dock.png");
     await app.press("id:terminal-rename");
     expect(app.texts().join("\n")).toContain("[Rename]");
     await app.press("[Cancel]");

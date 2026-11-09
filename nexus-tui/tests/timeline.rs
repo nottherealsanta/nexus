@@ -2930,3 +2930,75 @@ fn a_child_card_for_a_fork_reads_fork() {
     let head = line_text(&t.lines[card.start]);
     assert!(head.contains("Fork Check tests"), "{head}");
 }
+
+/// A parent's `fork` call is a minor task run like a tool call: a `Fork ‹title›`
+/// tool row inside the activity group (counted as a fork), never a child card.
+/// Opened, it shows the task and then the report the parent received.
+#[test]
+fn a_fork_call_renders_as_a_tool_row_in_the_parent() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let msgs = serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"go"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[
+            {"type":"tool_call","id":"c1","name":"read","arguments":"{\"path\":\"README.md\"}"},
+            {"type":"tool_call","id":"c2","name":"fork","arguments":"{\"title\":\"Check tests\",\"prompt\":\"Which tests cover the parser?\"}"}
+        ]},
+        {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":[
+            {"type":"tool_result","call_id":"c1","output":"hello","is_error":false},
+            {"type":"tool_result","call_id":"c2","output":"Sub agent ses_f (fork) finished.\n\ntests/parser.rs","is_error":false}
+        ]}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(msgs).unwrap();
+    view.scratch.clear();
+    let t = build(&a, &a.theme, 0, 100);
+    assert!(!t.blocks.iter().any(|b| b.kind == BlockKind::Child));
+    let group = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .expect("one activity group");
+    let head = line_text(&t.lines[group.start]);
+    assert!(head.contains("1 read") && head.contains("1 fork"), "{head}");
+
+    a.ui.timeline_open.insert(group.key.clone(), true);
+    a.ui.timeline_open.insert("tool:c2".into(), true);
+    let open = build(&a, &a.theme, 0, 100);
+    let row = open
+        .blocks
+        .iter()
+        .find(|b| b.key == "tool:c2")
+        .expect("the fork's tool row");
+    assert_eq!(row.kind, BlockKind::Tool);
+    let text: Vec<String> = open.lines[row.start..row.end]
+        .iter()
+        .map(|l| line_text(l))
+        .collect();
+    assert!(
+        text[0].contains("Fork") && text[0].contains("Check tests"),
+        "{text:?}"
+    );
+    let body = text.join("\n");
+    assert!(body.contains("Which tests cover the parser?"), "{body}");
+    assert!(body.contains("tests/parser.rs"), "{body}");
+    // No fork session known yet: no link.
+    assert!(!open.blocks.iter().any(|b| b.key == "tool:c2:open"));
+
+    // With the fork's session known, the open row ends with a link to it, a
+    // block of its own that Enter or a click opens like a child card.
+    let mut fork = a.state.model.sessions[SESSION].clone();
+    fork.id = "ses_f".into();
+    fork.parent_id = Some(SESSION.into());
+    fork.parent_call_id = Some("c2".into());
+    a.state.model.sessions.insert(fork.id.clone(), fork);
+    let linked = build(&a, &a.theme, 0, 100);
+    let link = linked
+        .blocks
+        .iter()
+        .find(|b| b.key == "tool:c2:open")
+        .expect("the open-fork link");
+    assert_eq!(link.kind, BlockKind::Child);
+    assert_eq!(link.target.as_deref(), Some("ses_f"));
+    assert!(line_text(&linked.lines[link.start]).contains("open fork"));
+}

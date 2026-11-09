@@ -1162,6 +1162,18 @@ export const manifest = {
    ]
   },
   {
+   "id": "terminal.attach",
+   "title": "Attach selected output",
+   "category": "copy",
+   "when": [
+    "terminal.selected"
+   ],
+   "unavailable_reason": "Select terminal text first.",
+   "placement": [
+    "panel"
+   ]
+  },
+  {
    "id": "terminal.focus_list",
    "title": "Focus terminal list",
    "category": "navigation",

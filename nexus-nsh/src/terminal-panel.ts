@@ -36,6 +36,7 @@ const selected = () => terminalItems().find(t => t.id === terminalSelected());
 const validDimensions = (r: unknown, c: unknown) => Number.isInteger(r) && Number.isInteger(c) && Number(r) >= 1 && Number(r) <= 200 && Number(c) >= 1 && Number(c) <= 500;
 const changeItem = (item: TerminalResource) => { refreshGeneration++; terminalItems.update(items => items.map(t => t.id === item.id ? item : t)); };
 
+export function terminalEvidenceContext() { return {generation, stream_seq: seq || null}; }
 export function setTerminalSender(fn: ((message: TerminalMessage) => void | Promise<void>) | null) { sender = fn; }
 export async function refreshTerminals() {
   const project = currentProject(), request = ++refreshGeneration;
@@ -110,6 +111,10 @@ async function stream(id: string, first: string, gen: number, signal: AbortSigna
           if (gen !== generation || signal.aborted) return;
           seq = frame.seq;
           if (frame.type === "discard") terminalNotice.set("Terminal history was discarded; screen may be incomplete.");
+          if (frame.type === "exit") {
+            terminalControlled.set(false); send({type:"writable", value:false});
+            terminalItems.update(items => items.map(t => t.id === id ? {...t, status:frame.status === "closed" ? "closed" : frame.status === "ended" ? "ended" : "exited", controller:null} : t));
+          }
           if (["control", "exit", "rename"].includes(frame.type)) void refreshTerminals();
         }
       }
@@ -135,8 +140,15 @@ export async function newTerminal() {
   if (!workspace) { terminalError.set("No workspace selected."); return; }
   try {
     const t = await terminals.create({project_id, workspace, ...(session?.project_id === project_id ? {session_id:session.id} : {}), client_id:client, rows, cols});
-    await refreshTerminals(); await selectTerminal(t.id);
+    await refreshTerminals();
+    await selectCreatedTerminal(t, project_id);
   } catch (e) { failure(e); }
+}
+export async function selectCreatedTerminal(item: TerminalResource, project: string) {
+  if (currentProject() !== project) return;
+  refreshGeneration++;
+  terminalItems.update(items => [...items.filter(t => t.id !== item.id), item]);
+  await selectTerminal(item.id);
 }
 export async function renameTerminal() {
   const id = terminalSelected(); if (!id) return;
@@ -155,8 +167,10 @@ export async function controlTerminal(action: "acquire" | "release") {
   try {
     const item = await terminals.control(id, aid, action);
     if (aid !== attachment) return;
-    changeItem(item); terminalControlled.set(action === "acquire"); send({type:"writable",value:action === "acquire"});
-    if (action === "acquire") { send({type:"fit"}); await flushResize(); }
+    const writable = action === "acquire" && selected()?.status === "running";
+    if (selected()?.status === "running") changeItem(item);
+    terminalControlled.set(writable); send({type:"writable",value:writable});
+    if (writable) { send({type:"fit"}); await flushResize(); }
   } catch (e) { if (aid === attachment) failure(e); }
   finally { if (aid === attachment) controlBusy = false; }
 }

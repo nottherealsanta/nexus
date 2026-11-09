@@ -344,10 +344,14 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 &d.title,
                 &d.body,
                 Some((&d.cancel, &d.confirm, d.danger, d.button)),
+                match &d.action {
+                    crate::ui::Confirmed::AttachTerminalEvidence { offset, .. } => Some(*offset),
+                    _ => None,
+                },
                 &mut hits,
             );
         } else if let Some((title, body)) = a.blocking() {
-            draw_dialog(&cx, buf, area, &title, &body, None, &mut hits);
+            draw_dialog(&cx, buf, area, &title, &body, None, None, &mut hits);
         }
         // The Manager's indicator, caption and card are painted over everything else.
         crate::stage::draw(a, buf, area, regions.composer, regions.manager, &mut hits);
@@ -2515,9 +2519,17 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .as_ref()
         .and_then(|id| terminals.iter().position(|t| &t.id == id));
     let control = if a.terminal_controlled {
-        ("[Release control]", "Release control", Target::TerminalReleaseControl)
+        (
+            "[Release control]",
+            "Release control",
+            Target::TerminalReleaseControl,
+        )
     } else {
-        ("[Take control]", "Take control", Target::TerminalTakeControl)
+        (
+            "[Take control]",
+            "Take control",
+            Target::TerminalTakeControl,
+        )
     };
     let (rename, copy, hide) = if ascii {
         ("[r]", "=", "v")
@@ -2548,6 +2560,12 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             control.0.to_owned(),
             control.1,
             control.2,
+            selected.is_some(),
+        ),
+        (
+            "[Attach]".to_owned(),
+            "Attach selected output",
+            Target::TerminalAttach,
             selected.is_some(),
         ),
         (
@@ -2622,13 +2640,19 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // Keep the names readable, then shrink them before scrolling to the
     // selected tab. A `…` marks tabs scrolled off either side.
     let tab_width = |terminal: &crate::terminal_api::TerminalResource, name_max: usize| {
-        let dot = if terminal.status == "running" { "●" } else { "○" };
+        let dot = if terminal.status == "running" {
+            "●"
+        } else {
+            "○"
+        };
         width(dot) as u16 + 1 + width(&truncate(&terminal.name, name_max, cx.ell())) as u16 + 4
     };
     let name_cap = if terminals.is_empty() {
         6
     } else {
-        (r.width as usize / terminals.len()).saturating_sub(8).clamp(6, 48)
+        (r.width as usize / terminals.len())
+            .saturating_sub(8)
+            .clamp(6, 48)
     };
     let mut name_max = name_cap;
     let total = |max: usize| -> u16 {
@@ -2666,15 +2690,27 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         let rect = Rect::new(x, tab_y, tab_w, 1);
         let active = selected == Some(index);
         let background = if active { RAISED } else { CANVAS };
-        let base = cx.st(if active { PRIMARY } else { SECONDARY }, background)
+        let base = cx
+            .st(if active { PRIMARY } else { SECONDARY }, background)
             .add_modifier(if active {
                 Modifier::BOLD
             } else {
                 Modifier::empty()
             });
         clear(buf, rect, base);
-        let dot = if terminal.status == "running" { "●" } else { "○" };
-        let dot_style = cx.st(if terminal.status == "running" { PRIMARY } else { MUTED }, background);
+        let dot = if terminal.status == "running" {
+            "●"
+        } else {
+            "○"
+        };
+        let dot_style = cx.st(
+            if terminal.status == "running" {
+                PRIMARY
+            } else {
+                MUTED
+            },
+            background,
+        );
         put(buf, x + 1, tab_y, dot, dot_style, 1);
         let name = truncate(&terminal.name, name_max, cx.ell());
         put(
@@ -2779,10 +2815,8 @@ fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
     if a.ui.overlay.is_none() && a.ui.dialog.is_none() && a.ui.edit.is_none() {
         if let Some((mx, my)) = a.mouse {
-            if let Some((anchor, label)) = tips
-                .iter()
-                .rev()
-                .find(|(rect, _)| contains(*rect, mx, my))
+            if let Some((anchor, label)) =
+                tips.iter().rev().find(|(rect, _)| contains(*rect, mx, my))
             {
                 draw_tooltip(cx, buf, *anchor, label, hits);
             }
@@ -2807,10 +2841,9 @@ fn draw_tooltip(cx: &Cx, buf: &mut Buffer, anchor: Rect, label: &str, hits: &mut
     } else {
         (anchor.y + 1).min(area.bottom().saturating_sub(1))
     };
-    let x = mx.saturating_sub(width / 2).clamp(
-        area.x,
-        area.right().saturating_sub(width).max(area.x),
-    );
+    let x = mx
+        .saturating_sub(width / 2)
+        .clamp(area.x, area.right().saturating_sub(width).max(area.x));
     let rect = Rect::new(x, y, width, 1);
     clear(buf, rect, cx.st(PRIMARY, RAISED));
     let rail = cx.t.structure("rail");
@@ -5561,7 +5594,7 @@ enum WRow {
     /// the text on that row.
     Input(usize, String),
     Choice(usize),
-    Hint,
+    Hint(usize),
 }
 
 type ApprovalParts = (String, Vec<(String, String)>, Option<crate::diff::Diff>);
@@ -5666,7 +5699,11 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                         let text = format!("{}. {}", i + 1, json_str(&question["question"]));
                         rows.extend(ask_lines(&text, inner, ell).into_iter().map(WRow::Ask));
                         let answer = c.answer(i);
-                        for line in ask_lines(&answer.clone().unwrap_or_else(|| "not answered".into()), inner.saturating_sub(4), ell) {
+                        for line in ask_lines(
+                            &answer.clone().unwrap_or_else(|| "not answered".into()),
+                            inner.saturating_sub(4),
+                            ell,
+                        ) {
                             rows.push(WRow::Answer(line, answer.is_some()));
                         }
                     }
@@ -5678,7 +5715,10 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                     );
                     for (i, option) in c.options().iter().enumerate() {
                         let label = json_str(&option["label"]);
-                        for (n, line) in ask_lines(&label, inner.saturating_sub(6), ell).into_iter().enumerate() {
+                        for (n, line) in ask_lines(&label, inner.saturating_sub(6), ell)
+                            .into_iter()
+                            .enumerate()
+                        {
                             rows.push(WRow::Opt(i, line, n == 0, false));
                         }
                         if let Some(preview) = option["preview"].as_str() {
@@ -5705,16 +5745,31 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
             rows.push(WRow::Blank);
         }
     }
-    rows.push(WRow::Hint);
+    let hint_rows = if item.kind == WaitKind::Question {
+        if w < 55 {
+            5
+        } else if w < 100 {
+            3
+        } else {
+            2
+        }
+    } else {
+        1
+    };
+    rows.extend((0..hint_rows).map(WRow::Hint));
     rows.push(WRow::Pad);
     if item.kind == WaitKind::Question && limit != usize::MAX {
-        let available = limit.saturating_sub(1);
+        let hint_rows = hint_rows.min(limit.saturating_sub(1));
+        let available = limit.saturating_sub(hint_rows);
         let scroll = app.ui.asks.get(&item.id).map_or(0, |d| d.scroll);
-        let max = rows.len().saturating_sub(2).saturating_sub(available);
+        let max = rows
+            .len()
+            .saturating_sub(hint_rows + 1)
+            .saturating_sub(available);
         let start = scroll.min(max);
-        rows.truncate(rows.len().saturating_sub(2));
+        rows.truncate(rows.len().saturating_sub(hint_rows + 1));
         let mut visible: Vec<WRow> = rows.into_iter().skip(start).take(available).collect();
-        visible.push(WRow::Hint);
+        visible.extend((0..hint_rows).map(WRow::Hint));
         return visible;
     }
     // Fit: diff first, then blanks, pads, extra answer rows, table rows, option
@@ -6016,10 +6071,16 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     cx.st(SECONDARY, PANEL)
                 };
                 if *i == c.pick().map_or(0, |p| p.cursor) {
-                    if *first { band_row(buf, y, PRIMARY); }
-                    if !preview { st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD); }
+                    if *first {
+                        band_row(buf, y, PRIMARY);
+                    }
+                    if !preview {
+                        st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD);
+                    }
                 }
-                if *preview { st = cx.st(MUTED, PANEL); }
+                if *preview {
+                    st = cx.st(MUTED, PANEL);
+                }
                 put(
                     buf,
                     x,
@@ -6156,7 +6217,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     );
                 }
             }
-            WRow::Hint => {
+            WRow::Hint(hint_line) => {
                 let key = |id: &str, fallback: &str| {
                     a.manifest
                         .command(id)
@@ -6165,7 +6226,10 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 };
                 let mut hints: Vec<(String, String)> = Vec::new();
                 let mut submit = None;
-                if focused && ask.is_some() && a.ui.asks.get(&w.id).is_some_and(|d| d.scroll_max > 0) {
+                if focused
+                    && ask.is_some()
+                    && a.ui.asks.get(&w.id).is_some_and(|d| d.scroll_max > 0)
+                {
                     hints.push(("pgup/dn".into(), "scroll".into()));
                 }
                 match (&w.kind, ask.as_ref()) {
@@ -6226,7 +6290,43 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         hints.push(("enter".into(), "confirm".into()));
                     }
                 }
-                let rects = hints_at(cx, buf, (x, y), end, &hints);
+                let mut line = 0;
+                let mut used = 0;
+                let mut start = 0;
+                for (i, (key, label)) in hints.iter().enumerate() {
+                    let width =
+                        text::width(key) + text::width(label) + usize::from(!key.is_empty());
+                    let sep = if used > 0 { text::width(&cx.sep()) } else { 0 };
+                    if used > 0 && used + sep + width > end.saturating_sub(x) as usize {
+                        if line == *hint_line {
+                            break;
+                        }
+                        line += 1;
+                        used = 0;
+                        start = i;
+                    }
+                    used += if used > 0 { text::width(&cx.sep()) } else { 0 };
+                    used += width;
+                }
+                let mut count = 0;
+                let mut width = 0;
+                for (key, label) in &hints[start..] {
+                    let next = text::width(key)
+                        + text::width(label)
+                        + usize::from(!key.is_empty())
+                        + if count > 0 { text::width(&cx.sep()) } else { 0 };
+                    if count > 0 && width + next > end.saturating_sub(x) as usize {
+                        break;
+                    }
+                    width += next;
+                    count += 1;
+                }
+                let rects = if line == *hint_line {
+                    hints_at(cx, buf, (x, y), end, &hints[start..start + count])
+                } else {
+                    Vec::new()
+                };
+                submit = submit.and_then(|i| i.checked_sub(start));
                 if let (Some(i), true) = (submit, writable) {
                     if let Some(rc) = rects.get(i) {
                         hits.add(*rc, Target::Wait(WaitButton::Submit));
@@ -10484,6 +10584,7 @@ type Buttons<'a> = Option<(&'a str, &'a str, bool, usize)>;
 /// A confirm or blocking dialog: title, body, and `[ Cancel ]` (the safe
 /// default, on the selection band when focused) beside the confirm button
 /// (`[ Delete ]` in `status.error` when `danger`).
+#[allow(clippy::too_many_arguments)]
 fn draw_dialog(
     cx: &Cx,
     buf: &mut Buffer,
@@ -10491,6 +10592,7 @@ fn draw_dialog(
     title: &str,
     body: &[String],
     buttons: Buttons,
+    scroll: Option<usize>,
     hits: &mut HitMap,
 ) {
     // modal: swallow everything underneath
@@ -10510,7 +10612,11 @@ fn draw_dialog(
         b
     };
     let m = modal(cx, buf, area, b, title, hits);
-    for (i, l) in rows.iter().enumerate() {
+    let offset = scroll.unwrap_or(0).min(
+        rows.len()
+            .saturating_sub(m.body.height.saturating_sub(2) as usize),
+    );
+    for (i, l) in rows.iter().skip(offset).enumerate() {
         if i as u16
             >= m.body
                 .height
@@ -10572,7 +10678,18 @@ fn draw_dialog(
                 cx,
                 buf,
                 &m,
-                &[(lr, "choose"), ("enter", "confirm"), ("esc", "cancel")],
+                &[
+                    (
+                        if scroll.is_some() {
+                            "↑/↓ PgUp/PgDn"
+                        } else {
+                            lr
+                        },
+                        if scroll.is_some() { "scroll" } else { "choose" },
+                    ),
+                    ("enter", "confirm"),
+                    ("esc", "cancel"),
+                ],
             );
         }
         None => {

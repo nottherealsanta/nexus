@@ -56,6 +56,34 @@ async def test_detach_reconnect_and_shutdown(tmp_path, monkeypatch):
     assert term.status == "closed"
 
 
+async def test_shutdown_survives_process_group_permission_race(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SHELL", "/bin/sh")
+    service = TerminalService()
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="client", session_id=None, rows=24, cols=80)
+    killpg = os.killpg
+    denied = []
+
+    def deny_hangup(pgid, sig):
+        if sig == signal.SIGHUP:
+            denied.append(pgid)
+            raise PermissionError("process group changed during shutdown")
+        killpg(pgid, sig)
+
+    try:
+        await wait_until(lambda: os.tcgetpgrp(term.fd) == term.pid)
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", deny_hangup)
+            await service.shutdown()
+        assert term.pid in denied
+        assert term.waiter.done()
+        assert term.output_done.is_set()
+        assert term._fd_closed
+        assert term.status == "closed"
+    finally:
+        await service.shutdown()
+
+
 async def test_controlling_terminal_and_signalled_exit(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SHELL", "/bin/sh")

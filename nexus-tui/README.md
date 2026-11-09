@@ -21,10 +21,24 @@ mouse events when they request them; hold Shift to select text instead.
 The compact dock toolbar offers new, rename, close, take/release control, copy and
 hide; hover a control for its label. Background shells linked to a terminal appear
 only once in the activity indicators, and terminal shells open the dock.
+Closed resources are hidden and opening the dock prefers a running terminal.
+Exit immediately disables input and updates the tab; a late control acknowledgment
+cannot make an ended terminal writable again. `--dump-frame` also runs the real
+terminal attachment and stream, so dock captures include the actual VT screen.
+
+**Attach selected output** (`[Attach]`) freezes the rendered terminal selection and
+previews the exact payload before **Add to draft**. Use Up/Down or PageUp/PageDown
+to read the entire preview. It includes resource/project/workspace provenance, a
+stream-sequence watermark, an untrusted-data warning and exact UTF-8 clipping counts
+(16 KiB selection cap). Actual source session/turn/tool/job IDs are retained when
+recorded, never guessed. Missing earlier terminal history is disclosed separately.
+Confirmation appends without replacing selected draft text. Cancel is inert; normal composer send alone commits it into model context. Live
+output cannot mutate it, and a changed/read-only destination draft fails visibly.
 
 **Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
-session, a fixed ruler), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
+session, a fixed ruler, and `~` terminal lifecycle bars for exactly tool-linked
+resources, including those outliving the launching turn), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
 Questions. Lists show each record's `summary`; Enter expands the exact `detail`
 JSON and `e` loads the full record when it was clipped. Rows and session-tree entries are clickable (click a row to select and expand it). `n`/`p` page to older/newer
 records by cursor (never page numbers); `[`/`]` inspect another session of the
@@ -305,32 +319,26 @@ capitals (bold) and `⌥ branch` muted at the right. With several checkouts the 
 and a click or `files.root_toggle` switches between the project and the open session's
 worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
 folders are bold, ignored entries are muted and can be hidden, and Git status letters are
-right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens a
-read-only file view: the header row has `‹ Back`, the `~` path (the
-basename bold), `e edit`, the Markdown `p source`/`p preview` control and `lines 1-38 of 38`
-muted at the right, a blank row follows, then
-right-aligned line numbers and a `│` gutter; Esc or Back returns to the timeline. It opens
-in a centred modal over the dimmed page (the page keeps its layout); a click outside closes it, and long lines wrap.
-Markdown files (`.md`, `.markdown`) open as rendered prose; the header's `p source` control
-shows the numbered source, and `p` switches back to the preview. Find returns to the source first.
+right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens the
+editable, syntax-highlighted source in a centred modal over the dimmed page. The header has
+`‹ Back`, the path (basename bold), and `editing`, `● modified` or `changed on disk · reload`.
+The vendored editor supplies line numbers, folding and horizontal scrolling for long lines;
+NSH currently soft-wraps, so long-line wrapping parity remains an unresolved verification gate,
+not an approved client difference. End reaches the insertion point after the final character. Markdown files (`.md`, `.markdown`)
+open as source; `ctrl+shift+p` toggles rendered prose and Find returns to the source first.
 When a session needs approval or an answer, its header shows `⚠ N waiting`.
-Resizing keeps the open file, search and scroll. The selected file can be copied as an absolute
-path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the terminal suspended. In the
-file view `/` opens the search on the bottom row (always reserved, so the text does not move):
-`/ query  3 of 12   n next · N prev · esc end`. Matches are on the selection band and the
-current one is reversed; typing filters, Enter or `n` goes to the next match and `N` to the
-previous one, and the first Esc ends the search while the next closes the file. Core serves
-whole files up to 1 MiB and has no offsets, so the header gives the exact range shown. The
-read-only view has no syntax highlighting yet; the vendored editor is wired next.
+The selected file can be copied as an absolute path, inserted as `@path`, or opened in
+`$VISUAL`/`$EDITOR` with the terminal suspended. Core serves whole files up to 1 MiB.
 
-**Editor (K10).** `e` in the file view starts the editor over a `Composer` buffer (cursor at
-the top, `ctrl+s` saves, `ctrl+z`/`ctrl+y` undo and redo, Tab inserts four spaces); the header
-says `editing`, `● modified` or `changed on disk · reload`. Save is `PUT …/file` with the
-revision the file was read at; a stale write keeps the text. `editor.reload` (palette) re-reads,
-asking first when dirty; Esc leaves a clean editor and asks before dropping changes;
-`files.changed` reloads a clean editor and warns a dirty one. Opening another session or a Git
-diff is refused while the text is unsaved. `vendor/ratatui-code-editor` is checked in for the
-step that replaces this buffer; see [development.md](../docs/development.md#vendored-crates).
+**Editor (K10).** The cursor starts at the top; `ctrl+s` saves and `ctrl+z`/`ctrl+y` undo and
+redo. `ctrl+f` opens Find/Replace: Enter/Shift+Enter cycle matches, Tab switches between the
+query and replacement, `alt+c` toggles case sensitivity, `ctrl+r` replaces one match and
+`ctrl+shift+r` replaces all. Matches are highlighted. Esc ends Find first, then closes
+the file, asking before discarding unsaved changes; Back and outside clicks use the same guard.
+Save is `PUT …/file` with the revision the file was read at; a stale write keeps the text.
+`editor.reload` (palette) re-reads, asking first when dirty; `files.changed` reloads a clean
+editor and warns a dirty one. Opening another session or a Git diff is refused while the text
+is unsaved. See [development.md](../docs/development.md#vendored-crates) for the editor crate.
 
 **K5-K11 client parts.** The session switcher (`ctrl+k`) leads each session with the same status
 glyph as its tab (running spinner, attention/error dot or idle dot), then the title and age, and also
@@ -414,9 +422,14 @@ counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold 
 `3 thoughts, 50 commands, 8 tools, 9 reads` with `+N −M` and `✕ N failed`; a live group is
 `Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
 flashes the accent for six frames when it finishes (not with reduced motion).
-A fork (a child launched with `agent: "fork"`, whose session JSON carries
-`fork: {parent_id, inherited}`) is labelled `Fork` in the subagent strip and on
-its child card, coloured as that name. Its timeline folds the first `inherited`
+A parent's `fork` call (PLAN.md section 10, F6) is a minor task run like a tool
+call, so it is a tool member, not a child card: `Fork ‹title›` in its activity
+group, counted as `N forks`; open, it shows the task (as a command's rows) and
+then the report the parent received, and an `╰ open fork ↗` row (its own
+`Child` block, so Enter or a click opens the fork's session) once the fork's
+session is known. As in NSH.
+A fork (whose session JSON carries `fork: {parent_id, inherited}`) is labelled
+`Fork` in the subagent strip, coloured as that name. Its timeline folds the first `inherited`
 messages, copied from the parent, into one group row at the top,
 `▸ Forked from ‹parent title› · N messages` (the parent id when the parent is
 unknown), folded by default and toggled like a group (Enter/Space, a click,

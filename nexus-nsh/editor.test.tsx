@@ -83,7 +83,7 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-editor");
     expect(app.shows("id:file-markdown")).toBe(false);
     expect(app.shows("text:# Title")).toBe(true);
-    await app.press("id:file-preview");
+    await app.keyboard.press("mod+shift+p");
     await app.waitFor("id:file-markdown");
     expect(app.shows("id:file-editor")).toBe(false);
     expect(app.shows("text:Some bold text.")).toBe(true);
@@ -414,6 +414,7 @@ describe("one editor mode and replacement", () => {
     }, width: 1100, height: 768 });
     await app.waitFor("text:Refactor loader");
     await app.press("id:tab-files");
+    await app.waitFor(`id:file-entry-${editorScenario.path}`);
     await app.press(`id:file-entry-${editorScenario.path}`);
     await app.waitFor("id:file-save");
     expect(app.shows("id:file-edit")).toBe(false);
@@ -432,6 +433,12 @@ describe("one editor mode and replacement", () => {
     await app.keyboard.press("mod+z");
     await app.waitFor("text:Alpha alpha");
     await app.waitFor("text:ALPHA");
+    await app.waitFor("text:saved");
+    await app.keyboard.press("mod+shift+z");
+    await app.waitFor("text:beta beta");
+    await app.waitFor("text:beta");
+    await app.waitFor("text:● modified");
+    await app.keyboard.press("mod+z");
     await app.waitFor("text:saved");
     await app.keyboard.press("escape");
     await app.waitFor("id:file-panel", { state: "gone" });

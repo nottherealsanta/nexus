@@ -30,8 +30,7 @@ fn terminal_command_opens_a_bottom_dock() {
     assert!(rows[(dock.y + 2) as usize].contains("Loading terminals…"));
     app.terminal_panel.loading = false;
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[(dock.y + 2) as usize]
-        .contains("No terminal selected. Use + to create one."));
+    assert!(rows[(dock.y + 2) as usize].contains("No terminal selected. Use + to create one."));
 }
 
 #[test]
@@ -71,7 +70,10 @@ fn terminal_toolbar_tooltips_follow_the_pointer() {
             modifiers: KeyModifiers::NONE,
         });
         let shown = draw(&mut app, 120, 36).1.join("\n");
-        assert!(shown.contains(label), "missing tooltip {label:?} in:\n{shown}");
+        assert!(
+            shown.contains(label),
+            "missing tooltip {label:?} in:\n{shown}"
+        );
     }
 
     let rect = app.hits.rect_of(&Target::TerminalTakeControl).unwrap();
@@ -88,10 +90,8 @@ fn terminal_toolbar_tooltips_follow_the_pointer() {
 
 #[test]
 fn terminal_dock_matches_the_shared_scenario() {
-    let scenario: serde_json::Value = serde_json::from_str(include_str!(
-        "../../interface/scenarios/terminal-dock.json"
-    ))
-    .unwrap();
+    let scenario: serde_json::Value =
+        serde_json::from_str(include_str!("../../interface/scenarios/terminal-dock.json")).unwrap();
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     app.execute("terminal.open");
     app.terminal_panel.loading = false;
@@ -118,6 +118,15 @@ fn terminal_dock_matches_the_shared_scenario() {
         .find(|terminal| terminal.background_job_id.as_deref() == job["id"].as_str())
         .expect("the linked background job's terminal");
     assert_eq!(linked.id, job["terminal_id"].as_str().unwrap());
+    if let Ok(dir) = std::env::var("NEXUS_TERMINAL_DOCK_SHOTS") {
+        let buffer = draw(&mut app, 144, 44).0;
+        let (fg, bg) = nexus_tui::svg::page_colors(false);
+        std::fs::write(
+            format!("{dir}/tui-dock.svg"),
+            nexus_tui::svg::to_svg(&buffer, fg, bg),
+        )
+        .unwrap();
+    }
 }
 
 #[test]
@@ -136,10 +145,14 @@ fn terminal_open_lists_and_new_creates_in_current_workspace() {
     app.apply_done(ActionDone {
         call,
         result: Ok(Done {
-            terminals: Some(vec![]),
+            terminals: Some([("closed", "closed"), ("exited", "exited"), ("live", "running")].into_iter().map(|(id, status)| {
+                serde_json::from_value(serde_json::json!({"id":id,"name":"Terminal","workspace":"/tmp","status":status,"controller":null,"rows":24,"cols":80})).unwrap()
+            }).collect()),
             ..Done::default()
         }),
     });
+    assert_eq!(app.terminal_panel.terminals.len(), 2);
+    assert_eq!(app.terminal_panel.selected.as_deref(), Some("live"));
     app.execute("terminal.new");
     assert!(app.effects.iter().any(|effect| matches!(effect, Effect::Api(ApiCall::TerminalCreate { workspace, .. }) if !workspace.is_empty())));
 }
@@ -168,6 +181,33 @@ fn selecting_terminal_attaches_and_renders_stream_output() {
     });
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(rows.join("\n").contains("hello"));
+}
+
+#[test]
+fn terminal_exit_revokes_input_and_updates_tab_immediately() {
+    use nexus_tui::terminal_panel::TerminalEvent;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("terminal.open");
+    app.terminal_panel.terminals.push(
+        serde_json::from_value(serde_json::json!({
+            "id":"t1", "name":"Shell", "workspace":"/tmp", "status":"running",
+            "controller":"client", "rows":24, "cols":80
+        }))
+        .unwrap(),
+    );
+    press(&mut app, &["down", "enter"]);
+    app.terminal_controlled = true;
+    app.terminal_panel
+        .input_queue
+        .push_back(b"must not send".to_vec());
+    app.terminal_event(TerminalEvent::Frame {
+        generation: app.terminal_panel.generation,
+        frame: serde_json::json!({"version":1,"seq":1,"type":"exit","status":"exited"}),
+    });
+    assert!(!app.terminal_controlled);
+    assert!(app.terminal_panel.input_queue.is_empty());
+    assert_eq!(app.terminal_panel.terminals[0].status, "exited");
+    assert_eq!(app.terminal_panel.terminals[0].controller, None);
 }
 
 #[test]
@@ -411,6 +451,7 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     .left_sidebar
                     .tab
                     .iter()
+                    .filter(|t| t.id != "git" || app.regions.left.is_some_and(|r| r.width >= 33))
                     .map(|t| {
                         let tab = nexus_tui::ui::Tab::from_id(&t.id).unwrap();
                         let r = app.hits.rect_of(&Target::Tab(tab)).expect("tab icon");
@@ -1300,7 +1341,6 @@ fn save_calls(app: &nexus_tui::app::App) -> Vec<nexus_tui::actions::ApiCall> {
 fn the_editor_saves_with_the_revision_it_read_and_follows_the_new_one() {
     use nexus_tui::actions::{ActionDone, ApiCall, Done};
     let mut app = open_file_view("one\ntwo\n");
-    press(&mut app, &["e"]);
     assert!(app.ui.file_edit.is_some());
     assert!(joined(&draw(&mut app, 120, 36).1).contains("editing"));
     // Nothing to save yet.
@@ -1350,7 +1390,6 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
     use nexus_tui::actions::{ActionDone, Done};
     use nexus_tui::sync::SyncMsg;
     let mut app = open_file_view("one\n");
-    press(&mut app, &["e"]);
     typing(&mut app, "mine");
     press(&mut app, &["ctrl+s"]);
     let call = save_calls(&app).remove(0);
@@ -1393,27 +1432,24 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
 }
 
 #[test]
-fn esc_leaves_a_clean_editor_and_asks_before_dropping_changes() {
+fn esc_closes_a_clean_editor_and_asks_before_dropping_changes() {
     let mut app = open_file_view("one\n");
-    press(&mut app, &["e"]);
     press(&mut app, &["esc"]);
-    assert!(app.ui.file_edit.is_none() && app.ui.file_open);
-    press(&mut app, &["e"]);
+    assert!(app.ui.file_edit.is_none() && !app.ui.file_open);
+    let mut app = open_file_view("one\n");
     typing(&mut app, "x");
     press(&mut app, &["esc"]);
     assert!(app.ui.dialog.is_some() && app.ui.file_edit.is_some());
-    // Keep editing is the focused choice.
     press(&mut app, &["enter"]);
     assert!(app.ui.file_edit.is_some());
     press(&mut app, &["esc", "right", "enter"]);
-    assert!(app.ui.file_edit.is_none() && app.ui.file_open);
+    assert!(app.ui.file_edit.is_none() && !app.ui.file_open);
 }
 
 #[test]
 fn an_outside_change_reloads_a_clean_editor_and_warns_a_dirty_one() {
     use nexus_tui::sync::SyncMsg;
     let mut app = open_file_view("one\n");
-    press(&mut app, &["e"]);
     let project = app.current_project().unwrap();
     let changed = |rev: &str| serde_json::json!({"project_id": project, "path": "hello.txt", "revision": rev, "source": "editor"});
     app.effects.clear();
@@ -1436,75 +1472,59 @@ fn an_outside_change_reloads_a_clean_editor_and_warns_a_dirty_one() {
 }
 
 #[test]
-fn file_view_search_filters_jumps_and_ends_before_closing() {
+fn editor_find_cycles_matches_and_ends_before_closing() {
     let mut app = open_file_view("alpha\nbeta needle\ngamma\nNeedle again\n");
-    press(&mut app, &["/"]);
+    press(&mut app, &["ctrl+f"]);
     typing(&mut app, "needle");
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("/ needle  2 matches"), "{rows:?}");
-
+    assert_eq!(app.ui.file_search.as_ref().unwrap().query, "needle");
     press(&mut app, &["enter"]);
     assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0));
-    press(&mut app, &["n"]);
+    press(&mut app, &["enter"]);
     assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(1));
-    press(&mut app, &["n"]);
-    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0), "wraps");
-    press(&mut app, &["N"]);
-    assert_eq!(
-        app.ui.file_search.as_ref().unwrap().hit,
-        Some(1),
-        "wraps back"
-    );
-
-    // Typing again edits the query, so n is a letter.
-    press(&mut app, &["/"]);
+    press(&mut app, &["enter"]);
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0));
+    press(&mut app, &["shift+enter"]);
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(1));
     typing(&mut app, "n");
     assert_eq!(app.ui.file_search.as_ref().unwrap().query, "needlen");
-
-    // The first Esc ends the search and keeps the file open.
     press(&mut app, &["esc"]);
-    assert!(app.ui.file_search.is_none());
-    assert!(app.ui.file_open);
+    assert!(app.ui.file_search.is_none() && app.ui.file_open);
+    assert!(!app.ui.file_edit.as_ref().unwrap().dirty());
     press(&mut app, &["esc"]);
     assert!(!app.ui.file_open);
 }
 
 #[test]
-fn file_view_highlights_matches_and_announces_the_line_range() {
+fn editor_find_case_sensitive_replace_all_and_undo() {
+    let mut app = open_file_view("needle Needle needle\n");
+    press(&mut app, &["ctrl+f"]);
+    typing(&mut app, "needle");
+    press(&mut app, &["alt+c", "tab"]);
+    typing(&mut app, "thread");
+    press(&mut app, &["ctrl+shift+r"]);
+    assert_eq!(
+        app.ui.file_edit.as_ref().unwrap().buf.text(),
+        "thread Needle thread\n"
+    );
+    press(&mut app, &["esc", "ctrl+z", "ctrl+z"]);
+    assert_eq!(
+        app.ui.file_edit.as_ref().unwrap().buf.text(),
+        "needle Needle needle\n"
+    );
+}
+
+#[test]
+fn editor_find_reveals_matches_outside_the_initial_viewport() {
     let lines: String = (1..=100).map(|n| format!("line {n}\n")).collect();
     let mut app = open_file_view(&format!("{lines}target here\n"));
-    let (_, rows) = draw(&mut app, 120, 36);
-    let all = joined(&rows);
-    assert!(all.contains("lines 1-"), "{all}");
-    assert!(all.contains("of 101"), "{all}");
-    assert!(
-        !all.contains("scroll"),
-        "the range moved to the header: {all}"
-    );
-
-    press(&mut app, &["pagedown"]);
-    let scroll = app.ui.file_scroll;
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(
-        joined(&rows).contains(&format!("lines {}-", scroll + 1)),
-        "{rows:?}"
-    );
-
-    press(&mut app, &["/"]);
+    assert!(!joined(&draw(&mut app, 120, 36).1).contains("target here"));
+    press(&mut app, &["ctrl+f"]);
     typing(&mut app, "TARGET");
     press(&mut app, &["enter"]);
-    let (buf, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("1 of 1"), "{rows:?}");
-    let y = rows
-        .iter()
-        .position(|row| row.contains("target here"))
-        .unwrap() as u16;
-    let x = col_of(&rows[y as usize], "target") as u16;
-    assert!(buf
-        .cell((x, y))
-        .unwrap()
-        .modifier
-        .contains(ratatui::style::Modifier::UNDERLINED));
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("target here"), "{rows:?}");
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0));
+    assert!(!app.ui.file_edit.as_ref().unwrap().dirty());
 }
 
 #[test]
@@ -2193,7 +2213,10 @@ fn question_card_shows_options_and_a_number_key_answers() {
 
 #[test]
 fn long_question_content_scrolls_and_drafts_survive_pages() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../interface/scenarios/question-readability.json")).unwrap();
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/question-readability.json"
+    ))
+    .unwrap();
     let mut app = asking(&fixture["questions"].to_string(), (80, 24));
     press(&mut app, &["alt+w", "1", "enter"]);
     let mut seen = String::new();
@@ -2201,13 +2224,41 @@ fn long_question_content_scrolls_and_drafts_survive_pages() {
         seen.push_str(&joined(&draw(&mut app, 80, 24).1));
         press(&mut app, &["pagedown"]);
     }
-    for text in ["For the second question", "review the state?", "Automatically roll back", "previous service configuration", "rollback includes", "sequence afterward", "Pause and wait", "explicit decision", "Add context"] {
+    let end = draw(&mut app, 80, 24);
+    assert!(joined(&end.1).contains("Add context"));
+    if let Ok(dir) = std::env::var("NEXUS_QUESTION_SHOTS") {
+        let (fg, bg) = nexus_tui::svg::page_colors(false);
+        std::fs::write(
+            format!("{dir}/tui-narrow-end-verified.svg"),
+            nexus_tui::svg::to_svg(&end.0, fg, bg),
+        )
+        .unwrap();
+    }
+    for text in [
+        "For the second question",
+        "review the state?",
+        "Automatically roll back",
+        "previous service configuration",
+        "rollback includes",
+        "sequence afterward",
+        "Pause and wait",
+        "explicit decision",
+        "Add context",
+    ] {
         assert!(seen.contains(text), "missing {text}: {seen}");
     }
     press(&mut app, &["alt+a"]);
     typing(&mut app, "my draft");
     press(&mut app, &["alt+left", "alt+right"]);
-    assert_eq!(app.ask_current().unwrap().pick().unwrap().input.expanded_text(), "my draft");
+    assert_eq!(
+        app.ask_current()
+            .unwrap()
+            .pick()
+            .unwrap()
+            .input
+            .expanded_text(),
+        "my draft"
+    );
     press(&mut app, &["enter"]);
     let mut review = String::new();
     for _ in 0..100 {
@@ -2216,6 +2267,8 @@ fn long_question_content_scrolls_and_drafts_survive_pages() {
     }
     assert!(review.contains("operator to review the state"), "{review}");
     assert!(review.contains("my draft"), "{review}");
+    assert!(review.contains("enter submit"), "{review}");
+    assert!(review.contains("esc stop"), "{review}");
 }
 
 #[test]
@@ -3231,6 +3284,21 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
         rows[1]
     );
     assert_eq!(buf[(1, 0)].bg, Color::Rgb(0x14, 0x14, 0x14));
+}
+
+#[test]
+fn every_manifest_sidebar_tab_is_clickable_when_the_sidebar_is_wide() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    app.ui.left_width = 40;
+    for entry in &Manifest::load().navigation.left_sidebar.tab {
+        draw(&mut app, 160, 40);
+        let tab = nexus_tui::ui::Tab::from_id(&entry.id).unwrap();
+        let rect = app.hits.rect_of(&Target::Tab(tab)).expect("manifest tab");
+        assert_eq!(rect.y, 0);
+        assert!(rect.right() <= app.regions.left.unwrap().right());
+        click(&mut app, rect.x, rect.y);
+        assert_eq!(app.ui.tab, tab, "{} tab activates on click", entry.id);
+    }
 }
 
 #[test]
@@ -4555,54 +4623,42 @@ fn the_file_view_is_a_modal_at_every_width() {
         "typing stays out of the page behind"
     );
     press(&mut app, &["esc"]);
-    assert!(!app.ui.file_open, "esc closes the modal");
+    assert!(
+        app.ui.dialog.is_some(),
+        "typed changes require confirmation"
+    );
+    press(&mut app, &["right", "enter"]);
+    assert!(!app.ui.file_open, "discard closes the modal");
 }
 
 #[test]
-fn long_lines_wrap_in_the_file_view_and_its_end_stays_reachable() {
+fn long_file_lines_keep_the_last_line_reachable() {
     let long = "abcdefghij".repeat(30);
     let body: String = (0..40).map(|n| format!("{n} {long}\n")).collect();
     let mut app = open_file_view(&body);
-    let (_, rows) = draw(&mut app, 120, 36);
-    let r = app.regions.panel.unwrap();
-    let all = joined(&rows);
-    assert!(!all.contains('\u{2026}'), "nothing is cut: {all}");
-    let first = rows
-        .iter()
-        .position(|row| row.contains("1 \u{2502} 0"))
-        .unwrap();
-    let next = &rows[first + 1];
-    assert!(
-        next.contains("\u{2502}") && !next.contains(" 2 \u{2502}"),
-        "a wrapped row has no number: {next:?}"
-    );
-    for _ in 0..200 {
+    for _ in 0..40 {
         press(&mut app, &["down"]);
     }
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(
-        joined(&rows).contains("40 \u{2502} 39"),
-        "the last line shows"
-    );
-    assert_eq!(r, app.regions.panel.unwrap());
+    assert!(joined(&rows).contains("39 abcdefghij"), "{rows:?}");
+    assert_eq!(app.ui.file_edit.as_ref().unwrap().buf.text(), body);
 }
 
 #[test]
-fn long_lines_wrap_while_editing_and_the_cursor_follows() {
+fn long_editor_lines_keep_the_end_reachable_and_editable() {
     let long = "abcdefghij".repeat(30);
     let mut app = open_file_view(&format!("{long}\nshort\n"));
-    draw(&mut app, 120, 36);
-    app.execute("editor.edit");
+    press(&mut app, &["end"]);
+    typing(&mut app, "TAIL");
     let (_, rows) = draw(&mut app, 120, 36);
-    let r = app.regions.panel.unwrap();
-    let room = nexus_tui::paint::file_text_room(r.width, 3);
-    let first = rows
-        .iter()
-        .position(|row| row.contains("  1 \u{2502} abc"))
-        .unwrap();
-    assert!(rows[first + 1].contains("\u{2502} ") && !rows[first + 1].contains("  2 \u{2502}"));
-    assert!(rows.iter().any(|row| row.contains("  2 \u{2502} short")));
-    assert!(room < long.len());
+    assert!(joined(&rows).contains("TAIL"), "{rows:?}");
+    assert_eq!(
+        app.ui.file_edit.as_ref().unwrap().buf.text(),
+        format!("{long}TAIL\nshort\n")
+    );
+    press(&mut app, &["down", "home"]);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("short"), "{rows:?}");
 }
 
 #[test]
@@ -4727,166 +4783,128 @@ fn a_skill_entry_asks_core_for_its_full_text() {
 }
 
 #[test]
-fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
+fn the_editor_has_a_header_a_gutter_and_a_find_replace_row() {
     let lines: String = (1..=40).map(|n| format!("line {n} needle\n")).collect();
     let mut app = open_file_view(&lines);
     let (buf, rows) = draw(&mut app, 120, 36);
-    let r = app.regions.panel.expect("the file panel");
+    let r = app.regions.panel.unwrap();
     let head = &rows[r.y as usize];
-    assert!(head.contains("hello.txt"), "{head:?}");
-    // the basename is bold, the directory is not
+    assert!(
+        head.contains("hello.txt") && head.contains("editing"),
+        "{head:?}"
+    );
     let at = col_of(head, "hello.txt") as u16;
     assert!(buf[(at, r.y)]
         .modifier
         .contains(ratatui::style::Modifier::BOLD));
-    assert!(!buf[(at - 2, r.y)]
-        .modifier
-        .contains(ratatui::style::Modifier::BOLD));
-    // the range sits at the right edge of the column, before the `e edit` hint
-    let page = nexus_tui::paint::file_page(r.height);
-    assert!(head.contains(&format!("lines 1-{page} of 40")), "{head:?}");
-    assert!(head.contains("edit"), "{head:?}");
-    // the gutter: right-aligned numbers, then `\u{2502}`
     let first = rows
         .iter()
         .position(|r| r.contains("line 1 needle"))
         .unwrap();
-    assert_eq!(first as u16, r.y + 2, "a blank row under the header");
-    assert!(
-        rows[first].contains("  1 \u{2502} line 1"),
-        "{:?}",
-        rows[first]
-    );
-    assert!(
-        rows[first + 9].contains(" 10 \u{2502} line 10"),
-        "{:?}",
-        rows[first + 9]
-    );
-    let bar = col_of(&rows[first], "\u{2502}") as u16;
-    assert_eq!(
-        buf[(bar, first as u16)].fg,
-        app.theme.color("border.default").unwrap()
-    );
-    // the page is the rows between the blank row and the search row
-    assert!(page > 10 && page < 40, "{page}");
-    assert!(
-        rows[r.bottom() as usize - 1].trim().is_empty(),
-        "no search yet"
-    );
-    assert!(!joined(&rows).contains(&format!("line {} needle", page + 1)));
-
-    press(&mut app, &["/"]);
+    assert!(rows[first].contains("1"));
+    assert!(rows[first + 9].contains("10") && rows[first + 9].contains("line 10 needle"));
+    assert!(!joined(&rows).contains("line 40 needle"));
+    press(&mut app, &["ctrl+f"]);
     typing(&mut app, "needle");
-    press(&mut app, &["enter", "n"]);
+    press(&mut app, &["enter", "enter", "tab"]);
+    typing(&mut app, "replacement");
     let (buf, rows) = draw(&mut app, 120, 36);
-    let bottom = &rows[r.bottom() as usize - 1];
-    assert!(bottom.contains("/ needle  2 of 40"), "{bottom:?}");
-    assert!(
-        bottom
-            .trim_end()
-            .ends_with("n next \u{b7} N prev \u{b7} esc end"),
-        "{bottom:?}"
-    );
-    // every match is on the selection band; the current one is reversed
-    let line = |n: usize| {
-        rows.iter()
+    for n in [2, 3] {
+        let y = rows
+            .iter()
             .position(|r| r.contains(&format!("line {n} needle")))
-            .unwrap() as u16
-    };
-    let x = |n: usize| col_of(&rows[line(n) as usize], "needle") as u16;
-    // (`n` scrolled the second match to the top)
+            .unwrap();
+        let x = col_of(&rows[y], "needle") as u16;
+        assert_ne!(
+            buf[(x, y as u16)].bg,
+            buf[(x - 1, y as u16)].bg,
+            "match {n} is highlighted"
+        );
+    }
+    let all = joined(&rows);
     assert!(
-        buf[(x(3), line(3))]
-            .modifier
-            .contains(ratatui::style::Modifier::UNDERLINED)
-            && !buf[(x(3), line(3))]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED)
+        all.contains("needle") && all.contains("replacement"),
+        "{all}"
     );
-    assert!(buf[(x(2), line(2))]
-        .modifier
-        .contains(ratatui::style::Modifier::REVERSED));
-    // while typing the hints change
-    press(&mut app, &["/"]);
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(
-        rows[r.bottom() as usize - 1].contains("enter next"),
-        "{rows:?}"
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(1));
+    assert_eq!(
+        app.ui.file_search.as_ref().unwrap().replacement,
+        "replacement"
     );
 }
 
 #[test]
-fn markdown_files_open_as_prose_and_keep_the_source_behind_p() {
+fn markdown_files_open_as_editable_source_with_an_explicit_preview() {
     let content = "# Title\n\nSome **bold** text.\n";
     let mut app = open_named_file_view("hello.md", content);
-    let (_, rows) = draw(&mut app, 120, 36);
-    let r = app.regions.panel.expect("the file panel");
-    let all = joined(&rows);
-    assert!(all.contains("Title"), "{all}");
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("# Title") && all.contains("**bold**"), "{all}");
+    assert!(all.contains("ctrl+shift+p preview"), "{all}");
+    press(&mut app, &["ctrl+shift+p"]);
+    assert!(app.file_preview());
+    let all = joined(&draw(&mut app, 120, 36).1);
     assert!(
-        !all.contains("# Title"),
-        "the heading marker is gone: {all}"
+        all.contains("Some bold text.") && !all.contains("# Title"),
+        "{all}"
     );
-    assert!(
-        all.contains("Some bold text."),
-        "the emphasis markers are gone: {all}"
-    );
-    assert!(
-        rows[r.y as usize].contains("p source"),
-        "{:?}",
-        rows[r.y as usize]
-    );
-    assert!(
-        rows[r.y as usize].contains("e edit"),
-        "the header says how to edit: {:?}",
-        rows[r.y as usize]
-    );
-    assert!(!all.contains("\u{2502} # Title"), "no source gutter: {all}");
-
-    press(&mut app, &["p"]);
-    let (_, rows) = draw(&mut app, 120, 36);
-    let all = joined(&rows);
-    assert!(all.contains("# Title"), "the source is readable: {all}");
-    assert!(all.contains("1 \u{2502} # Title"), "{all}");
-    assert!(
-        rows[r.y as usize].contains("p preview"),
-        "{:?}",
-        rows[r.y as usize]
-    );
-
-    // Find reads the source, so it leaves the preview and opens the bar.
-    press(&mut app, &["p", "ctrl+f"]);
+    press(&mut app, &["ctrl+f"]);
     assert!(app.ui.file_source && app.ui.file_search.is_some());
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(
-        rows[r.bottom() as usize - 1].contains("/ "),
-        "{:?}",
-        rows[r.bottom() as usize - 1]
-    );
-    press(&mut app, &["esc", "e"]);
-    assert!(app.ui.file_edit.is_some(), "e edits after the preview");
+    press(&mut app, &["esc"]);
+    assert_eq!(app.ui.file_edit.as_ref().unwrap().buf.text(), content);
+    typing(&mut app, "x");
+    assert!(app.ui.file_edit.as_ref().unwrap().dirty());
+}
 
-    let mut preview = open_named_file_view("hello.md", content);
-    assert!(preview.file_preview());
-    preview.click(Target::FileEdit);
-    assert!(
-        preview.ui.file_edit.is_some(),
-        "the header's edit control starts the editor"
-    );
-    let mut preview = open_named_file_view("hello.md", content);
-    press(&mut preview, &["e"]);
-    assert!(
-        preview.ui.file_edit.is_some(),
-        "e edits straight from the preview"
-    );
-
-    // A plain text file has no preview control.
-    let mut plain = open_file_view("hello\n");
-    let (_, rows) = draw(&mut plain, 120, 36);
-    let r = plain.regions.panel.expect("the file panel");
-    assert!(!rows[r.y as usize].contains("preview"));
-    press(&mut plain, &["p"]);
-    assert!(!plain.ui.file_source);
+/// `NEXUS_EDITOR_SHOTS=<dir> cargo test --test shell editor_parity_shots -- --ignored`.
+#[test]
+#[ignore]
+fn editor_parity_shots() {
+    let Ok(dir) = std::env::var("NEXUS_EDITOR_SHOTS") else {
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    let content =
+        "# Editor parity\n\nneedle Needle needle\nEnd inserts after the last character.\n";
+    let mut app = open_named_file_view("hello.md", content);
+    let write = |app: &mut nexus_tui::app::App, name: &str| {
+        let (buf, rows) = draw(app, 120, 36);
+        let (fg, bg) = nexus_tui::svg::page_colors(false);
+        std::fs::write(
+            format!("{dir}/{name}.svg"),
+            nexus_tui::svg::to_svg(&buf, fg, bg),
+        )
+        .unwrap();
+        std::fs::write(format!("{dir}/{name}.txt"), joined(&rows)).unwrap();
+    };
+    write(&mut app, "tui-editor-source");
+    press(&mut app, &["ctrl+f"]);
+    typing(&mut app, "needle");
+    press(&mut app, &["alt+c", "enter", "enter", "tab"]);
+    typing(&mut app, "thread");
+    write(&mut app, "tui-editor-find");
+    press(&mut app, &["ctrl+shift+r", "esc", "ctrl+z", "ctrl+z"]);
+    assert_eq!(app.ui.file_edit.as_ref().unwrap().buf.text(), content);
+    press(&mut app, &["ctrl+shift+p"]);
+    assert!(app.file_preview());
+    write(&mut app, "tui-editor-preview");
+    if let Ok(shared_dir) = std::env::var("NEXUS_EDITOR_SHARED_SHOTS") {
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        let mut shared = open_named_file_view("AGENTS.md", "# Title\n\nSome **bold** text.\n");
+        for name in ["tui-source", "tui-find"] {
+            if name == "tui-find" {
+                press(&mut shared, &["ctrl+f"]);
+                typing(&mut shared, "bold");
+            }
+            let (buf, rows) = draw(&mut shared, 120, 36);
+            let (fg, bg) = nexus_tui::svg::page_colors(false);
+            std::fs::write(
+                format!("{shared_dir}/{name}.svg"),
+                nexus_tui::svg::to_svg(&buf, fg, bg),
+            )
+            .unwrap();
+            std::fs::write(format!("{shared_dir}/{name}.txt"), joined(&rows)).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -5647,7 +5665,6 @@ fn disk_file_reads_follow_clean_edits_and_preserve_dirty_edits() {
     let scenario: serde_json::Value =
         serde_json::from_str(include_str!("../../interface/scenarios/file-watch.json")).unwrap();
     let mut app = open_file_view(scenario["initial"].as_str().unwrap());
-    press(&mut app, &["e"]);
     let project = app.current_project().unwrap();
     let read = |content: &str, revision: &str| SyncMsg::Files {
         project: project.clone(),

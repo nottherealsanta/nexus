@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · New session ×    +                                                               ◨
+     │                            New session
+▏
+▏ X   ‹ Back  /work/nexus-home/ws/AGENTS.md                                          editing  ctrl+shift+p preview
+▏  1      1  ▼ # Title
+          2
+          3    Some **bold** text.
+  +       4
+
+                                                                                                                    a38
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      Find bold  1 matches Aa:off ↑ ↓ Close
+      Replace   Replace All
+
+     │                             /work/nexus-home/ws
+     │  Settings         ctrl+,    ─────────────────────────────────────────────────────

@@ -82,7 +82,10 @@ fn strip_counts_and_modal_list() {
     assert!(!shown.contains("Kernels (1)"), "{shown}");
     app.execute("session.resources");
     let shown = draw(&mut app, 160, 50).1.join("\n");
-    assert!(shown.contains("Background shells (1 live, 2 kept)"), "{shown}");
+    assert!(
+        shown.contains("Background shells (1 live, 2 kept)"),
+        "{shown}"
+    );
     assert!(shown.contains("$ sleep 30"), "{shown}");
 }
 

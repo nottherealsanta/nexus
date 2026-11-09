@@ -423,7 +423,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     config_revision = config.read()["revision"]
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
-    terminal_service = TerminalService(runtime.store.db)
+    terminal_service = TerminalService(
+        runtime.store.db,
+        lambda data: runtime.bus.publish("terminal.updated", data, session_id=data["session_id"]),
+    )
     runtime.jobs.terminal_service = terminal_service
     from .file_watch import FileWatches
 

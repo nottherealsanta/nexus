@@ -139,8 +139,8 @@ fn question_card_marks_single_and_multiple_choice_and_offers_free_text() {
         all.contains("Add context, or type your own answer"),
         "{all}"
     );
-    // pad, head, sub, blank, question, 2 options, blank, field, blank, hint, pad
-    assert_eq!(app.regions.waiting.height, 12);
+    // Reserve three footer rows at this card width so complete key hints wrap.
+    assert_eq!(app.regions.waiting.height, 14);
     press(&mut app, &["down", "enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);

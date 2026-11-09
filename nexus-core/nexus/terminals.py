@@ -34,6 +34,47 @@ MAX_INPUT = 16 * 1024
 LEASE_SECONDS = 30
 DEFAULT_NAME = "Terminal"
 MAX_NAME = 80
+MAX_CONTROL_CHARS = 4096
+DIAGNOSTIC_FIELDS = ("id", "session_id", "turn_id", "tool_call_id", "background_job_id", "status", "created", "ended",
+                     "exit_code", "signal", "control_acquisitions", "control_releases")
+
+
+class BoundedByteStream(pyte.ByteStream):
+    """Bound diagnostic parsing without changing raw bytes or safe replay boundaries."""
+
+    def _parser_fsm(self):
+        parser = super()._parser_fsm()
+        plain = next(parser)
+        count = 0
+        prefix = ""
+        dropping = False
+        escaped = False
+        while True:
+            char = yield plain
+            if dropping:
+                osc = prefix.startswith(("\x1b]", "\x9d"))
+                ended = ((char in "\x07\x9c" or escaped and char == "\\") if osc
+                         else "@" <= char <= "~" or char in "\x18\x1a")
+                escaped = char == "\x1b"
+                if ended:
+                    parser = super()._parser_fsm()
+                    plain = next(parser)
+                    count, prefix, dropping = 0, "", False
+                continue
+            was_plain = plain
+            plain = parser.send(char)
+            if plain:
+                count, prefix = 0, ""
+            else:
+                if was_plain:
+                    count, prefix = 0, ""
+                count += 1
+                if len(prefix) < 2:
+                    prefix += char
+                if count >= MAX_CONTROL_CHARS:
+                    parser.close()
+                    dropping = True
+                    escaped = char == "\x1b"
 
 
 class Screen(pyte.Screen):
@@ -84,10 +125,14 @@ class Terminal:
     def __init__(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
                  rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None,
                  command: str | None = None, background_job_id: str | None = None,
-                 output_listener: Callable[[bytes], None] | None = None) -> None:
+                 output_listener: Callable[[bytes], None] | None = None,
+                 turn_id: str | None = None, tool_call_id: str | None = None) -> None:
         self.id = secrets.token_urlsafe(18)
         self.name = DEFAULT_NAME
         self.background_job_id = background_job_id
+        self.turn_id, self.tool_call_id = turn_id, tool_call_id
+        self.control_acquisitions = 0
+        self.control_releases = 0
         self.output_listener = output_listener
         self.output_done = asyncio.Event()
         self.project_id, self.workspace, self.creator, self.session_id = project_id, workspace, creator, session_id
@@ -98,7 +143,7 @@ class Terminal:
         self.signal: int | None = None
         self.rows, self.cols = rows, cols
         self.screen = Screen(cols, rows)
-        self.parser = pyte.ByteStream(self.screen)
+        self.parser = BoundedByteStream(self.screen)
         self.frames: deque[tuple[dict[str, Any], int]] = deque()
         self.retained = 0
         self.discarded = 0
@@ -147,7 +192,9 @@ class Terminal:
                 "session_id": self.session_id, "creator": self.creator, "status": self.status,
                 "created": self.created, "ended": self.ended, "rows": self.rows, "cols": self.cols,
                 "exit_code": self.exit_code, "signal": self.signal,
-                "controller": controller.client_id if controller else None}
+                "controller": controller.client_id if controller else None,
+                "turn_id": self.turn_id, "tool_call_id": self.tool_call_id,
+                "control_acquisitions": self.control_acquisitions, "control_releases": self.control_releases}
 
     def _emit(self, kind: str, **payload: Any) -> None:
         self.seq += 1
@@ -175,15 +222,15 @@ class Terminal:
             else:
                 self._discard_to_boundary = True
         self.discarded += removed
-        for attachment in list(self.attachments.values()):
+        overflowed = []
+        for aid, attachment in list(self.attachments.items()):
             if attachment.queue is not None:
                 try:
                     attachment.queue.put_nowait(frame)
                 except asyncio.QueueFull:
-                    # A disconnected slow consumer must reconnect and resync.
-                    while not attachment.queue.empty():
-                        attachment.queue.get_nowait()
-                    attachment.queue.put_nowait(None)
+                    overflowed.append(aid)
+        for aid in overflowed:
+            self.detach(aid)
 
     def _read(self) -> bool:
         try:
@@ -253,15 +300,17 @@ class Terminal:
         return self.attachments[aid]
 
     def detach(self, aid: str) -> None:
+        attachment = self.attachments.pop(aid, None)
+        if attachment and attachment.queue is not None:
+            if attachment.queue.full():
+                while not attachment.queue.empty():
+                    attachment.queue.get_nowait()
+            attachment.queue.put_nowait(None)
         if self.controller == aid:
             self.controller = None
+            self.control_releases += 1
+            self._persist()
             self._emit("control", controller=None)
-        attachment = self.attachments.pop(aid, None)
-        if attachment and attachment.queue:
-            try:
-                attachment.queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
 
     def control(self, aid: str, action: str) -> None:
         attachment = self.attachment(aid)
@@ -270,13 +319,17 @@ class Terminal:
         if action == "acquire":
             if self.controller not in (None, aid):
                 raise Conflict("terminal already has a controller")
+            if self.controller != aid:
+                self.control_acquisitions += 1
             self.controller = aid
         elif action == "release":
             if self.controller != aid:
                 raise Conflict("not the controller")
             self.controller = None
+            self.control_releases += 1
         else:
             raise ValueError("invalid control action")
+        self._persist()
         self._emit("control", controller=self.metadata()["controller"])
 
     def require_control(self, aid: str) -> Attachment:
@@ -379,24 +432,41 @@ def dimensions(rows: int, cols: int) -> None:
 
 
 class TerminalService:
-    def __init__(self, db: sqlite3.Connection | None = None) -> None:
+    def __init__(self, db: sqlite3.Connection | None = None,
+                 on_change: Callable[[dict[str, Any]], None] | None = None) -> None:
+        self.on_change = on_change
         self.terminals: dict[str, Terminal] = {}
         self.retired: dict[str, dict[str, Any]] = {}
         self.db = db
         if db is not None:
             db.execute("create table if not exists terminal_resource (id text primary key, metadata text not null)")
+            recovered = []
             for terminal_id, raw in db.execute("select id, metadata from terminal_resource").fetchall():
                 metadata = json.loads(raw)
                 if metadata["status"] == "running":
-                    metadata.update(status="ended", reason="core_restart", ended=time.time(), controller=None)
-                    db.execute("update terminal_resource set metadata=? where id=?", (json.dumps(metadata), terminal_id))
+                    metadata.update(status="ended", reason="core_restart", ended=time.time())
+                    recovered.append(metadata)
+                metadata["controller"] = None
+                db.execute("update terminal_resource set metadata=? where id=?", (json.dumps(metadata), terminal_id))
             db.commit()
+            for metadata in recovered:
+                self._announce(metadata)
+
+    def _announce(self, metadata: dict[str, Any]) -> None:
+        if self.on_change and all(metadata.get(key) for key in ("session_id", "turn_id", "tool_call_id")):
+            self.on_change({key: metadata.get(key) for key in DIAGNOSTIC_FIELDS})
 
     def save(self, metadata: dict[str, Any]) -> None:
+        previous = None
         if self.db is not None:
+            row = self.db.execute("select metadata from terminal_resource where id=?", (metadata["id"],)).fetchone()
+            if row:
+                previous = json.loads(row[0])
             self.db.execute("insert or replace into terminal_resource values (?, ?)",
                             (metadata["id"], json.dumps(metadata)))
             self.db.commit()
+        if previous is None or any(metadata.get(key) != previous.get(key) for key in DIAGNOSTIC_FIELDS):
+            self._announce(metadata)
 
     def list(self, project_id: str) -> list[dict[str, Any]]:
         if self.db is None:
@@ -441,7 +511,8 @@ class TerminalService:
     def create(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
                rows: int, cols: int, command: str | None = None,
                background_job_id: str | None = None,
-               output_listener: Callable[[bytes], None] | None = None) -> Terminal:
+               output_listener: Callable[[bytes], None] | None = None,
+               turn_id: str | None = None, tool_call_id: str | None = None) -> Terminal:
         dimensions(rows, cols)
         if sum(t.status == "running" for t in self.terminals.values()) >= MAX_TERMINALS:
             raise Conflict("terminal limit reached")
@@ -466,7 +537,8 @@ class TerminalService:
             raise ValueError("workspace does not exist")
         term = Terminal(project_id=project_id, workspace=workspace, creator=creator,
                         session_id=session_id, rows=rows, cols=cols, persist=self.save, command=command,
-                        background_job_id=background_job_id, output_listener=output_listener)
+                        background_job_id=background_job_id, output_listener=output_listener,
+                        turn_id=turn_id, tool_call_id=tool_call_id)
         self.terminals[term.id] = term
         return term
 

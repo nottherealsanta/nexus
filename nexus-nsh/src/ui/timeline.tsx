@@ -58,6 +58,8 @@ type RowKind =
       state: "running" | "done" | "error" | "waiting" | "denied"; duration?: string; seconds?: number; diff?: Diff; output?: string;
       /** The file an edit counts toward in its group's summary (the call id without a path). */
       editFile?: string; exit?: number; errorLine?: string;
+      /** A `fork` call's session, once known: the open row ends with a link to it. */
+      forkId?: string;
       detail: ToolDetailLine[];
       raw: string; open: boolean; clipped: boolean; showAll: boolean;
       /** Images the tool returned (K8): artifacts Core stored, shown beside the output. */
@@ -207,6 +209,7 @@ function toolArg(name: string, args: string | undefined): string {
     case "bash": return preview80(first(o.command));
     case "code": return "";
     case "ask": return str(o.questions?.[0]?.question);
+    case "fork": return preview80(first(o.title) || first(o.prompt));
     default: return str(o.pattern ?? o.path ?? o.query ?? o.url ?? o.name);
   }
 }
@@ -436,9 +439,9 @@ function detailLines(value: string): string[] {
 }
 /** A command's first rows, ahead of its output: `$ cmd`, then a continuation. */
 function commandRows(name: string, args: string | undefined): ToolDetailLine[] {
-  if (name !== "bash" && name !== "code") return [];
+  if (name !== "bash" && name !== "code" && name !== "fork") return [];
   let command: unknown;
-  try { const o = JSON.parse(args ?? "{}"); command = name === "bash" ? o.command : o.code; } catch { return []; }
+  try { const o = JSON.parse(args ?? "{}"); command = name === "bash" ? o.command : name === "fork" ? o.prompt : o.code; } catch { return []; }
   if (typeof command !== "string") return [];
   const lines = detailLines(command);
   return lines.slice(0, COMMAND_ROWS).map((line, i) => ({
@@ -568,10 +571,10 @@ function buildStableRows(): Row[] {
           out.push({ key, kind: "reasoning", text: summary, encrypted: !summary.trim(), open: !!summary.trim() && open(`reason:${key}`, false) });
         } else if (p.type === "tool_call") {
           const id = p.id ?? key;
-          if (p.name === "session" || p.name === "fork" || p.name === "message_session") {
+          // A `fork` is a minor task run like a tool call: it is a tool row (below), not a child card.
+          if (p.name === "session" || p.name === "message_session") {
             let a: any = {};
             try { a = JSON.parse(p.arguments ?? "{}"); } catch {}
-            if (p.name === "fork") a.agent = "fork";
             const follow = p.name === "message_session";
             const child = follow ? model.sessions.get(a.session) : [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id);
             const res = results.get(id);
@@ -628,8 +631,9 @@ function buildStableRows(): Row[] {
               ? [{ text: `↑ showing all ${allDetail.length} lines · o show less`, tone: "show-less" }, ...capped]
               : capped;
             const exitCode = name === "bash" ? bashExit(res?.output) : undefined;
+            const forkId = name === "fork" ? [...model.sessions.values()].find((c) => c.parent_id === sid && c.parent_call_id === id)?.id : undefined;
             out.push({
-              key, kind: "tool", id, name, arg: toolArg(name, p.arguments), summary,
+              key, kind: "tool", id, name, arg: toolArg(name, p.arguments), summary, forkId,
               editFile: isEdit ? (typeof args.path === "string" ? args.path : id) : undefined,
               exit: exitCode !== undefined && exitCode !== 0 ? exitCode : undefined,
               errorLine: failed ? preview80(firstLine(res?.output ?? "")) : undefined,
@@ -823,7 +827,7 @@ function activitySummary(items: ActivityEntry[]): string {
       if (item.editFile !== undefined) editFiles.add(item.editFile);
       noun = ({
         bash: "command", read: "read", edit: "edit", patch: "edit", write: "edit",
-        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session", fork: "session",
+        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session", fork: "fork",
       } as Record<string, string>)[item.name] ?? "tool";
     }
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
@@ -1261,7 +1265,7 @@ function ToolTone(tone: string): string {
 /** Member label and the verb icon (the status glyph replaces it while running, failed or waiting). */
 const VERB: Record<string, string> = {
   bash: "Shell", read: "Read", edit: "Edit", patch: "Edit", write: "Write", code: "Code", ask: "Ask",
-  web_search: "Search", web_fetch: "Fetch",
+  web_search: "Search", web_fetch: "Fetch", fork: "Fork",
 };
 function verbLabel(name: string): string { return VERB[name] ?? name; }
 function verbIcon(name: string): IconName {
@@ -1474,6 +1478,13 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
                 {(x) => <View class="gap-1"><Image src={apiUrl(`/api/artifact/${x().artifact}`)} style={{ width: 320, height: 240, objectFit: "contain" }} accessibilityLabel={x().name || "image"} /><Text class={META}>{x().name}</Text></View>}
               </Each>
             </View>
+          </If>
+          {/* A fork's own session, as the TUI's `open fork ↗` row: the only way in from the parent's timeline. */}
+          <If when={!!r().forkId}>
+            <Button onPress={() => r().forkId && void selectSession(r().forkId!)} testID={`tool-open-fork-${r().id}`} accessibilityLabel="open fork"
+              class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+              <Text class="font-(family-name:--font-code) text-[12.5px] leading-5 text-primary">open fork ↗</Text>
+            </Button>
           </If>
         </View>
       </If>

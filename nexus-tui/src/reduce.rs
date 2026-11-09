@@ -549,6 +549,11 @@ impl Model {
             .filter(|_| keep_in_scratch(&event.kind))
             .and_then(|sid| self.view_mut(sid))
         {
+            // A live provider error goes once the turn continues or another message arrives.
+            if matches!(event.kind.as_str(), "step_start" | "message.added") {
+                view.scratch
+                    .retain(|e| !matches!(e.kind.as_str(), "session.error" | "retry_exhausted"));
+            }
             view.scratch.push(scratch_copy(event));
         }
         Applied::Applied

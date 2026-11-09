@@ -7,6 +7,11 @@ archiving, pending directory moves and startup recovery, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files. Core also owns
 interactive terminal PTYs, with a separate bounded stream and lifecycle described
 in [terminals.md](terminals.md); they never enter model context automatically.
+Terminal viewer overflow, disconnect and restart revoke attachment authority;
+no controller identity survives restart, including on already-exited resources.
+Linked background jobs retain their ordinary tool-output path. Their terminal
+lifecycle may also appear as bounded, exact-tool-linked diagnostic spans in the
+inspector, without adding canonical messages, terminal bytes or model usage.
 
 The daemon also keeps the latest provider-usage snapshot in its database, refreshing it every 10 minutes by default
 while running. `[usage] refresh_minutes` changes the interval (1–1440); clients can request an immediate refresh.
@@ -436,7 +441,7 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   after `session.created`. Everything else (`parent_id`, `parent_call_id`,
   `launched_by: "agent"`, `wait`, notifications, `message_session` from the
   parent) is as for any child; reports name it `(fork)` instead of
-  `(agent A)`. The daemon refuses every `session`, `fork` and `message_session` call a fork makes, with an explanatory error; only roots can fork.
+  `(agent A)`. The daemon refuses every `session`, `fork` and `message_session` call a fork makes, with an explanatory error; only roots can fork. A fork is read-only (its `edit`, `write`, `patch`, workspace control and non-read-only MCP calls are refused) and each of its turns has at most 20 steps.
 - **Users.** A user can start a child too: `POST /api/session {parent}`.
 - **Interrupt and delete.** Interrupting a session interrupts its descendants'
   turns, and an interrupted parent is not woken by them. The session itself is

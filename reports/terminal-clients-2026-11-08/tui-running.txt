@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]    [Git]     · New session ×    +                                                                                                           □
+     │                                  New session
+▏    │                              ▣
+▏ W  │ ⌕ Search sessions       ctrl+k
+▏  1 │                                     System prompt ~852
+     │▏  New session               7m
+     │▏                                    AGENTS.md  not found · /private/tmp/nexus-terminal-parity.zAwXSw/workspace/AGENTS.md
+  +  │
+     │ + New session                       Tools [16] ~2.9K
+     │                                       ● read                      ● bash_kill                 ● ask
+     │                                       ● grep                      ● edit                      ● code
+     │                                       ● glob                      ● patch                     ● fork
+     │                                       ● ls                        ● write                     ● expose_workspace_tools
+     │                                       ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+     │
+     │                                     Skills [0]  none
+     │
+     │                                     MCP [0]  none
+     │
+     │                                     total  ~3,757 tok
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                      Type a message…
+     │
+     │                                      Build · … · default                                                                                                     0
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/nexus-terminal-parity.zAwXSw/workspace    1 terminal shell
+     │                                   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+     │                                 Terminals (1)  Ctrl+] tabs                                                              +  ✎  ×  [Release control]  [Attach]  ⧉  ▾
+     │                                  ● Terminal parity ×
+     │                                 13:49:46 /private/tmp/nexus-terminal-parity.zAwXSw/workspace >
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │  Settings               ctrl+,

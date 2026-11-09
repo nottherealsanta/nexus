@@ -51,7 +51,8 @@ impl Filters {
 /// Values the `kind` filter cycles through for a view.
 pub fn kind_options(view: usize) -> &'static [&'static str] {
     match view {
-        0 | 2 => &["turn", "model", "tool", "attempt"],
+        0 => &["turn", "model", "tool", "attempt", "terminal"],
+        2 => &["turn", "model", "tool", "attempt"],
         1 => &["user", "assistant"],
         _ => &[],
     }
@@ -59,7 +60,16 @@ pub fn kind_options(view: usize) -> &'static [&'static str] {
 /// Values the `status` filter cycles through for a view.
 pub fn status_options(view: usize) -> &'static [&'static str] {
     match view {
-        0 | 2 => &["running", "completed", "failed", "interrupted"],
+        0 => &[
+            "running",
+            "completed",
+            "failed",
+            "interrupted",
+            "exited",
+            "closed",
+            "ended",
+        ],
+        2 => &["running", "completed", "failed", "interrupted"],
         5 => &["pending", "replied"],
         _ => &[],
     }
@@ -532,7 +542,11 @@ impl Inspector {
         } else {
             (item["kind"].as_str().unwrap_or("").to_owned(), id.clone())
         };
-        if !["message", "event", "turn", "request", "tool", "attempt"].contains(&kind.as_str()) {
+        if ![
+            "message", "event", "turn", "request", "tool", "attempt", "terminal",
+        ]
+        .contains(&kind.as_str())
+        {
             return Act::None;
         }
         self.loading_full = Some(id.clone());
@@ -1074,7 +1088,8 @@ impl Inspector {
         ));
         header.push(format!("{pad}{}", ticks.iter().collect::<String>()));
         let mut legend =
-            "# model · = tool · - turn/attempt · > live · ! failed · ? end unknown".to_owned();
+            "# model · = tool · ~ terminal · - turn/attempt · > live · ! failed · ? end unknown"
+                .to_owned();
         if ttfb {
             legend.push_str(" · | first byte");
         }
@@ -1127,6 +1142,8 @@ impl Gantt {
             '#'
         } else if lane["kind"] == "tool" {
             '='
+        } else if lane["kind"] == "terminal" {
+            '~'
         } else {
             '-'
         };

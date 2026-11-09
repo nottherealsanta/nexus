@@ -50,6 +50,13 @@ explicit stream control with the last durable id; id-less events never advance i
 Global `log.retention` announcements are rate-limited. Details and settings:
 [daemon.md](daemon.md#durable-event-log), [api.md](api.md#event-stream).
 
+Exactly tool-linked terminal lifecycle/control metadata changes publish durable
+`terminal.updated` diagnostic events. Their sanitized IDs, status, timestamps and
+control counts advance the inspector head and invalidate open inspector views.
+They contain no terminal bytes, typed input, command labels, workspace paths or
+controller identities, and are not canonical messages or model context. Raw PTY
+output remains on the dedicated terminal stream; see [terminals.md](terminals.md).
+
 ## Conversation
 
 A conversation is a list of `Message`s made of ordered parts.

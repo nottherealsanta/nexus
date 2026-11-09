@@ -1,11 +1,13 @@
 import { Clipboard, PanResponder, Scroll, Text, View, WebView, colorScheme, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
 import theme from "../../gen/theme.json";
-import { commands, term, toKeystroke } from "../commands";
+import { commands, draftKey, term, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
-import { beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
-import { confirmDialog } from "../store";
+import { terminalEvidenceContext, beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
+import { confirmDialog, connection, viewed } from "../store";
+import { terminalEvidence, terminalEvidenceAction, type TerminalEvidenceContext } from "../terminal-evidence";
+import { previewTerminalEvidence } from "../terminal-evidence-preview";
 import { Btn, FOCUS, Icon, T } from "./kit";
 import type { IconName } from "../icons";
 
@@ -14,7 +16,7 @@ function TerminalButton(p: {icon: IconName; label: string; onPress: () => void; 
   return <View class="relative" onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}><Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
     class={`size-8 items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${FOCUS}`}>
     <View testID={`terminal-icon-${p.icon}`}><Icon name={p.icon} /></View>
-  </Button><If when={hovered()}><View style={{width:160}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-xs text-popover-foreground" style={{numberOfLines: 1}}>{p.label}</Text></View></If></View>;
+  </Button><If when={hovered()}><View style={{width:224}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-xs text-popover-foreground">{p.label}</Text></View></If></View>;
 }
 
 const dockHeight = signal(320);
@@ -30,6 +32,20 @@ export function TerminalPanel() {
     onPanResponderMove: (_event, gesture) => dockHeight.set(Math.max(180, Math.min(700, startHeight - gesture.dy))),
   });
   let copyPending = false;
+  let evidenceRequest = 0;
+  let evidencePending: {request: number; id: string; name: string; target: string; generation: number; context: TerminalEvidenceContext} | null = null;
+  const attachSelection = () => {
+    const source = terminalItems().find(t => t.id === terminalSelected());
+    if (!source || viewed()?.kind === "manager" || connection().kind !== "live") return;
+    focusList();
+    const watermark = terminalEvidenceContext();
+    evidencePending = {request: ++evidenceRequest, id: source.id, name: source.name, target: draftKey(), generation:watermark.generation, context:{
+      project_id:source.project_id, workspace:source.workspace, stream_seq:watermark.stream_seq,
+      session_id:source.session_id ?? undefined, turn_id:source.turn_id ?? undefined,
+      tool_call_id:source.tool_call_id ?? undefined, background_job_id:source.background_job_id ?? undefined,
+    }};
+    send({type:"capture", request:evidenceRequest});
+  };
   effect(() => {
     if (!terminalFocused()) return;
     const modified = ["ctrl", "alt", "cmd"].flatMap(mod => [..."abcdefghijklmnopqrstuvwxyz0123456789[]"].flatMap(k => [`${mod}+${k}`, `${mod}+shift+${k}`]));
@@ -38,11 +54,14 @@ export function TerminalPanel() {
     for (const key of keys) { try { off.push(keymap.bind(key, () => {}, {when:"always",passThrough:true})); } catch {} }
     return () => off.forEach(f => f());
   });
+  terminalEvidenceAction.run = attachSelection;
+  effect(() => () => { terminalEvidenceAction.run = null; evidencePending = null; });
   let ready = false;
   let pending: string[] = [];
   let pendingBytes = 0, writeId = 0;
   const writes = new Map<number, {resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>}>();
   const send = (message: {type: string; [key: string]: unknown}): void | Promise<void> => {
+    if (message.type === "reset") evidencePending = null;
     let ack: Promise<void> | undefined;
     if (message.type === "write") {
       const id = ++writeId; message = {...message, id};
@@ -90,6 +109,14 @@ export function TerminalPanel() {
     if (m.type === "focus-list") focusList();
     if (m.type === "input" && typeof m.data === "string") inputTerminal(m.data);
     if (m.type === "resize") resizeTerminal(m.rows, m.cols);
+    if (m.type === "capture" && evidencePending && m.request === evidencePending.request) {
+      const captured = evidencePending; evidencePending = null;
+      if (terminalEvidenceContext().generation !== captured.generation || terminalSelected() !== captured.id || draftKey() !== captured.target || typeof m.data !== "string" || !m.data) {
+        terminalError.set("Select terminal text first; keep the same terminal and draft open while capturing."); return;
+      }
+      const payload = terminalEvidence(captured.id, captured.name, m.data, captured.context);
+      previewTerminalEvidence(captured.target, payload);
+    }
     if (m.type === "selection" && copyPending) { copyPending = false; if (typeof m.data === "string" && m.data) void Clipboard.writeText(m.data); }
   };
   const close = () => { setTerminalSender(null); closeTerminalPanel(); };
@@ -103,6 +130,7 @@ export function TerminalPanel() {
         <TerminalButton icon="pencil" label="Rename terminal" onPress={beginRenameTerminal} disabled={!terminalSelected()} testID="terminal-rename" />
         <TerminalButton icon="x" label="Close terminal" onPress={() => requestTerminalClose()} disabled={!terminalSelected()} testID="terminal-close" />
         <TerminalButton icon={terminalControlled() ? "lock" : "unlock"} label={terminalControlled() ? "Release control" : "Take control"} onPress={() => void controlTerminal(terminalControlled() ? "release" : "acquire")} disabled={!terminalSelected()} testID="terminal-control" />
+        <TerminalButton icon="plus" label="Attach selected output" onPress={attachSelection} disabled={!terminalSelected() || viewed()?.kind === "manager"} testID="terminal-attach" />
         <TerminalButton icon="copy" label="Copy output" onPress={requestTerminalCopy} disabled={!terminalSelected()} testID="terminal-copy" />
         <TerminalButton icon="chevron-down" label="Hide terminal panel" onPress={close} testID="terminal-panel-close" />
         <If when={tabTip()}>{tip => <View style={{width:320}} class="absolute left-3 -top-7 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${tip().id}-tooltip`}><Text class="text-xs text-popover-foreground" style={{numberOfLines:1}}>{tip().label}</Text></View>}</If>

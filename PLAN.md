@@ -23,6 +23,14 @@ Rules every item keeps:
 When an item lands, tick it, add a one-line record under [Landed](#landed) and update the docs it touches. Keep
 "not verified" honest.
 
+## Remote iPhone install follow-up — 2026-11-09
+
+- [ ] Capture the paired iPhone's Bonjour announcement with Xcode Tailscale Bridge
+  while phone and Mac are on the same local network, then verify a signed Nexus
+  update from a different network over Tailscale. Remote diagnostics/build passed,
+  but capture was blocked by lack of local-network adjacency; no install occurred.
+  Checklist and signing caveats: [NSH remote updates](nexus-nsh/README.md#remote-iphone-updates-over-tailscale-pending-verification).
+
 ## Consolidation checkpoint — 2026-11-08
 
 The user requested consolidating all current work on `main`, updating this plan,
@@ -42,7 +50,7 @@ GPUI runtime checks. The new native bootstrap honors explicit `NEXUS10_HOME`
 without falling back to a personal daemon; its offline tests pass. No paid
 provider checks or real-home migration/deployment were performed.
 
-Final consolidation validation: Core **1255 passed, 1 skipped, 1 terminal-shutdown failure** (isolated rerun passes); TUI full run **825 passed, 15 failed, 9 ignored**, then three stale expectations corrected and their focused suites pass. **Twelve TUI shell/editor checks remain failing**. NSH editor/Git **17/18**, with the remaining focus/undo test passing after its fix; no final full rerun. Builds, Clippy, Ruff and shared manifest/theme checks pass. See [the exact consolidation report](reports/consolidation-2026-11-08.md) for commands, scope and remaining failures.
+Historical consolidation validation (superseded by section 4's 11-09 rerun): Core **1255 passed, 1 skipped, 1 terminal-shutdown failure** (isolated rerun passes); TUI full run **825 passed, 15 failed, 9 ignored**, then three stale expectations corrected and their focused suites pass. **Twelve TUI shell/editor checks were still failing at that checkpoint; the 11-09 rerun passes**. NSH editor/Git **17/18**, with the remaining focus/undo test passing after its fix; no final full rerun. Builds, Clippy, Ruff and shared manifest/theme checks pass. See [the exact consolidation report](reports/consolidation-2026-11-08.md) for commands, scope and remaining failures.
 Branch pruning and the release PR remain pending; no unique-history branches
 were removed. The local `main` matched freshly fetched `origin/main` before the
 consolidation commit.
@@ -51,15 +59,15 @@ consolidation commit.
 
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | **11-07 checkpoint: Core 1227 passed/1 skipped; NSH full-run failures corrected in targeted tests. Final suites pending current slices** | [4](#4-fix-all-tests-and-lints), do this first |
-| 1 | Unmerged work | Local `main` matches the local `origin/main` ref; PR #100 is open with conflicts; PR #99 is already closed | [1](#1-merge-what-is-unmerged) |
+| 4 | Tests and lints | **11-09: Core 1290 passed/1 skipped; TUI 860 passed/10 ignored; lints and builds pass. Final NSH web suite running** | [4](#4-fix-all-tests-and-lints) |
+| 1 | Unmerged work | PR #100 (0.12.0) is mergeable; release follows final test validation. It is the only open PR; #99 and superseded older PRs are already closed | [1](#1-merge-what-is-unmerged) |
 | 5 | Mobile cut-down client | Three-tab implementation and capability guards present for iPhone/iPad; 4 rule tests pass. Native/device and compact-card runtime verification pending | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
-| 2 | Terminal inside Nexus | Core PTY and HTTP/SSE slice; initial TUI terminal panel, not feature-complete | [2](#2-terminal-inside-nexus) |
+| 2 | Terminal inside Nexus | Implemented in Core, TUI and NSH web, including explicit evidence and inspector spans (11-08). Platform/native/remote release checks remain | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
 | 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
-| 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok | [10](#10-fork-subagent) |
+| 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok; **11-09:** read-only minor task (20 steps), tool row in the parent | [10](#10-fork-subagent) |
 
 Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
 user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later. Section 8 (the usage panel) is small, self-contained and can go any time after 4.
@@ -147,17 +155,18 @@ Decided 2026-11-06: retire it, keep the code somewhere safe. The complete code i
 
 ## 2. Terminal inside Nexus
 
-Side job (user, 2026-11-08): make every question fully readable in both clients.
-Remove the TUI's two-line prompt truncation and single-line option clipping; retain
-complete option previews and a practical scroll path at narrow/short sizes. Paired
-implementation, interaction tests and screenshots are in progress.
+Side job (user, 2026-11-08): **implemented and visually checked** full question,
+option-label and preview wrapping with narrow/short scrolling in both clients.
+TUI footer hints wrap in reserved rows; NSH's reading hint no longer overlaps
+scrolling content. [Screenshots and interaction evidence](reports/question-readability/README.md).
+The existing paged-TUI versus single-card-NSH question interaction is not redesigned here.
 
 Goal (user, 2026-11-06): a real interactive terminal in Nexus, in the TUI and in NSH (desktop and web, never mobile),
 with the same operations in both. Not the old `nexus nsh tui` launcher and not a list of bash jobs. Design inputs:
 [reports/section14/spikes.md](reports/section14/spikes.md) (PTY + pyte, `vt100`, `@xterm/headless` all proven in
 spikes) and the archived 14.2/14.3.
 
-Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job tests: **26 passed**. Paired client polish and screenshot verification are in progress; the previously reported TUI 404 has not been independently reproduced.
+Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job/inspector tests: **58 passed**. Paired real-Core smoke checks and screenshots pass; the previously reported TUI 404 was not reproduced. [Terminal work and remaining release gates](reports/terminal-work-2026-11-08.md).
 
 Defaults to confirm at the first design review (change any of them freely):
 
@@ -174,21 +183,30 @@ Defaults to confirm at the first design review (change any of them freely):
 
 Work:
 
-- [ ] Design review and the decisions above; shared resource contract (API, versioned data stream with sequence
-  numbers, bounded replay, gap/resync, input ids so a retry never repeats a command). `docs/api.md` first.
-  Contract and Core endpoints in `docs/terminals.md`; the remaining client design review is open.
-- [ ] Core PTY service: spawn in the chosen workspace, process group, resize, binary-safe I/O, UTF-8 split across
+- [x] Shared resource contract following the defaults above (no new client-specific behavior); API, versioned data stream with sequence
+  numbers, bounded replay, gap/resync and idempotent input are documented and tested. Design inputs remain available for user review.
+  See `docs/api.md` and `docs/terminals.md`; paired screenshots are available for user review.
+- [x] Core PTY service: spawn in the chosen workspace, process group, resize, binary-safe I/O, UTF-8 split across
   chunks, signals and exit codes, bounded scrollback with an announced discard, orphan cleanup, limits.
-  Core and HTTP/SSE are implemented and tested; a foreground shell exiting on abrupt Core death is tested on
-  macOS. Cleanup of a separately grouped foreground job and other platforms is not verified.
-- [ ] TUI: panel with a terminal tab and resource list; keys arbitrated with global shortcuts (Esc, Ctrl chords,
+  Core and HTTP/SSE are implemented and tested; normal shutdown of a separately grouped foreground job and
+  abrupt-Core-death SIGHUP delivery to that group are verified on macOS. Other platforms remain unverified.
+  Slow-viewer overflow immediately revokes control; restart clears all controller identities (11-08).
+  Focused terminal/job suites: **40 passed**. A 16 MiB output profile retained 1 MiB, discarded 15 MiB,
+  completed in 9.846 s (1.63 MiB/s), and measured 12.55 ms maximum timer delay under concurrent suite load.
+- [x] TUI: panel with a terminal tab and resource list; keys arbitrated with global shortcuts (Esc, Ctrl chords,
   paste, mouse); selection/copy through OSC 52.
-- [ ] NSH: the same panel, tabs, list and keys (xterm.js in a WebView on web/macOS; spike the focus and key capture
-  against NSH's keymap first). Manifest commands in `interface/manifest.toml`.
+- [x] NSH: the same panel, tabs, list and keys (xterm.js in a WebView on web/macOS; spike the focus and key capture
+  against NSH's keymap first). Manifest commands in `interface/manifest.toml`. Web key capture and actual PTY input are verified;
+  native AppKit WebView runtime is not. Both clients reconnect read-only and require Take control again.
 - [x] Tests on real PTYs in an isolated workspace: shell I/O, alt-screen program, resize, split byte
   sequences, high-volume output, two clients, control contention, reconnect, exit, close, Core shutdown.
-- [ ] Docs: `docs/api.md`, a new `docs/terminals.md`, both READMEs; screenshots in both clients; ledger rows for any
-  approved difference.
+- [x] Docs: `docs/api.md`, `docs/terminals.md`, daemon/tools/inspector docs and both READMEs; paired dock, evidence and inspector screenshots;
+  behavior ledger updated. No new client-specific differences introduced.
+- [x] Terminal parts of 9.22: immutable selection preview → draft → ordinary send; exact UTF-8 clipping/provenance and untrusted-data encoding;
+  exact-tool-linked inspector lifecycle bars and sanitized change invalidation. Interactive agent typing remains deliberately unavailable.
+- [ ] Remaining release verification: Linux/other platforms, native AppKit WebView, authenticated remote failure/reconnect matrix, and a
+  final all-green consolidated suite. Full Core reruns expose intermittent Manager/kernel timeout failures outside the terminal paths;
+  focused terminal suites and isolated reruns pass. See the report rather than treating implementation ticks as release approval.
 - Exit: a terminal is not done if it renders only line-oriented output.
 
 ## 3. Manager: finish and test end to end
@@ -221,6 +239,10 @@ checks below pass in the TUI and NSH and the iOS client (section 5 makes the Man
 - [ ] Docs and ledger kept current; tick M0–M6 in `docs/manager-design.md`.
 
 ## 4. Fix all tests and lints
+
+**2026-11-09 release validation:** Core **1290 passed, 1 skipped**; TUI **860 passed, 10 ignored**, plus the opt-in real-Core PTY test passed. Ruff, lock consistency, formatting, Clippy, shared manifest/theme checks, Mermaid/annotation/vendored editor, native library and installer fixtures pass. Core, release TUI and NSH web builds pass. NSH type check and 11 host tests pass; the final full web suite is running. See [the current validation report](reports/release-0.12.0-validation.md). Device/audio, remaining visual-parity and platform runtime checks stay in their own sections; this test gate does not complete them.
+
+### Historical baseline (superseded by the release validation above)
 
 Checkpoint 2026-11-07: full Core rerun **1227 passed, 1 skipped** before later tool/provider/file slices; current targeted suites pass. NSH full run was **337/339**: one deleted retired-target test was discovered before deletion; the other expected old usage glyphs. Current usage suite passes **3/3** with the effective theme gauge asserted. NSH type check, all **11** host tests, manifest and **602** theme checks pass. Final full suites remain pending current concurrent slices.
 
@@ -533,7 +555,7 @@ numbered section above when it is started.
 
 ### 9.2 File explorer, editor and Git page (old 4.1)
 
-**11-08 stop checkpoint:** initial paired Git UI and one-mode editor compile, but are not complete. Twelve TUI shell/editor checks remain failing; see the consolidation report above. No item below is complete merely because code exists.
+**11-08 follow-up:** initial paired Git UI and one-mode editor are not release-complete. The twelve recorded TUI shell/editor failures are resolved; the full TUI suite passes (857 passed, 10 ignored). See [test cleanup](reports/test-cleanup-2026-11-08.md). Matching source/Find captures were inspected in [editor parity](reports/test-editor-parity/README.md); full interaction/performance/visual parity gates remain separate from automated-suite cleanup. Existing unapproved gaps remain open: TUI horizontal scrolling versus NSH soft wrapping, Find below versus above the source, header controls/status wording, and active-match distinction.
 
 Desktop and web only; never mobile. Decisions: the editor stays small (highlighting, undo/redo, no tabs, language servers or Vim mode); Git scope is worktrees, changes and branches with actions (no merge, stash, rebase, conflict UI or hunk staging); both are silent to the model; no new auth. Files and diffs open in a centred modal.
 
@@ -552,9 +574,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
 - [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
   `--bench` typing on a 1 MiB file; NSH save and stale-file paths in the browser harness.
-- [ ] Sidebar tabs: the manifest (`interface/manifest.toml:187–196`) lists only Sessions and Files, while NSH's
-  `leftTab` also has `projects`; the manifest already names `sidebar.git`, `focus.git_file` and `git.open_diff` with
-  no UI behind them. Make the manifest and both clients agree when the Git tab lands.
+- [ ] Sidebar tabs: Git is implemented and present in the shared manifest, but the TUI's full Git tab needs a sidebar at least 33 cells wide and is omitted at the default 28-cell width. Resolve narrow-sidebar access/parity in both clients. Automated coverage checks the width-dependent layout and clicks every manifest tab with a 40-cell sidebar; passing tests do not mark this UI limitation complete.
 - [~] New file, new folder, rename and delete are implemented in both clients through shared commands, row menus and prompts. Core confinement/count and focused client tests pass; new-file/delete dialog screenshots compared in `reports/files-operations/`. Broader rename/folder interaction coverage remains. Delete asks first,
   gives the item count for a folder, and is permanent.
 - [x] Core file mutations and folder counting implemented with confinement, symlink/race checks, shared tool/API file lock, global workspace events and focused tests: `POST /api/project/{id}/files?session=` with
@@ -1067,23 +1087,28 @@ Deferred (not in this plan's scope). Kept whole.
 ### 9.22 Agent handoff and release gate (old 14.5)
 
 Terminal evidence capture and agent-control policy apply to section 2 as well.
+**Terminal slice implemented (11-08):** explicit immutable selection preview and draft insertion in both clients;
+exact-tool-linked Timing lanes, sanitized lifecycle/control invalidation (including restart), and a documented
+user-only interactive-control policy. Real-Core input/capture smoke, paired screenshots, 58 focused Core tests,
+full TUI suite and focused NSH suites pass. Browser portions stay deferred; cross-platform/native/remote and
+final consolidated green-suite gates remain open. See [terminal report](reports/terminal-work-2026-11-08.md).
 
-- [ ] **Explicit evidence capture first.** Add user actions to attach selected terminal output, a page
+- [~] **Explicit evidence capture first.** Add user actions to attach selected terminal output, a page
   extract or a screenshot to the current draft. Preview the exact payload, source resource and omitted
   bytes/lines before sending. The user's normal send commits it into canonical context; live panel
   refreshes must never silently replace content already sent to a provider.
-- [ ] **Agent control only after policy review.** Classify terminal commands, raw keystrokes, browser
+- [~] **Agent control only after policy review.** Classify terminal commands, raw keystrokes, browser
   navigation/form actions and credential-bearing operations. Prefer existing approved `bash` and MCP
   paths where they suffice. A raw interactive shell cannot reliably enforce per-command allow patterns;
   do not present those rules as protection or turn approval of one command into indefinite shell access.
   Define grant scope/revocation, destructive actions and takeover behavior, with visible tool arguments,
   outcomes and failures in the ordinary timeline. Browser content and terminal output remain untrusted
   data, never instructions or implicit permission.
-- [ ] **Diagnostic integration.** Link resource actions and captured evidence to session/turn/tool IDs
+- [~] **Diagnostic integration.** Link resource actions and captured evidence to session/turn/tool IDs
   when they actually belong to one. Add recorded browser/terminal spans to the inspector Gantt without
   inventing model calls or token usage. Keep full streams private/bounded outside the timeline; retain
   only the explicit model-visible payload and bounded diagnostic metadata under the existing policies.
-- [ ] **Release gate.** Core store/API/access/lifecycle tests, shared scenarios, TUI tests, NSH browser
+- [~] **Release gate.** Core store/API/access/lifecycle tests, shared scenarios, TUI tests, NSH browser
   tests, manifest/theme checks and both builds pass for the changed paths. Run matching screenshots,
   failure/reconnect tests, high-output/large-page profiling and a cross-client handoff demo. Document
   unsupported platforms/capabilities and approved differences. Update both client READMEs, API/daemon/
@@ -1108,7 +1133,8 @@ pi-subagents' fork spec. No peer-reviewed work on the pattern found.
 | **F2. How it is launched** | The control-plane `fork` tool (its own tool, granted by `control: [fork]`, in `build`), never a task tool. Same `message_session` follow-ups as other children |
 | **F3. What it inherits** | The parent's request prefix byte for byte: system prompt, tool definitions, model, effort/thinking settings, canonical history. No model or effort override (any change breaks the cache hit) |
 | **F4. Timeline** | Client side. The fork's timeline must show what the model receives: a collapsed, labelled "Forked from ‹parent› at ‹message›" block for the inherited prefix (expandable, not copied into the UI as new items), then the fork marker and its own work. Same in both clients. Core gives `fork: {parent_id, inherited}`; the first `inherited` messages are the copied ones |
-| **F5. Recursion** | A fork cannot launch any subagent or fork (told in the marker; hard refusal in the control plane with a clear error) |
+| **F5. Recursion** | A fork cannot launch any subagent or fork (said in the tool description; hard refusal in the control plane with a clear error) |
+| **F6. Minor task (2026-11-09, user)** | A fork is a minor task run like a tool call: read-only (write tools, workspace controls and non-read-only MCP refused; bash a guard only), at most 20 steps per turn, and a tool row in the parent's timeline. The marker only says "forked session" and read-only; the tool description explains forks |
 
 - [x] **Decide F1–F5** (2026-11-08; F1 changed as above, F4 is the clients').
 - [x] **Core:** the fork's snapshot is a copy of the parent's (tool definitions with `session` itself), with the
@@ -1123,12 +1149,16 @@ pi-subagents' fork spec. No peer-reviewed work on the pattern found.
 - [x] **Cache:** verified 2026-11-08 with one real run each: the fork's first request read 96–100% of the
   reusable prefix from cache on `codex/gpt-6-luna`, `copilot/gpt-6-luna`, `opencode/deepseek-v4.1-flash` and
   `grok/grok-4.7` ([reports/fork-cache](reports/fork-cache/README.md)). Claude provider not checked (user).
-- [ ] **Grok rejects the `edit` tool schema** (`invalid_client_tool_schema`: root is anyOf/oneOf, must be an
-  object). Every Grok session with `edit` on fails on its first request; found by the fork cache check.
 - [x] **Context size:** refused (tool error suggesting a named sub agent) when the parent's context leaves under 10%
   of the window; skipped when the window is unknown.
-- [x] **Parallel writes:** decided: forks get the parent's tools and workspace, no read-only restriction and no
-  worktree; the conflict risk is documented in docs/agents.md.
+- [x] **Parallel writes:** ~~forks get the parent's tools and workspace, no read-only restriction~~ superseded
+  2026-11-09 by F6: forks are read-only, so they cannot conflict.
+- [x] **Minor task (F6, 11-09):** `FORK_MARKER` cut to "forked session" + read-only; tool description rewritten
+  for minor read-only tasks; `FORK_REFUSED` gate in `_approve` (inside `code` too) and non-read-only `mcp_call`
+  refused; `FORK_MAX_STEPS = 20`. Both clients: a parent's `fork` call is a `Fork ‹title›` tool row in its activity
+  group (`N forks`), opened it shows the task and report and ends with `open fork ↗` (TUI: its own `Child` block,
+  Enter/click opens; NSH: `tool-open-fork-<call>` button). Tests: `tests/test_fork.py`, TUI
+  `a_fork_call_renders_as_a_tool_row_in_the_parent`, NSH `fork-subagent.test.tsx`. Screenshots not taken.
 - [x] **Usage audit (2026-11-08):** 7 real fork calls (2 sessions, `codex/gpt-6.1-sol`, effort low) behaved
   correctly in Core, but the parent ran two forks on `nexus-tui/src/app.rs` and a later session took a fork's
   uncommitted edits for user work. Fixed in guidance: the tool description asks for one owner per file across
@@ -1136,7 +1166,7 @@ pi-subagents' fork spec. No peer-reviewed work on the pattern found.
   to edit only its files and list them in its report.
 - [ ] **Watch:** parents re-tasking a finished fork with new scope via `message_session`, terse task prompts, and
   fork use on other models (only one model seen so far). Re-audit after more sessions before changing anything.
-- [x] **UI (both clients):** child card and strip labelled `Fork`; the fork's timeline opens with one collapsed
+- [x] **UI (both clients):** strip labelled `Fork` (the parent's child card is replaced by a tool row, F6); the fork's timeline opens with one collapsed
   `Forked from ‹parent› · N messages` group (key `fork:<sid>`, existing group fold), inherited rows indented when
   open; phone keeps the folded row. TUI and NSH tests pass (11-08).
 - [ ] **UI verification:** side-by-side TUI/NSH screenshots from mock `fork_subagent` (not taken). Open questions:
@@ -1150,6 +1180,8 @@ and mistakes.
 
 
 ## Landed
+
+- **Terminal implementation and safety (11-08).** Paired real-PTY docks hardened for exit, creation races and read-only reconnect; bounded diagnostic parsing, immediate slow-writer revocation, restart-safe control, explicit selection → preview → draft evidence, and exact-tool-linked inspector lifecycle bars/invalidation. Real-Core TUI/NSH smoke and paired captures verified; platform/native/remote and consolidated-suite gates remain open. [Report](reports/terminal-work-2026-11-08.md).
 
 - **Core network default (11-08).** Core now binds `0.0.0.0` by default for LAN/Tailscale clients; explicit host overrides remain. Native discovery accepts the empty token written for network binds. The default is tokenless: trusted networks/firewall only; loopback opt-in retains token protection. Focused checks: Core daemon 7 passed, native discovery 4 passed, Ruff passed; device connectivity not verified.
 
