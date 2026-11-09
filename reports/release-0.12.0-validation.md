@@ -8,11 +8,11 @@ This is the final automated-test follow-up to the November 8 consolidation. Phys
 | --- | --- |
 | Core full offline suite, scratch `NEXUS10_HOME` | 1290 passed, 1 skipped (209.72 s) |
 | Core Ruff and `uv lock --check` | Pass |
-| TUI `cargo test --no-fail-fast` | 860 passed, 10 ignored initially; added wide-sidebar regression passes in the 165-test shell suite; final full rerun in progress |
+| TUI `cargo test --no-fail-fast` | 861 passed, 10 ignored in the final full rerun (including the new wide-sidebar regression) |
 | Real-Core TUI PTY test (`--test terminal_core -- --ignored`) | 1 passed |
 | TUI formatting / Clippy, all targets, warnings denied | Pass; formatted the fork timeline test |
 | NSH `npm run check` | Pass |
-| NSH full web suite | First run: 370 passed, 1 failed; inspector palette test lost its test-host connection. Focused inspector rerun: 12 passed. Full confirmation run in progress before release |
+| NSH full web suite | Final full confirmation: **371 passed, 0 failed** (13m 31s). Initial run: 370 passed, 1 inspector test-host disconnect; focused inspector rerun: 12 passed. Full rerun passed unchanged |
 | NSH host tests | 11 passed |
 | Browser terminal-page test | 1 passed |
 | Native NSH library tests | 9 passed |
@@ -28,6 +28,10 @@ The earlier Core shutdown failure did not recur in the full concurrent run or 20
 ## Non-gating replay benchmark
 
 Debug build, 160×48, reduced motion, 200 messages / 902 events: first frame 77.80 ms; burst draw mean 9.50 ms / p95 10.48 ms; paced draw mean 10.55 ms / p95 13.65 ms; chrome-only redraws made zero timeline builds; RSS 44,544 KiB. This is a diagnostic, not a release performance threshold.
+
+## Existing release-PR checks
+
+[Run 42562862647](https://github.com/nottherealsanta/nexus/actions/runs/42562862647) passed for the refreshed release PR: Core macOS/Linux, TUI tests and release builds macOS/Linux, lint, Mermaid/annotation native and wasm checks, and `ci-ok`. The existing workflow skips NSH; its local full web confirmation passed separately (371/371). No CI configuration was changed.
 
 ## Release and PR scope
 

@@ -59,7 +59,7 @@ consolidation commit.
 
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | **11-09: Core 1290 passed/1 skipped; TUI 860 passed/10 ignored; lints and builds pass. Final NSH web suite running** | [4](#4-fix-all-tests-and-lints) |
+| 4 | Tests and lints | **Complete 11-09: Core 1290 passed/1 skipped; TUI 861 passed/10 ignored; NSH 371/371; lints and builds pass** | [4](#4-fix-all-tests-and-lints) |
 | 1 | Unmerged work | PR #100 (0.12.0) is mergeable; release follows final test validation. It is the only open PR; #99 and superseded older PRs are already closed | [1](#1-merge-what-is-unmerged) |
 | 5 | Mobile cut-down client | Three-tab implementation and capability guards present for iPhone/iPad; 4 rule tests pass. Native/device and compact-card runtime verification pending | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
@@ -69,8 +69,7 @@ consolidation commit.
 | 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
 | 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok; **11-09:** read-only minor task (20 steps), tool row in the parent | [10](#10-fork-subagent) |
 
-Suggested order: 4, then 1 (so the release PR can merge on a green tree), then 5, then 2 and 3 in whatever order the
-user prefers (3 needs real-model approvals). Section 6 (ZMX) is for later. Section 8 (the usage panel) is small, self-contained and can go any time after 4.
+Suggested order: finish 1 (release on the now-green tree), then 5, then 2 and 3 in whatever order the user prefers (3 needs real-model approvals). Section 4 (tests) and section 8 (usage panel) are complete; section 6 (ZMX) is for later.
 
 ## Decisions
 
@@ -240,50 +239,15 @@ checks below pass in the TUI and NSH and the iOS client (section 5 makes the Man
 
 ## 4. Fix all tests and lints
 
-**2026-11-09 release validation:** Core **1290 passed, 1 skipped**; TUI **860 passed, 10 ignored**, plus the opt-in real-Core PTY test passed. Ruff, lock consistency, formatting, Clippy, shared manifest/theme checks, Mermaid/annotation/vendored editor, native library and installer fixtures pass. Core, release TUI and NSH web builds pass. NSH type check and 11 host tests pass; the final full web suite is running. See [the current validation report](reports/release-0.12.0-validation.md). Device/audio, remaining visual-parity and platform runtime checks stay in their own sections; this test gate does not complete them.
+**2026-11-09 release validation:** Core **1290 passed, 1 skipped**; TUI **861 passed, 10 ignored**, plus the opt-in real-Core PTY test passed. Ruff, lock consistency, formatting, Clippy, shared manifest/theme checks, Mermaid/annotation/vendored editor, native library and installer fixtures pass. Core, release TUI and NSH web builds pass. NSH type check, 11 host tests and the final full web suite (**371/371**) pass. **Section 4 is complete.** See [the current validation report](reports/release-0.12.0-validation.md). Device/audio, remaining visual-parity and platform runtime checks stay in their own sections; this test gate does not complete them.
 
-### Historical baseline (superseded by the release validation above)
+- [x] Full offline Core and TUI suites pass; Core macOS/Linux and TUI macOS/Linux release-PR checks also pass ([run 42562862647](https://github.com/nottherealsanta/nexus/actions/runs/42562862647)).
+- [x] Ruff, lock consistency, formatting and Clippy pass; shared manifest/theme, Mermaid, annotation, vendored editor, native library and installer checks pass.
+- [x] NSH type check, host tests and web packaging pass.
+- [x] Final NSH full browser confirmation: **371 passed, 0 failed** (13m 31s). Initial run 370/371 had one inspector test lose its test-host connection; all 12 inspector tests then passed in isolation and the full rerun passed unchanged. The transient failure is recorded, not hidden with an assertion change or retry wrapper.
+- [x] Record load-only failures and the non-gating replay benchmark in [the validation report](reports/release-0.12.0-validation.md): Core shutdown passed 20 additional paired repetitions; debug replay paced draw mean 10.55 ms / p95 13.65 ms, zero chrome-only timeline builds.
 
-Checkpoint 2026-11-07: full Core rerun **1227 passed, 1 skipped** before later tool/provider/file slices; current targeted suites pass. NSH full run was **337/339**: one deleted retired-target test was discovered before deletion; the other expected old usage glyphs. Current usage suite passes **3/3** with the effective theme gauge asserted. NSH type check, all **11** host tests, manifest and **602** theme checks pass. Final full suites remain pending current concurrent slices.
-
-The 2026-11-06 baseline below is retained for comparison. Each failure was triaged (code or test wrong?) rather than updated blindly.
-
-| Suite | Result | Left |
-| --- | --- | --- |
-| Core `uv run pytest -q` | 1200 passed, 1 skipped (162 s) before the lint change | [ ] Re-run once after the `manager/context.py` lint fix; watch `test_server.py::test_code_nested_write_needs_no_approval_and_kernel_api` (one flake seen under load) and the `test_archive.py` hangs seen under heavy load |
-| Core `ruff check nexus tests`, `uv lock --check` | **Clean** (fixed ISC004 in `nexus/manager/context.py`) | — |
-| TUI `cargo fmt --check` | **Clean** | — |
-| TUI `cargo clippy --all-targets -- -D warnings` | **Clean** (10 errors fixed: `is_multiple_of`, `div_ceil`, `as_chunks`, `contains`, duplicate `if` blocks) | — |
-| TUI `cargo test --no-fail-fast` | **816 passed, 0 failed, 8 ignored** | — |
-| NSH `nsh check` | Known errors were fixed earlier | [ ] Re-run |
-| NSH `nsh test --target web` | 277/279 on 11-06 | [ ] Find and fix the 2 failures (the `i7` picker-footer wording check is one) |
-| `check_manifest.py`, `check_theme.py --overlay nexus-nsh/theme-void.toml` | Clean (184 commands, 602 contrast checks) | Keep clean |
-| `nexus-mermaid`, `nexus-annotate` | Clean at last check | [ ] Re-run |
-
-What the 12 TUI failures were (all fixed):
-
-- **Real bug, fixed in the test only:** the drag-copy test computed its click column from a byte offset, which is wrong
-  now that the rail draws a multi-byte `▏`; the copy code itself was right.
-- **Stale tests after the 11-06 design changes:** the left sidebar is 5 cells right of where tests assumed (the project
-  rail), the search glyph and session rows moved one cell left, the selected session carries the active block (not the
-  spacer row), and the rail's two-letter label `NT` is centred, so its middle cell is `T` (the test expected `N`).
-- **Stale Markdown test:** a Mermaid fence draws as a diagram with `◇ mermaid · copy source`; its source is still
-  available to Copy (asserted through `fence_sources`).
-- **Six Manager tests:** the header indicator is gated on `[manager] enabled` (off by default); the fixture never
-  enabled it. No product bug.
-
-Local machine problems met on the way (not repo bugs): Homebrew `node` once failed to load `libuv.1.dylib` (fixed by the
-user); Homebrew Python 3.14.7 cannot import `sqlite3` (missing `libsqlite3.dylib`), so `uv run pytest` fails at collection
-with that interpreter (python.org 3.14.5 works); `~/.nsh/bin/nsh` must be the NSH 0.4.0 source build (`nsh --version`
-prints `0.4.0 (3789a45)`); the wasm test build needs `llvm-ar` (`rustup component add llvm-tools`,
-`AR_wasm32_unknown_unknown`) because Apple's `ar` produces a broken archive. Disk: a shared `CARGO_TARGET_DIR` across
-worktrees grew ~22 GB in 30 minutes (each NSH build is ~1 GB; `nsh run` hot-reload loops keep rebuilding), so work in one
-worktree and prune the target directory.
-
-Then:
-
-- [ ] Fix the two NSH failures and re-run `nsh check`; re-run the Core suite and record the result here.
-- [ ] Record anything that fails only under load. Add the TUI replay-bench result to this table without gating on it.
+The older baseline is superseded; the consolidation failures and cleanup details remain in [the consolidation report](reports/consolidation-2026-11-08.md) and [the test cleanup report](reports/test-cleanup-2026-11-08.md). NSH web tests need an explicit Playwright Chromium path on this host; see the validation report and `docs/development.md`. Existing theme-class warnings and the separately listed UI/runtime gaps are not claimed fixed by passing tests.
 
 ## 5. Mobile cut-down client: Sessions, Manager, Settings
 
@@ -1180,6 +1144,8 @@ and mistakes.
 
 
 ## Landed
+
+- **Automated test gate complete (11-09).** Core 1290 passed/1 skipped; TUI 861 passed/10 ignored plus real-Core PTY smoke; NSH final full web run 371/371. Lints, builds, native/shared/installer checks and existing macOS/Linux PR checks pass. Transient inspector-host failure and remaining UI/runtime gates stay explicit in [the validation report](reports/release-0.12.0-validation.md). Grok schema backlog item removed at the user's request; no provider fix is claimed.
 
 - **Terminal implementation and safety (11-08).** Paired real-PTY docks hardened for exit, creation races and read-only reconnect; bounded diagnostic parsing, immediate slow-writer revocation, restart-safe control, explicit selection → preview → draft evidence, and exact-tool-linked inspector lifecycle bars/invalidation. Real-Core TUI/NSH smoke and paired captures verified; platform/native/remote and consolidated-suite gates remain open. [Report](reports/terminal-work-2026-11-08.md).
 
