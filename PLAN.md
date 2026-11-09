@@ -51,8 +51,7 @@ without falling back to a personal daemon; its offline tests pass. No paid
 provider checks or real-home migration/deployment were performed.
 
 Historical consolidation validation (superseded by section 4's 11-09 rerun): Core **1255 passed, 1 skipped, 1 terminal-shutdown failure** (isolated rerun passes); TUI full run **825 passed, 15 failed, 9 ignored**, then three stale expectations corrected and their focused suites pass. **Twelve TUI shell/editor checks were still failing at that checkpoint; the 11-09 rerun passes**. NSH editor/Git **17/18**, with the remaining focus/undo test passing after its fix; no final full rerun. Builds, Clippy, Ruff and shared manifest/theme checks pass. See [the exact consolidation report](reports/consolidation-2026-11-08.md) for commands, scope and remaining failures.
-Branch pruning and the release PR remain pending; no unique-history branches
-were removed. The local `main` matched freshly fetched `origin/main` before the
+At that checkpoint, branch pruning and the release PR were pending. PR #100 has since merged (11-09); branch pruning remains separate and no unique-history branches were removed. The local `main` matched freshly fetched `origin/main` before the
 consolidation commit.
 
 ## Status at a glance
@@ -60,7 +59,7 @@ consolidation commit.
 | # | Work | State | First step |
 | --- | --- | --- | --- |
 | 4 | Tests and lints | **Complete 11-09: Core 1290 passed/1 skipped; TUI 861 passed/10 ignored; NSH 371/371; lints and builds pass** | [4](#4-fix-all-tests-and-lints) |
-| 1 | Unmerged work | PR #100 (0.12.0) is mergeable; release follows final test validation. It is the only open PR; #99 and superseded older PRs are already closed | [1](#1-merge-what-is-unmerged) |
+| 1 | Release | **0.12.0 released** with all eight assets and verified checksums; isolated published macOS arm64 install/plain TUI smoke passed. No open PRs remain | [1](#1-merge-what-is-unmerged) |
 | 5 | Mobile cut-down client | Three-tab implementation and capability guards present for iPhone/iPad; 4 rule tests pass. Native/device and compact-card runtime verification pending | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
 | 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
@@ -69,7 +68,7 @@ consolidation commit.
 | 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
 | 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok; **11-09:** read-only minor task (20 steps), tool row in the parent | [10](#10-fork-subagent) |
 
-Suggested order: finish 1 (release on the now-green tree), then 5, then 2 and 3 in whatever order the user prefers (3 needs real-model approvals). Section 4 (tests) and section 8 (usage panel) are complete; section 6 (ZMX) is for later.
+Suggested order: 5, then 2 and 3 in whatever order the user prefers (3 needs real-model approvals). The 0.12.0 release, section 4 (automated tests) and section 8 (usage panel) are complete; remaining installation/platform checks stay in 1.1. Section 6 (ZMX) is for later.
 
 ## Decisions
 
@@ -112,13 +111,12 @@ Open (each has a default that holds unless the user objects):
 
 ## 1. Merge what is unmerged
 
-Rechecked 2026-11-07 against the checkout and GitHub PR metadata. Local tracking refs were not refreshed.
+Rechecked 2026-11-09 against freshly fetched refs and GitHub. Release PR #100 merged; **no open PRs remain**. Older superseded PRs were already closed; their historical records are retained on GitHub, not deleted. Unrelated branch pruning remains separate.
 
 | Item | What it is | Verdict and action |
 | --- | --- | --- |
-| **Local `main`** | Matches the local `origin/main` ref at `3984ea49`; earlier work is already present | [x] Previously listed commits are in the tracking ref. Current work is consolidated in the main checkpoint commit (11-08); incomplete verification remains recorded |
-| PR #100 `release 0.12.0` | Release-please bump (version files, changelog). PR #98 (0.11.0) already merged. GitHub reports merge conflicts (11-07) | [ ] Merge after section 4; check the changelog; then the checks in 1.1 |
-| PR #99 `fix/ci-core` | Two Core test fixes plus `call.live` docs | [x] Already closed without merge on 2026-11-06; confirmed through GitHub 11-07. Main contains the expected test/docs behavior |
+| **Local `main`** | Validated terminal/editor/fork/client work and final test report committed and pushed | [x] Full automated gate complete (section 4); release merge pulled fast-forward |
+| PR #100 `release 0.12.0` | Reviewed seven-file version/changelog bump | [x] Merged 11-09 at `a17354d3`; release branch removed. Artifact and installation checks follow in 1.1 |
 | `origin/fix/daemon-agents-restart` (`74daa3b`) | A clear error when no agent loads, and `install.sh` restarts a running daemon on update | **Already in `main`** (verified 2026-11-07: ancestor `74daa3b2`). Installer restart and missing-agent diagnostic regression tests pass (2026-11-07). |
 | `origin/ci/nsh` (`9c5a127`) | Lazy native microphone lookup, unverified | **Superseded:** `main`'s `dictation.ts` already looks it up lazily. [ ] Delete the branch |
 | `origin/feat/update-notice`, `fix/default-model-client`, `fix/native-binary-needs-host` | Sept/Oct branches from old Nexus's layout (`rust/tui`, `nexus/client`) | Do not apply to this tree. [ ] Decide whether the update notice is still wanted (it overlaps `nexus update`); otherwise delete |
@@ -127,13 +125,13 @@ Rechecked 2026-11-07 against the checkout and GitHub PR metadata. Local tracking
 
 ### 1.1 Release and installation
 
-- [ ] After the 0.12.0 merge: the release has the four TUI binaries, the wheel and sdist, `install.sh` and
-  `SHA256SUMS`; run the installer from the published release on macOS and Linux; plain `nexus` opens the TUI on a
-  clean install; the release-download path of `install.sh` passes `--no-binary-package claude-agent-sdk`.
+- [x] **0.12.0 published (11-09):** four TUI binaries, Core wheel/sdist, `install.sh` and `SHA256SUMS`; all payload checksums independently verified. Release workflow [42564022608](https://github.com/nottherealsanta/nexus/actions/runs/42564022608) passed. Published installer succeeded in an isolated macOS arm64 home, including SDK source build, daemon start/stop and plain `nexus` PTY launch/quit. No real home was migrated or updated. Details: [validation report](reports/release-0.12.0-validation.md).
+- [ ] Execute the published installer on Linux; complete the wider platform runtime matrix below. No NSH web bundle is published by the existing workflow.
+- [ ] Correct the existing daemon info/version label (`0.10.0.dev0`); installed distribution metadata and all release package versions are 0.12.0.
 - [x] Linux: installer checks and `docs/development.md` list `pkg-config`, ALSA headers, a C toolchain, `git`, `uv`,
   Rust, Node 22; source install checks `/usr/bin/env`, which the Monty launcher explicitly executes. Real Linux kernel execution remains part of the platform matrix.
 - [x] Remove `nexus-design-mockup/` (11-07); no leftover `nexus10` branch wording remains in `AGENTS.md` or `docs/development.md`.
-- [ ] Bump to the next `-dev` version after the pending release merge.
+- [ ] Bump to the next `-dev` version after published-release verification.
 - [x] **`nexus update`:** reports only, following the default decision. Core CLI, launcher and offline update-check tests are implemented.
 - [ ] Platform matrix: macOS arm64 from a clean home, then Linux x86_64 and aarch64 (install, `nexus doctor`, daemon,
   TUI, NSH web, a scripted turn, a kernel run).
@@ -1144,6 +1142,8 @@ and mistakes.
 
 
 ## Landed
+
+- **0.12.0 released (11-09).** PR #100 merged, release branch removed, no open PRs remain. Four platform binaries, wheel/sdist, installer and checksums published; every payload hash verified. Isolated published macOS arm64 install, daemon and plain TUI smoke passed; Linux installer/runtime and native/device gates remain explicit. [Release](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0).
 
 - **Automated test gate complete (11-09).** Core 1290 passed/1 skipped; TUI 861 passed/10 ignored plus real-Core PTY smoke; NSH final full web run 371/371. Lints, builds, native/shared/installer checks and existing macOS/Linux PR checks pass. Transient inspector-host failure and remaining UI/runtime gates stay explicit in [the validation report](reports/release-0.12.0-validation.md). Grok schema backlog item removed at the user's request; no provider fix is claimed.
 

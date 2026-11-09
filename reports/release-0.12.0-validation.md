@@ -35,6 +35,16 @@ Debug build, 160×48, reduced motion, 200 messages / 902 events: first frame 77.
 
 ## Release and PR scope
 
-Use the existing release-please PR #100 for 0.12.0 after committing the tested tree. It was the only open PR at the start; #99 and the older superseded release PRs were already closed. GitHub PR history is retained, not deleted. No unrelated branch history is pruned.
+PR #100 merged at `a17354d3` after committing the tested tree; tag `v0.12.0` points to that commit. Its release branch was deleted. No open PRs remain; #99 and older superseded release PRs were already closed. GitHub PR history is retained, not deleted. No unrelated branch history was pruned.
 
-The existing artifact workflow excludes the NSH web bundle. Expected published artifacts are four macOS/Linux TUI binaries, the Core wheel and sdist, `install.sh` and `SHA256SUMS`. Successful local web packaging does not imply a published web bundle. Published asset and clean-install verification remain pending until the release workflow finishes.
+[Release workflow 42564022608](https://github.com/nottherealsanta/nexus/actions/runs/42564022608) passed: macOS arm64/x86_64 and Linux aarch64/x86_64 TUI builds and help smoke tests, Core wheel/sdist, and artifact attachment. All eight expected assets are published on [v0.12.0](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0). Downloaded every asset and independently verified all seven payload hashes against `SHA256SUMS`. The existing workflow excludes the NSH web bundle; successful local web packaging does not imply a published web bundle.
+
+### Published macOS arm64 installer smoke
+
+Ran the downloaded, checksum-verified `install.sh --release v0.12.0` against GitHub in an isolated temporary `HOME`, `PREFIX`, `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, XDG directories and `NEXUS10_HOME`. The installer downloaded and verified the release payloads, built `claude-agent-sdk` from source, and installed Core plus TUI successfully. Installed distribution metadata is **0.12.0**. Confirmed `nexus tui --help`, daemon start/stop on an isolated loopback port, `nexus tui --once`, and plain `nexus` in a 120×36 PTY: it rendered New session / Settings and exited cleanly with Ctrl+Q. No real installation or daemon was modified.
+
+`nexus doctor` reached the isolated daemon and validated config/MCP/rg; its nonzero status is expected with no provider sign-ins, models cache, search service or voice models in the fresh home. The existing daemon info/version display still says `0.10.0.dev0`; distribution metadata, tag and package versions are verified separately as 0.12.0. That diagnostic-label discrepancy remains open.
+
+Smoke-harness corrections: neither Core nor TUI supports `--version`; use distribution metadata. TUI flags go after `nexus tui`. The daemon requires a concrete unused port (not `NEXUS_PORT=0`), and an explicit scratch home must be created private (`0700`). Initial attempts using those unsupported flags/port and a non-private override directory were corrected before the successful run; these were not hidden as passing checks.
+
+Linux published installer execution and the wider per-platform runtime matrix remain unverified locally; Linux builds/help smoke and macOS/Linux automated suites passed in GitHub.
