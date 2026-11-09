@@ -15,6 +15,22 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.12.0](https://github.com/nottherealsanta/nexus/compare/v0.11.0...v0.12.0) (2026-11-09)
+
+
+### Features
+
+* **nsh:** add terminal launcher and align shared UI with Rust TUI ([c38bc3c](https://github.com/nottherealsanta/nexus/commit/c38bc3cb2a13d44f3030f4d9fc3ec7d4a5266347))
+* **ui:** polish shared terminal layouts and Mermaid rendering ([4f17eb9](https://github.com/nottherealsanta/nexus/commit/4f17eb953a75a7970651fe8422689bcb0345bf63))
+* **ui:** sidebar selection takes the project rail's active block and bar (PLAN 15.5) ([1987c42](https://github.com/nottherealsanta/nexus/commit/1987c42c13c91d544964f11571c1755a6537e31a))
+
+
+### Bug fixes
+
+* clear error when no agent loads; restart the daemon on update ([e617f04](https://github.com/nottherealsanta/nexus/commit/e617f048b426d4cee481a3a6cb012c5714e6cb86))
+* harden terminal resources and finish editor regression coverage ([3805fe9](https://github.com/nottherealsanta/nexus/commit/3805fe97028f54dc28aef888e93775f23c3a59fd))
+* **install:** retry transient release downloads ([485bdde](https://github.com/nottherealsanta/nexus/commit/485bddee6c5bf973d74c6ff4bc5c5e002e6236db))
+
 ## [0.11.0](https://github.com/nottherealsanta/nexus/compare/v0.10.0...v0.11.0) (2026-11-05)
 
 
