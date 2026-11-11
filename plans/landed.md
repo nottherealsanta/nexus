@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **`/btw` modal parity (11-11, plan 42).** NSH now matches the TUI: the `[i]`/`[c]` lines are the tappable folds (button rows removed) and desktop/web gets the `↑↓ scroll · esc close` footer (not on the phone idiom). `session-status-btw` 4/4; paired captures in [reports/42-btw-parity](../reports/42-btw-parity/).
+
 - **Plans 01–23 audit (11-11).** 1, 2, 3, 21 and 23 moved to done/: their remaining boxes need hardware, a paid call or branch-deletion approval. Retook the 21/23 paired captures from current code (TUI 170×50, NSH 1440×900 and 390×844); status strips match, and the `/btw` modal divergence is now plan 42. ZMX isolation test fixed (77/77). 5, 6, 9 and 10 stay open with real offline work. [Captures](../reports/sections21-23/).
 
 - **Search startup with an existing Apple container (11-11).** Recheck for the container after starting its system and serialize concurrent Core start requests; regression tests cover both cases.

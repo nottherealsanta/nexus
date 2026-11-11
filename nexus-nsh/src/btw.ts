@@ -78,9 +78,19 @@ async function refreshBtw(request_id: string) {
 }
 export function toggleBtwContext() { if (btw()) btw.set({ ...btw()!, inherited_open: !btw()!.inherited_open }); }
 export function toggleBtwTranscript() { if (btw()) btw.set({ ...btw()!, context_open: !btw()!.context_open }); }
-export function btwDetail(run: Btw): string {
-  const inherited = run.inherited_open ? `\n\n\`\`\`json\n${run.inherited_context}\n\`\`\`` : "";
+export function btwParts(run: Btw) {
   const transcript = run.messages.map((m) => `\n\n**${m.role}**\n\n${(m.parts ?? []).map((p: any) => p.type === "text" ? p.text : `\n\`\`\`json\n${JSON.stringify(p, null, 2)}\n\`\`\`\n`).join("")}`).join("");
   const answers = run.messages.filter((m) => m.role === "assistant").flatMap((m) => m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n\n");
-  return `Inherited context · ${run.inherited} messages · [i] ${run.inherited_open ? "collapse" : "expand"}${inherited}\n\nRead-only side question · ${run.calls}/10 tool calls · ${run.running ? "Running…" : "Finished"}\n\n${Object.values(run.tools).join("\n")}\n\n${answers}\n\n${run.answer}\n\nContext · [c] ${run.context_open ? "collapse" : "expand"}${run.context_open ? transcript : ""}\n\nNot added to the session's context.`;
+  return {
+    inheritedLine: `Inherited context · ${run.inherited} messages · [i] ${run.inherited_open ? "collapse" : "expand"}`,
+    inheritedBody: run.inherited_open ? `\`\`\`json\n${run.inherited_context}\n\`\`\`` : "",
+    middle: `Read-only side question · ${run.calls}/10 tool calls · ${run.running ? "Running…" : "Finished"}\n\n${Object.values(run.tools).join("\n")}\n\n${answers}\n\n${run.answer}`,
+    contextLine: `Context · [c] ${run.context_open ? "collapse" : "expand"}`,
+    contextBody: run.context_open ? transcript.trim() : "",
+    tail: "Not added to the session's context.",
+  };
+}
+export function btwDetail(run: Btw): string {
+  const p = btwParts(run);
+  return `${p.inheritedLine}${p.inheritedBody ? `\n\n${p.inheritedBody}` : ""}\n\n${p.middle}\n\n${p.contextLine}${p.contextBody ? `\n\n${p.contextBody}` : ""}\n\n${p.tail}`;
 }

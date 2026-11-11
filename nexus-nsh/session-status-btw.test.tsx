@@ -27,6 +27,9 @@ describe("sections 21–23", () => {
     await app.press("id:start-btw");
     await app.waitFor("id:btw-modal");
     expect(app.texts().join("\n")).toContain("Running");
+    expect(app.texts().join("\n")).toContain("↑↓ scroll");
+    expect(app.texts().join("\n")).toContain("Inherited context");
+    expect(app.texts().join("\n").includes("Expand inherited context")).toBe(false);
     expect(app.texts().join("\n").includes("inherited prefix proof")).toBe(false);
     await app.press("id:btw-inherited");
     await app.waitUntil(() => app.texts().join("\n").includes("inherited prefix proof"));

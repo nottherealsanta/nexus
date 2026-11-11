@@ -34,6 +34,6 @@ message is created; the parent's context and timeline stay unchanged.
   `nsh-desktop-btw.png`, `nsh-phone-btw.png` in `reports/sections21-23/` (narrow web now opens the left drawer
   first). Title, inherited/context folds, `N/10` progress, tool row and answer match. **Divergence found:** NSH adds
   two button rows ("Expand inherited context", "Expand context") and has no `↑↓ scroll · esc close` footer; the TUI
-  has the footer and no buttons. Not fixed here; tracked in [42](../42-btw-modal-parity.md).
+  has the footer and no buttons. Not fixed here; tracked in [42](42-btw-modal-parity.md).
 - [ ] **Real-provider cache measurement** (unscheduled; needs approval): requires explicit user approval for a paid/model call. Offline prefix
   equality is tested; no paid request has been made for this change.
