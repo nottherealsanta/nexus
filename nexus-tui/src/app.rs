@@ -14331,6 +14331,10 @@ impl App {
             .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
         let mut out = vec![PageLine::Text(self.provider_status(p), Tone::Secondary)];
+        if let Some(note) = p["note"].as_str().filter(|n| !n.is_empty()) {
+            let tone = if connected { Tone::Muted } else { Tone::Warning };
+            out.push(PageLine::Text(note.to_owned(), tone));
+        }
         if connected {
             if p["key_source"].as_str() == Some("env") {
                 out.push(PageLine::Text(

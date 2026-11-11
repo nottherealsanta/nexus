@@ -260,8 +260,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   modals, Dynamic Type / text scaling (fixed `text-[16px]`).
 - [ ] **iPad:** `touch` is true but `phone` is false, so it gets the desktop layout with hover affordances; decide
   the iPad design.
-- [ ] **Docs:** `nexus-nsh/README.md` says session rows are 56 px (code: 72 px) and its Connect text omits the Local
-  Network permission.
+- [~] **Docs:** `nexus-nsh/README.md` said session rows are 56 px (code: 72 px); fixed 2026-11-11. Its Connect text still omits the Local
+  Network permission (mobile redesign agent's area).
 - [ ] **Tests:** Playwright tests at a 390 px viewport with `platform.idiom` stubbed to phone, once NSH is back in CI.
   Then review on a real device with screenshots before and after.
 
@@ -297,8 +297,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
 - [ ] Complete NSH suite coverage after the mock-stream/toolchain fixes, real PTY screenshots,
   and provider sign-in/detail and tool-grid verification.
-- [ ] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
-  Providers page when `cli_path()` is empty.
+- [x] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
+  Providers page when `cli_path()` is empty. Core adds `note` to the `claude` provider row; both provider-detail views show it (2026-11-11: `test_config.py` 15 passed, TUI `shell` test, NSH `App.test.tsx` Providers test).
 - [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
 
 ## 9.10 NSH Void design leftovers (old 8.4)

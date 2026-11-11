@@ -598,7 +598,7 @@ No global shortcut is registered.
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
   actions visible (the user card's Copy/Fold, tab close, session row menu) and
-  use finger-sized targets; session rows are 56 px and icon buttons 44 px below
+  use finger-sized targets; session rows are at least 72 px and icon buttons 44 px below
   820 px. `nsh.json` grants every network host, since the address is the user's,
   and reads `~/.nexus` / `~/.nexus10` for the local daemon file.
 

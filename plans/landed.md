@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Claude Code install note on Providers (11-11, plan 09 9.9).** Core's `claude` provider row carries `note` (required version 2.1.248, or not installed); both provider-detail views show it. Core 15/15, TUI shell test, NSH Providers test pass; NSH README session-row height corrected.
+
 - **Plans 01–23 audit (11-11).** 1, 2, 3, 21 and 23 moved to done/: their remaining boxes need hardware, a paid call or branch-deletion approval. Retook the 21/23 paired captures from current code (TUI 170×50, NSH 1440×900 and 390×844); status strips match, and the `/btw` modal divergence is now plan 42. ZMX isolation test fixed (77/77). 5, 6, 9 and 10 stay open with real offline work. [Captures](../reports/sections21-23/).
 
 - **Search startup with an existing Apple container (11-11).** Recheck for the container after starting its system and serialize concurrent Core start requests; regression tests cover both cases.

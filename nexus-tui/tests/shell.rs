@@ -3173,6 +3173,18 @@ fn agent_model_rows_step_effort_with_right_and_left_returns_to_sections() {
 }
 
 #[test]
+fn the_claude_provider_detail_shows_core_s_install_note() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.providers = vec![serde_json::json!({"id": "claude", "label": "Claude", "connected": false, "methods": ["browser"],
+        "note": "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in."})];
+    app.execute("app.sign_in");
+    press(&mut app, &["down", "enter"]);
+    assert_eq!(app.ui.provider_detail.as_deref(), Some("claude"));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(all.contains("Claude Code is not installed") && all.contains("2.1.248"), "{all}");
+}
+
+#[test]
 fn a_pending_device_sign_in_shows_its_code_on_the_provider_row() {
     use nexus_tui::api::Frame;
     use nexus_tui::sync::SyncMsg;
