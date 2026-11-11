@@ -72,6 +72,55 @@ class Recovery:
         self.bus: Bus = runtime.bus
         self.crash_after = crash_after
 
+    def _external(self, session_id: str) -> bool:
+        from .workers.registry import external
+
+        session = self.store.session(session_id)
+        return bool(session and session.model and external(session.model))
+
+    def _transcript_tail(self, turn: dict[str, Any]) -> str | None:
+        """What a Claude Code CLI wrote after the daemon died: its last answer, read once and labelled as recovered.
+
+        Reads only the transcript path the worker record named, under the CLI's own config directory, and never
+        runs the CLI. Returns None when there is no record, no transcript or no assistant text after the last prompt.
+        """
+        from .workers import records
+        from .workers.base import WorkerError
+        from .workers.claude_code import transcript_path
+
+        record = records.read(turn["id"])
+        if not record or record.get("provider") != "claude-code" or not record.get("transcript_path"):
+            return None
+        try:
+            import json
+            import os
+            from pathlib import Path
+
+            config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+            path = transcript_path(record["transcript_path"], config)
+            if path.stat().st_size > 32 * 1024 * 1024:
+                return None
+            answer = ""
+            for raw in path.read_bytes().splitlines():
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                message = entry.get("message") if isinstance(entry, dict) else None
+                if not isinstance(message, dict) or entry.get("isSidechain"):
+                    continue
+                content = message.get("content")
+                if entry.get("type") == "user" and (isinstance(content, str) or any(
+                        isinstance(b, dict) and b.get("type") == "text" for b in content or ())):
+                    answer = ""
+                elif entry.get("type") == "assistant" and isinstance(content, list):
+                    text = "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                    if text:
+                        answer = text
+            return clip(answer, 8_000) if answer else None
+        except (OSError, ValueError, RuntimeError, WorkerError):  # the transcript is untrusted; recovery never fails on it
+            return None
+
     def _checkpoint(self, name: str) -> None:
         if self.crash_after == name:
             raise SimulatedCrash(name)
@@ -172,6 +221,7 @@ class Recovery:
             partial = {"diagnostic_only": True, **self.store.partial_summary(last_request)}
         notice = self._notice(turn, last_request, assistant, tools, waits, losses, partial)
         self._checkpoint("notice")
+        self._finish_worker_record(turn)
 
         self._publish_idle(turn)
         self._checkpoint("idle")
@@ -308,6 +358,8 @@ class Recovery:
             row = rows.get(call.id) or {"call_id": call.id, "name": call.name, "state": "saved"
                                         if not legacy else "unknown"}
             outcome, result = classify_call(call, row, questions, approvals, answers, legacy=legacy)
+            if self._external(session_id) and outcome not in ("inserted", "restored"):
+                outcome, result = "external", ToolResult(call.id, EXTERNAL_TOOL_TEXT, is_error=True)
             results.append(result)
             summary.append({"call_id": call.id, "name": call.name, "state": row["state"],
                             "outcome": outcome})
@@ -479,12 +531,34 @@ class Recovery:
                 "Background job(s) " + ", ".join(f"`{job}`" for job in losses["bash_jobs"])
                 + " have no finished record. Their retained output is lost and the command may still be running; "
                 "it was not killed by PID because a reused pid could belong to another process.")
+        if self._external(turn["session_id"]):
+            lines.append(
+                "This turn ran on a vendor CLI (ZMX). The CLI's own process may have outlived the daemon; Nexus never "
+                "kills a process by a stored PID. The CLI session id is kept, so the next prompt resumes it.")
+            recovered = self._transcript_tail(turn)
+            if recovered:
+                lines.append("Recovered from the CLI's transcript after the crash (the CLI's last answer, not verified "
+                             "by Nexus):\n" + recovered)
+            from .workers import records
+
+            record = records.read(turn["id"])
+            if record and record.get("pid") and record.get("started") and records.process_start(record["pid"]) == record["started"]:
+                lines.append(f"The CLI process {record['pid']} (started {record['started']}) still appears to be running. "
+                             "Nexus did not stop it; `nexus doctor` lists it and `nexus workers clean` stops it on request.")
         if archived:
             lines.append("The session remains archived and idle.")
         lines.append(
             f"Send a new prompt or use manual continuation (POST /api/session/{turn['session_id']}/continue or "
             "`/continue` in chat) to resume from this context; earlier context is unchanged.")
         return clip("\n".join(line for line in lines if line), NOTICE_CHARS)
+
+    def _finish_worker_record(self, turn: dict[str, Any]) -> None:
+        """Drop a record whose process is gone; keep one that still matches a live process, so it can be offered."""
+        from .workers import records
+
+        record = records.read(turn["id"])
+        if record is not None and not (record.get("pid") and records.process_start(record["pid"]) == record.get("started")):
+            records.clear(turn["id"])
 
     def _publish_idle(self, turn: dict[str, Any], *, reason: str | None = None) -> None:
         fields = {"status": "idle", "turn_id": turn["id"]}
@@ -499,7 +573,11 @@ class Recovery:
             self.bus.publish("turn.recovered", summary, session_id=turn["session_id"])
 
 
+EXTERNAL_TOOL_TEXT = ("interrupted by a daemon restart; the CLI ran this tool itself, so it may have finished or may still be "
+                      "running. Nexus did not retry it and its result is unknown")
 OUTCOMES = {
+    "external": "the CLI ran it itself (ZMX); it may have finished or may still be running. It was not retried, "
+                "and its result is unknown.",
     "restored": "its completed result was preserved exactly and inserted as a tool result (known outcome).",
     "inserted": "its result was already inserted; nothing changed.",
     "not_run": "it did not run; there is no durable record that it started.",

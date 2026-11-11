@@ -127,6 +127,9 @@ class StreamParser:
                 if note:
                     events.append(self._notice(f"partial answer {note}"))
                 return events
+            return []  # a closing agent_response step without text (agy 1.5.0 sends usage here)
+        elif kind in ("user_input", "system_message"):
+            return []  # recorded in the wire event; nothing to interpret (seen live on agy 1.5.0)
         elif kind == "tool":
             if index in self.closed_tools:
                 return []
@@ -288,7 +291,7 @@ class AntigravityWorker:
 
         try:
             if emit:
-                await emit(WorkerEvent("launch", {"cli_version": version, "argv": argv, "directory": str(workspace)}))
+                await emit(WorkerEvent("launch", {"cli_version": version, "argv": argv, "directory": str(workspace), "pid": process.pid}))
             try:
                 pending = {out, stop_wait, leader, writer}
                 while True:

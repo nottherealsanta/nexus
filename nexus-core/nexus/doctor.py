@@ -124,10 +124,46 @@ def check_rg() -> Row:
     return _row("rg", "warn", "not installed; grep falls back to a slower scan")
 
 
+def check_zmx() -> list[Row]:
+    """ZMX vendor CLIs: version and required flags, only for a vendor the user switched on (never probed while off)."""
+    import asyncio
+    import os
+
+    from .workers import records, registry
+    from .workers.antigravity import AntigravityWorker
+    from .workers.base import WorkerError, WorkerPolicy
+    from .workers.claude_code import ClaudeCodeWorker
+
+    if os.name != "posix":
+        return [_row("zmx", "warn", "unavailable on this platform: ZMX needs POSIX PTYs and process groups")]
+    rows = []
+    for pid in registry.IDS:
+        label = registry.LABELS[pid]
+        if not registry.enabled(pid):
+            rows.append(_row(f"zmx {pid}", "ok", f"{label}: off (no CLI probed)"))
+            continue
+        path = registry.cli_path(pid)
+        if not path:
+            rows.append(_row(f"zmx {pid}", "fail", f"{label}: switched on but the CLI is not installed"))
+            continue
+        try:
+            worker = ClaudeCodeWorker(path, state_dir=Path("/nonexistent")) if pid == "claude-code" else AntigravityWorker(path)
+            version = asyncio.run(worker.preflight() if pid == "claude-code" else worker.preflight(WorkerPolicy()))
+            rows.append(_row(f"zmx {pid}", "ok", f"{label}: {path} version {version}, required flags present"
+                             + ("; sign-in not verified" if pid == "agy" else "")))
+        except (WorkerError, OSError) as exc:
+            rows.append(_row(f"zmx {pid}", "fail", f"{label}: {path}: {exc}"))
+    live = records.orphans()
+    if live:
+        rows.append(_row("zmx workers", "warn", "; ".join(f"{r['provider']} pid {r['pid']} ({r.get('directory', '?')})" for r in live)
+                         + " still running after Nexus; stop on request with `nexus workers clean`"))
+    return rows
+
+
 def run() -> list[Row]:
     found = daemon.discover()
     return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_search(),
-            check_mcp(found), *check_voice(), check_rg()]
+            check_mcp(found), *check_voice(), check_rg(), *check_zmx()]
 
 
 RELEASES_URL = "https://api.github.com/repos/nottherealsanta/nexus/releases/latest"

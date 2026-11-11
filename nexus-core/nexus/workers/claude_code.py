@@ -38,7 +38,7 @@ from .base import (
     protected_cleanup,
     stop_process,
 )
-from .claude_transcript import TranscriptReader
+from .claude_transcript import SubagentReader, TranscriptReader
 
 RECONCILE_SECONDS = 2.0
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -196,6 +196,7 @@ class ClaudeCodeWorker:
         expected = transcript_path(previous_transcript, self.config_dir) if previous_transcript else derived_transcript(self.config_dir, workspace, session)
         baseline = expected.stat().st_size if resume and expected.exists() else 0
         reader = TranscriptReader(expected, session, offset=baseline)
+        sidechains = SubagentReader(expected)
         notes: list[str] = []
         replies: list[str] = []
         text = ""
@@ -249,6 +250,7 @@ class ClaudeCodeWorker:
                                                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
                 os.close(slave)
                 slave = None
+                await send(WorkerEvent("process", {"pid": process.pid, "session_id": session, "transcript_path": str(expected)}))
                 while True:
                     try:
                         chunk = os.read(master, 65536)
@@ -293,10 +295,11 @@ class ClaudeCodeWorker:
                         selected = transcript_path(supplied, self.config_dir) if supplied else derived_transcript(self.config_dir, workspace, session)
                         if selected != reader.path or session != reader.session:
                             reader = TranscriptReader(selected, session, offset=baseline if selected == expected else 0)
+                            sidechains = SubagentReader(selected)
                         if event in ("Stop", "StopFailure"):
                             stop = value
                             ended_at = time.monotonic()
-                    for event in reader.poll():
+                    for event in (*reader.poll(), *sidechains.poll()):
                         await send(event)
                     if stop and stop["event"] == "StopFailure":
                         error = "Claude Code StopFailure: " + diagnostic_text(str(stop.get("error") or stop.get("reason") or "unknown failure").encode("utf-8", "replace"))
