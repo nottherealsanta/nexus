@@ -302,9 +302,13 @@ pub(crate) const QUESTION_LOCK: &str = "Answer the question above";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 /// The timeline scroll bar stays at full strength this long after a scroll…
-pub const SCROLLBAR_VISIBLE: std::time::Duration = std::time::Duration::from_millis(1000);
+pub fn scrollbar_visible() -> std::time::Duration {
+    std::time::Duration::from_millis(crate::theme::motion_durations().scrollbar_visible_ms)
+}
 /// …then dims for this long before it disappears.
-pub const SCROLLBAR_FADE: std::time::Duration = std::time::Duration::from_millis(400);
+pub fn scrollbar_fade() -> std::time::Duration {
+    std::time::Duration::from_millis(crate::theme::motion_durations().scrollbar_fade_ms)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -909,7 +913,7 @@ pub struct Ui {
     /// the first turn).
     pub timeline_open: HashMap<String, bool>,
     /// Keys of the activity groups that were live at the last draw, and the
-    /// frame at which a group finished (its glyph flashes for `FLASH_FRAMES`).
+    /// frame at which a group finished (its glyph flashes for `flash_frames()`).
     pub live_groups: std::collections::HashSet<String>,
     pub group_flash: HashMap<String, usize>,
     /// The block the keyboard is on, as an index into `timeline_blocks`.
@@ -9976,7 +9980,7 @@ impl App {
 
     /// Note which groups of the freshly built timeline are live. A group that
     /// was live at the last draw and now is not has just finished: its glyph
-    /// flashes the accent for `timeline::FLASH_FRAMES` (never with reduced motion).
+    /// flashes the accent for `timeline::flash_frames()` (never with reduced motion).
     pub fn note_live_groups(&mut self, timeline: &crate::timeline::Timeline) {
         let now: std::collections::HashSet<String> = timeline.live_groups.iter().cloned().collect();
         if !self.theme.opts.reduced_motion {
@@ -9990,7 +9994,7 @@ impl App {
         let frame = self.frame;
         self.ui
             .group_flash
-            .retain(|_, at| frame.wrapping_sub(*at) < crate::timeline::FLASH_FRAMES);
+            .retain(|_, at| frame.wrapping_sub(*at) < crate::timeline::flash_frames());
     }
 
     pub fn set_size(&mut self, w: u16, h: u16) {
@@ -12724,9 +12728,9 @@ impl App {
     pub fn scrollbar_phase(&self, now: Instant) -> Option<bool> {
         let at = self.ui.scroll_mark?;
         let age = now.saturating_duration_since(at);
-        if age < SCROLLBAR_VISIBLE {
+        if age < scrollbar_visible() {
             Some(false)
-        } else if age < SCROLLBAR_VISIBLE + SCROLLBAR_FADE {
+        } else if age < scrollbar_visible() + scrollbar_fade() {
             Some(true)
         } else {
             None

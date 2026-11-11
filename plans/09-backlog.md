@@ -136,10 +136,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **Per-dependency invalidation.** Events from non-selected sessions still rebuild the viewed timeline
   (correct but conservative); replace the single `timeline_revision` with explicit dependencies if profiling shows
   it matters.
-- [ ] **Draw cost has grown.** The 2026-11-04 replay (200 messages, 160×48, release) measured paced draws at 4.09 ms
-  mean and chrome-only frames at 1.73 ms, against 1.13–1.17 ms and 0.36 ms on 10-31 (the timeline build 2.77 ms vs
-  1.46–1.58 ms). Re-run on an idle machine; if it holds, bisect the 11-01 to 11-03 UI commits (fixed tab widths,
-  rail, sticky header, Manager stage) and restore the budget.
+- [x] **Draw cost has grown.** Re-run 2026-11-11 (release, `--bench 160x48 --replay`, 200 messages, three runs, machine busy with load average ~7): paced draws 1.40, 1.42 and 1.53 ms mean (p95 1.7–2.1), chrome-only frames 0.37–0.39 ms, burst 1.39–1.49 ms. The 11-04 figures (4.09 ms and 1.73 ms) do not reproduce and are within ~25% of 10-31 (1.13–1.17 and 0.36), so no bisect. Rebuild and compare again before a release.
 - [ ] Keep a scratch-Core PTY run for end-to-end terminal behavior and input latency; the replay bench
   (`nexus-tui --bench WxH --replay`) measures scheduling, layout and paint only.
 
@@ -222,8 +219,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Empty, loading, error and offline states on every surface (sessions, files, settings panes, pickers,
   new-session view).
 - [ ] Keyboard-only paths and focus visibility in both; decide the focus-ring colour.
-- [ ] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
-  reduced motion.
+- [~] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
+  reduced motion. Done 2026-11-11 for what exists: `[motion.durations]` (`flash_ms` 750, `scrollbar_visible_ms` 1000, `scrollbar_fade_ms` 400) is read by both clients (TUI `theme::motion_durations()`, NSH generated `motionDurations`); this also fixed a drift (NSH flashed 600 ms and faded its scroll bar at 900/1300 ms, the TUI 750 and 1000/1400). Fold, spinner and modal-open durations wait for those features.
 - [ ] Copy pass: sentence case, one verb per meaning (close / back / cancel), no developer notes in the UI.
 - [ ] **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
   (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
