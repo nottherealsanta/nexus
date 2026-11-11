@@ -244,6 +244,8 @@ pub enum OverlayKind {
     Resources {
         top: usize,
         kind: ResourceKind,
+        /// The selected background shell (index into the viewed jobs); `s` stops it.
+        selected: usize,
     },
     /// The full text of one alert (a toast or a past notification), wrapped
     /// and scrollable (DESIGN_PLAN.md D15). `back` is the notifications row
@@ -729,6 +731,10 @@ pub enum Target {
     ComposerResources,
     ComposerShells,
     ComposerTerminals,
+    /// A background shell row in the Shells modal: select it.
+    ResourceJob(usize),
+    /// A running background shell's `[stop]` action: kill the job.
+    ResourceStop(String),
     TerminalTab(usize),
     TerminalClose(usize),
     TerminalNew,

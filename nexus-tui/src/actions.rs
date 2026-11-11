@@ -125,6 +125,10 @@ pub enum ApiCall {
         id: String,
         name: String,
     },
+    /// Stop (kill) a background bash job from the Shells modal.
+    StopJob {
+        id: String,
+    },
     TerminalClose {
         id: String,
     },
@@ -476,6 +480,7 @@ impl ApiCall {
                 ..
             } => "Voice model removed from cache",
             ApiCall::Interrupt { .. } => "Interrupt sent",
+            ApiCall::StopJob { .. } => "Shell stopped",
             ApiCall::Archive { archived: true, .. } => "Archived",
             ApiCall::Archive { .. } => "Unarchived",
             ApiCall::Rename { .. } => "Renamed",
@@ -843,6 +848,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .await
                     .map_err(e)?,
             );
+        }
+        ApiCall::StopJob { id } => {
+            api.stop_bash_job(id).await.map_err(e)?;
         }
         ApiCall::TerminalClose { id } => {
             done.terminal = Some(

@@ -1490,6 +1490,22 @@ impl CoreApi {
         serde_json::from_value(self.http.get("/api/bash", &[]).await?).map_err(dec)
     }
 
+    /// Stop a background bash job (`DELETE /api/bash/{id}`); a finished job is unchanged.
+    pub async fn stop_bash_job(&self, id: &str) -> Result<Value, Error> {
+        Ok(self
+            .http
+            .call(
+                Method::DELETE,
+                &format!("/api/bash/{id}"),
+                &[],
+                None,
+                None,
+                None,
+            )
+            .await?
+            .body)
+    }
+
     /// The connected providers' model catalog (`{source, models}`).
     pub async fn models(&self) -> Result<Value, Error> {
         self.http.get("/api/model", &[]).await

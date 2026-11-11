@@ -150,3 +150,41 @@ fn no_kernel_or_shell_leaves_the_strip_unmarked() {
     assert!(app.hits.rect_of(&Target::ComposerResources).is_none());
     assert!(app.hits.rect_of(&Target::ComposerTerminals).is_none());
 }
+
+fn stops(app: &nexus_tui::app::App) -> Vec<String> {
+    use nexus_tui::actions::ApiCall;
+    use nexus_tui::app::Effect;
+    app.effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Api(ApiCall::StopJob { id }) => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_running_shell_can_be_stopped_from_the_modal() {
+    let mut app = with_resources();
+    draw(&mut app, 160, 50);
+    let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
+    click(&mut app, chip.x, chip.y);
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    assert!(shown.contains("[stop]"), "{shown}");
+    assert!(shown.contains("s stop"), "{shown}");
+    // Only the running shell has a stop action.
+    assert!(app.hits.rect_of(&Target::ResourceStop("job_1".into())).is_some());
+    assert!(app.hits.rect_of(&Target::ResourceStop("job_2".into())).is_none());
+    // `s` on a finished shell does nothing; on the running one it stops it.
+    press(&mut app, &["down"]);
+    press(&mut app, &["s"]);
+    assert!(stops(&app).is_empty());
+    press(&mut app, &["up"]);
+    press(&mut app, &["s"]);
+    assert_eq!(stops(&app), vec!["job_1".to_owned()]);
+    app.effects.clear();
+    draw(&mut app, 160, 50);
+    let stop = app.hits.rect_of(&Target::ResourceStop("job_1".into())).unwrap();
+    click(&mut app, stop.x + 1, stop.y);
+    assert_eq!(stops(&app), vec!["job_1".to_owned()]);
+}

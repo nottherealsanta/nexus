@@ -441,7 +441,8 @@ The job is always a pipe process: stdin is `/dev/null`, stdout and stderr are
 combined, and there is no terminal, so no echo, CRLF or escape sequences (a program
 that needs a TTY can use `script` or `unbuffer`). It is not a terminal resource and
 never appears in the terminal dock; clients list running jobs under the
-location strip's `N shell` indicator. The job JSON carries the `turn_id` and
+location strip's `N shell` indicator, whose Shells modal lets the user stop a
+running job (the same kill as `bash_kill`; the finish notice reports `killed`). The job JSON carries the `turn_id` and
 `tool_call_id` that started it when the call was recorded.
 
 * `bash_output {job_id, offset?, limit?}` returns status (`running`, `done`,

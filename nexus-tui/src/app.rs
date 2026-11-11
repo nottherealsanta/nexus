@@ -3007,6 +3007,30 @@ impl App {
     }
 
     /// User terminals in the dock.
+    /// Stop the background shell selected in the Shells modal, if it is still running.
+    fn stop_selected_shell(&mut self) {
+        let Some(Overlay {
+            kind: OverlayKind::Resources { kind, selected, .. },
+            ..
+        }) = &self.ui.overlay
+        else {
+            return;
+        };
+        if *kind == crate::ui::ResourceKind::Kernels {
+            return;
+        }
+        let selected = *selected;
+        let id = self
+            .view_jobs()
+            .get(selected)
+            .filter(|job| job["status"].as_str() == Some("running"))
+            .and_then(|job| job["id"].as_str())
+            .map(str::to_owned);
+        if let Some(id) = id {
+            self.api(ApiCall::StopJob { id });
+        }
+    }
+
     pub fn terminal_shell_count(&self) -> usize {
         self.terminal_panel.terminals.len()
     }
@@ -6772,6 +6796,7 @@ impl App {
                 self.open_overlay(OverlayKind::Resources {
                     top: 0,
                     kind: crate::ui::ResourceKind::All,
+                    selected: 0,
                 });
             }
             "session.worktree_info" => {
@@ -8951,6 +8976,10 @@ impl App {
         ) {
             self.inspector_done(done);
             return;
+        }
+        if matches!(&done.call, ApiCall::StopJob { .. }) {
+            // The job list changes now; Core's own event may arrive later.
+            self.effects.push(Effect::Sync(SyncCommand::Resources));
         }
         if matches!(&done.call, ApiCall::Usage | ApiCall::RefreshUsage) {
             match done.result {
@@ -11277,6 +11306,16 @@ impl App {
             {
                 self.api(ApiCall::RefreshUsage);
             }
+            "s" if matches!(
+                self.ui.overlay,
+                Some(Overlay {
+                    kind: OverlayKind::Resources { .. },
+                    ..
+                })
+            ) =>
+            {
+                self.stop_selected_shell();
+            }
             "up" => self.overlay_move(-1),
             "down" => self.overlay_move(1),
             "pageup" => self.overlay_move(-8),
@@ -11380,8 +11419,16 @@ impl App {
 
     fn overlay_move(&mut self, delta: isize) {
         let n_notices = self.ui.alerts.history.len();
+        let n_jobs = self.view_jobs().len();
         let area = self.regions.area;
         match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
+            // With shells listed, the arrows move the shell selection; the
+            // modal scrolls to keep it in view.
+            Some(OverlayKind::Resources { kind, selected, .. })
+                if *kind != crate::ui::ResourceKind::Kernels && n_jobs > 0 =>
+            {
+                *selected = (*selected as isize + delta).clamp(0, n_jobs as isize - 1) as usize;
+            }
             Some(OverlayKind::Palette(_)) => self.palette_move(delta),
             Some(OverlayKind::Notifications { selected }) => {
                 *selected = (*selected as isize + delta)
@@ -15444,6 +15491,16 @@ impl App {
             }
             Target::SettingsEntry => self.run_command("app.settings"),
             Target::UsageRefresh => self.api(ApiCall::RefreshUsage),
+            Target::ResourceJob(index) => {
+                if let Some(Overlay {
+                    kind: OverlayKind::Resources { selected, .. },
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    *selected = index;
+                }
+            }
+            Target::ResourceStop(id) => self.api(ApiCall::StopJob { id }),
             Target::SideRow(i) => {
                 self.ui.focus = Focus::Sidebar;
                 self.ui.cursor.insert(self.ui.tab, i);
@@ -15587,6 +15644,7 @@ impl App {
                 self.open_overlay(OverlayKind::Resources {
                     top: 0,
                     kind: crate::ui::ResourceKind::Kernels,
+                    selected: 0,
                 });
             }
             Target::ComposerShells => {
@@ -15594,6 +15652,7 @@ impl App {
                 self.open_overlay(OverlayKind::Resources {
                     top: 0,
                     kind: crate::ui::ResourceKind::Shells,
+                    selected: 0,
                 });
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
@@ -16140,6 +16199,7 @@ impl ActionDone {
             ApiCall::OlderMessages { .. } => "Older messages failed to load",
             ApiCall::SwitchCost { .. } => "",
             ApiCall::Usage | ApiCall::RefreshUsage => "Provider usage failed to load",
+            ApiCall::StopJob { .. } => "Could not stop the shell",
             ApiCall::Inspector { .. }
             | ApiCall::InspectorHead { .. }
             | ApiCall::InspectorRecord { .. } => "Inspector failed to load",

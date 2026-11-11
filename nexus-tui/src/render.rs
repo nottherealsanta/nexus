@@ -8895,7 +8895,11 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
             draw_alert_detail(cx, buf, area, *id, *top, hits)
         }
         OverlayKind::Usage { rows, top } => draw_usage(cx, buf, area, rows, *top, hits),
-        OverlayKind::Resources { top, kind } => draw_resources(cx, buf, area, *top, *kind, hits),
+        OverlayKind::Resources {
+            top,
+            kind,
+            selected,
+        } => draw_resources(cx, buf, area, *top, *kind, *selected, hits),
         OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
         OverlayKind::WorktreeInfo(info) => draw_worktree_info(cx, buf, area, info, hits),
     }
@@ -10214,9 +10218,13 @@ fn draw_resources(
     area: Rect,
     top: usize,
     kind: crate::ui::ResourceKind,
+    selected: usize,
     hits: &mut HitMap,
 ) {
     use crate::ui::ResourceKind;
+    // Each shell's rows: (job index, first row, row count) for selection,
+    // the stop action and scrolling.
+    let mut job_rows: Vec<(usize, usize, usize, bool, String)> = Vec::new();
     let wide = MODAL_LARGE;
     let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
     let kernels = cx.app.view_kernels();
@@ -10314,7 +10322,8 @@ fn draw_resources(
         if jobs.is_empty() {
             rows.push(vec![Span::styled("No background shells.", quiet)]);
         }
-        for job in &jobs {
+        for (index, job) in jobs.iter().enumerate() {
+            let first = rows.len();
             let id = job["id"].as_str().unwrap_or("job");
             let status = job["status"].as_str().unwrap_or("unknown");
             let token = match status {
@@ -10363,6 +10372,13 @@ fn draw_resources(
                 ));
             }
             rows.push(vec![Span::styled(truncate(&meta, inner, cx.ell()), quiet)]);
+            job_rows.push((
+                index,
+                first,
+                rows.len() - first,
+                status == "running",
+                id.to_owned(),
+            ));
         }
     }
     let b = modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16);
@@ -10373,11 +10389,76 @@ fn draw_resources(
     };
     let m = modal(cx, buf, area, b, title, hits);
     let h = m.body.height as usize;
-    let top = top.min(rows.len().saturating_sub(h));
-    for (i, row) in rows.iter().skip(top).take(h).enumerate() {
-        draw_spans(cx, buf, m.x, m.body.y + i as u16, row, m.w);
+    let selected = selected.min(job_rows.len().saturating_sub(1));
+    let current = job_rows.iter().find(|row| row.0 == selected);
+    let mut top = top.min(rows.len().saturating_sub(h));
+    if let Some(&(_, first, count, ..)) = current {
+        // Keep the selected shell in view; the kernels above stay reachable
+        // by selecting the first shell.
+        if first < top {
+            top = first;
+        }
+        if first + count > top + h {
+            top = (first + count).saturating_sub(h);
+        }
+        if selected == 0 && first + count <= h {
+            top = 0;
+        }
     }
-    hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
+    let stop = "[stop]";
+    let stop_w = stop.chars().count() as u16;
+    for (i, row) in rows.iter().skip(top).take(h).enumerate() {
+        let y = m.body.y + i as u16;
+        let at = top + i;
+        let job = job_rows
+            .iter()
+            .find(|(_, first, count, ..)| at >= *first && at < first + count);
+        if let Some(&(index, first, _, running, ref id)) = job {
+            if index == selected {
+                band(cx, buf, &m, y, PRIMARY);
+            }
+            if at == first {
+                let room = if running {
+                    m.w.saturating_sub(stop_w + 1)
+                } else {
+                    m.w
+                };
+                draw_spans(cx, buf, m.x, y, row, room);
+                if running {
+                    let x = m.x + m.w - stop_w;
+                    put(buf, x, y, stop, cx.st("status.warning", RAISED), stop_w);
+                    hits.add(Rect::new(x, y, stop_w, 1), Target::ResourceStop(id.clone()));
+                }
+            } else {
+                draw_spans(cx, buf, m.x, y, row, m.w);
+            }
+            hits.add(
+                Rect::new(
+                    m.x,
+                    y,
+                    m.w.saturating_sub(if at == first && running {
+                        stop_w + 1
+                    } else {
+                        0
+                    }),
+                    1,
+                ),
+                Target::ResourceJob(index),
+            );
+        } else {
+            draw_spans(cx, buf, m.x, y, row, m.w);
+        }
+    }
+    if job_rows.is_empty() {
+        hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
+    } else {
+        hint_row(
+            cx,
+            buf,
+            &m,
+            &[(updown(cx), "select"), ("s", "stop"), ("esc", "close")],
+        );
+    }
 }
 
 /// A session's title, falling back to its id when the row is not loaded.

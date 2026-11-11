@@ -66,6 +66,31 @@ describe("kernels and shells", () => {
     expect(app.texts().join("\n")).toContain("Background shells (1 live, 2 kept)");
   });
 
+  test("a running shell can be stopped from the modal", async () => {
+    const deleted: string[] = [];
+    const app = await open("./App.tsx", {
+      network: { ...network, "DELETE */api/bash/*": (req: any) => { deleted.push(String(req.url)); return { body: { ...jobs[0], status: "killed" } }; } },
+      width: 1280, height: 900, platform: "web",
+    });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:location-background-shell");
+    await app.press("id:location-background-shell");
+    await app.waitFor("id:resource-job-job_1");
+    expect(app.shows("id:resource-job-stop-job_1")).toBe(true);
+    expect(app.shows("id:resource-job-stop-job_2")).toBe(false);
+    expect(app.texts().join("\n")).toContain("s stop");
+    await app.keyboard.press("ArrowDown");
+    await app.keyboard.press("s");
+    expect(deleted.length).toBe(0);
+    await app.keyboard.press("ArrowUp");
+    await app.keyboard.press("s");
+    await app.waitUntil(() => deleted.length === 1);
+    expect(deleted[0]).toContain("/api/bash/job_1");
+    await app.press("id:resource-job-stop-job_1");
+    await app.waitUntil(() => deleted.length === 2);
+  });
+
   test("the count is absent when no kernel or running shell exists", async () => {
     const app = await open("./App.tsx", {
       network: { ...network, "GET */api/kernel*": { body: [] }, "GET */api/bash*": { body: [] } },

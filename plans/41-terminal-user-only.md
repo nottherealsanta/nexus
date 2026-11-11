@@ -95,6 +95,10 @@ Desktop/web TUI and NSH in the same change; mobile has neither surface.
   `N terminal shell` is the terminal count; evidence provenance is id/name/project/workspace/stream_seq only.
 - Scenarios: `terminal-dock.json` has one terminal and a `background_job` that is not in the dock;
   `terminal-evidence.json` lost its provenance fields.
+- Shells modal stop (user, 2026-11-11: "shell background should be visible but separate and in the modal, user should
+  be able to stop them"): both clients select a shell with ↑/↓ and stop a running one with `s` or `[stop]` / **Stop**
+  (`DELETE /api/bash/{id}`), toast `Shell stopped`, list refreshed. Tests: TUI `resources` 7/7, NSH
+  `resources.test.tsx` 5/5; TUI text render and NSH screenshot compared (same structure, hints and selection).
 - Follow-up: the inspector `job` lane (not built; see the decision above).
 - Paired TUI/NSH screenshots: **not verified** (not taken in this change); the scenario tests assert the same facts
   in both clients (`Terminals (1)`, `1 shell`, `1 terminal shell`, job only under the shell indicator).

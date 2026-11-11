@@ -17,7 +17,7 @@ forwarded to the shell. Legacy terminals that collapse ``Ctrl+` `` and `Ctrl+~` 
 look like Ctrl+Space, which Nexus deliberately leaves to the shell instead of
 hijacking. Closing with the shortcut or Hide detaches and never terminates.
 The agent's running background bash jobs have their own **N shell** indicator, which
-opens the jobs list (output, kill); see [tools.md](tools.md#background-bash-jobs). The distinct
+opens the Shells modal; the user can stop a running job there (↑/↓ select, `s` or **Stop**); see [tools.md](tools.md#background-bash-jobs). The distinct
 **kernel** indicator has no number (there is exactly one kernel). The dock header
 reads **Terminals (N)**.
 Each terminal has a tab showing a running/exited status dot, its name, and a close
