@@ -181,6 +181,12 @@ def test_interrupted_stream_keeps_output_as_diagnostic_history_only(tmp_path):
                                                      "origin": "codex", "raw": {"type": "message"}}}),
     ]
     ids = [crash.event(session, name, data)["id"] for name, data in notes]
+    from nexus.live import LivePartial
+    live = LivePartial(request["id"])
+    for name, data in notes:
+        if name in ("text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done"):
+            live.apply(data)
+    crash.store.save_partial(request["id"], live.json())
     crash.close()
 
     rt = restart(tmp_path / "nexus.db")
@@ -313,7 +319,7 @@ def test_completed_result_missing_from_history_is_inserted_once(tmp_path):
 
 
 def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
-    # A turn left open before `turn.ended` existed: the log's `turn_end` is the fallback evidence.
+    # `turn.ended` is the only evidence; the legacy `turn_end` event fallback was removed.
     workspace = tmp_path / "proj"
     workspace.mkdir()
     crash = Crash(tmp_path / "nexus.db", workspace)
@@ -326,6 +332,7 @@ def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
         session.id, Message("assistant", (Text("done"),)), turn_id=turn["id"], request_id=request["id"])
     crash.publish_message(session, assistant)
     crash.event(session, "turn_end", {"type": "turn_end", "stop": "end_turn", "steps": 1})
+    crash.store.mark_turn_ended(turn["id"], "end_turn", 1)
     # Crash before finish_turn wrote `completed`.
     crash.close()
 
@@ -1190,5 +1197,22 @@ def test_wire_payload_expiry_waits_for_recovery_and_leaves_restored_parts_identi
         assert message_json(again)["parts"] == parts
         assert rt.store.session_usage(session.id)["models"]["unknown"]["input"] == 12
         assert {e["id"]: e for e in rt.store.events(session.id)}[wire["id"]]["payload_state"] == "expired"
+    finally:
+        rt.store.close()
+
+
+def test_turn_end_event_alone_is_no_longer_evidence(tmp_path):
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    crash.request(turn)
+    crash.event(session, "turn_end", {"type": "turn_end", "stop": "end_turn", "steps": 1})
+    crash.close()
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [stored] = rt.store.turns_for_session(session.id)
+        assert stored["status"] == "interrupted"
     finally:
         rt.store.close()

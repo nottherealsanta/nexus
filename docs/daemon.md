@@ -548,8 +548,8 @@ removes raw wire traffic and deltas; it no longer takes a turn's footer data.
 
 **Recovery.** A running turn with `ended` set had finished from the loop's
 point of view, so startup recovery closes it as `completed` without reading the
-event log; only a turn left open with `ended` unset falls back
-to the log's `turn_end` event ([Crash recovery](#crash-recovery)).
+event log; a turn left open with `ended` unset is interrupted
+([Crash recovery](#crash-recovery)); the old `turn_end` event fallback is gone.
 
 ## Crash recovery
 
@@ -577,8 +577,7 @@ Busy state itself is in memory (`Runtime.turns`) and is not the recovery
 authority; the durable turn and request rows are.
 
 **What recovery does.**
-- If the loop ended the turn before the crash (the turn's `ended` record, or
-  for a turn left open by an older daemon a durable `turn_end` event) but the
+- If the loop ended the turn before the crash (the turn's `ended` record) but the
   turn's closing record was lost, it finishes the turn as `completed` instead:
   nothing was interrupted from the model's point of view. It publishes the idle status and a
   `turn.recovered` with `outcome: "completed"` (including any runtime losses it

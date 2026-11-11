@@ -1205,8 +1205,7 @@ durable log:
 - One `turn.recovered` per turn with `{turn_id, session_id, outcome,
   reason, legacy, origin, continuation, request, assistant_message, tool_message,
   tools, waits, losses, partial_output, notice}`. `outcome` is `interrupted`, or
-  `completed` when the turn's `ended` record (or, for a turn left open by an older
-  daemon, a durable `turn_end` event) proved the loop finished before the crash
+  `completed` when the turn's `ended` record proved the loop finished before the crash
   (then `notice` is null). `legacy` is true for a pre-execution-record session.
   `origin` is `prompt` or `continuation` when recorded (null for an older turn),
   and `continuation` is the predecessor link a continuation crashed with.

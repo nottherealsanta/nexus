@@ -49,6 +49,7 @@ import base64
 import copy
 import hashlib
 import json
+import logging
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
@@ -1821,7 +1822,7 @@ class Runtime:
             root = self.session(session_id)
             runner = self._hook_runner(root, Path(root.directory))
             if runner is not None and runner.has("SessionEnd"):
-                await runner.fire("SessionEnd")  # side effects only: the session's log is about to go
+                await runner.fire("SessionEnd", reason="deleted")  # side effects only: the session's log is about to go
             for sid in ids:
                 self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
             await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
@@ -1891,11 +1892,37 @@ class Runtime:
                 {"root": session_id, "sessions": ids, "archived": archived, "revisions": revisions},
                 session_id=session_id,
             )
+        if archived and changed:
+            self._fire_session_end(session_id)
         if archived:
             for kid in self.kernels.release_tree(session_id, set(ids)):
                 self.bus.publish("kernel.deleted", {"id": kid, "reason": "session tree archived; state discarded"},
                                  session_id=session_id)
         return self.session(session_id)
+
+    def _fire_session_end(self, session_id: str) -> None:
+        """Run `SessionEnd` hooks for an archived root, off the caller's path (side effects only).
+
+        Archiving is synchronous and also called by the sweep and the Manager, so the hook runs as a
+        tracked background task; its failure never undoes or delays the archive.
+        """
+        try:
+            root = self.session(session_id)
+            runner = self._hook_runner(root, Path(root.directory))
+            loop = asyncio.get_running_loop()
+        except (NotFound, RuntimeError, OSError):
+            return
+        if runner is None or not runner.has("SessionEnd"):
+            return
+
+        async def fire() -> None:
+            try:
+                await runner.fire("SessionEnd", reason="archived")
+            except Exception:  # a hook is policy around the archive, never part of it
+                logging.getLogger(__name__).exception("SessionEnd hook failed")
+
+        self.background.add(task := loop.create_task(fire()))
+        task.add_done_callback(self.background.discard)
 
     def archive_stale_sessions(self, *, older_than: float, now: float | None = None) -> list[str]:
         """Archive whole root trees idle strictly longer than `older_than` seconds.

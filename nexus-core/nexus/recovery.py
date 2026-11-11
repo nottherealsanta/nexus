@@ -249,15 +249,9 @@ class Recovery:
                           requests: list[dict[str, Any]]) -> dict[str, Any] | None:
         """`{"stop", "steps"}` if the loop ended the turn before the crash, else `None`.
 
-        `turn.ended` is the record. A turn left open by a daemon from before that
-        column has `ended` null; for it the log's `turn_end` event is the evidence.
+        `turn.ended` is the only record; the legacy `turn_end` event fallback is gone.
         """
-        if turn.get("ended") is not None:
-            return turn["ended"]
-        if not requests:
-            return None
-        rows = self.store.events(session_id, after=requests[-1]["event_after"], limit=1, types=["turn_end"])
-        return rows[0]["data"] if rows else None
+        return turn.get("ended")
 
     def _restore_completed_response(self, turn: dict[str, Any], request: dict[str, Any] | None) -> StoredMessage | None:
         """Restore a durably completed response whose message was never saved.
