@@ -458,6 +458,21 @@ describe("history", () => {
     expect(latestUsage(m.selected!.turns, m.selected!.scratch)).toEqual({ input: 12, model: "codex/gpt-5" });
   });
 
+  test("retry status clears when a provider response arrives and remains scoped to its session", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    m.applyEvent(ev(1, "retry_scheduled", { attempt: 1 }));
+    expect(m.selected!.retryPending).toBe(true);
+    m.select("ses_2");
+    expect(!!m.selected!.retryPending).toBe(false);
+    m.applyEvent(ev(2, "retry_started", { attempt: 2 }));
+    m.select("ses_1");
+    expect(m.selected!.retryPending).toBe(true);
+    m.applyEvent(ev(3, "text_delta", { request_id: "r", seq: 1, part_index: 0, text: "ok" }));
+    expect(m.selected!.retryPending).toBe(false);
+    expect(m.selected!.scratch.some((event) => event.type === "retry_scheduled")).toBe(true);
+  });
+
   test("global live-only events advance the cursor without entering session scratch", () => {
     const m = live(new Model());
     m.select("ses_1");

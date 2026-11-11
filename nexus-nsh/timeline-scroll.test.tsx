@@ -2,6 +2,7 @@
 import { describe, expect, open, test } from "nsh/test";
 import { keepIdentity } from "./src/ui/keep-identity";
 import { followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "./src/scroll-follow";
+import { stickyUser, visibleRowKey } from "./src/ui/timeline";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Long session", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
@@ -36,6 +37,28 @@ const network = {
 };
 
 describe("timeline scrolling", () => {
+  test("sticky context follows the first visible row rather than estimated heights", () => {
+    const rows = [
+      { key: "context", kind: "context" }, { key: "u1", kind: "user" },
+      { key: "long-reply", kind: "assistant" }, { key: "u2", kind: "user" },
+      { key: "short-reply", kind: "assistant" },
+    ] as any;
+    expect(stickyUser(rows, "context")).toBe(null);
+    expect(stickyUser(rows, "u1")).toBe(null);
+    expect(stickyUser(rows, "long-reply")?.key).toBe("u1");
+    expect(stickyUser(rows, "u2")).toBe(null);
+    expect(stickyUser(rows, "short-reply")?.key).toBe("u2");
+    expect(stickyUser(rows, "missing")).toBe(null);
+  });
+  test("visible-row tracking survives a session switch and changed rows at the same indices", () => {
+    const old = { sid: "one", key: "old-reply", index: 2 };
+    const other = [{ key: "context" }, { key: "new-user" }, { key: "new-reply" }] as any;
+    expect(visibleRowKey(other, old, "two")).toBe("new-reply");
+    expect(visibleRowKey(other, old, "one")).toBe("new-reply");
+    const shifted = [{ key: "new" }, { key: "old-reply" }] as any;
+    expect(visibleRowKey(shifted, old, "one")).toBe("old-reply");
+    expect(visibleRowKey([], old, "two")).toBe(null);
+  });
   test("the virtual list compensates once for a measured row growing above the viewport", async () => {
     const app = await open("./ScrollAnchorFixture.tsx", { width: 600, height: 500, platform: "web" });
     await app.scroll("id:anchor-list", 150);
@@ -64,6 +87,18 @@ describe("timeline scrolling", () => {
     // Upward again from the end: the jump really moved the list there.
     await app.scroll("id:timeline", -300);
     await app.waitFor("id:jump-latest");
+  });
+
+  test("the sticky user message can return to its turn after scrolling", async () => {
+    const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:Long session");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-row");
+    await app.scroll("id:timeline", -300);
+    if (!app.shows("id:sticky-user-button")) await app.scroll("id:timeline", -100);
+    await app.waitFor("id:sticky-user-button");
+    await app.press("id:sticky-user-button");
+    await app.waitFor("id:msg-user");
   });
 
   test("a quiet scroll bar shows while scrolling, then fades away", async () => {

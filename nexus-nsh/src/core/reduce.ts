@@ -27,6 +27,8 @@ export interface SelectedView {
   usageMark: number;
   /** Live events of this session since the last `turn.summary`, without deltas or wire bodies. */
   scratch: CoreEvent[];
+  /** A retry is pending until the provider produces a response or the turn closes. */
+  retryPending?: boolean;
   loaded: boolean;
   /** The frozen starting context (`GET …/snapshot`), shown above the first turn. */
   starting: any | null;
@@ -219,6 +221,11 @@ export class Model {
     if (c && c.generation !== this.generation) return { resync: `event log changed (${this.generation} -> ${c.generation})` };
     if (e.id != null && e.id <= this.lastId) return "duplicate";
     if (e.id != null) this.lastId = e.id;
+    const retryView = this.viewOf(e.session_id);
+    if (retryView) {
+      if (e.type === "retry_scheduled" || e.type === "retry_started" || e.type === "retry_exhausted") retryView.retryPending = true;
+      else if (["text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "message.added", "turn.summary"].includes(e.type)) retryView.retryPending = false;
+    }
     if (e.session_id && e.data?.request_id && ["text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done"].includes(e.type)) {
       const p = this.partials.get(e.session_id) ?? new LivePartial();
       p.event(e.data); this.partials.set(e.session_id, p); this.streaming.set(e.session_id, p.text());

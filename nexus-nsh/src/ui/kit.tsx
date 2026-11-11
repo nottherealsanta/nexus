@@ -203,7 +203,7 @@ export function Seg(p: { onFocus?: () => void; options: string[]; value: string;
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <View focusable onFocus={p.onFocus} role="radio" accessibilityState={{ selected: p.value === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
-            class={`rounded-none px-3 ${isNarrow() ? "min-h-10" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
+            class={`rounded-none px-3 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
             <Text class={`${TS.base} ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
           </View>
         )}

@@ -45,6 +45,13 @@ def _answers(url: str) -> bool:
         return False
 
 
+def _json_forbidden(url: str) -> bool:
+    try:
+        return httpx.get(url, params={"q": "nexus", "format": "json"}, timeout=3).status_code == 403
+    except httpx.HTTPError:
+        return False
+
+
 def _run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_S, check=False)
 
@@ -155,6 +162,13 @@ def start() -> dict[str, Any]:
         return current
     if current["state"] == "unavailable":
         raise RuntimeError(current["detail"])
+    if _json_forbidden(current["url"]):
+        raise RuntimeError(
+            f"A service at {current['url']} returned HTTP 403 for a JSON search. "
+            "An existing SearXNG may have JSON disabled or a limiter enabled. "
+            "Enable json in its search.formats and check its limiter, then restart that service; "
+            "or stop it before starting Nexus search. Nexus will not replace it."
+        )
     try:
         _launch(current["runtime"], current["state"] == "stopped")
     except (OSError, subprocess.SubprocessError) as exc:

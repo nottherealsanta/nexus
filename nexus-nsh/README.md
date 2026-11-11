@@ -47,22 +47,32 @@ See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
 Argon for interface text and prose and a full-width reading column with a fixed 24 px
-outer gutter and 8 px inner gutters. Desktop and web controls use bundled,
-theme-tinted SVGs, including sidebar tabs and the Settings row alongside their
-labels. Open and closed sidebar indicators use distinct icons; timeline status
+outer gutter, with a 16 px left inset for user messages and activity groups. Desktop and web controls use bundled,
+theme-tinted SVGs, including icon-only desktop sidebar tabs in a compact segmented
+control whose names and shortcuts appear on hover, and the Settings row alongside its label. The narrow drawer retains
+tab labels. Open and closed sidebar indicators use distinct icons; timeline status
 and animated running marks retain their shared TUI meanings. Rounded surfaces,
 hover, focus and pressed states are screen-specific presentation, not different
 placement or behavior. Manager consent uses a translucent solid surface without
 backdrop blur so that GPUI can render it too. Icon-only buttons retain accessible
 names and tooltips.
-The session search icon, field and shortcut are laid out side by side, without
-absolute overlays. Phone touch targets and mobile navigation remain unchanged.
+The desktop session-search button opens the session switcher with its search field
+focused; phone search remains inline. Phone segmented controls and tool toggles use 44 px touch targets; mobile navigation remains unchanged.
 Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
 
 Question cards scroll to reveal all questions, choices and option previews. Free-text
-drafts stay with their question when the card is reopened.
+drafts stay with their question when the card is reopened. Accessible names on each
+choice and text field include the question, so controls remain distinguishable when
+navigating a multi-question card. Narrow connection banners show up to three lines of
+their recovery explanation; the complete message remains in the banner's accessible name.
+
+Image previews include a visible Close button for touch and pointer users; long image
+names are truncated in the title while the image retains its accessible name.
+In the projects overview, accessible row names include project and session status,
+and archive toggles announce their count and expanded state. Long project and session
+names yield space to the visible status.
 
 ## Workspace terminals
 
@@ -135,13 +145,12 @@ message is the turn's header: a full-width raised card (`#n · time` on the righ
 with long messages previewed in six lines and expandable as sent,
 Copy and Fold on hover) that folds to one line. Image previews and inline markers
 remain visible without repeating generated attachment labels below the text; previews sit side by side in bordered squares and wrap as needed. A sticky copy of the current
-user card sits under the header with `↑ N lines of this turn above`, pushed up by
-the next card and clicked to scroll back; it pins only bands whose height has been
-measured, so a newly added message cannot make it jump or blink. A subdued
+user card sits under the header with `↑ #N` and can be clicked to return to the message.
+It uses the list's first visible row rather than estimated accumulated heights, and hides
+when a user message itself reaches the top. A subdued
 `interactive.scrollbar` bar appears at the timeline's right edge while the reader
 scrolls, then fades out after about a second; Settings → Appearance → Scroll bar turns
-it off. Its scroll offset and
-measured row heights are keyed by session, so a root's band cannot place the sticky
+it off. The visible row and scroll geometry are scoped to the session, so a root's band cannot place the sticky
 header over a child. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
 status word. Outcomes sit in a non-dismissible strip above the composer instead of timeline/footer rows: latest
 error/interruption, retry or recovery, with an additional-diagnostic count. It restores on revisit, clears on busy,
@@ -164,7 +173,7 @@ member's detail sits behind the tree line with `raw` on its row: `$ command` row
 behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
 a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `Thought · preview`, with the body behind a rail, and no time;
 a thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group.
-Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The group's chevron starts on the text edge shared by the user message and the reply. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog.
+Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog.
 
 The app sets a 16 px default with 24 px leading; the shared kit's title, body and
 code roles use that size, and hierarchy comes from weight and colour rather than
@@ -193,7 +202,7 @@ Selecting a session loads, after the bounded snapshot view, every message, the
 frozen starting context and the turn summaries with the session's spend ledger
 (`GET /api/session/{id}/turn`: the newest 200, then `before=` pages to the oldest,
 at most 25 pages; more are announced). It never reads the event log. Footers
-(models, duration, tokens and cache share), tool timings, retry and error rows,
+(models, duration, tokens and cache share), tool timings, retry notices and error rows,
 the dock's activity bar and the Working row's output count read the
 summaries; a user turn's footer covers every Core turn that starts in its message
 range, so continuations and notice turns join the turn they follow. A row marks
@@ -207,6 +216,12 @@ scratch fills in the running turn, joining a summary loaded mid-turn by step, an
 `turn.summary` replaces that turn's summary and drops the scratch. Diagnostics
 that exist only as live events (directory moves, child notices, cancelled waits)
 show while the session stays open; their messages carry them after a reload.
+Provider retry diagnostics appear as one status row inside the composer, not in the
+context timeline. It shows an active retry or an unresolved exhausted retry, and
+disappears when the provider responds successfully or a later turn succeeds. The row
+opens the available retry history in a detail modal; live events give way to saved
+attempt summaries when a turn closes. The inspector and Core retain their diagnostic
+records independently.
 
 Session views are cached. The views of the last 8 sessions left behind stay in
 `Model.cached` and keep taking their sessions' events, so switching back shows the
@@ -266,15 +281,15 @@ tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). Th
 split rules and tool boxes.
 
 The composer is a dock at the foot of the centre column, edge to edge on the chrome
-surface, with its input, controls and location strip in the timeline's reading column.
-The agent (in its colour at regular weight), model with its muted provider, and effort are compact selectors;
+surface, with a subtly outlined, compact input surface and the controls and location strip in the timeline's reading column.
+The agent (in its colour at regular weight), model with its muted provider at the model's size and baseline, and effort are compact selectors;
 the input starts on the user band's 16 px text edge, and the mic and send buttons sit
-beside it on the input's bottom edge, with the dock padded tighter. The selector row
+beside it on the input's bottom edge, with the dock padded tighter; an enabled send button uses the neutral foreground surface rather than the accent colour. The selector row
 ends with context usage. The location strip is its own row under the controls at every width: the
 muted home-shortened path and branch on the left, centered gray indicators for a live
 kernel, running background shells and terminal shells when present. The kernel and
 background-shell indicators open separate detail lists; terminal shells open the dock. A linked worktree
-adding `⑂`, and the context reading (`82k · 41%`) on the right. The activity line along the dock's foot sits on the text edges. While a turn runs it is a
+adding `⑂`, and the context reading (`82k · 41%`) on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a
 soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
 hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
 While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
@@ -328,7 +343,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only and ends in `+ New session`. Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only, with `New session` above search and `Show archive` below the list. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archive includes archived sessions alongside active sessions when enabled.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -725,10 +740,9 @@ estimate.
 
 ## K5-K11 client parts (2026-10-29)
 
-- **Search (K5).** The sessions list asks `GET /api/search` after 150 ms (two characters or
-  more) and lists the sessions whose user messages match, under their title matches, with the
-  matching snippet on the row's agent line. The search field retains its query when switching
-  sidebar tabs, matching the active filter.
+- **Search (K5).** Desktop search opens the session switcher; phone search filters the sessions
+  list inline. Both ask `GET /api/search` after 150 ms (two characters or more) and show matching
+  user-message snippets alongside title matches. The phone list retains its query when reopened.
 - **Older messages (K6).** A session opens with its newest 200 messages (`message?limit=200`);
   when more exist the timeline starts with `Older messages are not loaded` and a Load older
   messages button (`turn.load_older`, also in the palette) that reads the page before the oldest

@@ -63,7 +63,7 @@ export function Splash() {
     <If when={!splashDone()}>
       <View
         testID="splash"
-        class={`absolute inset-0 items-center justify-center bg-background transition-opacity duration-150 ${splashLeaving() ? "opacity-0" : "opacity-100"}`}
+        class={`absolute inset-0 items-center justify-center bg-background transition-opacity motion-reduce:transition-none duration-150 ${splashLeaving() ? "opacity-0" : "opacity-100"}`}
         style={{ pointerEvents: splashLeaving() ? "none" : "auto" }}
       >
         <View class="items-center gap-6" accessibilityLabel={`Starting Nexus Core, ${pct()}%`}>
@@ -76,7 +76,7 @@ export function Splash() {
             <View class="flex-row items-center gap-3">
               <View class="flex-row items-center gap-[2px]" accessible={false}>
                 <Each of={[...Array(SPLASH_SEGMENTS).keys()]}>
-                  {(i) => <View class={`h-2 w-1.5 rounded-none transition-colors duration-200 ${i() < filled() ? "bg-foreground" : "bg-border"}`} />}
+                  {(i) => <View class={`h-2 w-1.5 rounded-none transition-colors motion-reduce:transition-none duration-200 ${i() < filled() ? "bg-foreground" : "bg-border"}`} />}
                 </Each>
               </View>
               <Text class="font-mono text-[13px] leading-5 text-muted-foreground tabular-nums">{String(pct()).padStart(3, " ")}%</Text>

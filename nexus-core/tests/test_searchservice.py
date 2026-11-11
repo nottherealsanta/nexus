@@ -8,6 +8,7 @@ from nexus import searchservice
 @pytest.fixture
 def home_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path))
+    monkeypatch.setattr(searchservice, "_json_forbidden", lambda url: False)
     return tmp_path
 
 
@@ -66,6 +67,22 @@ def test_a_failed_launch_reports_the_last_line(home_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(searchservice, "_run", lambda *a, cwd=None: _done(1, err="x\nCannot connect to the Docker daemon"))
     with pytest.raises(RuntimeError, match="Docker daemon"):
         searchservice.start()
+
+
+def test_forbidden_existing_service_is_not_replaced(home_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(searchservice, "directory", lambda: tmp_path)
+    monkeypatch.setattr(searchservice, "_runtime", lambda: "docker")
+    monkeypatch.setattr(searchservice, "_exists", lambda runtime: False)
+    monkeypatch.setattr(searchservice, "_answers", lambda url: False)
+    monkeypatch.setattr(searchservice, "_json_forbidden", lambda url: True)
+    monkeypatch.setattr(searchservice, "_launch", lambda *args: pytest.fail("must not replace the service"))
+    with pytest.raises(RuntimeError, match="HTTP 403.*search.formats.*limiter"):
+        searchservice.start()
+
+
+def test_json_forbidden_detects_http_status(monkeypatch):
+    monkeypatch.setattr(searchservice.httpx, "get", lambda *a, **kw: type("Response", (), {"status_code": 403})())
+    assert searchservice._json_forbidden("http://localhost:18765/search")
 
 
 def test_a_container_with_a_moved_mount_is_recreated(home_dir, monkeypatch, tmp_path):

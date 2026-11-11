@@ -8,7 +8,7 @@ import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } fr
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
-import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
+import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
 import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
 import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
@@ -116,8 +116,6 @@ export function capToolOutput(lines: ToolDetailLine[], showAll: boolean, head: n
 
 const NOTICE = /^(?:\[(Nexus notice|Nexus recovery|Notification)|→ Background Shell Done:)/;
 const closedTurns = signal<Record<string, boolean>>({});
-// Sticky user bar: the bands' geometry (content coordinates) and the list's scroll offset.
-type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
 // Layout and scroll state belong to the session that measured it. A height or
 // offset from the root must never place the sticky header in a child session.
 const rowHeights = signal<Record<string, number>>({});
@@ -132,9 +130,6 @@ const heightKey = (sid: string, key: string) => `${sid}\u0000${key}`;
 const scrollOf = (sid: string) => scrollY()[sid] ?? 0;
 const setScroll = (sid: string, y: number) => scrollY.update((all) => all[sid] === y ? all : { ...all, [sid]: y });
 const focusedBand = signal<string | null>(null);
-// Sticky user bar line height (secondary text) and bar height, for the push-up geometry.
-const STICKY_LINE = 24; // TS.base's leading-6
-const STICKY_BAR = 28;
 const LIST_PAD = 12; // the list's `py-3`
 const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
 // The timeline's own scroll bar (Settings › Scroll bar): a quiet thumb shown
@@ -301,9 +296,6 @@ export function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   const label = roles.diagnostic.label;
   switch (e.type) {
     case "session.error": return { key: k, kind: "diag", label, text: errorText(d.kind, d.message), detail: d.status ? `HTTP ${d.status}` : undefined, tone: d.kind === "interrupted" ? "warning" : "error" };
-    case "retry_scheduled": return { key: k, kind: "diag", label, text: `provider retry ${d.attempt ?? ""}/${d.max_attempts ?? ""} in ${d.delay ?? "?"}s`, detail: d.reason, tone: "warning" };
-    case "retry_started": return { key: k, kind: "diag", label, text: `provider retry started (attempt ${d.attempt ?? ""})`, tone: "warning" };
-    case "retry_exhausted": return { key: k, kind: "diag", label, text: "provider retries exhausted", detail: d.reason, tone: "error" };
     case "turn.recovered": return { key: k, kind: "diag", label, text: `turn ${d.outcome ?? "interrupted"}: ${d.reason ?? "daemon restarted"}`, tone: "warning" };
     case "session.directory_changed": return { key: k, kind: "diag", label, text: `directory changed: ${d.from ?? ""} → ${d.to ?? ""}`, tone: "info" };
     case "session.notified": return { key: k, kind: "diag", label, text: `child finished: ${d.from ?? "child"}`, tone: "info" };
@@ -320,19 +312,6 @@ export function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { k
   if (t.status === "running") return [];
   const label = roles.diagnostic.label;
   const out: { t: number; row: Extract<Row, { kind: "diag" }> }[] = [];
-  for (const r of t.requests ?? []) {
-    const attempts = r.attempts ?? [];
-    attempts.forEach((a, i) => {
-      const next = attempts[i + 1];
-      const at = a.finished ?? a.started ?? r.started ?? t.started;
-      if (next) {
-        const delay = typeof next.delay === "number" ? ` in ${fmtDuration(next.delay)}` : "";
-        out.push({ t: at, row: { key: `retry-${r.id}-${a.n}`, kind: "diag", label, text: `provider retry ${next.n}/${attempts.length}${delay}`, detail: a.error ?? undefined, tone: "warning" } });
-      } else if (i > 0 && a.status === "failed") {
-        out.push({ t: at, row: { key: `retry-${r.id}-end`, kind: "diag", label, text: "provider retries exhausted", detail: a.error ?? undefined, tone: "error" } });
-      }
-    });
-  }
   if (t.error) {
     const e = t.error;
     out.push({ t: t.finished ?? t.started, row: { key: `error-${t.id}`, kind: "diag", label, text: errorText(e.kind, e.message), detail: e.status ? `HTTP ${e.status}` : undefined, tone: e.kind === "interrupted" ? "warning" : "error" } });
@@ -680,7 +659,7 @@ function buildStableRows(): Row[] {
     }
     mark();
   }
-  // Closed turns: retries and errors from their summaries. The running turn: live diagnostics
+  // Closed turns: errors from their summaries. The running turn: live diagnostics
   // (its scratch), replaced by its summary when it closes.
   for (const e of sel.scratch) {
     if (!DIAG_TYPES.has(e.type) || e.data?.origin !== "manager") continue;
@@ -918,7 +897,7 @@ function RowView(p: { r: () => Row; sid: string }) {
           <NoticeRow text={() => (r() as any).text} />
         </If>
         <If when={r().kind === "assistant"}>
-          <View class={`py-2 pr-4 ${TEXT_INDENT}`} testID="msg-assistant">
+          <View class={`py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
             <TextView
               selectable links="open" markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => {
@@ -947,8 +926,8 @@ function RowView(p: { r: () => Row; sid: string }) {
           {() => {
             const c = r() as Extract<Row, { kind: "child" }>;
             return (
-              <Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId} testID="child-card" accessibilityLabel={`${c.agent} ${c.title}`}
-                class={`items-start rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 ml-3 hover:bg-accent ${FOCUS}`}>
+              <View class={TURN_INSET}><Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId} testID="child-card" accessibilityLabel={`${c.agent} ${c.title}`}
+                class={`items-start rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 hover:bg-accent ${FOCUS}`}>
                 <View class="flex-row items-center gap-2 max-w-full">
                   <View class="w-4 shrink-0 items-center">
                     <If when={c.state === "running"}><Status kind="running" /></If>
@@ -960,7 +939,7 @@ function RowView(p: { r: () => Row; sid: string }) {
                 </View>
                 <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
                 <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-6`}>{c.outcome}</Text></If>
-              </Button>
+              </Button></View>
             );
           }}
         </If>
@@ -1008,7 +987,7 @@ function NoticeRow(p: { text: () => string }) {
   const head = () => firstLine(p.text()).replace(/^\[/, "").replace(/\]$/, "");
   const label = () => shell() ? `${firstLine(p.text())} · show full output` : `context · ${head()} · show details`;
   return (
-    <View class={`py-0.5 ${TEXT_INDENT}`}>
+    <View class={`py-0.5 ${TURN_INSET}`}>
       <Button onPress={() => contextDetail.set({ title: shell() ? "Background shell" : "Context", detail: p.text() })} testID={shell() ? "background-shell-done" : "msg-notice"} accessibilityLabel={label()}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="chevron-right" size={14} class="tint-muted-foreground" /></View>
@@ -1130,7 +1109,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full bg-band py-3 relative ${CARD_INSET}`} testID="msg-user"
+      <View class={`group/band w-full bg-band py-3 relative ${USER_BAND_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} />
@@ -1173,8 +1152,8 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
           </View>
           <If when={!touch}>
             {/* Hover icons stay out of the flow: over a small backing, hiding the stamp while they show. */}
-            <Text class={`${META} pt-[3px] transition-opacity ${focusedBand() === r().key ? "opacity-0" : "group-hover/band:opacity-0"}`}>{meta()}</Text>
-            <View class={`absolute right-2 top-[7px] flex-row items-center gap-1 rounded-(--radius) bg-raised transition-opacity ${focusedBand() === r().key ? "opacity-100" : "opacity-0 group-hover/band:opacity-100"}`}>
+            <Text class={`${META} pt-[3px] transition-opacity motion-reduce:transition-none ${focusedBand() === r().key ? "opacity-0" : "group-hover/band:opacity-0"}`}>{meta()}</Text>
+            <View class={`absolute right-2 top-[7px] flex-row items-center gap-1 rounded-(--radius) bg-raised transition-opacity motion-reduce:transition-none ${focusedBand() === r().key ? "opacity-100" : "opacity-0 group-hover/band:opacity-100"}`}>
               <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
               <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
             </View>
@@ -1189,7 +1168,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
       </View>
     }>
       <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
-        class={`w-full flex-row items-center gap-2 rounded-(--radius) bg-band min-h-9 hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius) bg-band min-h-9 hover:bg-accent ${USER_BAND_INSET} ${FOCUS}`}>
         <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.body} text-foreground`}>{r().text || (r().pastes ?? []).map((p) => p.marker).join(" ")}</Text>
         <If when={r().tools > 0 || !!r().duration}>
@@ -1202,51 +1181,38 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   );
 }
 
-/** The sticky copy of the current turn's user band, under the header; the next band pushes it up. */
-function StickyBar(p: { rows: () => Row[]; scrollTo: (offset: number) => void }) {
-  // One band scan per row/layout change, shared by the visibility check and the render.
-  const list = computed(() => {
-    const h = rowHeights();
-    const rows = p.rows();
-    const sid = sessionId();
-    const lastUser = rows.reduce((last, r, i) => r.kind === "user" ? i : last, -1);
-    let top = LIST_PAD;
-    const out: Band[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      // The newest user band waits for its measured height: it is on an estimate for a
-      // frame, and using that estimate makes the header jump to the wrong band and blink
-      // until layout settles.
-      const height = h[heightKey(sid, r.key)] ?? (i === lastUser ? undefined : ROW_ESTIMATE);
-      if (r.kind === "user" && height !== undefined) out.push({ key: r.key, top, height, n: r.n, text: firstLine(r.text), turnKey: r.turnKey });
-      top += height ?? ROW_ESTIMATE;
-    }
-    return { bands: out, total: top };
-  });
+export function stickyUser(rows: Row[], visibleKey: string): Extract<Row, { kind: "user" }> | null {
+  const at = rows.findIndex((row) => row.key === visibleKey);
+  if (at < 0 || rows[at].kind === "user") return null;
+  for (let i = at - 1; i >= 0; i--) if (rows[i].kind === "user") return rows[i] as Extract<Row, { kind: "user" }>;
+  return null;
+}
+
+export function visibleRowKey(rows: Row[], visible: { sid: string; key: string; index: number } | null, sid: string): string | null {
+  if (!visible) return null;
+  if (visible.sid === sid && rows.some((row) => row.key === visible.key)) return visible.key;
+  return rows[visible.index]?.key ?? null;
+}
+
+/** The last user message above the visible rows, without guessing virtual-list offsets. */
+function StickyBar(p: { rows: () => Row[]; firstVisible: () => { sid: string; key: string; index: number } | null; scrollTo: (key: string) => void }) {
   const current = computed(() => {
-    const y = scrollOf(sessionId());
-    const { bands, total } = list();
-    // An offset well past the content (a shrink or a stale frame) must not pin the last band.
-    if (y < 0 || y > total + viewHOf(sessionId())) return null;
-    let idx = -1;
-    bands.forEach((b, i) => { if (b.top + b.height <= y) idx = i; });
-    return idx < 0 ? null : { band: bands[idx], next: bands[idx + 1] as Band | undefined };
+    const rows = p.rows();
+    const key = visibleRowKey(rows, p.firstVisible(), sessionId());
+    return key === null ? null : stickyUser(rows, key);
   });
   return (
     <If when={!!current()}>
       {() => {
-        const c = current()!;
-        const y = scrollOf(sessionId());
-        const lines = Math.max(0, Math.floor((Math.min(y, c.next?.top ?? Infinity) - c.band.top) / STICKY_LINE));
-        const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
+        const band = current()!;
         return (
-          <View class="absolute left-0 right-0 items-start" style={{ top: offset, pointerEvents: "box-none" }} testID="sticky-user">
+          <View class="absolute left-0 right-0 top-0 items-start" style={{ pointerEvents: "box-none" }} testID="sticky-user">
             <TimelineColumn>
-              <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
-                class={`relative w-full flex-row items-center gap-3 bg-band ${hit("min-h-7")} hover:bg-accent ${CARD_INSET} ${FOCUS}`}>
+              <Button onPress={() => p.scrollTo(band.key)} accessibilityLabel={`Scroll to message ${band.n}: ${firstLine(band.text)}`} testID="sticky-user-button"
+                class={`relative w-full flex-row items-center gap-3 bg-band ${hit("min-h-7")} hover:bg-accent ${USER_BAND_INSET} ${FOCUS}`}>
                 <View class="absolute left-0 top-0 bottom-0 w-0.5 bg-border-strong" />
-                <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-foreground-secondary`}>{c.band.text}</Text>
-                <Text class={META}>{`↑ ${lines} lines of this turn above`}</Text>
+                <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-foreground-secondary`}>{firstLine(band.text)}</Text>
+                <Text class={`${META} shrink-0`}>{`↑ #${band.n}`}</Text>
               </Button>
             </TimelineColumn>
           </View>
@@ -1292,7 +1258,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
     wasRunning = running;
   });
   return (
-    <View class={`py-0.5 ${TEXT_INDENT}`}>
+    <View class={`py-0.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
@@ -1321,7 +1287,7 @@ function ForkRow(p: { r: () => Extract<Row, { kind: "fork" }> }) {
   const r = p.r;
   const summary = () => forkSummary(r().parent, r().count);
   return (
-    <View class={`py-0.5 ${TEXT_INDENT}`}>
+    <View class={`py-0.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, false)} testID="fork-inherited" accessibilityLabel={`${summary()}, ${r().open ? "collapse" : "expand"}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
@@ -1361,7 +1327,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
   const key = () => x().running ? "reason:streaming" : `reason:${x().key}`;
   const preview = () => x().encrypted ? "encrypted, replayed to the provider" : firstLine(x().text);
   return (
-    <View class={`py-0.5 ${p.nested ? "" : TEXT_INDENT}`}>
+    <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS} ${p.nested ? "gap-2" : ""}`}>
         <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>}>
@@ -1504,6 +1470,7 @@ function newBelow(rows: Row[], sid: string): number {
 
 export function Timeline() {
   let ref: any;
+  const firstVisible = signal<{ sid: string; key: string; index: number } | null>(null);
   // Read the session when a row is rendered or an event fires: this component
   // stays mounted across sessions, so a captured id would go stale.
   const viewId = () => sessionId();
@@ -1668,6 +1635,13 @@ export function Timeline() {
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
+          onViewableItemsChange={({ viewableItems }) => {
+            const first = viewableItems.reduce<typeof viewableItems[number] | null>((best, item) => !best || item.index < best.index ? item : best, null);
+            const sid = viewId();
+            const next = first && rows().some((row) => row.key === first.key) ? { sid, key: first.key, index: first.index } : null;
+            const previous = firstVisible();
+            if (previous?.sid !== next?.sid || previous?.key !== next?.key || previous?.index !== next?.index) firstVisible.set(next);
+          }}
           onLayout={(b: any) => {
             const h = b?.bounds?.size?.height ?? b?.size?.height;
             const sid = viewId();
@@ -1694,7 +1668,7 @@ export function Timeline() {
             lastY = y;
             if (restoringSid === sid && Math.abs(y - restoring) <= 1) restoringSid = null;
           }}
-          scrollEventThrottle={64}
+          scrollEventThrottle={16}
         >
           {(r) => <RowView r={r} sid={viewId()} />}
         </List>
@@ -1706,7 +1680,10 @@ export function Timeline() {
           return <View testID="timeline-scrollbar" accessible={false} class="absolute right-0 w-1 bg-scrollbar" style={{ top: b.top, height: b.height, pointerEvents: "none", opacity: scrollBarFading() ? 0.35 : 1 }} />;
         }}
       </If>
-      <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
+      <StickyBar rows={rows} firstVisible={firstVisible} scrollTo={(key) => {
+        const index = rows().findIndex((row) => row.key === key);
+        if (index >= 0) try { ref?.scrollToIndex({ index, animated: false }); } catch {}
+      }} />
       <If when={scrolledUp()}>
         <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn>

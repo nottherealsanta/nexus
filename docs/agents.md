@@ -218,6 +218,7 @@ model comparison. Details and offline checkpoint overhead: [harness report](../r
 ```sh
 nexus agent                     # agents for this project, with source, tools and preferences
 nexus agent plan                # one agent's settings and full prompt
+nexus agents reinit             # copy the built-in agents over <home>/agents (refreshes stale copies)
 nexus run --agent plan "…"      # new session with that agent
 nexus chat                      # then: /agent plan, /agent (list), /model default
 ```

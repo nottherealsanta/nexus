@@ -46,14 +46,17 @@ describe("sessions sidebar (I6)", () => {
     await app.waitFor("id:session-ses_1");
     expect(app.shows("id:chip-all-projects")).toBe(false);
     expect(app.shows("id:session-ses_2")).toBe(false);
-    await app.type("id:session-search", "remote");
-    expect(app.shows("id:session-ses_2")).toBe(false);
+    await app.press("id:session-search");
+    await app.waitFor("id:session-switcher-input");
+    await app.keyboard.press("r");
+    await app.waitUntil(() => app.value("id:session-switcher-input") === "r");
+    await app.keyboard.press("escape");
     await app.press("id:rail-project-prj_2");
     await app.waitFor("id:session-ses_2");
     expect(app.shows("id:session-ses_1")).toBe(false);
   });
 
-  test("the row shows its branch and child count, and the list ends in New session", async () => {
+  test("the row shows its branch and child count, with New session above the list", async () => {
     const parent = session("ses_1", "Refactor loader", { agent: "orchestrate" });
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });

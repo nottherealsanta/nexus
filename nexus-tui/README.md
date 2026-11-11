@@ -105,14 +105,14 @@ the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
-the switcher). Its archive icon above the search shortcut includes archived sessions alongside active sessions when enabled.
+the switcher). The sidebar places `+ New session` above search and `Show archive` below the session list; the archive control includes archived sessions alongside active sessions when enabled.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
 sending. Explicit Unarchive shows the same warning without sending a message.
-The list has `⌥ branch  ~/…/dir`
+The sidebar places `+ New session` above search and `Show archive` below the session list. The list has `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
-`⌥ branch`, `2 ↳`) ending with `+ New session`, whose label starts on the session titles' text edge; `Settings` is pinned at the bottom.
+`⌥ branch`, `2 ↳`); `Settings` is pinned at the bottom.
 Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
 Settings → Sidebar switches full / rail. The project
 strip under the card shows the project name (bold), its path (muted),

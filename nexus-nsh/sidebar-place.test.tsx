@@ -16,12 +16,31 @@ const network = {
 };
 
 describe("session sidebar location", () => {
+  test("desktop sidebar tabs are icon-only with accessible names and hover labels", async () => {
+    const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:tab-sessions");
+    for (const [id, label] of [["sessions", "Sessions"], ["files", "Files"], ["git", "Git"]]) {
+      expect(app.shows(`label:${label}`)).toBe(true);
+      expect(app.texts().includes(label)).toBe(false);
+      await app.hover(`id:tab-${id}`);
+      await app.waitUntil(() => app.texts().some((text) => text.startsWith(label)));
+    }
+    await app.press("id:tab-files");
+    await app.waitFor("id:files-header");
+  });
+
   test("shows the branch, with the project left to the rail", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:⌥ feature/sidebar");
     expect(app.shows("id:session-place-ses_1")).toBe(true);
     expect(app.shows("id:session-group")).toBe(false);
     expect(app.texts().includes("demo")).toBe(false);
+    expect(app.shows("id:new-session-row")).toBe(true);
+    expect(app.shows("id:chip-archived")).toBe(true);
+    const labels = app.texts();
+    expect(labels.filter((text) => text === "Show archive").length).toBe(1);
+    expect(labels.indexOf("New session")).toBeLessThan(labels.indexOf("Show archive"));
+    expect(app.shows("id:session-search")).toBe(true);
   });
 });
 

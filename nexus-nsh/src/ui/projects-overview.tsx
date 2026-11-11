@@ -6,7 +6,7 @@ import { FOCUS, FocusEdge, T, TS } from "./kit";
 import { attention } from "./sidebar";
 import { flowEnd, setProjectStatus } from "../commands";
 import { m, model, projectsOverview, selectProject, selectSession } from "../store";
-import { PROJECT_STATUS, PROJECT_STATUS_LABEL, overviewRows, projectStatus, sessionStateWord } from "../project-rail";
+import { PROJECT_STATUS, PROJECT_STATUS_LABEL, overviewRowLabel, overviewRows, projectStatus, sessionStateWord } from "../project-rail";
 import type { OverviewRow } from "../project-rail";
 import { escape } from "../commands";
 
@@ -67,9 +67,9 @@ function ProjectsOverviewBody() {
         const p = project(row.id);
         const st = p ? projectStatus(p) : PROJECT_STATUS.current;
         return (
-          <View class="flex-row items-center">
-            <Text class={`${TS.base} ${st === PROJECT_STATUS.passive ? "text-muted-foreground" : "font-semibold text-foreground"}`}>{p?.name ?? row.id}</Text>
-            <Text class={`${TS.base} text-muted-foreground`}>{`\u00a0\u00a0· ${PROJECT_STATUS_LABEL[st]}`}</Text>
+          <View class="flex-row items-center min-w-0">
+            <Text style={{ numberOfLines: 1 }} class={`${TS.base} shrink min-w-0 ${st === PROJECT_STATUS.passive ? "text-muted-foreground" : "font-semibold text-foreground"}`}>{p?.name ?? row.id}</Text>
+            <Text class={`${TS.base} shrink-0 text-muted-foreground`}>{`\u00a0\u00a0· ${PROJECT_STATUS_LABEL[st]}`}</Text>
             <If when={st === PROJECT_STATUS.inactive}><Text class={`${TS.base} text-foreground-secondary`}>{"\u00a0\u00a0· r restore"}</Text></If>
           </View>
         );
@@ -78,10 +78,10 @@ function ProjectsOverviewBody() {
       case "session": {
         const state = row.archived ? "archived" : stateOf(row.id);
         return (
-          <View class="flex-row items-center">
+          <View class="flex-row items-center min-w-0">
             <Text class={`${TS.base} text-muted-foreground`}>{row.last ? "\u00a0\u00a0└\u00a0" : "\u00a0\u00a0├\u00a0"}</Text>
-            <Text style={{ numberOfLines: 1 }} class={`${TS.base} ${row.archived ? "text-muted-foreground" : "font-semibold text-foreground"}`}>{model.sessions.get(row.id)?.title || row.id}</Text>
-            <Text class={`${TS.base} ${STATE_TONE[state] ?? "text-foreground-secondary"}`}>{` · ${state}`}</Text>
+            <Text style={{ numberOfLines: 1 }} class={`${TS.base} shrink min-w-0 ${row.archived ? "text-muted-foreground" : "font-semibold text-foreground"}`}>{model.sessions.get(row.id)?.title || row.id}</Text>
+            <Text class={`${TS.base} shrink-0 ${STATE_TONE[state] ?? "text-foreground-secondary"}`}>{` · ${state}`}</Text>
           </View>
         );
       }
@@ -98,7 +98,7 @@ function ProjectsOverviewBody() {
               <Each of={rows()} key={(r) => r.kind === "group" ? "group" : r.kind === "project" ? `p:${r.id}` : r.kind === "empty" ? `e:${r.project}` : r.kind === "toggle" ? `t:${r.project}` : `s:${r.id}:${r.archived}`}>
                 {(row, i) => (
                   <Button onPress={() => { set(i()); activate(row()); }} selected={cursor() === i()} disabled={row().kind === "group"} testID={`overview-row-${i()}`}
-                    accessibilityLabel={`${row().kind} ${row().kind === "session" ? (model.sessions.get((row() as { id: string }).id)?.title ?? "") : ""}`}
+                    accessibilityLabel={overviewRowLabel(row(), project(projectOf(row()) ?? ""), row().kind === "session" ? model.sessions.get((row() as { id: string }).id) : undefined, row().kind === "session" ? stateOf((row() as { id: string }).id) : "")}
                     class={`relative rounded-none px-3 min-h-8 justify-center hover:bg-accent ${cursor() === i() ? "bg-selection" : ""} ${FOCUS}`}>
                     <If when={cursor() === i()}><FocusEdge testID={`overview-cursor-${i()}`} /></If>
                     {line(row())}

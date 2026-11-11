@@ -1214,6 +1214,7 @@ ZMX work is preserved; no personal daemon restart or deployment is part of this 
   pass. NSH has implementation and tests and the recorded release-wide suite passed 371/371; the latest
   focused rerun was blocked by the runner not finding Chrome/Chromium. Screenshot review remains above.
 
+- **Search startup diagnosis (11-11).** Detect an existing service rejecting JSON searches and explain how to restore it or free the port instead of attempting a conflicting launch.
 
 - **0.12.0 released (11-09).** PR #100 merged, release branch removed, no open PRs remain. Four platform binaries, wheel/sdist, installer and checksums published; every payload hash verified. Isolated published macOS arm64 install, daemon and plain TUI smoke passed; Linux installer/runtime and native/device gates remain explicit. [Release](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0).
 

@@ -33,18 +33,17 @@ function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : nul
  */
 export function SidebarTabs(p: { labels?: boolean }) {
   return (
-    <Tabs class="flex-row items-center gap-0.5">
+    <Tabs class={`flex-row items-center gap-0.5 ${p.labels ? "" : "rounded-(--radius) bg-raised p-0.5"}`}>
       <Each of={[...tabs].sort((a, b) => a.order - b.order)} key={(t) => t.id}>
         {(t) => (
-          <Tab
+          <View tooltip={<Tooltip delay={200}><Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text></Tooltip>}><Tab
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); if (t().id === "git") void loadGitPage(); savePrefs(); }}
-            tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
-            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-2 hover:bg-accent active:bg-selection ${leftTab() === t().id ? "bg-background" : ""} ${isNarrow() ? "min-h-11" : "min-h-6"} ${FOCUS}`}
+            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent active:bg-selection ${p.labels ? "px-2 min-h-11" : "size-8"} ${leftTab() === t().id ? (p.labels ? "bg-background" : "bg-selection") : ""} ${FOCUS}`}
           >
-            <Icon name={(t().id === "git" ? "branch" : t().id) as IconName} size={14} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
-            <Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{t().label}</Text>
-          </Tab>
+            <Icon name={(t().id === "git" ? "branch" : t().id) as IconName} size={16} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
+            <If when={!!p.labels}><Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{t().label}</Text></If>
+          </Tab></View>
         )}
       </Each>
     </Tabs>
@@ -208,7 +207,7 @@ export function SessionRail() {
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
-                <Text testID={`rail-label-${p().id}`} class={`${TS.base} font-medium ${target() ? "text-primary" : currentProject() === p().id ? "text-highlight" : activity(p().id).active ? (passive() ? "text-foreground opacity-40" : "text-foreground opacity-70") : "text-muted-foreground opacity-30"}`}>{labels().get(p().id)}</Text>
+                <Text testID={`rail-label-${p().id}`} class={`${TS.base} font-medium ${target() ? "text-primary" : currentProject() === p().id ? "text-highlight" : activity(p().id).active ? (passive() ? "text-foreground opacity-40" : "text-foreground opacity-70") : "text-muted-foreground opacity-60"}`}>{labels().get(p().id)}</Text>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
@@ -266,7 +265,7 @@ function rowItems(): Item[] {
   const hits = searchHits();
   const byMessage = hits && hits.q === sessionQuery().trim() ? hits.snippets : null;
   const ses = rowSessions().filter((s) => !query || s.title.toLowerCase().includes(query) || byMessage?.has(s.id));
-  if (!scopeAll() || (railShown() && !query)) return [...ses.map((s) => ({ key: s.id, kind: "session" as const, s })), ...(railShown() && !query ? [{ key: "new-session-row", kind: "new" as const }] : [])];
+  if (!scopeAll() || (railShown() && !query)) return ses.map((s) => ({ key: s.id, kind: "session" as const, s }));
   const out: Item[] = [];
   for (const pr of model.projectsRecent()) {
     const mine = ses.filter((s) => s.project_id === pr.id);
@@ -336,22 +335,18 @@ export function SessionsTab() {
   return (
     <View class="flex-1 min-h-0">
       <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 py-2 pr-2"}>
-        <If when={!phone}><View class="flex-row justify-end"><ArchivedToggle /></View></If>
-        <View class={`w-full flex-row items-center gap-2 px-2 ${phone ? "h-11 bg-raised" : "h-8 bg-hover"}`}>
+        <If when={!phone}><Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session" class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="plus" size={16} class="tint-muted-foreground" /><Text class={`${TS.base} text-muted-foreground`}>New session</Text></Button></If>
+        <If when={phone} else={<Button onPress={() => run("session.switch")} accessibilityLabel="Search sessions" testID="session-search" class={`w-full flex-row items-center gap-2 px-2 h-8 rounded-(--radius) bg-hover hover:bg-accent ${FOCUS}`}>
           <Icon name="search" size={14} class="tint-muted-foreground" />
-          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder={leftSidebarWidth() < 220 ? "Search" : "Search sessions"} accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground ${phone ? "bg-raised" : "bg-hover"}`} />
-          <If when={!!hint("session.switch") && !phone}>
-            <View class="shrink-0 items-center justify-center" style={{ pointerEvents: "none" }} accessible={false}>
-              <Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text>
-            </View>
-          </If>
-        </View>
+          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{leftSidebarWidth() < 220 ? "Search" : "Search sessions"}</Text>
+          <If when={!!hint("session.switch")}><Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text></If>
+        </Button>}><View class="w-full flex-row items-center gap-2 px-2 h-11 bg-raised">
+          <Icon name="search" size={14} class="tint-muted-foreground" />
+          <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground bg-raised`} />
+        </View></If>
         {/* A phone has the project selector in its top bar (PhoneProjectBar). */}
         <If when={!railShown() && !phone}>
-        <View class="flex-row items-center gap-2">
-          <ProjectSelector />
-          <NewSessionButton />
-        </View>
+        <View class="flex-row items-center gap-2"><ProjectSelector /></View>
         </If>
         <If when={!railShown()}>
           <View class="flex-row items-center gap-1">
@@ -367,23 +362,10 @@ export function SessionsTab() {
         </If>
       }>
         <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
-          {(x) => (
-            <If when={x().kind === "new"} else={
-              <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}>
-                <View class="px-2 pt-3 pb-1" testID="session-group">
-                  <Text style={{ numberOfLines: 1 }} class={`${TS.base} font-medium text-muted-foreground`}>{(x() as any).title}</Text>
-                </View>
-              </If>
-            }>
-              <Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session"
-                class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
-                <Icon name="plus" size={16} class="tint-muted-foreground" />
-                <Text class={`${TS.base} text-muted-foreground`}>New session</Text>
-              </Button>
-            </If>
-          )}
+          {(x) => <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class="px-2 pt-3 pb-1" testID="session-group"><Text style={{ numberOfLines: 1 }} class={`${TS.base} font-medium text-muted-foreground`}>{(x() as any).title}</Text></View></If>}
         </List>
       </If>
+      <If when={!phone}><View class="border-t border-border p-2"><Button onPress={() => run("sessions.archived_filter")} testID="chip-archived" accessibilityLabel="Show archive" selected={archivedFilter()} class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="archive" size={16} class={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} /><Text class={`${TS.base} text-foreground`}>Show archive</Text></Button></View></If>
     </View>
   );
 }

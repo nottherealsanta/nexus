@@ -82,3 +82,9 @@ curl -fsS 'http://127.0.0.1:18765/search?q=nexus&format=json'
 Core should report an actionable error if unavailable, rather than silently
 installing or launching a container runtime. `web_fetch` uses HTTP directly;
 it does not depend on SearXNG or browser-use.
+
+If an existing service returns HTTP 403 for the JSON health check, starting a
+second container on the same port will not help. For an existing SearXNG, enable
+`json` under `search.formats` in its settings, check whether its limiter blocks
+local requests, and restart that service. Alternatively stop the existing service
+before starting Nexus search. Nexus does not modify or replace that service.
