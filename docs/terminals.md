@@ -8,15 +8,16 @@ resize operations described below; see their READMEs for current limitations.
 ## Client behaviour
 
 The desktop workspace has a bottom terminal dock below the composer and activity bar;
-mobile never exposes it. The terminal-shell activity indicator shows the terminal
-count, including linked background jobs once; clicking it opens or closes the dock,
-remembering its state. **``Ctrl+` ``** toggles the dock from anywhere, including while the
+mobile never exposes it. The dock holds only terminals a user opened; nothing the
+agent runs appears there. The terminal-shell activity indicator shows the terminal
+count; clicking it opens or closes the dock, remembering its state. **``Ctrl+` ``** toggles the dock from anywhere, including while the
 terminal screen owns the keys; **`Ctrl+~`** and the Shift spellings (**``Ctrl+Shift+` ``**,
 **`Ctrl+Shift+~`**) are the same physical key and do the same. The shortcut is never
 forwarded to the shell. Legacy terminals that collapse ``Ctrl+` `` and `Ctrl+~` into NUL
 look like Ctrl+Space, which Nexus deliberately leaves to the shell instead of
 hijacking. Closing with the shortcut or Hide detaches and never terminates.
-Legacy pipe-only jobs keep their separate resource indicator. The distinct
+The agent's running background bash jobs have their own **N shell** indicator, which
+opens the jobs list (output, kill); see [tools.md](tools.md#background-bash-jobs). The distinct
 **kernel** indicator has no number (there is exactly one kernel). The dock header
 reads **Terminals (N)**.
 Each terminal has a tab showing a running/exited status dot, its name, and a close
@@ -54,8 +55,7 @@ when focused and by Nexus otherwise. Applications that request mouse reports rec
 are required before emitting OSC 52. Escape sequences in terminal output never
 write the clipboard or open URLs or files by themselves. Resizing the screen
 resizes the PTY only while this attachment has control. Interactive terminal contents
-are never automatically added to model context; linked background jobs keep their
-existing captured-output and completion-notice paths described below.
+are never automatically added to model context.
 
 ### Explicit evidence capture
 
@@ -63,9 +63,8 @@ Both desktop clients offer **Attach selected output** beside Copy. The action
 freezes selected rendered text, not raw escape-bearing output. A scrollable preview
 shows the exact eventual draft payload, resource ID/name, project/workspace and
 stream-sequence watermark, an untrusted-data warning and exact included/omitted
-UTF-8 byte counts. When the resource records them, provenance also includes its
-originating session, turn, tool-call and background-job IDs; missing links are
-omitted, never inferred from the current draft. At most 16 KiB of selected text is included, cut only at a code
+UTF-8 byte counts. Provenance is only those fields; no session, turn or tool-call
+IDs are recorded or inferred from the current draft. At most 16 KiB of selected text is included, cut only at a code
 point boundary. Counts refer to the selection; unavailable earlier terminal history
 is disclosed without inventing raw-byte omission counts. Text is JSON-string encoded
 so embedded fences or closing tags cannot masquerade as provenance. DEL/C1
@@ -81,7 +80,8 @@ a preview or evidence already in a draft. This action grants no agent control.
 
 ## Resource and authority
 
-Core owns each PTY, not a client or `bash_jobs`. A resource has an opaque `id`,
+Core owns each PTY, not a client; agent bash jobs are separate pipe processes
+([tools.md](tools.md#background-bash-jobs)) and never create a terminal resource. A resource has an opaque `id`,
 `project_id`, absolute creation `workspace`, optional `session_id`, `creator`
 (client identity, not an agent), `status` (`running`, `exited`, `closed`, or
 `ended`), creation and end timestamps, dimensions, exit code or terminating
@@ -91,17 +91,7 @@ the project and any associated session before spawning; reject mismatches.
 List and individual-resource operations must enforce the same project access
 checks as creation. IDs are not authorization credentials.
 
-Daemon background bash jobs use the same PTY resources and appear in the existing
-project list, with the originating session and workspace, a sanitized command
-label, and `background_job_id` linking to the job. Other terminals have a null
-or absent `background_job_id`. The job and terminal share one process: explicit
-terminal control permits input, terminal Close terminates it, and `bash_kill` and
-the job timeout terminate it too. The existing job output limit, tree scope and
-finish notices still apply. PTY output includes terminal echo and escape sequences
-and may differ from pipe output; input echoed by the terminal can therefore appear
-in job output and completion notices. If no terminal service is installed, jobs
-retain the original non-interactive pipe implementation. Terminal capacity errors
-do not silently fall back to a separate process. The service admits at most 16
+Terminal capacity errors do not fall back to anything else. The service admits at most 16
 running terminals and retains at most 64 PTYs with replay. When that retention
 limit is reached, the oldest finished resource without viewers is evicted from
 memory; its persisted metadata remains listed, but its replay and attachment are
@@ -110,12 +100,11 @@ fails rather than disconnecting viewers.
 
 On forced close Core drains available PTY output before the exit frame, bounded
 to 256 reads of at most 16 KiB each per drain. A detached descendant that keeps
-the PTY open cannot indefinitely block job shutdown: Core closes the master
-after a bounded wait. Such a descendant may survive if it left the job's process
+the PTY open cannot indefinitely block close: Core closes the master after a
+bounded wait. Such a descendant may survive if it left the shell's process
 group, and output it writes after the master is closed is not retained.
 
-Terminal bytes are untrusted. Apart from background job output and notices as
-described above, they are not session events or model context. A
+Terminal bytes are untrusted. They are not session events or model context. A
 future explicit user attachment must become a normal visible message with
 provenance and clipping, not a hidden context injection. No agent may attach as
 controller or type in this version.
@@ -123,15 +112,12 @@ controller or type in this version.
 ## Agent-control boundary
 
 The terminal dock is a user-controlled surface, not an additional agent tool.
-The existing approved `bash`, `bash_output` and `bash_kill` tools remain the
-agent's execution path. A background job appearing in the dock does not grant
-the model interactive input authority; a user may explicitly take control of
-that job through the ordinary single-writer attachment.
+The approved `bash`, `bash_output` and `bash_kill` tools are the agent's only
+execution path; they never create, read or type into a terminal resource.
 
 | Operation | Current authority and scope |
 | --- | --- |
 | Start a command with `bash` | Existing tool permission checks, visible arguments and result; one invocation, not a terminal-control grant |
-| Read or stop a background job | Existing job ownership/tree scope and visible tool result |
 | Send raw keystrokes, paste or signals through the dock | User controller only; attachment-scoped, revoked on detach, overflow, disconnect or Core restart |
 | Acquire another viewer's writer control | Rejected; the current controller must release it first |
 | Clipboard, files, URLs or credentials requested by terminal output | Output grants no authority; clipboard copy requires an explicit user action, other actions are not executed by the terminal renderer |
@@ -224,31 +210,14 @@ persisted running metadata `ended`, with reason `core_restart`; it does not
 resume a PTY, attachment, or input acknowledgment. Persisted controller identities
 are cleared for every resource on restart, including already-exited resources.
 
-## Diagnostic provenance (not model context)
+## Diagnostics (not model context)
 
-Background-job terminals may carry `turn_id` and `tool_call_id` only when Core
-finds that actual tool call in a running turn of the originating session. Manual
-terminals and unrecorded nested calls do not guess a turn from the session's latest
-activity. Lifecycle timestamps and aggregate control acquisition/release counts
-are persisted with the resource. Sanitized `terminal.updated` diagnostic events
-announce changes to exactly linked resources, advancing the inspector head and
-invalidating both clients without polling or adding canonical messages. Events
-contain IDs, status, timestamps and counts, never terminal bytes, input, command
-labels, workspace paths or controller identities. Repeated acquisition by the
-same controller is not another acquisition or diagnostic update.
-
-The inspector's Timing tool detail and Steps tool bundle include bounded
-`resource_spans` for exact session/turn/tool matches. These diagnostic spans have
-the terminal/job IDs, recorded start/end, status, exit code/signal and control
-counts. They exclude terminal bytes, input, command labels, workspace paths and
-controller identities, and create no model requests, tool calls or token usage.
-At most 200 terminal spans are projected per inspector page, with an omission
-notice. Retention follows terminal metadata; detached resources are not copied
-into the canonical timeline. Both clients render terminal lifecycle bars on the
-shared Timing axis, with a `terminal` kind filter and full sanitized record view.
-A terminal may remain live after its launching turn ends. Paging remains scoped
-to launching turns; terminal-only filtering may yield an empty page with older
-pages available. Manual terminals without actual tool provenance have no lane.
+Terminals carry no tool, turn or job provenance, so they have no inspector lanes
+and publish no `terminal.updated` events. Lifecycle timestamps and aggregate
+control acquisition/release counts are persisted with the resource. Metadata
+persisted by an older build with a `background_job_id` (a PTY that was an agent job)
+is marked `closed` on load, so it leaves the list, and its tool provenance fields
+are dropped.
 
 ## Safety and lifecycle requirements
 

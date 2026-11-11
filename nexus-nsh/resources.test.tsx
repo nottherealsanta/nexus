@@ -95,7 +95,7 @@ describe("kernels and shells", () => {
     await app.waitFor("id:resource-job-job_1");
   });
 
-  test("a background job linked to a terminal is counted once and opens the dock", async () => {
+  test("a running job never appears in the dock; the shell indicator opens the jobs list", async () => {
     const app = await open("./App.tsx", {
       network: { ...network,
         "GET */api/bash*": { body: [{...terminalDock.background_job, session_id: session.id, root: session.id}] },
@@ -105,10 +105,12 @@ describe("kernels and shells", () => {
     await app.waitFor("id:session-ses_1");
     await app.press("id:session-ses_1");
     await app.waitFor("id:location-shell");
-    expect(app.shows("id:location-background-shell")).toBe(false);
-    expect(app.texts().join("\n")).toContain("2 terminal shell");
+    expect(app.shows("id:location-background-shell")).toBe(true);
+    expect(app.texts().join("\n")).toContain("1 shell");
+    expect(app.texts().join("\n")).toContain("1 terminal shell");
     await app.press("id:location-shell");
     await app.waitFor("id:terminal-panel");
     for (const fact of terminalDock.expect) expect(app.texts().join("\n")).toContain(fact);
+    for (const fact of terminalDock.absent) expect(app.texts().join("\n").includes(fact)).toBe(false);
   });
 });

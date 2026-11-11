@@ -759,10 +759,8 @@ function LocationStrip(p: { working: boolean }) {
   const worktreeHover = signal(false);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   effect(() => { bashJobs(); if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
-  const legacyShells = () => {
-    const terminals = terminalItems();
-    return viewResources().jobs.filter(j => j.status === "running" && !terminals.some(t => t.id === j.terminal_id || t.background_job_id === j.id)).length;
-  };
+  // The agent's running bash jobs; user terminals are counted by their own button.
+  const runningShells = () => viewResources().jobs.filter(j => j.status === "running").length;
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
   const selectedTree = () => { m(); return currentWorktree(); };
@@ -778,7 +776,7 @@ function LocationStrip(p: { working: boolean }) {
     const w = stripWidth();
     if (!w) return isNarrow() ? 24 : 54;
     const c = resourceCounts();
-    const chip = (c.kernels ? 70 : 0) + (legacyShells() ? 70 : 0) + (terminalItems().length ? 140 : 0);
+    const chip = (c.kernels ? 70 : 0) + (runningShells() ? 70 : 0) + (terminalItems().length ? 140 : 0);
     const unit = 9.6;
     const reserved = 16 + (branch() ? (Array.from(branch()!).length + 3) * unit : 0) + (linked() ? 16 : 0);
     return Math.max(0, Math.floor(((w - chip) / 2 - reserved) / unit));
@@ -848,7 +846,7 @@ function LocationStrip(p: { working: boolean }) {
             <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 text-foreground-secondary">kernel</Text>
           </Button>
         </If>
-        <If when={legacyShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${legacyShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${legacyShells()} shell`}</Text></Button></If>
+        <If when={runningShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${runningShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${runningShells()} shell`}</Text></Button></If>
         <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
         </View>
         <View class="flex-1 w-0 min-w-0 flex-row items-center justify-end overflow-hidden"><If when={p.working}><WorkingRow /></If></View>

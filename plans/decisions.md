@@ -6,6 +6,7 @@ Made (user):
 
 | Date | Decision |
 | --- | --- |
+| 2026-11-11 | **Plan 41: the terminal dock is user-only and the bash tool is separate.** Reverses the 2026-11-08 decision that running background bash jobs appear in the dock with interactive input: agent bash jobs are pipe processes again with their own `N shell` indicator; background jobs lose interactive input; evidence provenance drops session/turn/tool-call/job ids; the inspector `terminal` lane is removed (a `job` lane is a follow-up); old job-linked terminal metadata is marked closed on load |
 | 2026-11-11 | **Plans 29–32:** question composer locking does not change approval Deny / “tell it what to do instead”; pending-row edit/up/down/remove icons are for **queued messages only**, with no Steer button (existing keyboard actions stay); Worktree details includes branch and main-checkout path, with no Manage worktrees link. |
 | 2026-11-04 | Manager is a top-bar dropdown; Settings value rows are segmented; only a session's first message pins to the top; pending rows are `S` / `Q`; finished sessions' events are compacted with a `session.compacted` record; CI deferred |
 | 2026-11-05 | Manager header indicator is a gray braille wave field; Stop on hover while Live; an open Manager panel dims the rest |

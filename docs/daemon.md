@@ -12,9 +12,8 @@ accepts them only from a loopback TCP peer with a loopback `Host`/`Origin` and n
 forwarding headers. A remote client needs the bearer token.
 Terminal viewer overflow, disconnect and restart revoke attachment authority;
 no controller identity survives restart, including on already-exited resources.
-Linked background jobs retain their ordinary tool-output path. Their terminal
-lifecycle may also appear as bounded, exact-tool-linked diagnostic spans in the
-inspector, without adding canonical messages, terminal bytes or model usage.
+Background bash jobs are pipe processes, separate from terminals: they keep their
+ordinary tool-output path and never create a terminal resource.
 
 The daemon also keeps the latest provider-usage snapshot in its database, refreshing it every 10 minutes by default
 while running. `[usage] refresh_minutes` changes the interval (1–1440); clients can request an immediate refresh.

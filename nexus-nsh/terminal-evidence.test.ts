@@ -33,7 +33,6 @@ describe("terminal evidence", () => {
     const r = scenario.resource;
     const payload = terminalEvidence(r.id, r.name, scenario.selected, {
       project_id:r.project_id, workspace:r.workspace, stream_seq:scenario.stream_seq,
-      session_id:r.session_id, turn_id:r.turn_id, tool_call_id:r.tool_call_id, background_job_id:r.background_job_id,
     });
     expect(payload.split("\n")[1]).toBe("Source: " + scenario.expected_source);
     const encoded = terminalEvidence("t1", "Build", scenario.selected_controls).split("\n").at(-1)!;

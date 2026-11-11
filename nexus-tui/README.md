@@ -23,8 +23,8 @@ list detaches.
 Input is sent only while this attachment has control. Terminal applications receive
 mouse events when they request them; hold Shift to select text instead.
 The compact dock toolbar offers new, rename, close, take/release control, copy and
-hide; hover a control for its label. Background shells linked to a terminal appear
-only once in the activity indicators, and terminal shells open the dock.
+hide; hover a control for its label. The dock holds only the user's terminals; the
+agent's running background shells have their own `N shell` indicator, which opens the jobs list.
 Closed resources are hidden and opening the dock prefers a running terminal.
 Exit immediately disables input and updates the tab; a late control acknowledgment
 cannot make an ended terminal writable again. `--dump-frame` also runs the real
@@ -41,8 +41,7 @@ output cannot mutate it, and a changed/read-only destination draft fails visibly
 
 **Open inspector** opens the native inspector modal (Inspector API v2), shared with NSH,
 instead of a browser. Views: `1` Timing (one shared-axis Gantt, lanes grouped by
-session, a fixed ruler, and `~` terminal lifecycle bars for exactly tool-linked
-resources, including those outliving the launching turn), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
+session, a fixed ruler), `2` Conversation, `3` Steps, `4` Requests, `5` Raw, `6`
 Questions. Lists show each record's `summary`; Enter expands the exact `detail`
 JSON and `e` loads the full record when it was clipped. Rows and session-tree entries are clickable (click a row to select and expand it). `n`/`p` page to older/newer
 records by cursor (never page numbers); `[`/`]` inspect another session of the

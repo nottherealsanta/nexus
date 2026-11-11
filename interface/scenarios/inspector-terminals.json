@@ -1,9 +1,0 @@
-{
-  "expect": ["Terminal", "live", "end unknown"],
-  "lanes": [
-    {"id":"ses_inspector:tool:launch","session":"Review","session_id":"ses_inspector","kind":"tool","label":"bash","turn_id":"turn_terminal","start":100,"end":101,"running":false,"end_unknown":false,"status":"completed","summary":"bash · completed","detail":"{\"call_id\":\"launch\"}","ref":{"kind":"tool","id":"turn_terminal:launch"}},
-    {"id":"ses_inspector:terminal:term_done","session":"Review","session_id":"ses_inspector","kind":"terminal","label":"Terminal","turn_id":"turn_terminal","start":100,"end":104,"running":false,"end_unknown":false,"status":"exited","summary":"Terminal · exited · diagnostic only","detail":"{\n  \"diagnostic_only\": true,\n  \"status\": \"exited\",\n  \"id\": \"term_done\",\n  \"turn_id\": \"turn_terminal\",\n  \"tool_call_id\": \"launch\",\n  \"control_acquisitions\": 1,\n  \"control_releases\": 1\n}","ref":{"kind":"terminal","id":"term_done"}},
-    {"id":"ses_inspector:terminal:term_live","session":"Review","session_id":"ses_inspector","kind":"terminal","label":"Terminal","turn_id":"turn_terminal","start":101,"end":110,"running":true,"end_unknown":false,"status":"running","summary":"Terminal · running · diagnostic only","detail":"{\"id\":\"term_live\",\"turn_id\":\"turn_terminal\",\"tool_call_id\":\"launch\",\"diagnostic_only\":true}","ref":{"kind":"terminal","id":"term_live"}},
-    {"id":"ses_inspector:terminal:term_unknown","session":"Review","session_id":"ses_inspector","kind":"terminal","label":"Terminal","turn_id":"turn_terminal","start":102,"end":102,"running":false,"end_unknown":true,"status":"ended","summary":"Terminal · ended · diagnostic only","detail":"{\"id\":\"term_unknown\",\"turn_id\":\"turn_terminal\",\"tool_call_id\":\"launch\",\"diagnostic_only\":true}","ref":{"kind":"terminal","id":"term_unknown"}}
-  ]
-}

@@ -155,14 +155,8 @@ fn terminal_dock_matches_the_shared_scenario() {
         let fact = fact.as_str().unwrap();
         assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
     }
-    let job = &scenario["background_job"];
-    let linked = app
-        .terminal_panel
-        .terminals
-        .iter()
-        .find(|terminal| terminal.background_job_id.as_deref() == job["id"].as_str())
-        .expect("the linked background job's terminal");
-    assert_eq!(linked.id, job["terminal_id"].as_str().unwrap());
+    // The agent's background job is not a terminal: the dock holds only the user's.
+    assert_eq!(app.terminal_panel.terminals.len(), 1);
     if let Ok(dir) = std::env::var("NEXUS_TERMINAL_DOCK_SHOTS") {
         let buffer = draw(&mut app, 144, 44).0;
         let (fg, bg) = nexus_tui::svg::page_colors(false);

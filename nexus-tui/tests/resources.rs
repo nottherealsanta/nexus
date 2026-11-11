@@ -77,11 +77,8 @@ fn strip_counts_and_modal_list() {
     let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
     click(&mut app, chip.x, chip.y);
     let shown = draw(&mut app, 160, 50).1.join("\n");
-    assert!(app.terminal_open, "{shown}");
-    assert!(shown.contains("Terminals (0)"), "{shown}");
+    assert!(!app.terminal_open, "{shown}");
     assert!(!shown.contains("Kernels (1)"), "{shown}");
-    app.execute("session.resources");
-    let shown = draw(&mut app, 160, 50).1.join("\n");
     assert!(
         shown.contains("Background shells (1 live, 2 kept)"),
         "{shown}"
@@ -108,37 +105,36 @@ fn background_and_terminal_shells_are_separate_and_clickable() {
 }
 
 #[test]
-fn background_shell_opens_the_terminal_dock_without_a_kernel() {
+fn background_shell_opens_the_jobs_list_without_a_kernel() {
     let mut app = with_resources();
     app.state.kernels.clear();
     let (_, rows) = draw(&mut app, 160, 50);
     assert!(rows.join("\n").contains("1 shell"));
     let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
     click(&mut app, chip.x, chip.y);
-    assert!(app.terminal_open);
+    assert!(!app.terminal_open);
     assert!(draw(&mut app, 160, 50)
         .1
         .join("\n")
-        .contains("Terminals (0)"));
+        .contains("Background shells (1 live, 2 kept)"));
 }
 
 #[test]
-fn a_linked_background_job_is_counted_once() {
+fn a_running_job_and_a_user_terminal_are_counted_separately() {
     let mut app = with_resources();
-    app.state.jobs[0]["terminal_id"] = json!("t1");
     app.terminal_panel.terminals.push(
         serde_json::from_value(json!({
             "id":"t1", "name":"sleep 30", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80, "background_job_id":"job_1"
+            "controller":null, "rows":24, "cols":80
         }))
         .unwrap(),
     );
-    assert_eq!(app.resource_counts().1, 0);
+    assert_eq!(app.resource_counts().1, 1);
     assert_eq!(app.terminal_shell_count(), 1);
     let (_, rows) = draw(&mut app, 160, 50);
     let shown = rows.join("\n");
     assert!(shown.contains("1 terminal shell"), "{shown}");
-    assert!(!shown.contains("1 shell"), "{shown}");
+    assert!(shown.contains("1 shell"), "{shown}");
     let chip = app.hits.rect_of(&Target::ComposerTerminals).unwrap();
     click(&mut app, chip.x, chip.y);
     assert!(app.terminal_open);

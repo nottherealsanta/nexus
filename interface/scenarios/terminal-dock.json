@@ -10,21 +10,7 @@
       "status": "running",
       "rows": 24,
       "cols": 80,
-      "controller": null,
-      "background_job_id": null
-    },
-    {
-      "id": "term_job",
-      "name": "printf 'Background job ready\\n'; sleep 1800",
-      "project_id": "prj_demo",
-      "workspace": "/work/demo",
-      "session_id": "ses_demo",
-      "creator": "background bash",
-      "status": "running",
-      "rows": 24,
-      "cols": 80,
-      "controller": null,
-      "background_job_id": "job_7"
+      "controller": null
     }
   ],
   "background_job": {
@@ -32,15 +18,33 @@
     "session_id": "ses_demo",
     "root": "ses_demo",
     "command": "printf 'Background job ready\\n'; sleep 1800",
-    "terminal_id": "term_job",
     "status": "running"
   },
-  "expect": ["Terminals (2)", "Build", "Background job ready"],
-  "absent": ["Close panel", "No terminal selected"],
+  "expect": [
+    "Terminals (1)",
+    "Build"
+  ],
+  "absent": [
+    "Close panel",
+    "No terminal selected",
+    "Background job ready"
+  ],
   "actions": [
-    { "id": "new", "label": "New terminal", "icon": "plus" },
-    { "id": "rename", "label": "Rename terminal", "icon": "pencil" },
-    { "id": "close", "label": "Close terminal", "icon": "x" },
+    {
+      "id": "new",
+      "label": "New terminal",
+      "icon": "plus"
+    },
+    {
+      "id": "rename",
+      "label": "Rename terminal",
+      "icon": "pencil"
+    },
+    {
+      "id": "close",
+      "label": "Close terminal",
+      "icon": "x"
+    },
     {
       "id": "control",
       "label": "Take control",
@@ -48,9 +52,21 @@
       "icon": "unlock",
       "icon_controlled": "lock"
     },
-    { "id": "attach", "label": "Attach selected output", "icon": "plus" },
-    { "id": "copy", "label": "Copy output", "icon": "copy" },
-    { "id": "hide", "label": "Hide terminal panel", "icon": "chevron-down" }
+    {
+      "id": "attach",
+      "label": "Attach selected output",
+      "icon": "plus"
+    },
+    {
+      "id": "copy",
+      "label": "Copy output",
+      "icon": "copy"
+    },
+    {
+      "id": "hide",
+      "label": "Hide terminal panel",
+      "icon": "chevron-down"
+    }
   ],
   "control_labels": {
     "take": "[Take control]",

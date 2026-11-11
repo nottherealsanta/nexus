@@ -41,8 +41,6 @@ export function TerminalPanel() {
     const watermark = terminalEvidenceContext();
     evidencePending = {request: ++evidenceRequest, id: source.id, name: source.name, target: draftKey(), generation:watermark.generation, context:{
       project_id:source.project_id, workspace:source.workspace, stream_seq:watermark.stream_seq,
-      session_id:source.session_id ?? undefined, turn_id:source.turn_id ?? undefined,
-      tool_call_id:source.tool_call_id ?? undefined, background_job_id:source.background_job_id ?? undefined,
     }};
     send({type:"capture", request:evidenceRequest});
   };

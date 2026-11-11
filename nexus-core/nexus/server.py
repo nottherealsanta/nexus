@@ -126,7 +126,6 @@ from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
-from .workers.registry import visible as zmx_visible
 from .llmhub.types import ProviderError
 from .manager.consent import NOTICE_VERSION
 from .manager.redact import redact
@@ -144,6 +143,7 @@ from .voice.audio import MAX_WAV_BYTES, VoiceAudioError, parse_wav
 from .voice.manager import VoiceManager
 from .voice.model import VoiceError
 from .voice.speech import SpeechError, SpeechService, final_answer
+from .workers.registry import visible as zmx_visible
 
 VERSION = version("nexus10")
 MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room for a coalesced line
@@ -425,11 +425,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     config_revision = config.read()["revision"]
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
-    terminal_service = TerminalService(
-        runtime.store.db,
-        lambda data: runtime.bus.publish("terminal.updated", data, session_id=data["session_id"]),
-    )
-    runtime.jobs.terminal_service = terminal_service
+    terminal_service = TerminalService(runtime.store.db)
     from .file_watch import FileWatches
 
     file_watches = FileWatches(runtime.bus.publish)

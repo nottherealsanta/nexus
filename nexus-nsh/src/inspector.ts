@@ -55,8 +55,8 @@ export const dataOf = (s: InspectorState | null) => s ? pageOf(s).data : undefin
 /** Mutate the open state and publish it. */
 function update(fn: (s: InspectorState) => void) { const s = inspector(); if (!s) return; fn(s); inspector.set({ ...s }); }
 
-export const kindOptions = (view: number): string[] => view === 0 ? ["turn", "model", "tool", "attempt", "terminal"] : view === 2 ? ["turn", "model", "tool", "attempt"] : view === 1 ? ["user", "assistant"] : [];
-export const statusOptions = (view: number): string[] => view === 0 ? ["running", "completed", "failed", "interrupted", "exited", "closed", "ended"] : view === 2 ? ["running", "completed", "failed", "interrupted"] : view === 5 ? ["pending", "replied"] : [];
+export const kindOptions = (view: number): string[] => view === 0 || view === 2 ? ["turn", "model", "tool", "attempt"] : view === 1 ? ["user", "assistant"] : [];
+export const statusOptions = (view: number): string[] => view === 0 || view === 2 ? ["running", "completed", "failed", "interrupted"] : view === 5 ? ["pending", "replied"] : [];
 export const supportsType = (view: number) => view === 3 || view === 4;
 
 // --- formatting shared word for word with the TUI -------------------------------------------------
@@ -361,7 +361,7 @@ export async function loadFull() {
   const row = rowsOf(dataOf(s), s.view)[indexOf(s)];
   if (!row || !row.detail_truncated || pageOf(s).full[idOf(row)]) return;
   const kind = s.view === 0 ? row.ref?.kind ?? "" : row.kind; const id = s.view === 0 ? row.ref?.id ?? "" : idOf(row);
-  if (!["message", "event", "turn", "request", "tool", "attempt", "terminal"].includes(kind)) return;
+  if (!["message", "event", "turn", "request", "tool", "attempt"].includes(kind)) return;
   const at = keyOf(s); const rowId = idOf(row);
   update((x) => { x.loadingFull = rowId; });
   try {
