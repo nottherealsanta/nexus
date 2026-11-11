@@ -1451,7 +1451,7 @@ does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
-`snapshot` summary, `tool_info` (each tool's `description`), and
+`snapshot` summary, `tool_info` (each tool's `description`), `details` (per-section text of the starting context: `system_prompt`, `instruction_file` `{path, status, bytes, content, error}`, `tools` `{name: {description, parameters}}`, `skills` and the fenced `mcp_listing`, exactly what the first request carries), and
 the lists the session would start with: `tools` (names, in request order),
 `skills` and `mcp` (the session JSON's rows, with `state` and `locked`; nothing the draft's own `disabled_tools` switched off is locked, since the session has not started, so only an unavailable server is), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
 MCP servers are connected first, as for creation. Clients draw the new-session

@@ -2088,10 +2088,30 @@ class Runtime:
         info = {n: {"description": d["description"]}
                 for n, d in snapshot["tool_definitions"].items()}
         skills, servers = self._switches(snapshot, set(disabled), started=False)
+        details = self._draft_details(snapshot)
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
+                                                    "details": details,
                                                     "snapshot": snapshots.summary(snapshot), "tool_info": info,
                                                     "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers,
                                                     "session": {"model": plan["model"], "effort": plan["effort"]}}
+
+    @staticmethod
+    def _draft_details(snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Per-section text of a draft's starting context, so a client need not ask a started session.
+
+        Each section is exactly what the first request would carry (bounded: the prompt and AGENTS.md as the
+        snapshot holds them, tool schemas as sent), nothing the model would not receive.
+        """
+        file = snapshot["instruction_file"]
+        book = (snapshot.get("skills") or {}).get("items", {})
+        return {
+            "system_prompt": snapshot["system_prompt"],
+            "instruction_file": {key: file.get(key) for key in ("path", "status", "bytes", "content", "error")},
+            "tools": {name: {"description": d["description"], "parameters": d["parameters"]}
+                      for name, d in snapshot["tool_definitions"].items()},
+            "skills": [{"name": n, "description": r["description"], "scope": r["scope"]} for n, r in book.items()],
+            "mcp_listing": (snapshot.get("mcp") or {}).get("listing") or "",
+        }
 
     # -- one-request helpers: titles, /btw, handoff (PLAN K1-K3) ----------------
 
