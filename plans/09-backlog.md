@@ -108,17 +108,11 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   Git's message. No credential UI.
 - [ ] Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
   unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
-- [ ] NSH `desktopTools = !(native && touch)` in `store.ts` (absent today; `store.ts:249–252` has only `native`,
-  `touch` and `phone`): hides Files and Git and makes `editor.*`, `files.*`
-  and `git.*` unavailable. This removes today's Files tab and read-only file view from iPhone and iPad. Check the
-  idiom Mac Catalyst reports (it should keep the tools). Core routes are not gated.
+- [x] NSH `desktopTools` gating: superseded 2026-11-11 by the mobile cut-down client in AGENTS.md (mobile has only Sessions, Manager and Settings, so Files, Git and the editor are desktop/web only and need no per-tool gate; a ledger row is not needed for mobile omissions). Mac Catalyst idiom check goes with the mobile redesign.
 - [ ] Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
   `docs/daemon.md`, `docs/development.md` (vendored crate), `interface/manifest.toml`,
   `interface/design-language.md`, `interface/capability-matrix.md`, `nexus-tui/NOTICE`, `nexus-nsh/README.md`.
-- [ ] Ledger rows: NSH has several carets, more languages and indentation folds, the TUI Tree-sitter folds; syntax
-  colours map to the same tokens but tokenise differently (syntect vs Tree-sitter); no Files or Git tab on iOS; Git
-  actions are silent to the model, so a mid-turn branch switch is caught by the re-read check but the model may
-  still believe it is on the old branch (an accepted exception to the one-timeline rule).
+- [x] Ledger rows: editor differences were already in the ledger (the `ratatui-code-editor` row); no Files or Git on iOS needs no row (AGENTS.md); silent Git actions row added 2026-11-11.
 
 ## 9.3 Turn summaries (old 5)
 
