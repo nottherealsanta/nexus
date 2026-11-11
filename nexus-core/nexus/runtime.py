@@ -1156,10 +1156,7 @@ class Runtime:
                 remembered = self.store.preference("effort.last")
                 effort = remembered if remembered is not None else settings["effort"]
             if disabled_tools is None:
-                try:
-                    disabled_tools = self.check_tool_names(defaults["tools"]["disabled"], self.switchable(project.path))
-                except ValueError:
-                    pass
+                disabled_tools = self.default_disabled(project.path, defaults["tools"]["disabled"])
             if agent is None and settings["agent"]:
                 available = self.agents(project.path).allowed(child=False)
                 if settings["agent"] in [item.name for item in available]:
@@ -2245,6 +2242,22 @@ class Runtime:
             self.bus.publish("session.handoff_failed", {"session_id": session_id, "error": str(exc)}, session_id=session_id)
 
     # -- turns ---------------------------------------------------------------
+
+    def default_disabled(self, project_path: str | None, names: list[str]) -> list[str]:
+        """`[tools] disabled` as it applies to one project: names this project does not have are skipped.
+
+        A project-only user tool, skill or MCP server is a valid config entry, but it must not drop the
+        other entries (or raise) in a project that lacks it.
+        """
+        extra = self.switchable(project_path)
+        kept = []
+        for name in names:
+            try:
+                self.check_tool_names([name], extra)
+            except ValueError:
+                continue
+            kept.append(name)
+        return kept
 
     @staticmethod
     def check_tool_names(names: Any, extra: Iterable[str] = ()) -> list[str]:

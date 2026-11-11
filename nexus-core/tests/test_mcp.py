@@ -783,3 +783,26 @@ async def test_consecutive_sessions_start_an_enabled_project_command(env):
     manager = rt.project_mcp(rt.project(project["id"]))
     assert "tripwire" in manager.manager.connections
     await rt.shutdown()
+
+
+async def test_resources_and_prompts_are_read_only_fenced_and_bounded(env):
+    rt, client, _provider, _workspace, home = env
+    write_config(home)
+    listed = await client.get("/api/mcp/fx/resources")
+    assert listed.status_code == 200, listed.text
+    [resource] = listed.json()["resources"]
+    assert resource["uri"] == "note://hello" and resource["mime_type"] == "text/plain"
+    read = await client.get("/api/mcp/fx/resource", params={"uri": "note://hello"})
+    text = read.json()["text"]
+    assert text.startswith("<untrusted-mcp-data>") and text.count("</untrusted-mcp-data>") == 1 and "‮" not in text
+    assert "hello from a resource" in text and "kind: resource" in text
+    prompts = (await client.get("/api/mcp/fx/prompts")).json()["prompts"]
+    assert prompts[0]["name"] == "summarize" and prompts[0]["arguments"][0] == {
+        "name": "topic", "required": True, "description": ""}
+    got = await client.get("/api/mcp/fx/prompt", params={"name": "summarize", "arguments": '{"topic": "cats"}'})
+    assert "Summarize cats briefly." in got.json()["text"] and "kind: prompt" in got.json()["text"]
+    assert (await client.get("/api/mcp/fx/resource")).status_code == 400
+    assert (await client.get("/api/mcp/fx/prompt", params={"name": "summarize", "arguments": "[1]"})).status_code == 400
+    assert (await client.get("/api/mcp/fx/resource", params={"uri": "note://missing"})).status_code == 404
+    assert (await client.get("/api/mcp/nope/resources")).status_code == 404
+    await rt.shutdown()

@@ -24,6 +24,7 @@ are in docs/api.md.
 | GET | /api/mcp | MCP servers: state, tool count, error and (no secret) settings |
 | GET | /api/mcp/{name} | one server: the same, plus its tool names once connected; never connects |
 | POST | /api/mcp/{name}/restart | close and reconnect one server |
+| GET | /api/mcp/{name}/resources, /resource?uri=, /prompts, /prompt?name=&arguments= | read-only MCP resources and prompts (connects the server; fenced untrusted text; also under `/api/project/{id}/mcp/{name}/`) |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/voice | offline voice model status |
 | GET | /api/search/service | state of the local SearXNG behind `web_search` |
@@ -995,6 +996,44 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         except mcp_module.McpUnavailable as exc:
             raise NotFound(str(exc)) from exc
 
+    async def mcp_extra(manager: Any, request: Request, name: str, what: str) -> Response:
+        """Read-only MCP resources and prompts of one server. These connect it; nothing reaches a session."""
+        try:
+            if what == "resources":
+                return JSONResponse({"server": name, "resources": await manager.resources(name)})
+            if what == "prompts":
+                return JSONResponse({"server": name, "prompts": await manager.prompts(name)})
+            if what == "resource":
+                uri = request.query_params.get("uri", "")
+                if not uri or len(uri) > 2000:
+                    raise ValueError("uri is required (at most 2000 characters)")
+                return JSONResponse({"server": name, "uri": uri, "text": await manager.read_resource(name, uri)})
+            prompt = request.query_params.get("name", "")
+            raw = request.query_params.get("arguments", "")
+            arguments = json.loads(raw) if raw else {}
+            if not prompt or len(prompt) > 200:
+                raise ValueError("name is required (at most 200 characters)")
+            if not isinstance(arguments, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                          for k, v in arguments.items()) or len(arguments) > 50:
+                raise ValueError("arguments must be a JSON object of strings (at most 50)")
+            return JSONResponse({"server": name, "prompt": prompt,
+                                 "text": await manager.get_prompt(name, prompt, arguments)})
+        except mcp_module.McpUnavailable as exc:
+            raise NotFound(str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("arguments must be JSON") from exc
+
+    def mcp_extra_route(what: str) -> Any:
+        async def handler(request: Request) -> Response:
+            return await mcp_extra(runtime.mcp, request, p(request, "name"), what)
+        return handler
+
+    def project_mcp_extra_route(what: str) -> Any:
+        async def handler(request: Request) -> Response:
+            scope = project_mcp_scope(runtime.project(p(request, "id")))
+            return await mcp_extra(scope.manager, request, p(request, "name"), what)
+        return handler
+
     def project_mcp_scope(project: Any) -> Any:
         """The project's MCP scope, with its project-scoped event sink attached."""
         scope = runtime.project_mcp(project)
@@ -1893,6 +1932,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/search/service", route(search_service_status)),
         Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
+        *(Route(f"/api/mcp/{{name}}/{what}", route(mcp_extra_route(what)))
+          for what in ("resources", "resource", "prompts", "prompt")),
+        *(Route(f"/api/project/{{id}}/mcp/{{name}}/{what}", route(project_mcp_extra_route(what)))
+          for what in ("resources", "resource", "prompts", "prompt")),
         Route("/api/mcp/{name}", route(mcp_one)),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
         Route("/api/skill", route(skill_list)),

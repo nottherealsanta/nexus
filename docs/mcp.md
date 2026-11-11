@@ -268,6 +268,10 @@ images ([llm-providers.md](llm-providers.md#tool-result-media)).
 | `GET /api/project/{id}/mcp` | project scope: `{project_id, file, exists, revision, error, warnings, servers: [rows], files, duplicates}`. Never starts a server; reads the files and may close a changed or removed connection |
 | `GET /api/project/{id}/mcp/{name}` | one project row plus `tool_names` and `log`; never starts a server |
 | `POST /api/project/{id}/mcp/{name}/restart` | close and reconnect a project server |
+| `GET /api/mcp/{name}/resources` and `/prompts` | `{server, resources: [{uri, name, description, mime_type}]}` or `{server, prompts: [{name, description, arguments: [{name, required, description}]}]}`; at most 200, sanitized. Connects the server (404 if off, invalid or failing) |
+| `GET /api/mcp/{name}/resource?uri=` | `{server, uri, text}`: the resource text fenced as `<untrusted-mcp-data>` (`kind: resource`), clipped at 24,000 characters; binary contents are named, never shown |
+| `GET /api/mcp/{name}/prompt?name=&arguments=` | `{server, prompt, text}` with `arguments` a JSON object of strings; the prompt's messages fenced (`kind: prompt`). Nothing is sent to a session |
+| `/api/project/{id}/mcp/{name}/resources`, `/resource`, `/prompts`, `/prompt` | the same for a project server |
 
 A project row also has `source: "project"`, `project_id`, `file` (the winning
 file), `warnings`, and the non-secret facts from `config.describe()`
@@ -288,7 +292,8 @@ and `scope: "project"`:
 
 ## Not yet
 
-MCP resources and prompts, OAuth, a circuit breaker beyond the retry delays,
+The resources and prompts routes above are Core-only: there is no model tool for them (the model still
+reaches a server through `mcp_tool_search` and `mcp_call`) and no client UI yet. OAuth, a circuit breaker beyond the retry delays,
 and Settings screens for adding or editing global servers. There is no project
 approval screen or CLI command: an enabled project entry starts with the next
 session. The old TUI/NSH project approval review is gone.
