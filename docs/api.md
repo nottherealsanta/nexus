@@ -731,6 +731,13 @@ file or a credential. A running session exports what is durably stored at the
 boundary; it is not interrupted or waited for. The JSON event log excludes live-only deltas. The inspector exposes checkpointed
 request partials separately as diagnostic-only output.
 
+The JSON event log is bounded so a huge session cannot hold the read snapshot
+open without limit: once an export has emitted 256 MiB of event data, or has held
+its snapshot for 300 s, the rest of the event log is omitted. Each session object
+carries `events_clipped`, null when nothing was omitted, else `{reason,
+events_emitted, events_stored, first_omitted_event_id}`. Messages and snapshots
+are never clipped, and the Markdown export contains no event log.
+
 Events are read in pages of 1,000 by event row id until a short page; this is
 not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
 parameter. Both formats stream. The export includes every event **retained at

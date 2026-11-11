@@ -746,9 +746,14 @@ archived when the job finishes, `bash.finished` is still stored and its notice
 is saved as context without starting a turn. The notice begins
 `→ Background Shell Done: <command>`; limits, output retention and the rest of
 the finish notice are in [tools.md](tools.md#background-bash-jobs). Jobs do not
-survive a daemon restart. An unfinished `bash.started` is reported by startup
-recovery when it reconciles that session's turn: the retained output is lost and
-the command may still be running. Recovery does not kill it from a pid.
+survive a daemon restart. `bash.started` records the command's `pid`. Startup
+recovery probes each unfinished job read-only (`bash_jobs.probe`): a live process
+counts as the job only when `ps` shows it as its own process-group leader started
+within 10 s of the recorded start; a missing process or a reused pid is `gone`,
+and no pid or an unreadable `ps` is `unknown`. The recovery notice and the closing
+`bash.finished` (`outcome: "lost"`, `process: {pid, state}`) say which. A verified
+survivor is reported as still running, unsupervised and not stopped; the retained
+output is lost. Recovery never signals a process, and never kills from a pid alone.
 
 ## Workspace controls
 

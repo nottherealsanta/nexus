@@ -43,6 +43,43 @@ def kill_process(process: Any) -> None:
         pass
 
 
+def process_identity(pid: int) -> dict[str, Any] | None:
+    """What `ps` says about a pid now: `{"start": epoch seconds, "pgid": int}`, or None when no such process.
+
+    A stored pid alone proves nothing (pids are reused). A job's command runs as its own process-group leader, so a
+    live process is the job only if its group is its pid and it started within seconds of the job's start time.
+    """
+    import subprocess
+    import time as _time
+    try:
+        out = subprocess.run(["ps", "-o", "pgid=,lstart=", "-p", str(int(pid))], capture_output=True, text=True,
+                             timeout=5, env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {"unknown": True}
+    out = out.strip()
+    if not out:
+        return None
+    try:
+        pgid, _, started = out.partition(" ")
+        return {"pgid": int(pgid), "start": _time.mktime(_time.strptime(" ".join(started.split()), "%a %b %d %H:%M:%S %Y"))}
+    except ValueError:
+        return {"unknown": True}
+
+
+def probe(pid: Any, started: Any) -> str:
+    """`running` (verified to be this job's process group), `gone`, or `unknown`. Reads only; never signals."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1 or not isinstance(started, int | float):
+        return "unknown"
+    found = process_identity(pid)
+    if found is None:
+        return "gone"
+    if found.get("unknown"):
+        return "unknown"
+    if found["pgid"] == pid and abs(found["start"] - float(started)) <= 10:
+        return "running"
+    return "gone"  # the pid now belongs to something else, so the job's process is not there
+
+
 @dataclass
 class Job:
     id: str
@@ -94,7 +131,7 @@ class Job:
 
     def json(self, *, output: bool = False) -> dict[str, Any]:
         end = self.finished or time.time()
-        data = {"id": self.id, "session_id": self.session_id, "root": self.root, "command": self.command,
+        data = {"pid": getattr(self.process, "pid", None), "id": self.id, "session_id": self.session_id, "root": self.root, "command": self.command,
                 "directory": self.directory, "started": self.started, "finished": self.finished,
                 "duration_s": end - self.started, "status": self.status, "exit_code": self.exit_code,
                 "timeout": self.timeout, "output_chars": self.size, "dropped_chars": self.dropped}

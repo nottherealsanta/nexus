@@ -1216,3 +1216,76 @@ def test_turn_end_event_alone_is_no_longer_evidence(tmp_path):
         assert stored["status"] == "interrupted"
     finally:
         rt.store.close()
+
+
+def _lost_job(tmp_path, pid, started):
+    workspace = tmp_path / "proj"
+    workspace.mkdir(exist_ok=True)
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    request = crash.request(turn)
+    crash.assistant(session, turn, [], request=request)
+    crash.event(session, "bash.started", {
+        "id": "job_p", "session_id": session.id, "root": session.id, "command": "sleep 100",
+        "directory": str(workspace), "started": started, "status": "running", "pid": pid})
+    crash.close()
+    return session
+
+
+def test_recovery_reports_a_verified_surviving_job_and_never_kills_it(tmp_path):
+    import subprocess
+    import sys
+    import time
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        session = _lost_job(tmp_path, proc.pid, time.time())
+        rt = restart(tmp_path / "nexus.db")
+        try:
+            [notice] = texts(rt.store, session.id, "user")
+            assert f"`job_p` (pid {proc.pid})" in notice and "still running as the same process group" in notice
+            assert "nothing was killed" in notice and proc.poll() is None  # still alive
+            [finished] = [e for e in rt.store.events(session.id, limit=5000) if e["type"] == "bash.finished"]
+            assert finished["data"]["process"] == {"pid": proc.pid, "state": "running"}
+        finally:
+            rt.store.close()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_recovery_does_not_trust_a_reused_or_vanished_pid(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    session = _lost_job(tmp_path, dead.pid, time.time())
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "no longer running" in notice
+    finally:
+        rt.store.close()
+    other = tmp_path / "other"
+    other.mkdir()
+    # The test process itself is a live pid, but not a group leader that started with the job.
+    session = _lost_job(other, os.getpid(), time.time())
+    rt = restart(other / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "no longer running" in notice and "still running as the same" not in notice
+    finally:
+        rt.store.close()
+
+
+def test_a_job_without_a_recorded_pid_stays_unknown(tmp_path):
+    import time
+    session = _lost_job(tmp_path, None, time.time())
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "may still be running" in notice and "was not killed by PID" in notice
+    finally:
+        rt.store.close()
