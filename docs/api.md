@@ -129,6 +129,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
 | POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
+| GET | `/api/mcp/{name}/resources`, `/resource`, `/prompts`, `/prompt` | `?uri=` / `?name=&arguments=` | read-only MCP resources and prompts, fenced untrusted text; connects the server; also under `/api/project/{id}/mcp/{name}/` ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
 | GET | `/api/voice` | | `{stt, tts}` status; never loads or downloads a model ([voice.md](voice.md#status)) |
 | POST | `/api/voice/transcribe` | raw mono 16 kHz PCM16 WAV; `?partial=1` | `{text}`; 409 `voice_busy` for an overlapping preview; transcript is not sent to a model ([voice.md](voice.md#speech-to-text)) |
@@ -598,6 +599,7 @@ durable reconciliation for a lost HTTP response.
 | `POST /api/project/{id}/move` | yes | — | Applied against Core's current order (not a client's list); replay returns the original list; an unknown id is 400 |
 | `POST /api/project/{id}/remove` | yes | — | Replay returns the original answer; a project already removed is 404 |
 | `POST /api/project/{id}/git/action` | required | — | External effect: a pending outcome after a crash is `mutation_outcome_unknown`, never blindly replayed |
+| `POST /api/project/{id}/worktree/integrate` | required | — | External effect on the base checkout; a pending outcome after a crash is `mutation_outcome_unknown`, never blindly replayed |
 | `POST /api/session` | yes | — | Replay returns the same session; a child is not created twice |
 | `PATCH /api/session/{id}` | yes | `If-Match` / `expected_revision` | Replay before recheck; stale revision 409 |
 | `DELETE /api/session/{id}` | yes | — | Replay is 204; tombstones already recorded |
@@ -728,6 +730,13 @@ writes a notice or event, reconstructs a missing snapshot, or reads a workspace
 file or a credential. A running session exports what is durably stored at the
 boundary; it is not interrupted or waited for. The JSON event log excludes live-only deltas. The inspector exposes checkpointed
 request partials separately as diagnostic-only output.
+
+The JSON event log is bounded so a huge session cannot hold the read snapshot
+open without limit: once an export has emitted 256 MiB of event data, or has held
+its snapshot for 300 s, the rest of the event log is omitted. Each session object
+carries `events_clipped`, null when nothing was omitted, else `{reason,
+events_emitted, events_stored, first_omitted_event_id}`. Messages and snapshots
+are never clipped, and the Markdown export contains no event log.
 
 Events are read in pages of 1,000 by event row id until a short page; this is
 not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
@@ -1205,8 +1214,7 @@ durable log:
 - One `turn.recovered` per turn with `{turn_id, session_id, outcome,
   reason, legacy, origin, continuation, request, assistant_message, tool_message,
   tools, waits, losses, partial_output, notice}`. `outcome` is `interrupted`, or
-  `completed` when the turn's `ended` record (or, for a turn left open by an older
-  daemon, a durable `turn_end` event) proved the loop finished before the crash
+  `completed` when the turn's `ended` record proved the loop finished before the crash
   (then `notice` is null). `legacy` is true for a pre-execution-record session.
   `origin` is `prompt` or `continuation` when recorded (null for an older turn),
   and `continuation` is the predecessor link a continuation crashed with.
@@ -1397,6 +1405,32 @@ returns an error. Status exposes at most 10,000 changes and 10,000 branches, wit
 `files.changed`. These events do not enter a session timeline. The desktop Git
 surface and remaining actions are not yet implemented.
 
+### Worktree review and integration
+
+Control-plane only (no task or control tool reaches it; agent access needs its own approval design, see plan 9.15).
+`GET /api/project/{id}/worktree/review?worktree=&base=` reads, never writes. `worktree` must be a registered,
+non-main checkout on a branch; `base` defaults to the main checkout's branch and must be checked out in a
+worktree. It returns `{worktree, branch, head, base, base_head, base_worktree, merge_base, ahead, behind,
+fast_forward, commits (50 newest: sha, author, time, subject), commits_omitted, files (500: path, status,
+added, deleted), files_omitted, conflicts (names; null when this Git is older than 2.38 and cannot predict),
+blockers, live}`. `blockers` lists why integrating would be refused now: nothing to integrate, uncommitted
+changes in either checkout, a Git operation in progress on the base, a predicted conflict. `live` is the
+`/git/live` record of both checkouts.
+
+`POST /api/project/{id}/worktree/integrate` requires `Idempotency-Key`:
+`{worktree, expected_head, mode: "ff" | "merge", base?, message?, remove?, confirmed_live?}`. `expected_head` is
+the full branch tip the user reviewed; a branch that moved since is refused. `ff` is `git merge --ff-only` (a
+base that moved on is refused); `merge` is `git merge --no-ff` with `message` or Git's default. Everything is
+rechecked under the worktree lock, a conflicting or failing merge is aborted and changes nothing, nothing is
+forced, and hooks and Git's own identity rules apply. As for Git actions, a session working in either checkout
+that `confirmed_live` does not list gives 409 `worktree_live` with `{live: {worktree, base}}`. With `remove`,
+a session, project, pending directory move or background job using the worktree refuses the whole call before
+anything is merged; after the merge Nexus removes the clean worktree and runs `git branch -d` in the base
+checkout. The reply is `{merged, mode, branch, base, worktree, base_worktree, previous_base_head, head,
+branch_head, removed: {worktree, branch, error}}`; if a removal step fails the merge still stands and `error`
+says what was left. It publishes global `git.changed` and `files.changed` for the base checkout and
+`worktree.integrated`. Archive and delete never touch a worktree.
+
 ### Image prompts
 
 `POST /api/session/{id}/prompt` accepts `{text?: string, images?: [{name?: string, data_url: string}]}`.
@@ -1451,7 +1485,7 @@ does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
 of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
-`snapshot` summary, `tool_info` (each tool's `description`), and
+`snapshot` summary, `tool_info` (each tool's `description`), `details` (per-section text of the starting context: `system_prompt`, `instruction_file` `{path, status, bytes, content, error}`, `tools` `{name: {description, parameters}}`, `skills` and the fenced `mcp_listing`, exactly what the first request carries), and
 the lists the session would start with: `tools` (names, in request order),
 `skills` and `mcp` (the session JSON's rows, with `state` and `locked`; nothing the draft's own `disabled_tools` switched off is locked, since the session has not started, so only an unavailable server is), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
 MCP servers are connected first, as for creation. Clients draw the new-session

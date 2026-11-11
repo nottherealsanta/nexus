@@ -307,3 +307,47 @@ def test_requests_filter_and_raw_pagination(data):
     raw = inspect(rt.store, sid, view="Raw")
     assert raw["more"] and "event-50" in raw["text"]
     assert "event-0" in inspect(rt.store, sid, view="Raw", before=raw["next_before"])["text"]
+
+
+def test_questions_paging_is_stable_when_new_questions_arrive(data):
+    rt, sid = data
+    s = rt.store
+    for i in range(7):
+        s.append_event({"session_id": sid, "seq": i, "time": 10 + i, "type": "question.asked",
+                        "data": {"id": f"q{i}", "call_id": f"c{i}", "questions": [{"q": "?"}]}})
+    first = inspect(s, sid, view="Questions", limit=3)
+    s.append_event({"session_id": sid, "seq": 50, "time": 999, "type": "question.asked",
+                    "data": {"id": "late", "call_id": "cl", "questions": [{"q": "?"}]}})
+    seen = [r["id"] for r in first["records"]]
+    cursor = first["next_before"]
+    while cursor:
+        page = inspect(s, sid, view="Questions", limit=3, before=cursor)
+        seen += [r["id"] for r in page["records"]]
+        cursor = page["next_before"]
+    # pages run newest first (rows within a page read oldest first); nothing repeats and the late one is not paged in
+    assert sorted(seen) == [f"q{i}" for i in range(7)] and len(seen) == len(set(seen))
+    assert seen[:3] == ["q4", "q5", "q6"]
+
+
+def test_paging_survives_retention_deleting_rows_between_pages(data):
+    rt, sid = data
+    s = rt.store
+    for i in range(12):
+        s.append_event({"session_id": sid, "seq": i, "time": i, "type": "probe", "data": {"n": i}})
+    first = inspect(s, sid, view="Raw", limit=4)
+    seen = [r["id"] for r in first["records"]]
+    # retention drops the oldest rows (and one the cursor already passed) between page 1 and page 2
+    with s.db:
+        s.db.execute("delete from event where session_id = ? and type = 'probe' and seq < 3", (sid,))
+        s.db.execute("delete from event where session_id = ? and type = 'probe' and seq = 11", (sid,))
+    cursor = first["next_before"]
+    while cursor:
+        page = inspect(s, sid, view="Raw", limit=4, before=cursor)
+        assert not {r["id"] for r in page["records"]} & set(seen)
+        seen += [r["id"] for r in page["records"]]
+        cursor = page["next_before"]
+    assert len(seen) == len(set(seen))
+    remaining = {r["id"] for r in inspect(s, sid, view="Raw", limit=200)["records"]}
+    boundary = min(r["id"] for r in first["records"])
+    # every surviving row older than page 1 was reached exactly once through the cursors
+    assert {i for i in remaining if i < boundary} == set(seen) - {r["id"] for r in first["records"]}

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import subprocess
+import sys
 
 import httpx
 import pytest
@@ -486,3 +487,21 @@ async def test_deep_tree_busy_check_and_archived_descendant_notifications(env):
     assert (await client.post(f"/api/session/{root['id']}/unarchive")).status_code == 200
     assert not any(s.archived for s in rt.store.sessions())
     assert not rt.turns and len(provider.requests) == count
+
+
+async def test_archive_fires_session_end_hook_once(env, monkeypatch, tmp_path):
+    from nexus.hooks import parse_hooks
+    marker = tmp_path / "ended.txt"
+    code = f"import sys,json;open({str(marker)!r},'a').write(json.load(sys.stdin)['reason']+'\\n')"
+    hooks, problems = parse_hooks({"SessionEnd": [{"name": "end", "command": [sys.executable, "-c", code]}]})
+    assert not problems
+    monkeypatch.setattr(runtime_module, "config_hooks", lambda: (hooks, []))
+    session = await _create(env.client, env.workspace)
+    assert (await env.client.post(f"/api/session/{session['id']}/archive", json={})).status_code == 200
+    await asyncio.gather(*list(env.rt.background))
+    assert marker.read_text() == "archived\n"
+    # a repeated archive is a no-op transition and fires nothing; unarchive never fires it
+    await env.client.post(f"/api/session/{session['id']}/archive", json={})
+    await env.client.post(f"/api/session/{session['id']}/unarchive")
+    await asyncio.gather(*list(env.rt.background))
+    assert marker.read_text() == "archived\n"

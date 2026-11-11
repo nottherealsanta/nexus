@@ -186,11 +186,15 @@ def _valid(section: str, key: str, value: Any) -> bool:
     if section == "tools" and key == "disabled":
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             return False
+        # A name only some projects define (a project user tool, skill or MCP server) is well formed here;
+        # `Runtime.default_disabled` skips names a session's project does not have.
         from .runtime import Runtime
-        try:
-            Runtime.check_tool_names(value)
-        except ValueError:
-            return False
+        for name in value:
+            try:
+                Runtime.check_tool_names([name])
+            except ValueError:
+                if not re.fullmatch(r"(?:skill:|mcp:)?[A-Za-z0-9][\w.-]{0,63}", name):
+                    return False
         return True
     return False
 

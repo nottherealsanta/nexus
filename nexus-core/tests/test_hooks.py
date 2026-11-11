@@ -254,3 +254,39 @@ async def test_post_hook_deadline_preserves_completed_effect_and_result(tmp_path
         assert any("result is preserved" in p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
     finally:
         await kernels.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_bash_matcher_sees_every_part_of_a_compound_command(tmp_path):
+    hooks, _ = parse_hooks({"PreToolUse": [{"name": "g", "matcher": "bash(rm *)", "command": ["true"]}]})
+    r = HookRunner(hooks, tmp_path)
+    assert r.selected("PreToolUse", "bash", {"command": "rm -rf x"})
+    assert r.selected("PreToolUse", "bash", {"command": "echo hi && rm -rf x"})
+    assert r.selected("PreToolUse", "bash", {"command": "ls; rm x | cat"})
+    assert not r.selected("PreToolUse", "bash", {"command": "echo rm"})
+    assert not r.selected("PreToolUse", "bash", {"command": "echo hi && ls"})
+
+
+@pytest.mark.asyncio
+async def test_post_tool_use_fires_after_a_denied_approval(tmp_path):
+    ran, seen = [], []
+
+    async def bash(args, ctx):
+        ran.append(args)
+        return "ran"
+
+    async def deny(call, args):
+        return False
+
+    code = ("import sys,json;d=json.load(sys.stdin);"
+            "print(json.dumps({'context':'post saw error=%s' % d['is_error']}))")
+    hooks, _ = parse_hooks({"PostToolUse": [{"name": "after", "matcher": "bash", "command": py(code)}]})
+    provider = Script()
+    agent = Agent(provider, model="m", workspace=tmp_path,
+                  tools=(Tool(ToolSpec("bash", "d", {"type": "object"}), bash),), approve=deny,
+                  hooks=HookRunner(hooks, tmp_path, session_id="s1"))
+    events = [e async for e in agent.turn("go")]
+    seen = [e for e in events if isinstance(e, HookFired) and e.event == "PostToolUse"]
+    assert ran == [] and len(seen) == 1
+    text = " ".join(p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
+    assert "post saw error=True" in text

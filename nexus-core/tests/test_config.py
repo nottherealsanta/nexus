@@ -296,3 +296,31 @@ def test_favorite_models_validate(tmp_path):
     for bad in ("claude/sonnet-5", ["nope"], ["a/b", "a/b"], [1]):
         with pytest.raises(ValueError):
             config.patch(config.read()["revision"], {"ui.favorite_models": bad}, [])
+
+
+def test_tools_disabled_accepts_project_only_names_but_not_malformed_ones(tmp_path: Path) -> None:
+    config = ConfigFile(tmp_path / "config.toml")
+    ok = ["bash", "my_project_tool", "skill:deploy", "mcp:browser-use"]
+    assert config.patch(config.read()["revision"], {"tools.disabled": ok}, [])["values"]["tools"]["disabled"] == ok
+    for bad in (["not a name!"], ["-x"], [""], [3], "bash"):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"tools.disabled": bad}, [])
+
+
+async def test_a_project_only_disabled_name_does_not_drop_the_other_defaults(tmp_path: Path, monkeypatch) -> None:
+    import httpx
+
+    from nexus.server import build_app, make_runtime
+    from nexus.store import Store
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("NEXUS10_HOME", str(home))
+    (home / "config.toml").write_text('[tools]\ndisabled = ["bash", "only_elsewhere", "skill:nothing"]\n')
+    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "codex/model"))
+    app = build_app(runtime, token="token", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer token"}) as client:
+        created = await client.post("/api/session", json={"directory": str(tmp_path)})
+        assert created.status_code == 200, created.text
+        assert created.json()["disabled_tools"] == ["bash"]

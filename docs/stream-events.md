@@ -328,8 +328,7 @@ A daemon restart reconciles turns it left unfinished ([daemon.md](daemon.md#cras
 Recovery publishes only durable, replayable facts:
 
 - `turn.recovered` once per turn: `outcome` (`interrupted`, or `completed`
-  when the turn's `ended` record proved the loop finished; a turn left open by
-  an older daemon has no record, and its `turn_end` event is used), the recorded `origin`
+  when the turn's `ended` record proved the loop finished; a turn left open without one is `interrupted`), the recorded `origin`
   (`prompt` or `continuation`; null for an older turn) and `continuation` link,
   the request state, restored `assistant_message` and `tool_message` ids, each
   tool call's classification, cancelled waits, lost runtime state, the
