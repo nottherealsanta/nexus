@@ -53,7 +53,7 @@ def process_identity(pid: int) -> dict[str, Any] | None:
     import time as _time
     try:
         out = subprocess.run(["ps", "-o", "pgid=,lstart=", "-p", str(int(pid))], capture_output=True, text=True,
-                             timeout=5, env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}).stdout
+                             timeout=5, check=False, env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}).stdout
     except (OSError, subprocess.SubprocessError, ValueError):
         return {"unknown": True}
     out = out.strip()

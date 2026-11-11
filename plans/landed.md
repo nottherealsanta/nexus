@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Core backlog pass (11-11, plan 9).** Removed the `stream_summary`/`turn_end` recovery fallbacks; `SessionEnd` also fires on archive; hook matcher and denied-approval tests; user-tool `MEMORY_MB`; `[tools] disabled` accepts project-only names without dropping the rest; read-only MCP resources and prompts API; per-section `details` in `/api/draft/context`; worktree review and keyed integrate (Git merge, optional remove) as control-plane API; recovery probes surviving background jobs without killing; export clips the event log with `events_clipped`; inspector paging tests under writes and retention. Ticks with evidence in 9.2, 9.3, 9.5, 9.13, 9.19, 9.20. Client UI for these stays open.
+
 - **Plans 01–23 audit (11-11).** 1, 2, 3, 21 and 23 moved to done/: their remaining boxes need hardware, a paid call or branch-deletion approval. Retook the 21/23 paired captures from current code (TUI 170×50, NSH 1440×900 and 390×844); status strips match, and the `/btw` modal divergence is now plan 42. ZMX isolation test fixed (77/77). 5, 6, 9 and 10 stay open with real offline work. [Captures](../reports/sections21-23/).
 
 - **Search startup with an existing Apple container (11-11).** Recheck for the container after starting its system and serialize concurrent Core start requests; regression tests cover both cases.

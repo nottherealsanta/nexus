@@ -9,6 +9,9 @@ offline (largest: 9.6 interface polish, 9.11, 9.13 hooks, 9.14 Anthropic/Gemini 
 legacy fallback removal now that 0.12.0 shipped), and about 68 need a device, a paid call, a decision or are deferred.
 Confirm each "done" against the code before ticking it.
 
+**Core backlog pass 2026-11-11 (branch `plans/core-backlog`):** the offline Core items below were verified or done; each box says what
+was checked. What remains needs a client UI, a device, a paid call or a user decision.
+
 Everything else open in the previous plan is in the sections below, in full.
 The areas, at a glance:
 
@@ -86,11 +89,11 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   `worktrees.ENV` already sets `GIT_TERMINAL_PROMPT=0`. `worktree` must be a registered worktree of the project's
   repo; one lock per repo, as `worktree_lock`. Timeouts 120 s, 300 s for network actions; clients show progress and
   never give up first.
-- [ ] Add the route to the mutation matrix in `docs/api.md`: an external effect, so a crash leaves 409
+- [x] (verified 11-11: `docs/api.md` mutation matrix row, keyed `required`, `mutation_outcome_unknown`; no task or control tool reaches it) Add the route to the mutation matrix in `docs/api.md`: an external effect, so a crash leaves 409
   `mutation_outcome_unknown` and it is never retried blindly. Control-plane only: no task or control tool reaches it.
-- [ ] Events `git.changed` and `files.changed` carry no `session_id`, so nothing enters a session's log or
+- [x] (verified 11-11: `test_project_git_live_guard_and_keyed_action` asserts every `git.changed` has `session_id` null; `file_watch` and the action route publish through `bus.publish` with no session) Events `git.changed` and `files.changed` carry no `session_id`, so nothing enters a session's log or
   timeline; confirm against `bus.py`.
-- [ ] Safe defaults: pull is `--ff-only` (a diverged branch shows Git's error); push never forces and says when it
+- [~] (Core verified 11-11: pull `--ff-only`, push never forces and proposes an upstream, switch never stashes, `branch -d` local only, `-D` needs `force_confirmed`, no amend, discard only regular files, in-progress operations block; the second `-D` warning, the banner and "never delete a branch checked out elsewhere" UI are client work) Safe defaults: pull is `--ff-only` (a diverged branch shows Git's error); push never forces and says when it
   will set an upstream; switch never stashes and shows Git's refusal, switching to a remote branch creates the
   tracking branch; branch delete is `git branch -d`, local only, with a second warning before `-D`, and refuses a
   branch checked out in a worktree; discard is `git restore` or deleting an untracked file, and says it cannot be
@@ -102,11 +105,11 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   lists **working** sessions (an active turn, pending approval/question or running background job in this worktree
   or a child of one; warning, danger button) and **idle** ones (non-archived, directory in this worktree), from a
   fresh `git/live` read.
-- [ ] Race protection: the request carries `confirmed_live`; if another session started working, Core returns 409
+- [x] (verified 11-11: same test, 409 `worktree_live` with the fresh list, then success once confirmed) Race protection: the request carries `confirmed_live`; if another session started working, Core returns 409
   `worktree_live` with the new list and the dialog reopens.
-- [ ] Credentials: fetch/pull/push run as Core with Core's environment; without an SSH agent they fail and show
+- [x] (verified 11-11: `worktrees.ENV` sets `GIT_TERMINAL_PROMPT=0`, every Git call uses it; no credential UI exists) Credentials: fetch/pull/push run as Core with Core's environment; without an SSH agent they fail and show
   Git's message. No credential UI.
-- [ ] Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
+- [x] (verified 11-11: `tests/test_git_ops.py` 12 tests incl. `--ff-only` on a diverged branch with a bare remote, unmerged `branch -d` refusal, path confinement; `test_server.py` `worktree_live`; dirty-worktree refusal in the worktree tests) Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
   unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
 - [ ] NSH `desktopTools = !(native && touch)` in `store.ts` (absent today; `store.ts:249–252` has only `native`,
   `touch` and `phone`): hides Files and Git and makes `editor.*`, `files.*`
@@ -125,7 +128,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **Real-daemon checks:** a real session (`nexus chat`) shows usage and model on every `turn_request` row, and
   `curl` on a real session returns the documented `/turn` shape. The step 1 migration and backfill run once at the
   next daemon start (0.4 s on a copy; usage for 578 of 587 requests).
-- [ ] **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
+- [x] (11-11: `docs/development.md` has no stale event-history text left; the floor row is now documented in `interface/design-language.md`; NSH and the TUI use the same words) **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
   for the floor row ("the turns above have no recorded details…").
 
 ## 9.4 TUI performance and launch time (old 6)
@@ -167,7 +170,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **A lighter context endpoint** (budget only) if `GET …/context` cost shows up again; Core rebuilds the whole
   request body per call (5–12 ms warm, 30–130 ms first read). No Core-side cache: a stale one would show context
   the model does not have.
-- [ ] Return per-section starting-context detail text from Core for session drafts.
+- [x] (11-11: `POST /api/draft/context` returns `details`: system prompt, AGENTS.md record, full tool schemas, skills, MCP listing; the system prompt equals the first request's; clients can drop their own text) Return per-section starting-context detail text from Core for session drafts.
 - [x] Allow `/btw` during a running turn in both clients (implemented in working tree; section 23 tracks remaining verification).
 - [ ] NSH browser coverage for opening the original session from a handoff.
 - [ ] Decide whether to persist session grants; expose grant listing and clearing in the clients.
@@ -329,13 +332,13 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 The feature landed on 2026-11-06 (Core order, move API, drag and menu in both clients). The old plan said not to mark it landed until verified; this is that verification.
 
-- [ ] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
+- [~] (Core verified 11-11: `test_project_order_status_and_snapshot_share_one_saved_order` and `test_project_order_survives_a_restart`; client reducers and verification pending) **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
   equivalent to creation time then ID. Append new projects; remove deleted projects; never expose the Manager's
   hidden project. Preserve existing project `created`/`updated` and revision semantics. Include the order in the
   consistent `/api/snapshot` and publish a durable global event on changes, with reducers in both clients; ensure
   snapshot watermark and event ordering cannot lose a move. Keep older snapshots/servers usable with the existing
   creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded.
-- [ ] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
+- [~] (Core verified 11-11: move by neighbour/end, validation 400s, replay does not overwrite a later move, concurrent moves apply to the current order; client reconciliation pending) **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
   (including an explicit end position), applied against Core's current order rather than replacing a stale whole
   list. Specify validation, no-op/self moves, concurrent moves, deleted or hidden IDs, retries, and how clients
   reconcile failures or a disconnected/reconnecting Core. Make ordering and event publication follow the existing
@@ -356,18 +359,18 @@ The feature landed on 2026-11-06 (Core order, move API, drag and menu in both cl
 
 ## 9.13 Extensions, skills, MCP and hooks (old 9)
 
-- [ ] Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
+- [~] (Core 11-11: `/api/agent`, `/api/extension` and `/api/skill` already return `problems` rows for the clients to show, display still open; the changed-file notice is in the tool result and tested (`changed on disk`); user tools get `MEMORY_MB` (default 2048, `RLIMIT_AS`, Linux-enforced, not verified on macOS); `[tools] disabled` accepts project-only names and a session skips names its project lacks, instead of dropping every entry; `test_reload_stress_does_not_accumulate` passes. Open: the client display, a real-model session) Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
   tool; process memory limits; validate project-only names in `[tools] disabled`. Exercise a user tool in a real
   session and run the reload stress test.
 - [ ] Default-on settings for skills; exercise skills with a real model; decide whether and how `allowed-tools` is
   enforced without changing a cached prompt or granting permissions.
-- [ ] MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
+- [~] (Core 11-11: read-only `GET /api/mcp/{name}/resources|resource|prompts|prompt` and the project-scoped twins, fenced, bounded, tested against the stdio fixture; no model tool and no client UI yet, those need a decision on how a model should reach them) MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
   untrusted and visible as received.
 - [ ] Exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server
   failure, screenshots and its LLM-backed tools.
-- [ ] Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
+- [x] (verified 11-11: `test_a_disabled_global_name_does_not_hide_an_enabled_project_server` and `test_enabling_a_global_server_after_a_project_entry_takes_the_name_back` pass) Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
   (the `browser-use` case).
-- [ ] Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
+- [~] (Core 11-11: `SessionEnd` fires on archive (background, payload `reason`), `bash(...)` matchers see every part of a compound command, `PostToolUse` fires with `is_error` after a denied approval, all tested; open: Settings editing, timeline rows, a real-model blocking hook) Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
   `bash(...)` matchers on compound commands and `PostToolUse` after a denied approval; a blocking hook with a real
   model.
 
@@ -398,22 +401,22 @@ The ZMX item is section 6.
 
 ## 9.15 Worktrees (old 11)
 
-- [ ] Port worktree review and integration as control commands: review against the base, merge by fast-forward or
+- [~] (Core and API 11-11: `GET /api/project/{id}/worktree/review`, keyed `POST .../worktree/integrate` (ff or `--no-ff`, pinned to the reviewed head, optional removal and `branch -d`), 9 tests, ledger row, redesigned on Git rather than the old file journal; open: client commands and dialogs in both clients, and agent exposure (the `worktree` control tool is ungated today, so an integrate action there needs an approval design first, see decisions)) Port worktree review and integration as control commands: review against the base, merge by fast-forward or
   merge commit with confirmation, remove the worktree and branch after merge. Commands in both clients; agents get
   them only when granted. Reference: old `nexus/agents/worktree_review.py`, `worktree_integrate.py`,
   `nexus/worktree_cleanup.py`, `tests/test_worktree_merge_permission.py` (in `~/repos/nexus-old`).
-- [ ] Decide cleanup on archive/delete (archive must never implicitly delete a worktree) and how to leave one.
+- [~] (11-11: archive and session delete never touch a worktree, documented and unchanged; what to offer when leaving one stays open) Decide cleanup on archive/delete (archive must never implicitly delete a worktree) and how to leave one.
 
 ## 9.16 Reliability and safety (old 12)
 
 - [ ] Monty: an OS-level sandbox if wanted; checkpoint recovery; forced worker crashes; cold-start latency; the
   Linux `/usr/bin/env` path. (Workers already start through a launcher with an empty environment.)
-- [ ] Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID
+- [~] (11-11: `bash.started` records the pid; startup recovery probes each unfinished job read-only by pid, group leader and start time, and says running, gone or unknown in the notice and the closing `bash.finished`; it never signals; 3 real-process tests. Not done: re-adopting a surviving job so Nexus can stop it, which would need a durable output spool) Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID
   alone.
 - [ ] Durable pending directory moves and worktree-in-use checks for external processes; archive transitions
   appear only in the root log today.
 - [ ] Archive: bulk/project operations or timestamps, if needed.
-- [ ] Export holds a long SQLite read snapshot for very large sessions; consider general artifacts and export
+- [~] (11-11: the JSON event log stops at 256 MiB of event data or 300 s of held snapshot with `events_clipped` per session; messages and snapshots are never clipped; tested. General artifacts not done) Export holds a long SQLite read snapshot for very large sessions; consider general artifacts and export
   clipping.
 - [ ] Whether read-only agents need sandboxing or restricted command execution beyond the file tools, including
   races with external writers.
@@ -428,7 +431,7 @@ Decided 2026-11-04: finished sessions' events are compacted, announced by a `ses
   runs the in-place migrations: 0.3 s on the copy). Done when `nexus doctor` no longer reports different code and
   `/api/info` `retention_status` shows wire payloads expiring. Restarting also rotates the daemon token, which was
   printed into a tool log during this investigation.
-- [ ] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. Legacy `stream_summary` and `turn_end` recovery fallbacks remain for pre-checkpoint requests during the transition; remove after one release. Full NSH visual verification remains blocked by the native dependency mismatch.
+- [~] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. The legacy `stream_summary` and `turn_end` recovery fallbacks were removed 11-11 (0.12.0 shipped; recovery reads `turn.ended` and the `partial` checkpoint only; the recovery suites and the full Core suite pass). The `grep "from event"` done-test was not re-run. Full NSH visual verification remains blocked by the native dependency mismatch.
   Original scope: Question/permission asked/replied into a small
   `wait` table (also serving the inspector's Questions card); background jobs into a `bash_job` table, replacing
   `open_bash_jobs` / `unfinished_bash_jobs` (which also removes the cold-start full scan in section 6); `code_used`
@@ -453,7 +456,7 @@ The native inspector first pass landed 11-06; these are the remaining gates.
   explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
   full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
   paused/live/disconnected state and manual Refresh; an offline view must not look current.
-- [ ] **Stable, bounded loading.** (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`. Clients landed: cursor stack paging, `omitted` and notes shown, at most 60 rows drawn around the selection. Client memory/render-latency regression checks still pending.) Replace offset-only paging with documented stable boundaries/cursors
+- [ ] **Stable, bounded loading.** (11-11 Core tests added: Questions paging under new writes, Raw paging while retention deletes rows between pages; the existing test covers the other views. Remaining: client memory/render checks.) (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`. Clients landed: cursor stack paging, `omitted` and notes shown, at most 60 rows drawn around the selection. Client memory/render-latency regression checks still pending.) Replace offset-only paging with documented stable boundaries/cursors
   so new turns cannot duplicate or skip older pages. Bound server queries and response bytes, avoid
   loading every message to show one page, virtualize long client lists and load large JSON on demand.
   Announce omitted sessions/lanes/bytes and expired diagnostics; provide a way to inspect the omitted
@@ -481,32 +484,34 @@ The native inspector first pass landed 11-06; these are the remaining gates.
 
 Supports section 2 (terminal). The browser parts are deferred.
 
-- [ ] **Resource model and authority.** Define Core-owned terminal/browser resources with opaque IDs,
+**Verified 11-11:** every item below is ticked on the evidence in [02](done/02-terminal.md) (its boxes are ticked) plus a re-run of the six terminal suites (46 passed). The Linux/other-platform, native AppKit and remote reconnect matrix stays open in 02.
+
+- [x] **Resource model and authority.** Define Core-owned terminal/browser resources with opaque IDs,
   project/workspace identity, creator, optional session association, status, timestamps and explicit
   create/attach/detach/close actions. Clients are viewers/controllers, not process owners. A session
   changing directory must not silently move an existing shell or browser; new resources use the chosen
   workspace and existing ones show their actual location/association.
-- [ ] **API and streaming design.** Specify authenticated resource metadata/control endpoints and a
+- [x] **API and streaming design.** Specify authenticated resource metadata/control endpoints and a
   versioned data stream, separately from the conversation SSE log. Include sequence numbers, bounded
   replay/checkpoints, explicit gap/resync messages, backpressure and read-only attachment. Keep raw
   PTY output and browser frames out of durable session-event rows. Input actions need IDs/acknowledgments
   so reconnect/retry never repeats a command, click or form submission.
-- [ ] **One active writer.** Allow multiple viewers but give only one user/client/agent explicit control
+- [x] **One active writer.** Allow multiple viewers but give only one user/client/agent explicit control
   at a time. Show who owns control; handoff/revocation is explicit and auditable. Reject stale resize,
   pointer and keyboard input from an old attachment. A disconnect releases control according to the
   documented lease policy; it never silently transfers control to an agent.
-- [ ] **Lifecycle, limits and security.** Decide idle limits, concurrent-resource limits, archive/delete
+- [x] **Lifecycle, limits and security.** Decide idle limits, concurrent-resource limits, archive/delete
   behavior and graceful shutdown before coding. Closing a panel is detach, not kill; explicit Close
   terminates a resource. For the first version, a Core restart may end processes/contexts but must mark
   them ended/interrupted, never pretend to resume them. Test orphan cleanup. Guard stream origins,
   attachment authorization and cross-project access; do not expose a remote shell or authenticated
   browser over the existing tokenless non-loopback mode without an approved access model.
-- [ ] **Visible context boundary.** A terminal/browser panel is a workspace resource, not another chat
+- [x] **Visible context boundary.** A terminal/browser panel is a workspace resource, not another chat
   timeline. Opening it or viewing its output does not automatically feed the model. Explicitly attached
   output, page extracts and screenshots become normal visible messages/tool results with provenance,
   clipping and untrusted-content treatment. Separate UI resource-management APIs/control tools from
   workspace task actions; do not add task tools that mutate Nexus sessions, models or workspace state.
-- [ ] **Shared shell placement.** Design a shared workspace panel with Terminal/Browser tabs, a resource
+- [x] **Shared shell placement.** Design a shared workspace panel with Terminal/Browser tabs, a resource
   list, split/expand/collapse and focus return, using the existing file-panel/layout machinery where
   appropriate. Keep the session composer draft and scroll unchanged when switching. Put commands and
   shortcuts in `interface/manifest.toml`; arbitrate terminal/browser input versus global shortcuts, IME,
@@ -516,22 +521,22 @@ Supports section 2 (terminal). The browser parts are deferred.
 
 The detail behind section 2.
 
-- [ ] **Core PTY service.** Add a dedicated resource service (proposed
+- [x] **Core PTY service.** Add a dedicated resource service (proposed
   `nexus-core/nexus/terminals.py`) for shell spawning in the selected workspace, terminal dimensions,
   environment, process groups, binary-safe I/O and resize. Preserve UTF-8 split across chunks and
   arbitrary terminal control bytes. Set a defined terminal type; support signals, exit codes and
   graceful-close/force-stop. Do not repurpose `bash_output`'s combined text buffer as a PTY.
-- [ ] **Shared terminal semantics.** Choose a maintained VT parser/screen checkpoint representation
+- [x] **Shared terminal semantics.** Choose a maintained VT parser/screen checkpoint representation
   and compatible renderers for NSH and Rust. Verify colors, Unicode/wide characters, cursor movement,
   scrollback, alternate screen, bracketed paste and interactive programs (`less`, an editor, a shell
   prompt). Bound scrollback and queued bytes; announce discarded history. Disable or gate terminal
   escape features that write the clipboard, access files, or launch URLs without the user's action.
-- [ ] **User interaction.** Open/list/rename/switch/close terminals; show cwd/workspace, running/exited
+- [x] **User interaction.** Open/list/rename/switch/close terminals; show cwd/workspace, running/exited
   status and active controller. Support selection/copy/paste, resize, Ctrl+C and focus handoff. Warn
   before terminating a running shell/process. Detach/reconnect restores a bounded screen checkpoint
   plus subsequent bytes without replaying input. First version is user-operated; agent raw typing is
   deferred until the authority model in 14.5 is settled.
-- [ ] **Exit gate.** Tests run real PTYs against an isolated workspace: shell input/output, interactive
+- [x] **Exit gate.** Tests run real PTYs against an isolated workspace: shell input/output, interactive
   alternate screen, resize, split byte sequences, high-volume output, two clients, control contention,
   disconnect/reconnect, exit, close and Core shutdown. Compare both clients' screens and input behavior.
   A terminal is not done if it only renders line-oriented command output.
