@@ -137,7 +137,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/voice/tts/download` | empty | 202 `{state: "downloading"}`; consented download of `[speech] tts_model`; progress is `voice.progress` with `target: "tts"` and the state shows in `GET /api/voice` |
 | DELETE | `/api/voice/{stt or tts}` | | removes the configured model repo from the HF cache; 409 while downloading or playing; `{repo, freed, ...status}` |
 | GET | `/api/search/service` | | `{state, url, runtime, detail}` for the local SearXNG behind `web_search`; `state` is `running`, `stopped`, `absent` or `unavailable` |
-| POST | `/api/search/service/start` | empty | starts it (Apple `container`, else Docker; creates `nexus-search/.env` once) and waits up to 30 s; the status, or 422 `search_start_failed` |
+| POST | `/api/search/service/start` | empty | starts it (Apple `container`, else Docker; creates `nexus-search/.env` once) and waits up to 30 s; concurrent starts are serialized, and an existing Apple container is rechecked after starting its system; the status, or 422 `search_start_failed` |
 | POST | `/api/voice/speak` | `{session_id}` | streams the latest completed answer as `audio/wav` ([voice.md](voice.md#speech)) |
 | POST | `/api/voice/speak/stop` | empty | `{stopped}` |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |

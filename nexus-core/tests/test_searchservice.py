@@ -1,4 +1,6 @@
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -105,3 +107,58 @@ def test_a_container_with_a_moved_mount_is_recreated(home_dir, monkeypatch, tmp_
     assert searchservice.start()["state"] == "running"
     verbs = [a[1] for a in calls]
     assert verbs.index("delete") < verbs.index("run") and "start" not in verbs[verbs.index("inspect"):]
+
+
+def test_existing_container_is_found_after_starting_container_system(home_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(searchservice, "directory", lambda: tmp_path)
+    monkeypatch.setattr(searchservice, "_runtime", lambda: "container")
+    answers = iter([False, True, True])
+    monkeypatch.setattr(searchservice, "_answers", lambda url: next(answers))
+    system_running = False
+    calls = []
+
+    def run(*args, cwd=None):
+        nonlocal system_running
+        calls.append(args)
+        if args[1:3] == ("system", "status"):
+            return _done(0 if system_running else 1)
+        if args[1:3] == ("system", "start"):
+            system_running = True
+        if args[1] == "inspect":
+            if not system_running:
+                return _done(1, err="system not running")
+            return _done(out=f'[{{"configuration": {{"mounts": [{{"source": "{tmp_path}/searxng"}}]}}}}]')
+        return _done()
+
+    monkeypatch.setattr(searchservice, "_run", run)
+    assert searchservice.start()["state"] == "running"
+    assert ("container", "start", "nexus-search") in calls
+    assert not any(args[1] in ("run", "delete") for args in calls)
+
+
+def test_concurrent_start_requests_launch_once(home_dir, monkeypatch):
+    launching = Event()
+    release = Event()
+    running = False
+    calls = []
+
+    def status():
+        return {"state": "running" if running else "absent", "url": "http://localhost/search", "runtime": "container"}
+
+    def launch(*args):
+        nonlocal running
+        calls.append(args)
+        launching.set()
+        assert release.wait(2)
+        running = True
+
+    monkeypatch.setattr(searchservice, "status", status)
+    monkeypatch.setattr(searchservice, "_launch", launch)
+    monkeypatch.setattr(searchservice, "_answers", lambda url: running)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(searchservice.start)
+        assert launching.wait(2)
+        second = pool.submit(searchservice.start)
+        release.set()
+        assert first.result()["state"] == second.result()["state"] == "running"
+    assert len(calls) == 1

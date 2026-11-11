@@ -63,6 +63,10 @@ SearXNG can take a few seconds to initialize; requests may fail until its worker
 starts. The Apple mount reported `chown` permission warnings in the smoke test,
 but the service started and returned results.
 
+When started from Nexus Settings, Core starts the Apple container system if
+needed, then checks again for an existing `nexus-search` container before
+creating one. Concurrent start requests to the same Core are serialized.
+
 Stop/remove:
 
 ```sh

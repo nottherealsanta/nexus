@@ -11,6 +11,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ CONTAINER_NAME = "nexus-search"
 DEFAULT_IMAGE = "docker.io/searxng/searxng@sha256:eb2a404db174d33a04cd9f2e519bcae2ca722a58923510652cc1314be94e8e63"
 START_WAIT_S = 30.0
 COMMAND_TIMEOUT_S = 120
+_start_lock = threading.Lock()
 
 
 def directory() -> Path:
@@ -138,6 +140,9 @@ def _launch(runtime: str, exists: bool) -> None:
             step = _run("container", "system", "start", "--enable-kernel-install")
             if step.returncode != 0:
                 raise _fail(step)
+        # Inspection can fail while the container system is stopped. Check again
+        # once it is running before deciding to create a named container.
+        exists = _exists(runtime)
         if exists and _stale(folder):
             step = _run("container", "delete", "--force", CONTAINER_NAME)
             if step.returncode != 0:
@@ -157,6 +162,11 @@ def _launch(runtime: str, exists: bool) -> None:
 
 def start() -> dict[str, Any]:
     """Start the service and wait for it to answer. Raises RuntimeError with a short reason."""
+    with _start_lock:
+        return _start()
+
+
+def _start() -> dict[str, Any]:
     current = status()
     if current["state"] == "running":
         return current

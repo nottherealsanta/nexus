@@ -3,7 +3,7 @@
 The plan used to be a single `PLAN.md` at the repo root. Since 2026-11-11 it is this folder: one file per piece of
 work; `PLAN.md` was removed. The plan before 2026-11-06 is kept whole in
 [docs/archive/PLAN-2026-11-06.md](../docs/archive/PLAN-2026-11-06.md). **Section numbers quoted by older docs and code
-comments ("PLAN.md 8.2", "14.1") refer to that file.** Section numbers below (1–38) are the ones from the
+comments ("PLAN.md 8.2", "14.1") refer to that file.** Section numbers below (1–40) are the ones from the
 2026-11-06 plan where they existed, so "section 6" still means ZMX. Current behavior is in
 [docs/README.md](../docs/README.md); deliberate changes from old Nexus are in the
 [porting ledger](../docs/porting-ledger.md).
@@ -33,7 +33,9 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
-| 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11 (working tree)**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
+| 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
+| 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **new** | Confirm summary shape and per-file actions, then Core line counts |
+| 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
 | 38 | [Ctrl+V pastes text too](38-ctrl-v-text.md) | **new**; TUI Ctrl+V reads images only | Fall back to clipboard text in the TUI |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |

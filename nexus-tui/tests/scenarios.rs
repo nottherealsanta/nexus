@@ -130,5 +130,8 @@ fn zmx_models_never_reach_the_root_model_picker() {
         assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
     }
     app.open_palette(PaletteMode::PoolModels);
-    assert!(draw(&mut app, 160, 50).1.join("\n").contains("agy/gemini-3.8-flash-high"));
+    assert!(draw(&mut app, 160, 50)
+        .1
+        .join("\n")
+        .contains("agy/gemini-3.8-flash-high"));
 }
