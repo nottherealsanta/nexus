@@ -1143,6 +1143,8 @@ and mistakes.
 
 ## Landed
 
+- **Search startup diagnosis (11-11).** Detect an existing service rejecting JSON searches and explain how to restore it or free the port instead of attempting a conflicting launch.
+
 - **0.12.0 released (11-09).** PR #100 merged, release branch removed, no open PRs remain. Four platform binaries, wheel/sdist, installer and checksums published; every payload hash verified. Isolated published macOS arm64 install, daemon and plain TUI smoke passed; Linux installer/runtime and native/device gates remain explicit. [Release](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0).
 
 - **Automated test gate complete (11-09).** Core 1290 passed/1 skipped; TUI 861 passed/10 ignored plus real-Core PTY smoke; NSH final full web run 371/371. Lints, builds, native/shared/installer checks and existing macOS/Linux PR checks pass. Transient inspector-host failure and remaining UI/runtime gates stay explicit in [the validation report](reports/release-0.12.0-validation.md). Grok schema backlog item removed at the user's request; no provider fix is claimed.
