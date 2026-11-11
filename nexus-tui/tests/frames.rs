@@ -141,6 +141,7 @@ fn stream() -> Vec<SyncMsg> {
             parts: vec![json!({"type": "text", "text": "older context"})],
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         }],
         messages_more: false,
         ..Default::default()
@@ -1029,6 +1030,7 @@ fn history_merge_and_replacement_show_new_text() {
             parts: vec![json!({"type": "text", "text": "merged after history"})],
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         }],
         ..Default::default()
     };

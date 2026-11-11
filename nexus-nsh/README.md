@@ -178,9 +178,9 @@ icons (the status glyph replaces the icon while running, failed, denied or waiti
 call adds its first error line, and read, edit, write, code and ask carry their summary. An open
 member's detail sits behind the tree line with `raw` on its row: `$ command` rows, then the last 8 output rows
 behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
-a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `Thought · preview`, with the body behind a rail, and no time;
-a thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group.
-Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog.
+a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `◇ Thought · preview`, with the body behind a rail, and no time;
+the one-line preview strips raw Markdown emphasis. A thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group, and shows the diamond where a group would show its chevron.
+Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog. A finished background subagent is instead `⣿ Subagent done · Agent · title`, with `failed` or `interrupted` in the error colour; pressing it opens a modal with the agent, title, model, duration and the exact notice text the model received, plus an **Open session** button for the child.
 
 The app sets a 16 px default with 24 px leading; the shared kit's title, body and
 code roles use that size, and hierarchy comes from weight and colour rather than
@@ -751,7 +751,8 @@ message. Clicking the chip opens the full pasted text in a modal. A failed send 
 draft.
 
 A background shell completion (`→ Background Shell Done: …`) is a plain context
-notice, without a user-message card or a new turn number.
+notice, without a user-message card or a new turn number. It shows the shell icon
+instead of a fold chevron and drops the leading `→`.
 
 The top header omits the busy indicator; activity stays with the conversation.
 

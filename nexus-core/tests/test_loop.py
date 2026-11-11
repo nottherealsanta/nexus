@@ -47,6 +47,27 @@ async def test_declined_and_unknown_tools_are_errors(tmp_path):
     assert "declined" in results[0].output and "unknown tool" in results[1].output
 
 
+async def test_structured_notice_metadata_rides_with_the_exact_model_text(tmp_path):
+    from nexus.loop import MessageAdded, Notice
+
+    provider = Scripted([[ToolCall("c1", "write", '{"path": "a.txt", "content": "a"}')], [Text("done")]])
+    meta = {"kind": "subagent", "state": "finished", "session_id": "ses_child"}
+    inbox = ["[Nexus notice: plain]", Notice("[Notification: sub agent finished]\nSub agent ses_child finished.",
+                                            meta)]
+    def take():
+        items, inbox[:] = list(inbox), []
+        return items
+
+    agent = Agent(provider, model="m", workspace=tmp_path, inbox=take)
+    events = [e async for e in agent.turn("go")]
+    [notice] = [e for e in events if isinstance(e, MessageAdded) and e.notices]
+    assert [p.text for p in notice.message.parts if isinstance(p, Text)] == [
+        "[Nexus notice: plain]", "[Notification: sub agent finished]\nSub agent ses_child finished."]
+    assert notice.notices == (meta,)
+    # The metadata is client-facing and never appears in the provider request.
+    assert meta["kind"] not in str(provider.requests[0].messages)
+
+
 async def test_step_limit_disables_tools_and_asks_for_a_summary(tmp_path):
     provider = Scripted([
         [ToolCall("c1", "write", '{"path": "a.txt", "content": "a"}')],

@@ -101,6 +101,7 @@ from .loop import (
     Agent,
     MessageAdded,
     ModelFallback,
+    Notice,
     NoUserMessage,
     RetryExhausted,
     RetryScheduled,
@@ -196,7 +197,7 @@ def project_json(p: Project) -> dict[str, Any]:
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
     return {"id": m.id, "session_id": m.session_id, "seq": m.seq, "created": m.created, **message_to_json(m.message), **({"delivery": m.delivery} if m.delivery else {}),
-            **({"origin": m.origin} if m.origin else {})}
+            **({"origin": m.origin} if m.origin else {}), **({"notices": list(m.notices)} if m.notices else {})}
 
 
 class ReasoningClock:
@@ -264,7 +265,7 @@ class Runtime:
         self.mcp = mcp_files.McpManager(lambda kind, data: self.bus.publish(kind, data),
                                         lambda: ConfigFile().mcp_servers(), _config_stamp)
         self.project_mcps: dict[str, ProjectMcp] = {}
-        self.inboxes: dict[str, list[str]] = {}  # session id -> notices waiting for its next model call
+        self.inboxes: dict[str, list[str | Notice]] = {}  # session id -> notices waiting for its next model call
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
@@ -1504,24 +1505,26 @@ class Runtime:
         if event.get("id") is not None:
             self.store.link_message_event(stored.id, event["id"])
 
-    def _notify(self, session_id: str, text: str) -> None:
+    def _notify(self, session_id: str, text: str, *,
+                notices: tuple[dict[str, Any], ...] = ()) -> None:
         """Deliver an automatic notice without waking an archived session.
 
         Busy: before the next model call. Idle: start a turn (the existing
         behavior). Archived: save the model-visible notice as context but do not
         call the provider; it is present when the user later unarchives and
-        resumes.
+        resumes. `notices` is client-facing metadata; `text` is what the model
+        receives, unchanged.
         """
         session = self.store.session(session_id)
         if session is None:
             return
         if session.archived:
-            stored = self.store.append_message(session_id, Message("user", (Text(text),)))
+            stored = self.store.append_message(session_id, Message("user", (Text(text),)), notices=notices)
             self._publish_message(session_id, stored)
         elif session_id in self.turns:
-            self.inboxes.setdefault(session_id, []).append(text)
+            self.inboxes.setdefault(session_id, []).append(Notice(text, notices[0]) if notices else text)
         else:
-            self.prompt(session_id, text)
+            self.prompt(session_id, text, notices=notices)
 
     def activate_workspace_tools(self, session_id: str, *, source: str = "tool") -> str:
         """Make `change_session_directory` and `worktree` available; idempotent per session."""
@@ -2852,8 +2855,44 @@ class Runtime:
         if parent_id is None or self.store.session(parent_id) is None:
             return
         notice = f"[Notification: sub agent finished]\n{self._child_report(child_id)}"
-        self.bus.publish("session.notified", {"from": child_id, "text": notice}, session_id=parent_id)
-        self._notify(parent_id, notice)
+        meta = self._child_notice(child_id)
+        self.bus.publish("session.notified", {"from": child_id, "text": notice, "notice": meta},
+                         session_id=parent_id)
+        self._notify(parent_id, notice, notices=(meta,))
+
+    def _child_notice(self, child_id: str) -> dict[str, Any]:
+        """Structured facts about a finished child, for clients; never model text."""
+        child = self.session(child_id)
+        error = self.errors.get(child_id)
+        if error is None:
+            state = "finished"
+        elif error == "interrupted by the user":
+            state = "interrupted"
+        else:
+            state = "failed"
+        agent = "fork" if child.fork else child.agent
+        snapshot: dict[str, Any] = {}
+        model = child.model or ""
+        effort: str | None = child.effort
+        try:
+            snapshot = self.snapshot_for(child)
+            worker = snapshot.get("worker") or {}
+            if label := worker.get("label"):
+                agent = label
+            model, _ = self.resolve_model(child, snapshot["agent"])
+            effort, _ = self.resolve_effort(child, snapshot, model)
+        except (KeyError, ValueError):
+            pass
+        return {
+            "kind": "subagent",
+            "state": state,
+            "session_id": child.id,
+            "agent": agent,
+            "title": child.title,
+            "model": model or None,
+            "effort": effort or None,
+            "duration": max(0.0, round(child.updated - child.created, 3)),
+        }
 
     def _check_turn_start(self, session: Session) -> None:
         if ref := self._worker_ref(session):
@@ -2874,7 +2913,8 @@ class Runtime:
     def _begin_turn(self, session: Session, *, user_text: str | Message | NoUserMessage, origin: str,
                     continuation: dict[str, Any] | None = None,
                     mutation: dict[str, Any] | None = None, input_id: str | None = None,
-                    via: str | None = None) -> dict[str, Any]:
+                    via: str | None = None,
+                    notices: tuple[dict[str, Any], ...] = ()) -> dict[str, Any]:
         """Record one turn durably, announce it, and start its task.
 
         Prompting and manual continuation share this path; the only difference is
@@ -2897,13 +2937,13 @@ class Runtime:
         self.bus.publish("session.status", status, session_id=session_id)
         self.turns[session_id] = asyncio.create_task(
             self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation, input_id=input_id,
-                      via=via))
+                      via=via, notices=notices))
         if session.parent_id and session.parent_id not in self.turns:
             self.bus.publish("session.status", {"status": "busy"}, session_id=session.parent_id)
         return turn
 
     def prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None, pastes: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None, mode: str = "send", typed: bool = False,
-               via: str | None = None) -> dict[str, Any]:
+               via: str | None = None, notices: tuple[dict[str, Any], ...] = ()) -> dict[str, Any]:
         """Start a turn with `text`, or queue/steer it. `via` is who typed it when that was not the user at a client
         (`"manager"`); it is stored on the message so clients can label it."""
         session = self.session(session_id)
@@ -2949,7 +2989,7 @@ class Runtime:
         ))
         structured = bool(parts) or any(part.collapsed for part in text_parts)
         turn = self._begin_turn(session, user_text=Message("user", (*text_parts, *labelled_parts)) if structured else text,
-                                origin="prompt", mutation=mutation, via=via)
+                                origin="prompt", mutation=mutation, via=via, notices=notices)
         if typed:
             self.store.record_prompt(session_id, Message("user", (*text_parts, *labelled_parts)))
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
@@ -3025,7 +3065,7 @@ class Runtime:
 
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None,
-                   via: str | None = None) -> None:
+                   via: str | None = None, notices: tuple[dict[str, Any], ...] = ()) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
@@ -3043,7 +3083,7 @@ class Runtime:
             agent = self._agent(self.session(session_id))
             agent.turn_id = turn_id
             self.vision[agent.model] = await self.image_input(self.session_json(self.session(session_id))["model"])
-            async for event in agent.turn(user_text):
+            async for event in agent.turn(user_text, notices=notices):
                 if isinstance(event, MessageAdded):
                     if event.message.role == "assistant":
                         started.clear()
@@ -3070,7 +3110,8 @@ class Runtime:
                         input_id = None
                     else:
                         # The turn's own prompt is the first user message; later ones are notices.
-                        stored = self.store.append_message(session_id, event.message, origin=via)
+                        stored = self.store.append_message(session_id, event.message, origin=via,
+                                                           notices=event.notices)
                         via = None
                     self._publish_message(session_id, stored)
                 else:
@@ -3268,7 +3309,11 @@ class Runtime:
             elif leftover and self.store.session(session_id) is not None:
                 if watcher is not None:
                     self.notify[session_id] = watcher
-                self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
+                self.prompt(  # notices that arrived as the turn ended
+                    session_id,
+                    "\n\n".join(n.text if isinstance(n, Notice) else n for n in leftover),
+                    notices=tuple(n.metadata for n in leftover if isinstance(n, Notice)),
+                )
             else:
                 session = self.store.session(session_id)
                 busy = session is not None and self._session_busy(session)

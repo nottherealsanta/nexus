@@ -3687,7 +3687,7 @@ impl App {
         self.ui.overlay = Some(Overlay { kind, restore });
     }
 
-    fn open_palette(&mut self, mode: PaletteMode) {
+    pub fn open_palette(&mut self, mode: PaletteMode) {
         self.open_overlay(OverlayKind::Palette(Palette {
             mode,
             query: Composer::new(),
@@ -11359,6 +11359,16 @@ impl App {
                     kind: OverlayKind::WorktreeInfo(_),
                     ..
                 }) => self.copy_worktree_value(WorktreeCopy::Path),
+                Some(Overlay {
+                    kind: OverlayKind::SubagentDone { session_id, .. },
+                    ..
+                }) => {
+                    let id = session_id.clone();
+                    if self.state.model.sessions.contains_key(&id) {
+                        self.close_overlay();
+                        self.open_session(&id);
+                    }
+                }
                 _ => {}
             },
             "c" if matches!(
@@ -11422,6 +11432,10 @@ impl App {
             }
             Some(OverlayKind::ContextDoc { text, top, .. }) => {
                 let max = crate::render::context_doc_max(area, &self.theme, text);
+                *top = (*top as isize + delta).clamp(0, max as isize) as usize;
+            }
+            Some(OverlayKind::SubagentDone { text, top, .. }) => {
+                let max = crate::render::subagent_done_max(area, text);
                 *top = (*top as isize + delta).clamp(0, max as isize) as usize;
             }
             Some(OverlayKind::ContextEntries {
@@ -11935,6 +11949,19 @@ impl App {
             b.kind,
             crate::timeline::BlockKind::Notice | crate::timeline::BlockKind::Footer
         ) {
+            if let Some(info) = b.subagent.clone() {
+                self.open_overlay(OverlayKind::SubagentDone {
+                    session_id: info.session_id,
+                    agent: info.agent,
+                    title: info.title,
+                    model: info.model,
+                    duration: info.duration,
+                    state: info.state,
+                    text: b.target.clone().unwrap_or_default(),
+                    top: 0,
+                });
+                return;
+            }
             if let Some(text) = b.target.clone() {
                 let title = text
                     .lines()

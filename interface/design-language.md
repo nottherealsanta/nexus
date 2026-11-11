@@ -93,9 +93,21 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   failures that stay visible. Members lead with a verb glyph (`[glyphs.verb]` in
   `theme.toml`) that the status glyph replaces while running, failed, denied or
   waiting; their detail is the old `┌ │ ╰` box in `border.strong` with capped
-  output and a `raw` toggle. Reasoning is `▸ Thought for 2.1s · preview` (italic
-  muted preview). Folded content remains accessible, and any clipped output is
-  labelled. Reduced motion and monochrome stay static.
+  output and a `raw` toggle. A single-item row shows that item's own icon where a
+  group's fold would be: a thought is `◇ Thought · preview` (ASCII `o Thought`;
+  italic muted preview, with raw Markdown emphasis stripped) and one finished
+  background shell is `$ Background Shell Done: … · show full output` (the `→`
+  prefix is gone). Groups with more than one item keep `▸`/`▾`. Folded content
+  remains accessible, and any clipped output is labelled. Reduced motion and
+  monochrome stay static.
+- A finished background subagent is one row: the child glyph `⣿` in the agent's
+  colour, `Subagent done`, then `· Agent · title` muted, and `failed` or
+  `interrupted` in the error colour. Its modal is titled `Subagent done`, shows
+  the agent, title, model and duration, then the full notice text exactly as the
+  model received it (scrollable and selectable), and its footer action opens the
+  child session (`enter open session` and `esc close` in the TUI; an
+  `Open session` button and `esc close` in NSH). Other context notices keep
+  `context · … · show details`.
 - The header row is a band on the chrome surface. The left toggle is at x=1,
   then the Sessions / Files / Projects icons in the band over the left sidebar
   (the active icon bold primary, the others muted; label on hover). Session

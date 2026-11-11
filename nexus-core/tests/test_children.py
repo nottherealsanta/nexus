@@ -114,6 +114,16 @@ async def test_non_blocking_child_wakes_the_idle_parent(env):
     assert next(t for role, t in texts if role == "tool").startswith("Started sub agent")
     notice = [t for role, t in texts if role == "user" and t.startswith("[Notification: sub agent finished]")]
     assert notice and notice[0].endswith("found it")
+    [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    message = next(m for m in (await client.get(f"/api/session/{parent['id']}/message")).json()
+                   if m["role"] == "user" and m["parts"][0]["text"].startswith("[Notification: sub agent finished]"))
+    [meta] = message["notices"]
+    assert (meta["kind"], meta["state"], meta["session_id"], meta["agent"]) == (
+        "subagent", "finished", child["id"], "helper")
+    assert meta["title"] == child["title"] and meta["model"] == "scripted/child"
+    assert meta["duration"] >= 0
+    assert message["parts"][0]["text"] == ("[Notification: sub agent finished]\n"
+                                           f"Sub agent {child['id']} (agent helper) finished.\n\nfound it")
     assert texts[-1] == ("assistant", "thanks")
 
 

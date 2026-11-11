@@ -1625,6 +1625,7 @@ fn paste_message_shot() {
             ],
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         });
     let (buf, _) = draw(&mut a, 140, 44);
     let (fg, bg) = nexus_tui::svg::page_colors(false);
@@ -2408,6 +2409,7 @@ fn a_collapsed_paste_in_a_user_message_opens_in_a_modal() {
             ],
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         });
     let (_, rows) = draw(&mut a, 120, 40);
     let marker_row = rows

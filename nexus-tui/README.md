@@ -470,10 +470,16 @@ the old box (`┌ │ ╰` in `border.strong`): the command's first two rows, th
 eight output rows behind `↑ N earlier lines · enter show all` (a diff or the raw
 view keeps a head and a tail), and a `raw` toggle on the head row. `o`, or Enter
 on the open tool, shows all; `r` raw and `i` inspector work on a focused tool.
-Reasoning reads `▸ Thought · preview` (or `◇ Thought` within an activity tree,
-ASCII `o Thought`; no duration, see Interface notes) and
-stays open with its last ten wrapped lines while it streams, with a count of
-earlier lines hidden. Once finished, opening it shows the full text. The header status reads
+Reasoning reads `◇ Thought · preview` (its own icon where a group would show a
+fold; within an activity tree the `◇` follows the tree glyph, ASCII `o Thought`;
+no duration, see Interface notes) and strips raw Markdown emphasis from the
+one-line preview. It stays open with its last ten wrapped lines while it streams,
+with a count of earlier lines hidden. Once finished, opening it shows the full
+text. A finished background subagent is one row, `⣿ Subagent done · Agent · title`
+with `failed` or `interrupted` in the error colour; Enter opens a modal with the
+agent, title, model, duration and the exact notice text the model received, and
+`enter open session` opens the child. Other context notices keep
+`context · … · show details`. The header status reads
 `◆ waiting for you` or `✕ offline`; it has no busy state.
 
 The right sidebar's Session
@@ -829,8 +835,9 @@ TUI can be driven by hand in a browser.
 - Background shell completions (`→ Background Shell Done: <command>`, then the
   job id, status, exit code, retained output tail and the `bash_output` hint)
   stay model context but show as a one-line expandable notice, not a user card or
-  turn; consecutive completions group, and expanding shows the full context in
-  order, including any output clipping notice.
+  turn. One completion shows `$` in place of the fold and drops the `→` prefix;
+  consecutive completions stay one group with `▸`, and expanding shows the full
+  context in order, including any output clipping notice.
 - Clipboard images: **Ctrl+V** in the composer in a local macOS or Linux
   terminal (macOS reads PNG/TIFF through AppKit; Linux uses `wl-paste` or
   `xclip`; SSH clipboard reads are refused). Pasting inserts `[Image A]`,

@@ -9,7 +9,7 @@ import { Clipboard, effect, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
-  firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   composerFocused, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
@@ -1096,6 +1096,7 @@ export function escape() {
   if (isDictationBusy()) { cancelDictation(); return "dictation"; }
   if (annotating()) { annotating.set(null); return "annotate"; }
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
+  if (subagentDone()) { subagentDone.set(null); return "subagent_done"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
   if (worktreeInfoOpen()) { worktreeInfoOpen.set(false); return "worktree_info"; }

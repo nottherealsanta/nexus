@@ -72,9 +72,22 @@ class ToolEnd:
 
 
 @dataclass(frozen=True, slots=True)
+class Notice:
+    """A notice added to the context with structured Core metadata.
+
+    `text` is exactly what the model receives; `metadata` is client-facing and
+    never sent to the provider. Older notices are plain strings.
+    """
+
+    text: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class MessageAdded:
     message: Message
     input_ids: tuple[str, ...] = ()
+    notices: tuple[dict[str, Any], ...] = ()
 
 
 def merge_steering(messages: list[Message]) -> Message:
@@ -170,7 +183,7 @@ LoopEvent = (Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | 
              | RetryExhausted | ModelFallback | HookFired)
 TurnInput = str | Message | NoUserMessage
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
-Inbox = Callable[[], list[str]]  # notices to add (as a user message) before the next model call
+Inbox = Callable[[], list[str | Notice]]  # notices to add (as a user message) before the next model call
 
 
 def default_instructions(workspace: Path) -> str:
@@ -264,9 +277,9 @@ class Agent:
             conversation_id=self.conversation_id,
         )
 
-    def _add(self, message: Message) -> MessageAdded:
+    def _add(self, message: Message, notices: tuple[dict[str, Any], ...] = ()) -> MessageAdded:
         self.messages.append(message)
-        return MessageAdded(message)
+        return MessageAdded(message, notices=notices)
 
     async def _fire(self, event: str, *, tool: str | None = None, args: dict[str, Any] | None = None,
                     call_id: str | None = None, **extra: Any) -> tuple[list[HookOutcome], list[HookFired]]:
@@ -287,7 +300,8 @@ class Agent:
         notes, self._hook_notes = self._hook_notes, []
         return notes
 
-    async def turn(self, user_text: TurnInput) -> AsyncIterator[LoopEvent]:
+    async def turn(self, user_text: TurnInput, *,
+                   notices: tuple[dict[str, Any], ...] = ()) -> AsyncIterator[LoopEvent]:
         self._tool_calls = 0
         self._tool_deadline = time.monotonic() + self.max_tool_seconds if self.max_tool_seconds is not None else None
         self._budget_notified = False
@@ -297,7 +311,7 @@ class Agent:
                 yield event
         if not isinstance(user_text, NoUserMessage):
             message = user_text if isinstance(user_text, Message) else Message("user", (Text(user_text),))
-            yield self._add(message)
+            yield self._add(message, notices)
             prompt = "\n".join(p.text for p in message.parts if isinstance(p, Text))
             outcomes, fired = await self._fire("UserPromptSubmit", prompt=prompt)
             for event in fired:
@@ -320,7 +334,11 @@ class Agent:
             elif step == max(2, (self.max_steps * 4 + 4) // 5):
                 notices.append(STEP_BUDGET_NOTICE)
             if notices:
-                yield self._add(Message("user", tuple(Text(n) for n in notices)))
+                meta = tuple(n.metadata for n in notices if isinstance(n, Notice))
+                yield self._add(
+                    Message("user", tuple(Text(n.text if isinstance(n, Notice) else n) for n in notices)),
+                    meta,
+                )
             steering = self.steering() if self.steering else []
             if steering:
                 message = merge_steering([message for _, message in steering])

@@ -1,0 +1,171 @@
+{
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "created": 1,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "fix the build"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "seq": 2,
+      "created": 2,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool_call",
+          "id": "call_bg",
+          "name": "session",
+          "arguments": "{\"agent\":\"build\",\"title\":\"Subagent heading and root-back navigation\",\"prompt\":\"Build the subagent heading and root-back navigation.\",\"wait\":false}"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "seq": 3,
+      "created": 3,
+      "role": "tool",
+      "parts": [
+        {
+          "type": "tool_result",
+          "call_id": "call_bg",
+          "output": "Started sub agent ses_child (agent build) in the background; it runs a turn and reports back when it stops."
+        }
+      ]
+    },
+    {
+      "id": "m4",
+      "seq": 4,
+      "created": 4,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "→ Background Shell Done: 'cd nexus-tui && cargo test …'"
+        }
+      ]
+    },
+    {
+      "id": "m5",
+      "seq": 5,
+      "created": 5,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "reasoning",
+          "summary": "**Delegating focused tests**"
+        }
+      ]
+    },
+    {
+      "id": "m6",
+      "seq": 6,
+      "created": 6,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "[Notification: sub agent finished]\nSub agent ses_child (agent build) finished.\n\nThe heading now navigates back to the root."
+        }
+      ],
+      "notices": [
+        {
+          "kind": "subagent",
+          "state": "finished",
+          "session_id": "ses_child",
+          "agent": "build",
+          "title": "Subagent heading and root-back navigation",
+          "model": "opencode/deepseek-v4.1-flash",
+          "effort": "high",
+          "duration": 310
+        }
+      ]
+    },
+    {
+      "id": "m7",
+      "seq": 7,
+      "created": 7,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "[Notification: sub agent finished]\nSub agent ses_old (agent quick) failed: the network dropped."
+        }
+      ]
+    },
+    {
+      "id": "m8",
+      "seq": 8,
+      "created": 8,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ]
+    }
+  ],
+  "sessions": [
+    {
+      "id": "ses_child",
+      "project_id": "prj_1",
+      "directory": "/work/demo",
+      "title": "Subagent heading and root-back navigation",
+      "agent": "build",
+      "parent_id": "ses_1",
+      "parent_call_id": "call_bg",
+      "launched_by": "agent",
+      "model": "opencode/deepseek-v4.1-flash",
+      "effort": "high",
+      "created": 10,
+      "updated": 320,
+      "revision": 1,
+      "archived": 0
+    },
+    {
+      "id": "ses_old",
+      "project_id": "prj_1",
+      "directory": "/work/demo",
+      "title": "Quick check",
+      "agent": "quick",
+      "parent_id": "ses_1",
+      "parent_call_id": "call_old",
+      "launched_by": "agent",
+      "model": "opencode/quick",
+      "created": 10,
+      "updated": 25,
+      "revision": 1,
+      "archived": 0
+    }
+  ],
+  "notice": "m6",
+  "expect": [
+    "Subagent done",
+    "Build",
+    "Subagent heading and root-back navigation",
+    "failed",
+    "Quick check",
+    "Background Shell Done",
+    "Delegating focused tests"
+  ],
+  "absent": [
+    "**Delegating",
+    "→ Background Shell Done",
+    "context · Notification: sub agent finished"
+  ],
+  "expect_modal": [
+    "Subagent done",
+    "Build · Subagent heading and root-back navigation",
+    "opencode/deepseek-v4.1-flash/high",
+    "5m 10s",
+    "The heading now navigates back to the root.",
+    "esc close"
+  ]
+}

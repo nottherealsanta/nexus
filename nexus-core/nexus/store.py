@@ -308,6 +308,7 @@ create table if not exists message (
   event_id integer,
   delivery text,
   origin text,
+  notices text,
   unique (session_id, seq)
 );
 create table if not exists prompt_history (
@@ -698,6 +699,7 @@ class StoredMessage:
     created: float
     delivery: str | None = None
     origin: str | None = None  # who put this message here when it was not the user at a client: "manager"
+    notices: tuple[dict[str, Any], ...] = ()  # structured Core notices attached to this message (never sent to the model)
 
 
 class Store:
@@ -828,7 +830,7 @@ class Store:
             "project": {"hidden": "integer not null default 0"},
             "session": {"kind": "text not null default 'user'", "topic": "text",
                         "topic_seq": "integer not null default 0", "fork": "text"},
-            "message": {"origin": "text"},
+            "message": {"origin": "text", "notices": "text"},
         }
         project_columns = {row["name"] for row in self.db.execute("pragma table_info(project)")}
         added_order = "position" not in project_columns
@@ -2009,13 +2011,14 @@ class Store:
     # -- messages ------------------------------------------------------------
 
     def _insert_message(self, session_id: str, message: Message, now: float,
-                        origin: str | None = None) -> StoredMessage:
+                        origin: str | None = None, notices: tuple[dict[str, Any], ...] = ()) -> StoredMessage:
         seq = self.db.execute("select coalesce(max(seq), 0) + 1 from message where session_id = ?", (session_id,)).fetchone()[0]
-        stored = StoredMessage(new_id("msg"), session_id, seq, message, now, None, origin)
+        stored = StoredMessage(new_id("msg"), session_id, seq, message, now, None, origin, notices)
         self.db.execute(
-            "insert into message (id, session_id, seq, role, parts, created, event_id, origin)"
-            " values (?, ?, ?, ?, ?, ?, null, ?)",
-            (stored.id, session_id, seq, message.role, json.dumps(message_to_json(message)["parts"]), now, origin),
+            "insert into message (id, session_id, seq, role, parts, created, event_id, origin, notices)"
+            " values (?, ?, ?, ?, ?, ?, null, ?, ?)",
+            (stored.id, session_id, seq, message.role, json.dumps(message_to_json(message)["parts"]), now, origin,
+             json.dumps(list(notices)) if notices else None),
         )
         self.db.execute("update session set updated = ? where id = ?", (now, session_id))
         if message.role == "user":
@@ -2336,10 +2339,11 @@ class Store:
         return [{"id": r["id"], "text": r["text"], "image_count": r["image_count"],
                  "session_id": r["session_id"], "created": r["created"]} for r in self.db.execute(sql, params)]
 
-    def append_message(self, session_id: str, message: Message, *, origin: str | None = None) -> StoredMessage:
+    def append_message(self, session_id: str, message: Message, *, origin: str | None = None,
+                       notices: tuple[dict[str, Any], ...] = ()) -> StoredMessage:
         now = time.time()
         with self.db:
-            return self._insert_message(session_id, message, now, origin)
+            return self._insert_message(session_id, message, now, origin, notices)
 
     def append_handoff(self, session_id: str, message: Message) -> StoredMessage:
         """The first message of a continued session: the summary, tagged `handoff`."""
@@ -2349,12 +2353,18 @@ class Store:
             self.db.execute("update message set delivery = 'handoff' where id = ?", (stored.id,))
         return replace(stored, delivery="handoff")
 
+    @staticmethod
+    def _stored_message(row: Any) -> StoredMessage:
+        return StoredMessage(
+            row["id"], row["session_id"], row["seq"],
+            message_from_json({"role": row["role"], "parts": json.loads(row["parts"])}),
+            row["created"], row["delivery"], row["origin"],
+            tuple(json.loads(row["notices"])) if row["notices"] else (),
+        )
+
     def messages(self, session_id: str) -> list[StoredMessage]:
         rows = self.db.execute("select * from message where session_id = ? order by seq", (session_id,))
-        return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
-            for r in rows
-        ]
+        return [self._stored_message(r) for r in rows]
 
     def messages_page(self, session_id: str, *, before: int | None = None, limit: int = 100) -> dict[str, Any]:
         """The `limit` messages just before sequence `before` (the newest when None), oldest first.
@@ -2371,17 +2381,15 @@ class Store:
         return {"messages": [{"id": r["id"], "session_id": r["session_id"], "seq": r["seq"], "created": r["created"],
                               "role": r["role"], "parts": json.loads(r["parts"]),
                               **({"delivery": r["delivery"]} if r["delivery"] else {}),
-                              **({"origin": r["origin"]} if r["origin"] else {})} for r in rows],
+                              **({"origin": r["origin"]} if r["origin"] else {}),
+                              **({"notices": json.loads(r["notices"])} if r["notices"] else {})} for r in rows],
                 "more": more, "oldest_seq": rows[0]["seq"] if rows else None}
 
     def messages_after_seq(self, session_id: str, seq: int) -> list[StoredMessage]:
         """Messages after a turn's starting sequence; recovery uses this, not a clock."""
         rows = self.db.execute(
             "select * from message where session_id = ? and seq > ? order by seq", (session_id, seq))
-        return [
-            StoredMessage(r["id"], r["session_id"], r["seq"], message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
-            for r in rows
-        ]
+        return [self._stored_message(r) for r in rows]
 
     def message_event_id(self, message_id: str) -> int | None:
         row = self.db.execute("select event_id from message where id = ?", (message_id,)).fetchone()
@@ -2394,11 +2402,7 @@ class Store:
         """
         rows = self.db.execute(
             "select * from message where event_id is null order by created, session_id, seq")
-        return [
-            StoredMessage(r["id"], r["session_id"], r["seq"],
-                          message_from_json({"role": r["role"], "parts": json.loads(r["parts"])}), r["created"], r["delivery"], r["origin"])
-            for r in rows
-        ]
+        return [self._stored_message(r) for r in rows]
 
     def link_message_event(self, message_id: str, event_id: int) -> None:
         with self.db:
@@ -3098,7 +3102,8 @@ class Store:
                          "created": row["created"], "role": row["role"],
                          "parts": json.loads(row["parts"]),
                          **({"delivery": row["delivery"]} if row["delivery"] else {}),
-                         **({"origin": row["origin"]} if row["origin"] else {})}
+                         **({"origin": row["origin"]} if row["origin"] else {}),
+                         **({"notices": json.loads(row["notices"])} if row["notices"] else {})}
                         for row in rows
                     ],
                     "messages_limit": message_limit,

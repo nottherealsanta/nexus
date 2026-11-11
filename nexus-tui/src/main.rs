@@ -1179,6 +1179,7 @@ fn replay_history(n: usize) -> History {
             parts,
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         });
         seq += 1;
         if tool {
@@ -1197,6 +1198,7 @@ fn replay_history(n: usize) -> History {
                 })],
                 delivery: None,
                 origin: None,
+                notices: Vec::new(),
             });
             seq += 1;
         }

@@ -274,6 +274,11 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 // A message also has `"origin": "manager"` (the message level, not a part's provider) when the Manager sent it into
 // the session on the user's words; clients label it `via Manager`. A message typed by a person has no `origin`.
 // Optional `"delivery"` is `steer`, `queued` or `handoff`.
+// Optional `"notices"` carries structured facts about Core notices in this message; the message text is always
+// exactly what the model received. A finished `wait: false` child adds
+// {"kind": "subagent", "state": "finished"|"failed"|"interrupted", "session_id": "ses_…", "agent": "build",
+//  "title": "…", "model": "provider/model", "effort": "high"|null, "duration": 310.2}. Older notices have no
+// metadata; clients fall back to parsing `Sub agent ses_… (agent …) finished.`.
 
 // Pending approval (also the data of permission.asked)
 {"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"},
@@ -1021,7 +1026,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `retry_scheduled` / `retry_started` / `retry_exhausted` | one provider retry transition: `{attempt, next_attempt?, attempt_id, delay?, reason, status?, retry_after?, max_attempts}` |
 | `model_fallback` | a child switched after a pre-response failure: `{previous, model, reason}`; a context message also announces the switch |
 | `log.retention` | a global retention pass: `{at, elapsed_ms, events: {removed, floor, head, protected, pinned, batches, retained_bytes, over_budget}, wire: {expired, expired_bytes, wire_bytes, over_budget, blocked}, migration, turn_links, scheduled, turns, mutations, storage, blockers, worked, settings}` |
-| `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
+| `session.notified` | `{from, text, notice}`: a `wait: false` child finished, and its answer goes to this (parent) session. `notice` is the structured subagent metadata clients also receive on the stored message |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
 | `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
 | `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |

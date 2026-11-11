@@ -61,7 +61,8 @@ class ExternalAgent:
     def request(self) -> Request:
         return Request(self.model, self.instructions, tuple(self.messages), reasoning_effort=self.reasoning_effort)
 
-    async def turn(self, user: str | Message | NoUserMessage) -> AsyncIterator:
+    async def turn(self, user: str | Message | NoUserMessage, *,
+                   notices: tuple[dict[str, Any], ...] = ()) -> AsyncIterator:
         require(self.pid)
         if isinstance(user, NoUserMessage):
             raise ProviderError("ZMX cannot continue without a user message; send a follow-up instead")
@@ -73,7 +74,7 @@ class ExternalAgent:
         if not executable:
             raise ValueError(f"{self.worker['label']} CLI is not installed on the Core machine")
         self.messages.append(message)
-        yield MessageAdded(message)
+        yield MessageAdded(message, notices=notices)
         self.worker.update(status="running", error=None, model=self.model_ref, directory=str(self.workspace),
                            permission_mode=("dontAsk" if self.permission == "ask" else "auto") if self.pid == "claude-code"
                            else "accept-edits" if self.permission == "ask" else "auto", effort=self.reasoning_effort)
