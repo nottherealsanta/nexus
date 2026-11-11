@@ -330,7 +330,7 @@ async def test_http_created_terminal_is_closed_on_shutdown(tmp_path, monkeypatch
         assert (await client.get(path)).json()["status"] == "closed"
 
 
-async def test_background_job_uses_http_terminal_resource(tmp_path, monkeypatch):
+async def test_background_job_creates_no_terminal_resource(tmp_path, monkeypatch):
     from nexus.tools import ToolContext
 
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
@@ -348,12 +348,9 @@ async def test_background_job_uses_http_terminal_resource(tmp_path, monkeypatch)
         await runtime._start_job(session, session, {"command": "sleep 30"}, ToolContext(workspace))
         job = runtime.jobs.list()[0]
         listing = await client.get("/api/terminal", params={"project_id": project.id})
-        resource = listing.json()[0]
-        assert resource["background_job_id"] == job.id and resource["id"] == job.json()["terminal_id"]
-        assert resource["session_id"] == session.id and resource["workspace"] == str(workspace.resolve())
-        response = await client.delete("/api/terminal/" + resource["id"])
-        assert response.status_code == 200
-        await asyncio.wait_for(asyncio.shield(job.task), 3)
+        assert listing.json() == []
+        assert "terminal_id" not in job.json()
+        await runtime.jobs.kill(job.id)
         assert job.status == "killed" and finished == [job]
 
 

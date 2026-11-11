@@ -71,10 +71,17 @@ async def test_shell_io_control_resize_and_close(tmp_path, monkeypatch):
         os.kill(term.pid, 0)
 
 
-async def test_command_terminal_accepts_interactive_input(tmp_path):
+def script_shell(tmp_path, monkeypatch, body):
+    shell = tmp_path / "shell.sh"
+    shell.write_text("#!/bin/bash\n" + body + "\n")
+    shell.chmod(0o755)
+    monkeypatch.setenv("SHELL", str(shell))
+
+
+async def test_terminal_accepts_interactive_input(tmp_path, monkeypatch):
+    script_shell(tmp_path, monkeypatch, "read value; printf 'received:%s\\n' \"$value\"")
     service = TerminalService()
-    term = service.create(project_id="p", workspace=str(tmp_path), creator="job", session_id="s",
-                          rows=24, cols=80, command="read value; printf 'received:%s\\n' \"$value\"")
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="user", session_id="s", rows=24, cols=80)
     aid = term.attach("viewer")
     term.attachments[aid].connected = True
     try:
@@ -87,10 +94,10 @@ async def test_command_terminal_accepts_interactive_input(tmp_path):
         await service.shutdown()
 
 
-async def test_output_frames_precede_exit_for_large_fast_output(tmp_path):
+async def test_output_frames_precede_exit_for_large_fast_output(tmp_path, monkeypatch):
+    script_shell(tmp_path, monkeypatch, "head -c 50000 /dev/zero | tr '\\0' X")
     service = TerminalService()
-    term = service.create(project_id="p", workspace=str(tmp_path), creator="job", session_id="s",
-                          rows=24, cols=80, command="head -c 50000 /dev/zero | tr '\\0' X")
+    term = service.create(project_id="p", workspace=str(tmp_path), creator="user", session_id="s", rows=24, cols=80)
     try:
         await asyncio.wait_for(term.waiter, 5)
         frames = [frame for frame, _ in term.frames]

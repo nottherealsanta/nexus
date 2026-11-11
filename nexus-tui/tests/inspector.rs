@@ -78,37 +78,6 @@ fn ready() -> App {
 }
 
 #[test]
-fn terminal_resource_lanes_share_axis_and_diagnostic_details() {
-    let fixture: Value = serde_json::from_str(include_str!(
-        "../../interface/scenarios/inspector-terminals.json"
-    ))
-    .unwrap();
-    let mut data = scenario("timing");
-    data["lanes"] = fixture["lanes"].clone();
-    let mut app = open();
-    let call = calls(&mut app).remove(0);
-    answer(&mut app, &call, data);
-    let text = shown(&mut app);
-    for fact in fixture["expect"].as_array().unwrap() {
-        assert!(text.contains(fact.as_str().unwrap()), "{text}");
-    }
-    assert!(text.contains("~ terminal"));
-    press(&mut app, &["j", "enter"]);
-    let expanded = shown(&mut app);
-    assert!(expanded.contains("diagnostic_only"), "{expanded}");
-    assert!(nexus_tui::inspector::kind_options(0).contains(&"terminal"));
-    if let Ok(dir) = std::env::var("NEXUS_INSPECTOR_SHOTS") {
-        let buffer = draw(&mut app, 160, 50).0;
-        let (fg, bg) = nexus_tui::svg::page_colors(false);
-        std::fs::write(
-            format!("{dir}/tui-terminals.svg"),
-            nexus_tui::svg::to_svg(&buffer, fg, bg),
-        )
-        .unwrap();
-    }
-}
-
-#[test]
 fn opens_with_v2_query_and_shows_cache_lifetime_and_page_separately() {
     let mut app = open();
     let first = calls(&mut app);

@@ -33,6 +33,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
+| 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11 (working tree)**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
 | 30 | [Questions: one-step answer, locked composer, free-text focus](30-questions.md) | Implemented; focused question scenarios pass in both clients; paired screenshots pending | Final verification; phone route/device unverified |
 | 38 | [Ctrl+V pastes text too](38-ctrl-v-text.md) | **new**; TUI Ctrl+V reads images only | Fall back to clipboard text in the TUI |

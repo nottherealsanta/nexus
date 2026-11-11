@@ -35,8 +35,6 @@ LEASE_SECONDS = 30
 DEFAULT_NAME = "Terminal"
 MAX_NAME = 80
 MAX_CONTROL_CHARS = 4096
-DIAGNOSTIC_FIELDS = ("id", "session_id", "turn_id", "tool_call_id", "background_job_id", "status", "created", "ended",
-                     "exit_code", "signal", "control_acquisitions", "control_releases")
 
 
 class BoundedByteStream(pyte.ByteStream):
@@ -123,17 +121,11 @@ class Attachment:
 
 class Terminal:
     def __init__(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
-                 rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None,
-                 command: str | None = None, background_job_id: str | None = None,
-                 output_listener: Callable[[bytes], None] | None = None,
-                 turn_id: str | None = None, tool_call_id: str | None = None) -> None:
+                 rows: int, cols: int, persist: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.id = secrets.token_urlsafe(18)
         self.name = DEFAULT_NAME
-        self.background_job_id = background_job_id
-        self.turn_id, self.tool_call_id = turn_id, tool_call_id
         self.control_acquisitions = 0
         self.control_releases = 0
-        self.output_listener = output_listener
         self.output_done = asyncio.Event()
         self.project_id, self.workspace, self.creator, self.session_id = project_id, workspace, creator, session_id
         self.created = time.time()
@@ -158,11 +150,9 @@ class Terminal:
             self._winsize(rows, cols)
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
-            shell = "/bin/bash" if command is not None else env.get("SHELL") or "/bin/sh"
+            shell = env.get("SHELL") or "/bin/sh"
             child = Path(__file__).with_name("_terminal_child.py")
             argv = [sys.executable, "-I", str(child), shell]
-            if command is not None:
-                argv.append(command)
             self.process = subprocess.Popen(
                 argv, cwd=workspace, env=env,
                 stdin=slave, stdout=slave, stderr=slave, start_new_session=True, close_fds=True,
@@ -187,13 +177,12 @@ class Terminal:
 
     def metadata(self) -> dict[str, Any]:
         controller = self.attachments.get(self.controller or "")
-        return {"id": self.id, "name": self.name, "background_job_id": self.background_job_id,
+        return {"id": self.id, "name": self.name,
                 "project_id": self.project_id, "workspace": self.workspace,
                 "session_id": self.session_id, "creator": self.creator, "status": self.status,
                 "created": self.created, "ended": self.ended, "rows": self.rows, "cols": self.cols,
                 "exit_code": self.exit_code, "signal": self.signal,
                 "controller": controller.client_id if controller else None,
-                "turn_id": self.turn_id, "tool_call_id": self.tool_call_id,
                 "control_acquisitions": self.control_acquisitions, "control_releases": self.control_releases}
 
     def _emit(self, kind: str, **payload: Any) -> None:
@@ -243,8 +232,6 @@ class Terminal:
             self.loop.remove_reader(self.fd)
             self.output_done.set()
             return False
-        if self.output_listener is not None:
-            self.output_listener(data)
         self.parser.feed(data)
         before = self.discarded
         self._emit("output", data=base64.b64encode(data).decode("ascii"))
@@ -374,7 +361,7 @@ class Terminal:
             await self._close()
 
     async def _close(self) -> None:
-        if self.status == "running" or (self.background_job_id is not None and not self.output_done.is_set()):
+        if self.status == "running":
             self.status = "closed"
             try:
                 foreground = os.tcgetpgrp(self.fd)
@@ -432,41 +419,31 @@ def dimensions(rows: int, cols: int) -> None:
 
 
 class TerminalService:
-    def __init__(self, db: sqlite3.Connection | None = None,
-                 on_change: Callable[[dict[str, Any]], None] | None = None) -> None:
-        self.on_change = on_change
+    def __init__(self, db: sqlite3.Connection | None = None) -> None:
         self.terminals: dict[str, Terminal] = {}
         self.retired: dict[str, dict[str, Any]] = {}
         self.db = db
         if db is not None:
             db.execute("create table if not exists terminal_resource (id text primary key, metadata text not null)")
-            recovered = []
             for terminal_id, raw in db.execute("select id, metadata from terminal_resource").fetchall():
                 metadata = json.loads(raw)
                 if metadata["status"] == "running":
                     metadata.update(status="ended", reason="core_restart", ended=time.time())
-                    recovered.append(metadata)
+                if metadata.pop("background_job_id", None) is not None:
+                    # Linked to an agent bash job by an older build; the dock is user-only now.
+                    metadata["status"] = "closed"
+                    metadata["ended"] = metadata.get("ended") or time.time()
+                for key in ("turn_id", "tool_call_id"):
+                    metadata.pop(key, None)
                 metadata["controller"] = None
                 db.execute("update terminal_resource set metadata=? where id=?", (json.dumps(metadata), terminal_id))
             db.commit()
-            for metadata in recovered:
-                self._announce(metadata)
-
-    def _announce(self, metadata: dict[str, Any]) -> None:
-        if self.on_change and all(metadata.get(key) for key in ("session_id", "turn_id", "tool_call_id")):
-            self.on_change({key: metadata.get(key) for key in DIAGNOSTIC_FIELDS})
 
     def save(self, metadata: dict[str, Any]) -> None:
-        previous = None
         if self.db is not None:
-            row = self.db.execute("select metadata from terminal_resource where id=?", (metadata["id"],)).fetchone()
-            if row:
-                previous = json.loads(row[0])
             self.db.execute("insert or replace into terminal_resource values (?, ?)",
                             (metadata["id"], json.dumps(metadata)))
             self.db.commit()
-        if previous is None or any(metadata.get(key) != previous.get(key) for key in DIAGNOSTIC_FIELDS):
-            self._announce(metadata)
 
     def list(self, project_id: str) -> list[dict[str, Any]]:
         if self.db is None:
@@ -509,10 +486,7 @@ class TerminalService:
         return metadata
 
     def create(self, *, project_id: str, workspace: str, creator: str, session_id: str | None,
-               rows: int, cols: int, command: str | None = None,
-               background_job_id: str | None = None,
-               output_listener: Callable[[bytes], None] | None = None,
-               turn_id: str | None = None, tool_call_id: str | None = None) -> Terminal:
+               rows: int, cols: int) -> Terminal:
         dimensions(rows, cols)
         if sum(t.status == "running" for t in self.terminals.values()) >= MAX_TERMINALS:
             raise Conflict("terminal limit reached")
@@ -536,9 +510,7 @@ class TerminalService:
         if not Path(workspace).is_dir():
             raise ValueError("workspace does not exist")
         term = Terminal(project_id=project_id, workspace=workspace, creator=creator,
-                        session_id=session_id, rows=rows, cols=cols, persist=self.save, command=command,
-                        background_job_id=background_job_id, output_listener=output_listener,
-                        turn_id=turn_id, tool_call_id=tool_call_id)
+                        session_id=session_id, rows=rows, cols=cols, persist=self.save)
         self.terminals[term.id] = term
         return term
 

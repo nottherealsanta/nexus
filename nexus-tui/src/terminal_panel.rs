@@ -18,25 +18,14 @@ pub fn terminal_evidence_with_context(
     selected: &str,
     seq: Option<u64>,
 ) -> String {
-    let mut source = format!(
-        "{{\"id\":{},\"name\":{},\"project_id\":{},\"workspace\":{},\"stream_seq\":{}",
+    let source = format!(
+        "{{\"id\":{},\"name\":{},\"project_id\":{},\"workspace\":{},\"stream_seq\":{}}}",
         evidence_json(&resource.id),
         evidence_json(&resource.name),
         evidence_json(&resource.project_id),
         evidence_json(&resource.workspace),
         evidence_json(&seq)
     );
-    for (key, value) in [
-        ("session_id", resource.session_id.as_deref()),
-        ("turn_id", resource.turn_id.as_deref()),
-        ("tool_call_id", resource.tool_call_id.as_deref()),
-        ("background_job_id", resource.background_job_id.as_deref()),
-    ] {
-        if let Some(value) = value {
-            source.push_str(&format!(",\"{key}\":{}", evidence_json(value)));
-        }
-    }
-    source.push('}');
     terminal_evidence_source(&source, selected)
 }
 

@@ -30,9 +30,8 @@ app-controlled. Deferred follow commands are scoped to the session that queued t
 **Open inspector** stays inside NSH, using the same authenticated transport as the
 session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
 same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,
-zoom/pan/Fit, first-byte markers only where recorded, "end unknown" spans, and `~`
-terminal lifecycle bars for exactly tool-linked resources, including those outliving
-the launching turn), Conversation,
+zoom/pan/Fit, first-byte markers only where recorded, "end unknown" spans),
+Conversation,
 Steps, Requests, Raw and Questions. Rows show Core's `summary`; pressing one expands its exact
 `detail` JSON, and "Load full record" fetches `/inspect/record` when it was clipped. Older/Newer
 use cursors; the Sessions chips (or `[`/`]`) inspect another session of the tree; the search box,
@@ -306,7 +305,8 @@ beside it on the input's bottom edge, with the dock padded tighter; an enabled s
 ends with context usage. The location strip is its own row under the controls at every width: the
 muted home-shortened path and branch on the left, centered gray indicators for a live
 kernel, running background shells and terminal shells when present. The kernel and
-background-shell indicators open separate detail lists; terminal shells open the dock. A linked
+background-shell indicators (the agent's running bash jobs) open separate detail lists;
+terminal shells (the user's terminals) open the dock. A linked
 worktree adds a bundled fork icon (muted, primary on hover) with the tooltip `Worktree session`; clicking it
 opens the small **Worktree** modal with the copyable worktree path, branch and main-checkout path, and a
 `Copied` toast. The context reading (`82k · 41%`) stays on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a

@@ -2993,39 +2993,22 @@ impl App {
             .collect()
     }
 
-    /// `(live kernels, running background shells without a terminal)` for the
-    /// location strip. A job linked to a terminal is counted by
-    /// `terminal_shell_count` instead, so the strip never counts it twice.
+    /// `(live kernels, running background shells)` for the location strip. The
+    /// shells are the agent's bash jobs; user terminals are counted separately
+    /// by `terminal_shell_count`.
     pub fn resource_counts(&self) -> (usize, usize) {
         (
             self.view_kernels().len(),
             self.view_jobs()
                 .iter()
-                .filter(|job| {
-                    job["status"].as_str() == Some("running")
-                        && job["terminal_id"].as_str().is_none()
-                })
+                .filter(|job| job["status"].as_str() == Some("running"))
                 .count(),
         )
     }
 
-    /// Terminal resources, plus linked background jobs whose terminal has not
-    /// reached the list yet. Once a job's `terminal_id` is in the list, it is
-    /// not counted again.
+    /// User terminals in the dock.
     pub fn terminal_shell_count(&self) -> usize {
-        let listed: HashSet<&str> = self
-            .terminal_panel
-            .terminals
-            .iter()
-            .map(|terminal| terminal.id.as_str())
-            .collect();
-        let unlisted = self
-            .view_jobs()
-            .iter()
-            .filter_map(|job| job["terminal_id"].as_str())
-            .filter(|id| !listed.contains(id))
-            .count();
-        self.terminal_panel.terminals.len() + unlisted
+        self.terminal_panel.terminals.len()
     }
 
     pub fn side_entries(&self) -> Vec<SideEntry> {
@@ -15602,7 +15585,11 @@ impl App {
                 });
             }
             Target::ComposerShells => {
-                self.execute("terminal.open");
+                self.effects.push(Effect::Sync(SyncCommand::Resources));
+                self.open_overlay(OverlayKind::Resources {
+                    top: 0,
+                    kind: crate::ui::ResourceKind::Shells,
+                });
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
             Target::TerminalNew => self.execute("terminal.new"),

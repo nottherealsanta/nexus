@@ -1,6 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
 import scenario from "../interface/scenarios/inspector.json";
-import terminalScenario from "../interface/scenarios/inspector-terminals.json";
 
 // One handler answers every inspector route from the shared scenario; tests steer it through `core`.
 const core = { head: scenario.head as Record<string, unknown>, headFails: false, slowView: "" };
@@ -51,15 +50,6 @@ const appNetwork = {
 const fixture = async (o: Record<string, unknown> = {}) => { reset(); const app = await open("./InspectorFixture.tsx", { width: 1280, height: 900, colorScheme: "dark", network, ...o }); await app.waitFor("id:inspector"); await see(app, o.width === 390 ? "Live · updated" : "Session lifetime"); return app; };
 
 describe("native inspector (API v2)", () => {
-  test("terminal resource lanes share axis and diagnostic details", async () => {
-    const app = await fixture({ network: { "GET */api/session/*/inspect*": { body: { ...scenario.timing, lanes: terminalScenario.lanes } } } });
-    for (const fact of terminalScenario.expect) expect(text(app)).toContain(fact);
-    expect(app.shows("id:lane-ses_inspector:terminal:term_done")).toBe(true);
-    await app.press("id:lane-ses_inspector:terminal:term_done");
-    await see(app, "diagnostic_only");
-    expect(text(app)).toContain("exited");
-    await app.screenshot("../reports/section14/inspector/nsh-terminals.png");
-  });
   test("the app palette opens the native inspector with Core data", async () => {
     reset();
     const app = await open("./App.tsx", { width: 1280, height: 900, network: appNetwork });

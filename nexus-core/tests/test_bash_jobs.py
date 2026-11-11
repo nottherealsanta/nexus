@@ -1,7 +1,5 @@
 """Bounded foreground bash, plus daemon background jobs."""
 import asyncio
-import os
-import signal
 
 import pytest
 
@@ -114,49 +112,29 @@ async def test_job_decodes_utf8_across_reads(tmp_path):
         await jobs.shutdown()
 
 
-async def test_terminal_job_control_output_and_scope(tmp_path):
-    from nexus.runtime import Conflict
-    from nexus.terminals import TerminalService
-
+async def test_background_job_uses_pipes_not_a_terminal(tmp_path):
     jobs = Jobs()
-    service = TerminalService()
-    jobs.terminal_service = service
     finished = []
     try:
-        job = await jobs.start(session_id="s", root="root", project_id="p",
-                               command="printf ready; read value; printf 'result:%s' \"$value\"",
+        job = await jobs.start(session_id="s", root="root",
+                               command="printf ready; read value || printf eof; echo err >&2",
                                directory=tmp_path, timeout=3, on_finish=finished.append)
-        term = job.terminal
-        assert term is not None and job.json()["terminal_id"] == term.id
-        assert service.list("other") == []
-        assert service.list("p")[0]["background_job_id"] == job.id
-        assert term.session_id == "s" and term.workspace == str(tmp_path)
+        await asyncio.wait_for(asyncio.shield(job.task), 4)
+        assert job.output == "readyeoferr\n"
+        assert finished == [job] and job.status == "done"
+        assert "terminal_id" not in job.json()
         with pytest.raises(ToolError):
             jobs.get(job.id, root="other")
-        a, b = term.attach("a"), term.attach("b")
-        term.attachments[a].connected = term.attachments[b].connected = True
-        term.control(a, "acquire")
-        with pytest.raises(Conflict):
-            term.control(b, "acquire")
-        term.input(a, 1, b"hello\n")
-        await asyncio.wait_for(asyncio.shield(job.task), 4)
-        assert "ready" in job.output and "result:hello" in job.output
-        assert finished == [job] and job.status == "done"
     finally:
         await jobs.shutdown()
-        await service.shutdown()
 
 
-@pytest.mark.parametrize("action", ["kill", "timeout", "close"])
-async def test_terminal_job_completion_once(tmp_path, action):
-    from nexus.terminals import TerminalService
-
+@pytest.mark.parametrize("action", ["kill", "timeout"])
+async def test_job_completion_once(tmp_path, action):
     jobs = Jobs()
-    service = TerminalService()
-    jobs.terminal_service = service
     finished = []
     try:
-        job = await jobs.start(session_id="s", root="r", project_id="p", command="printf early; sleep 30",
+        job = await jobs.start(session_id="s", root="r", command="printf early; sleep 30",
                                directory=tmp_path, timeout=0.2 if action == "timeout" else None,
                                on_finish=finished.append)
         for _ in range(200):
@@ -166,79 +144,32 @@ async def test_terminal_job_completion_once(tmp_path, action):
         assert "early" in job.output
         if action == "kill":
             await jobs.kill(job.id, root="r")
-        elif action == "close":
-            await job.terminal.close()
         await asyncio.wait_for(asyncio.shield(job.task), 3)
         assert finished == [job]
-        assert job.status == {"kill": "killed", "timeout": "timeout", "close": "killed"}[action]
-        assert job.terminal.status in {"closed", "exited"}
+        assert job.status == {"kill": "killed", "timeout": "timeout"}[action]
     finally:
         await jobs.shutdown()
-        await service.shutdown()
 
 
-async def test_terminal_job_output_is_independent_of_replay(tmp_path, monkeypatch):
-    from nexus.terminals import TerminalService
-
-    monkeypatch.setattr("nexus.terminals.RING_BYTES", 128)
+async def test_job_output_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr("nexus.bash_jobs.MAX_OUTPUT", 300)
     jobs = Jobs()
-    service = TerminalService()
-    jobs.terminal_service = service
     try:
-        job = await jobs.start(session_id="s", root="r", project_id="p",
+        job = await jobs.start(session_id="s", root="r",
                                command="printf '\\342\\202\\254'; printf '%0500d' 0",
                                directory=tmp_path, timeout=3, on_finish=lambda _: None)
         await asyncio.wait_for(asyncio.shield(job.task), 4)
         assert job.output.startswith("€") and len(job.output) == 300 and job.dropped == 201
-        assert job.terminal.discarded > 0
     finally:
         await jobs.shutdown()
-        await service.shutdown()
 
 
-async def test_many_finished_jobs_do_not_exhaust_live_terminal_limit(tmp_path, monkeypatch):
-    from nexus.terminals import TerminalService
-
-    monkeypatch.setattr("nexus.terminals.MAX_TERMINALS", 2)
-    monkeypatch.setattr("nexus.terminals.MAX_RETAINED_TERMINALS", 3)
+async def test_job_records_its_turn_and_tool_call(tmp_path):
     jobs = Jobs()
-    service = TerminalService()
-    jobs.terminal_service = service
     try:
-        for _ in range(8):
-            job = await jobs.start(session_id="s", root="r", project_id="p", command="printf done",
-                                   directory=tmp_path, timeout=3, on_finish=lambda _: None)
-            await asyncio.wait_for(asyncio.shield(job.task), 4)
-            assert job.output == "done"
-        assert len(service.terminals) == 3
-        assert len(service.list("p")) <= 6
+        job = await jobs.start(session_id="s", root="r", command="true", directory=tmp_path, timeout=3,
+                               on_finish=lambda _: None, turn_id="turn_1", tool_call_id="call_1")
+        await asyncio.wait_for(asyncio.shield(job.task), 4)
+        assert job.json()["turn_id"] == "turn_1" and job.json()["tool_call_id"] == "call_1"
     finally:
         await jobs.shutdown()
-        await service.shutdown()
-
-
-async def test_shutdown_with_detached_descendant_holding_pty(tmp_path):
-    from nexus.terminals import TerminalService
-
-    jobs = Jobs()
-    service = TerminalService()
-    jobs.terminal_service = service
-    pid_file = tmp_path / "pid"
-    command = ("python3 -c 'import os,time; p=os.fork(); "
-               "(os.setsid(), open(\"pid\",\"w\").write(str(os.getpid())), time.sleep(30)) if p == 0 else None'")
-    try:
-        job = await jobs.start(session_id="s", root="r", project_id="p", command=command,
-                               directory=tmp_path, timeout=None, on_finish=lambda _: None)
-        async with asyncio.timeout(5):
-            while not pid_file.exists() or not pid_file.read_text():
-                await asyncio.sleep(0.01)
-        await asyncio.wait_for(jobs.shutdown(), 4)
-        assert job.finished is not None
-    finally:
-        if pid_file.exists() and pid_file.read_text():
-            try:
-                os.kill(int(pid_file.read_text()), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        await service.shutdown()

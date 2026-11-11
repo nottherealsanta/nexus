@@ -10,8 +10,8 @@ and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
 `DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code)`.
 The [terminal dock authority boundary](terminals.md#agent-control-boundary)
-keeps interactive input user-only. A background job appearing in that dock does
-not grant an agent raw keystroke access or broaden a `bash` approval.
+keeps the dock user-only: `bash`, foreground or background, never creates a terminal
+resource and the agent has no raw keystroke access.
 
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
 disabled individually), because a background command needs a way to be read and
@@ -414,8 +414,8 @@ Run a command with `/bin/bash -c` in the workspace.
 | `timeout` | number | 120 foreground; none background | Foreground maximum 600 seconds; longer work uses a background job |
 | `background` | boolean | false | Return a job id at once instead of waiting |
 
-* stdout and stderr are combined. Foreground stdin is `/dev/null`; daemon
-  background jobs normally use a PTY with explicit user-controlled input.
+* stdout and stderr are combined. Stdin is `/dev/null` for foreground and
+  background commands alike (pipes, no terminal).
 * Foreground commands default to **120 seconds**, with an explicit maximum of
   **600 seconds**. Servers and longer work use managed background jobs, not long
   sleeps. Background jobs have no default timeout. Cancelling a foreground call
@@ -437,14 +437,12 @@ independent of the turn and of any code cell. It is owned by the session tree
 that started it: inside a sub agent, `bash_output` and `bash_kill` see the
 tree's jobs, not another tree's.
 
-When the daemon terminal service is available, the job is also an ordinary
-terminal resource in the originating project, session and workspace. Its
-`background_job_id` identifies the job, and the job JSON includes `terminal_id`.
-Viewing is read-only until a client explicitly acquires terminal control. Closing
-the terminal, killing the job and timing it out all affect the same process.
-PTY output can contain terminal echo, CRLF line endings and control sequences; echoed user input
-is included in job output and can appear in the completion notice. Without a
-terminal service, background jobs retain the non-interactive pipe behavior.
+The job is always a pipe process: stdin is `/dev/null`, stdout and stderr are
+combined, and there is no terminal, so no echo, CRLF or escape sequences (a program
+that needs a TTY can use `script` or `unbuffer`). It is not a terminal resource and
+never appears in the terminal dock; clients list running jobs under the
+location strip's `N shell` indicator. The job JSON carries the `turn_id` and
+`tool_call_id` that started it when the call was recorded.
 
 * `bash_output {job_id, offset?, limit?}` returns status (`running`, `done`,
   `timeout`, `killed`, `error`), exit code, duration and output. `offset` and

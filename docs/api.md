@@ -101,7 +101,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
-| GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts, optional `terminal_id` linking a PTY-backed job to the terminal dock; see [Terminal resources](terminals.md)) |
+| GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts, optional `turn_id` and `tool_call_id` of the recorded call that started it; jobs are pipe processes, never terminal resources) |
 | GET | `/api/bash/{id}` | | One job with its retained output (404 if missing) |
 | DELETE | `/api/bash/{id}` | | 204; kills it (a finished job is unchanged) |
 | GET | `/api/kernel` | `?summary=1` | Live kernels, metadata, retained cells and variable previews; `summary` omits the retained cell bodies |

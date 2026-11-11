@@ -6,8 +6,6 @@ export interface TerminalResource {
   creator: string; status: "running" | "exited" | "closed" | "ended";
   created: number; ended: number | null; rows: number; cols: number;
   exit_code: number | null; signal: number | null; controller: string | null;
-  background_job_id?: string | null;
-  turn_id?: string | null; tool_call_id?: string | null;
 }
 export interface TerminalFrame {
   version: number; seq: number; type: string;

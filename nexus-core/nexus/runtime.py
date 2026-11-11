@@ -2246,7 +2246,7 @@ class Runtime:
         try:
             job = await self.jobs.start(session_id=session.id, root=root.id, command=command,
                                         directory=ctx.workspace, timeout=timeout, on_finish=self._job_finished,
-                                        project_id=session.project_id, turn_id=source[0] if source else None,
+                                        turn_id=source[0] if source else None,
                                         tool_call_id=ctx.call_id if source else None)
         except Conflict as exc:
             raise ToolError(str(exc)) from exc

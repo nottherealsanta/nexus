@@ -3,7 +3,6 @@ export const terminalEvidenceAction: {run: (() => void) | null} = {run:null};
 
 export interface TerminalEvidenceContext {
   project_id: string; workspace: string; stream_seq: number | null;
-  session_id?: string; turn_id?: string; tool_call_id?: string; background_job_id?: string;
 }
 
 // Match the TUI's control-safe JSON so preview and draft remain byte-identical.

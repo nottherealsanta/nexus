@@ -19,17 +19,13 @@ import contextlib
 import os
 import signal
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .store import new_id
 from .tools.base import ToolError
-
-if TYPE_CHECKING:
-    from .terminals import Terminal, TerminalService
 
 MAX_LIVE = 16  # running at once
 MAX_JOBS = 64  # running + retained for output
@@ -68,7 +64,8 @@ class Job:
     task: asyncio.Task[None] | None = None
     watchdog: asyncio.Task[None] | None = None
     silent: bool = False  # no finish notice (session/project deletion, daemon shutdown)
-    terminal: Terminal | None = None
+    turn_id: str | None = None  # the turn and tool call that started the job (inspector `job` lane)
+    tool_call_id: str | None = None
     decoder: Any = field(default_factory=lambda: codecs.getincrementaldecoder("utf-8")("replace"))
 
     def retain(self, data: bytes, *, final: bool = False) -> None:
@@ -103,8 +100,10 @@ class Job:
                 "timeout": self.timeout, "output_chars": self.size, "dropped_chars": self.dropped}
         if self.error:
             data["error"] = self.error
-        if self.terminal is not None:
-            data["terminal_id"] = self.terminal.id
+        if self.turn_id:
+            data["turn_id"] = self.turn_id
+        if self.tool_call_id:
+            data["tool_call_id"] = self.tool_call_id
         if output:
             data["output"] = self.output
         return data
@@ -115,7 +114,6 @@ class Jobs:
         self.items: dict[str, Job] = {}
         self.closing = False
         self.start_lock = asyncio.Lock()
-        self.terminal_service: TerminalService | None = None
 
     def get(self, job_id: str, *, root: str | None = None) -> Job:
         job = self.items.get(job_id)
@@ -136,37 +134,21 @@ class Jobs:
             raise ToolError(f"background bash job limit ({MAX_JOBS}) reached; kill one or wait for output to be reaped")
 
     async def start(self, *, session_id: str, root: str, command: str, directory: Path,
-                    timeout: float | None, on_finish: OnFinish, project_id: str | None = None,
+                    timeout: float | None, on_finish: OnFinish,
                     turn_id: str | None = None, tool_call_id: str | None = None) -> Job:
         async with self.start_lock:
             return await self._start(session_id=session_id, root=root, command=command,
-                                     directory=directory, timeout=timeout, on_finish=on_finish, project_id=project_id,
+                                     directory=directory, timeout=timeout, on_finish=on_finish,
                                      turn_id=turn_id, tool_call_id=tool_call_id)
 
     async def _start(self, *, session_id: str, root: str, command: str, directory: Path,
-                     timeout: float | None, on_finish: OnFinish, project_id: str | None,
+                     timeout: float | None, on_finish: OnFinish,
                      turn_id: str | None, tool_call_id: str | None) -> Job:
         if self.closing:
             raise ToolError("the daemon is shutting down")
         if sum(1 for job in self.items.values() if job.finished is None) >= MAX_LIVE:
             raise ToolError(f"live background bash job limit ({MAX_LIVE}) reached; kill one first")
         self._trim()
-        if self.terminal_service is not None and project_id is not None:
-            job_id = new_id("job")
-            job = Job(job_id, session_id, root, command, str(directory), None, time.time(), timeout)
-            term = self.terminal_service.create(project_id=project_id, workspace=str(directory), creator="background bash",
-                                                session_id=session_id, rows=24, cols=80, command=command,
-                                                background_job_id=job_id, output_listener=job.retain,
-                                                turn_id=turn_id, tool_call_id=tool_call_id)
-            job.process, job.terminal = term.process, term
-            label = " ".join("".join(c if not unicodedata.category(c).startswith("C") else " "
-                                     for c in command).split())[:80] or "Background bash"
-            self.terminal_service.rename(term.id, label)
-            self.items[job.id] = job
-            job.task = asyncio.create_task(self._run(job, on_finish))
-            if timeout is not None:
-                job.watchdog = asyncio.create_task(self._watch(job))
-            return job
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
             "/bin/bash", "-c", command, cwd=directory, stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True,
@@ -179,7 +161,8 @@ class Jobs:
             kill_process(process)
             await process.communicate()
             raise
-        job = Job(new_id("job"), session_id, root, command, str(directory), process, time.time(), timeout)
+        job = Job(new_id("job"), session_id, root, command, str(directory), process, time.time(), timeout,
+                  turn_id=turn_id, tool_call_id=tool_call_id)
         self.items[job.id] = job
         job.task = asyncio.create_task(self._run(job, on_finish))
         if timeout is not None:
@@ -195,27 +178,14 @@ class Jobs:
             return
         job.timed_out = True
         kill_process(job.process)
-        if job.terminal is not None:
-            await asyncio.sleep(1)
-            if job.finished is None:
-                asyncio.create_task(job.terminal.close())
 
     async def _run(self, job: Job, on_finish: OnFinish) -> None:
         try:
-            if job.terminal is not None:
-                term = job.terminal
-                await term.output_done.wait()
-                await term.waiter
-                term.output_listener = None
-                if term.status == "closed" and not job.timed_out:
-                    job.killed = True
-            else:
-                assert job.process.stdout is not None
-                while chunk := await job.process.stdout.read(8192):
-                    job.retain(chunk)
+            assert job.process.stdout is not None
+            while chunk := await job.process.stdout.read(8192):
+                job.retain(chunk)
             job.retain(b"", final=True)
-            if job.terminal is None:
-                await job.process.wait()
+            await job.process.wait()
         except asyncio.CancelledError:
             job.killed = True
             kill_process(job.process)
@@ -227,10 +197,7 @@ class Jobs:
             if job.watchdog is not None:
                 job.watchdog.cancel()
             with contextlib.suppress(Exception):
-                if job.terminal is not None:
-                    await job.terminal.waiter
-                else:
-                    await job.process.wait()
+                await job.process.wait()
             job.exit_code = job.process.returncode
             job.finished = time.time()
             if not job.silent and not self.closing:
@@ -252,10 +219,8 @@ class Jobs:
             return
         _, pending = await asyncio.wait(tasks, timeout=1)
         if pending:
-            await asyncio.gather(*(job.terminal.close() for job in jobs
-                                   if job.task in pending and job.terminal is not None), return_exceptions=True)
             for job in jobs:
-                if job.task in pending and job.terminal is None:
+                if job.task in pending:
                     job.task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
 

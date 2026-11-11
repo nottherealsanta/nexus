@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Terminal is the user's (11-11, plan 41).** The dock holds only user terminals; `bash` (foreground and background) is pipe-only and never creates a terminal resource; `N shell` counts every running job in both clients and opens the jobs list; terminal evidence provenance, inspector `terminal` lane/`resource_spans` and `terminal.updated` removed; old job-linked terminals load as `closed`. The inspector `job` lane and paired screenshots remain open.
+
 - **Subscription usage sources (11-11).** Core parses Codex personal/managed monthly limits and optional workspace lookups; Claude uses OAuth usage or a guarded interactive `/usage` fallback, including weekly-only and enterprise spend-only accounts. Both clients retain their shared table contract. Approved read-only current-account checks and 56 focused tests passed; Ruff passed. Full Core run timed out; other plans and screenshots remain unverified. [Usage contract](../docs/api.md#usage-k11).
 
 - **Session controls, partial (11-11, working tree; plans 29–32).** Shared `/archive`, `/search [text]`, linked-worktree

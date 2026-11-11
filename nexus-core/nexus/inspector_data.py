@@ -15,8 +15,8 @@ from .store import Store
 
 VERSION = 2
 VIEWS = ("Timing", "Conversation", "Steps", "Requests", "Raw", "Questions")
-LANE_KINDS = ("turn", "model", "tool", "attempt", "terminal")
-RECORD_KINDS = ("message", "event", "turn", "request", "tool", "attempt", "terminal")
+LANE_KINDS = ("turn", "model", "tool", "attempt")
+RECORD_KINDS = ("message", "event", "turn", "request", "tool", "attempt")
 PAGE = 50
 PAGE_MAX = 200
 MAX_BYTES = 2_000_000       # details + text carried by one response
@@ -277,7 +277,7 @@ def inspect(store: Store, sid: str, *, view: str = "Timing", before: str | None 
             started, tid = decode_cursor(before, "t", 2)
             cond.append("(t.started < ? or (t.started = ? and t.id < ?))")
             params += [started, started, tid]
-        if status and kind != "terminal" and status not in ("exited", "closed", "ended"):
+        if status:
             cond.append("t.status = ?")
             params.append(status)
         if q:
@@ -305,23 +305,6 @@ def inspect(store: Store, sid: str, *, view: str = "Timing", before: str | None 
         for r in sorted(_rows_in(store, "turn_attempt", "turn_id", turn_ids),
                         key=lambda r: (r["started"] or 0, r["attempt"], r["id"])):
             by_turn[r["turn_id"]]["attempts"].append(dict(r))
-        if turn_ids and store.db.execute(
-                "select 1 from sqlite_master where type = 'table' and name = 'terminal_resource'").fetchone():
-            resources = store.db.execute(
-                "select metadata from terminal_resource where json_extract(metadata, '$.turn_id') in ("
-                + ", ".join("?" * len(turn_ids)) + ") order by id limit 201", turn_ids).fetchall()
-            if len(resources) > 200:
-                omitted.append({"kind": "resources", "count": 1, "reason": "terminal span limit 200; at least one omitted"})
-            for resource in resources[:200]:
-                metadata = json.loads(resource["metadata"])
-                tid = metadata["turn_id"]
-                if metadata.get("session_id") != turns[tid]["session_id"]:
-                    continue
-                for tool in by_turn[tid]["tools"]:
-                    if tool["call_id"] != metadata.get("tool_call_id"):
-                        continue
-                    span = _terminal_span(metadata)
-                    tool.setdefault("resource_spans", []).append(span)
         cache_range = _range_cache([x for t in turn_ids for x in by_turn[t]["requests"]])
         ordered = list(reversed(page))
         if view == "Steps":
@@ -341,7 +324,7 @@ def inspect(store: Store, sid: str, *, view: str = "Timing", before: str | None 
             parts = by_turn[row["id"]]
             for lane_kind, items in (("turn", [turn]), ("model", parts["requests"]), ("tool", parts["tools"]),
                                      ("attempt", parts["attempts"])):
-                if kind and kind != lane_kind or status in ("exited", "closed", "ended"):
+                if kind and kind != lane_kind:
                     continue
                 for item in items:
                     start = item.get("started")
@@ -366,22 +349,6 @@ def inspect(store: Store, sid: str, *, view: str = "Timing", before: str | None 
                     if lane_kind == "model" and item.get("ttfb") is not None:
                         lane["ttfb"] = item["ttfb"]  # recorded seconds from wire start to the first event
                     built.append((lane, item))
-        if view == "Timing" and (not kind or kind == "terminal"):
-            for row in ordered:
-                for tool in by_turn[row["id"]]["tools"]:
-                    for span in tool.get("resource_spans", []):
-                        if status and span["status"] != status:
-                            continue
-                        start, end = span["started"], span["finished"]
-                        running = span["status"] == "running" and end is None
-                        lane = {"id": f'{row["session_id"]}:terminal:{span["id"]}',
-                                "session": names.get(row["session_id"]), "session_id": row["session_id"],
-                                "kind": "terminal", "label": "Terminal", "turn_id": row["id"],
-                                "start": start, "end": max(start, now if running else end or start),
-                                "running": running, "end_unknown": end is None and not running,
-                                "status": span["status"], "ref": {"kind": "terminal", "id": span["id"]},
-                                "summary": f'Terminal · {span["status"]} · diagnostic only'}
-                        built.append((lane, span))
         if len(built) > max_lanes:
             built.sort(key=lambda p: p[0]["start"])
             dropped = len(built) - max_lanes
@@ -520,14 +487,6 @@ def clip(text: str, limit: int = EXTRA_MAX) -> tuple[str, int]:
     return cut + "\n... clipped", size - _blen(cut)
 
 
-def _terminal_span(metadata: dict[str, Any]) -> dict[str, Any]:
-    span = {key: metadata.get(key) for key in (
-        "id", "session_id", "turn_id", "tool_call_id", "background_job_id", "status",
-        "exit_code", "signal", "control_acquisitions", "control_releases")}
-    return span | {"kind": "terminal", "started": metadata["created"],
-                   "finished": metadata.get("ended"), "diagnostic_only": True}
-
-
 def record(store: Store, sid: str, kind: str, ident: str) -> dict[str, Any] | None:
     """One full record (no truncation) of the tree containing `sid`, or None."""
     if kind not in RECORD_KINDS:
@@ -556,17 +515,6 @@ def record(store: Store, sid: str, kind: str, ident: str) -> dict[str, Any] | No
     elif kind == "request":
         value = store.request(ident)
         owner = value["session_id"] if value else None
-    elif kind == "terminal":
-        exists = store.db.execute(
-            "select 1 from sqlite_master where type = 'table' and name = 'terminal_resource'").fetchone()
-        r = store.db.execute("select metadata from terminal_resource where id = ?", (ident,)).fetchone() if exists else None
-        if r:
-            metadata = json.loads(r["metadata"])
-            linked = store.db.execute(
-                "select 1 from turn_tool where session_id = ? and turn_id = ? and call_id = ?",
-                (metadata.get("session_id"), metadata.get("turn_id"), metadata.get("tool_call_id"))).fetchone()
-            if linked:
-                owner, value = metadata["session_id"], _terminal_span(metadata)
     elif kind == "attempt":
         r = store.db.execute("select * from turn_attempt where id = ?", (ident,)).fetchone()
         if r:
