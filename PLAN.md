@@ -1143,6 +1143,8 @@ and mistakes.
 
 ## Landed
 
+- **Subscription usage sources (11-11).** Researched CodexBar in a temporary clone. Core now parses Codex personal/managed monthly limits and optional workspace lookups; Claude uses OAuth usage or a guarded interactive `/usage` fallback, including weekly-only and enterprise spend-only accounts. Both clients retain their shared table contract. Approved read-only checks return the current Codex monthly credit limit and Claude Enterprise spend cap (CLI 2.1.322); no model requests. Focused checks: 56 passed, Ruff and diff checks pass. Full Core run timed out after 120 seconds; not a full-suite pass. Other plans have offline fixture coverage; screenshots not captured. [Usage contract](docs/api.md#usage-k11).
+
 - **Search startup diagnosis (11-11).** Detect an existing service rejecting JSON searches and explain how to restore it or free the port instead of attempting a conflicting launch.
 
 - **0.12.0 released (11-09).** PR #100 merged, release branch removed, no open PRs remain. Four platform binaries, wheel/sdist, installer and checksums published; every payload hash verified. Isolated published macOS arm64 install, daemon and plain TUI smoke passed; Linux installer/runtime and native/device gates remain explicit. [Release](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0).

@@ -17,8 +17,7 @@ already holds:
   carry a used percent and a reset time.
 * `grok`: `GET cli-chat-proxy.grok.com/v1/billing?format=credits` and `GET …/v1/settings` with the proxy headers.
   The billing config gives the credit percent and period; settings give the subscription name when it can be read.
-* `claude`: the official CLI's `-p /usage` command, a local command that makes no model request. The output is
-  `Label: N% used · resets …` lines.
+* `claude`: the Claude Code account's OAuth usage endpoint, with an interactive CLI `/usage` fallback.
 
 Only signed-in providers are asked, each bounded in time and size. A failure is that row's `error` (a short reason,
 never a credential). Providers with no plan-limit source (OpenAI, Groq, NVIDIA, Ollama) get a row with no windows
@@ -36,16 +35,19 @@ import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
+from .claude_usage import interactive_usage, oauth_credentials
 from .llmhub.auth import SIGN_INS, AuthError
 from .llmhub.auth.claude import child_env, cli_path
 from .llmhub.auth.claude import status as claude_status
 from .llmhub.providers import PROVIDERS
 
 CODEX_URL = "https://chatgpt.com/backend-api/wham/usage"
+CLAUDE_URL = "https://api.anthropic.com/api/oauth/usage"
 COPILOT_URL = "https://api.github.com/copilot_internal/user"
 OPENCODE_URL = "https://opencode.ai/zen/go/v1/usage"
 XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
@@ -53,18 +55,17 @@ XAI_SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
 LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"}
 SOURCES = {
     "codex": "chatgpt.com · wham/usage",
-    "claude": "claude CLI · /usage",
+    "claude": "Claude OAuth · api/oauth/usage (CLI fallback)",
     "grok": "cli-chat-proxy.grok.com · v1/billing",
     "copilot": "api.github.com · copilot_internal/user",
     "opencode": "opencode.ai · zen/go/v1/usage",
 }
-NO_LIMITS_NOTE = "No plan limits; token usage is in the session totals."
+NO_LIMITS_NOTE = "Plan limits are not exposed here; token usage is in the session totals."
 MAX_BODY = 512 * 1024
 MAX_WINDOWS = 16
 FIVE_HOURS, WEEK = 18_000, 604_800
 ROW_TIMEOUT = 40.0
 CLAUDE_USAGE_TIMEOUT = 30.0
-CLAUDE_MAX_OUTPUT = 256 * 1024
 
 
 class UsageError(Exception):
@@ -158,6 +159,9 @@ def parse_codex(data: Mapping[str, Any]) -> dict[str, Any]:
                                        _epoch(item.get("reset_at")), period=seconds, kind=kind))
 
     add(data.get("rate_limit"))
+    monthly = codex_individual_limit(data)
+    if monthly is not None:
+        windows.append(monthly)
     extra = data.get("additional_rate_limits")
     for item in extra[:8] if isinstance(extra, list) else ():
         if isinstance(item, Mapping):
@@ -172,6 +176,41 @@ def parse_codex(data: Mapping[str, Any]) -> dict[str, Any]:
         elif credits.get("has_credits") is True and (balance := _number(credits.get("balance"))) is not None:
             notes.append(f"Credits balance: {balance:g}")
     return {"plan": _text(data.get("plan_type"), 40).title(), "windows": windows[:MAX_WINDOWS], "notes": notes}
+
+
+def codex_individual_limit(data: Mapping[str, Any]) -> dict[str, Any] | None:
+    for parent in (data, data.get("rate_limit"), _first(data, ("spend_control", "spendControl"))):
+        if not isinstance(parent, Mapping):
+            continue
+        item = _first(parent, ("individual_limit", "individualLimit"))
+        if not isinstance(item, Mapping):
+            continue
+        limit, used = _number(item.get("limit")), _number(item.get("used"))
+        if limit is None or limit <= 0:
+            continue
+        percent = _percent(_first(item, ("used_percent", "usedPercent")))
+        remaining = _percent(_first(item, ("remaining_percent", "remainingPercent")))
+        if percent is None and remaining is not None:
+            percent = 100 - remaining
+        if percent is None and used is not None and used >= 0:
+            percent = _percent(used / limit * 100)
+        reset = _epoch(_first(item, ("reset_at", "resets_at", "resetsAt")))
+        detail = f"{used:,.2f} of {limit:,.2f} credits used" if used is not None and used >= 0 else f"{limit:,.2f} credit limit"
+        return _window("Monthly credits", percent, reset, period=month_before(reset), kind="monthly", detail=detail)
+    return None
+
+
+def parse_codex_monthly(data: Mapping[str, Any]) -> dict[str, Any] | None:
+    cap = data.get("effective_monthly_limit")
+    if not isinstance(cap, Mapping):
+        raise UsageError("monthly spend controls did not report a limit")
+    if str(cap.get("enforcement_mode", "")).casefold() in ("none", "off", "disabled", "no_limit"):
+        return None
+    window = codex_individual_limit({"individual_limit": {
+        "limit": cap.get("limit"), "used": data.get("current_month_usage")}})
+    if window is None:
+        raise UsageError("monthly spend controls reported an unreadable limit")
+    return window
 
 
 _COPILOT_QUOTAS = (("premium_interactions", "Premium requests"), ("chat", "Chat"), ("completions", "Completions"))
@@ -343,10 +382,29 @@ def claude_reset_at(text: str, now: float | None = None) -> int | None:
 
 
 def parse_claude(text: str, now: float | None = None) -> dict[str, Any]:
+    lines = text.splitlines()[:200]
+    normalized = []
+    for index, line in enumerate(lines):
+        if not re.fullmatch(r"\s*Current (?:session|week)(?:\s*\([^:\n]+\))?\s*", line, re.IGNORECASE):
+            normalized.append(line)
+            continue
+        following = []
+        for candidate in lines[index + 1:index + 13]:
+            if re.search(r"Current (?:session|week)|Usage credits|Usage insights", candidate, re.IGNORECASE):
+                break
+            following.append(candidate)
+        block = " ".join(candidate.strip() for candidate in following)
+        percent = re.search(r"(\d{1,3}(?:\.\d+)?)%\s+used", block)
+        if percent:
+            reset = next((re.search(r"[Rr]esets\s+(.+)", candidate.strip()) for candidate in following
+                          if re.search(r"[Rr]esets\s+", candidate)), None)
+            normalized.append(f"{line.strip()}: {percent[1]}% used" + (f" · resets {reset[1].strip()}" if reset else ""))
     windows: list[dict[str, Any]] = []
-    for line in text.splitlines()[:200]:
+    for line in normalized:
         match = _CLAUDE_USAGE.match(line)
         if match is None:
+            continue
+        if not re.fullmatch(r"Current (?:session|week)(?:\s*\([^:]+\))?", match["label"].strip(), re.IGNORECASE):
             continue
         label = claude_label(match["label"].strip())
         reset = (match["reset"] or "").strip().removeprefix("resets ").strip()
@@ -358,9 +416,18 @@ def parse_claude(text: str, now: float | None = None) -> dict[str, Any]:
                                detail="" if resets_at else reset))
         if len(windows) >= MAX_WINDOWS:
             break
+    heading = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip() == "Usage credits"), None)
+    if heading is not None:
+        for line in lines[heading + 1:heading + 7]:
+            match = re.fullmatch(r"\s*\$([\d,]+(?:\.\d+)?)\s*/\s*\$([\d,]+(?:\.\d+)?)\s+spent(?:\s*·\s*Resets[^\n]*)?\s*", line)
+            if match:
+                used, cap = (_number(v.replace(",", "")) for v in match.groups())
+                if used is not None and cap is not None and cap > 0:
+                    windows.append(_window("Spend limit", _percent(used / cap * 100), None, kind="monthly",
+                                           detail=f"USD {used:,.2f} of {cap:,.2f}"))
+                break
     if not windows:
-        line = next((line.strip() for line in text.splitlines() if line.strip()), "")
-        raise UsageError(_text(line) or "the Claude CLI printed no usage limits")
+        raise UsageError("the Claude CLI reported no recognizable subscription usage")
     return {"plan": "", "windows": windows, "notes": []}
 
 
@@ -383,7 +450,36 @@ async def _get(client: httpx.AsyncClient, url: str, headers: Mapping[str, str]) 
 
 async def _codex(client: httpx.AsyncClient) -> dict[str, Any]:
     headers = await SIGN_INS["codex"]().headers()
-    return parse_codex(await _get(client, CODEX_URL, {**headers, "accept": "application/json"}))
+    headers = {**headers, "accept": "application/json"}
+    data = await _get(client, CODEX_URL, headers)
+    result = parse_codex(data)
+    account = next((v for k, v in headers.items() if k.lower() == "chatgpt-account-id"), "")
+    response_account = data.get("account_id")
+    if not account or (response_account and response_account != account):
+        return result
+    base = f"https://chatgpt.com/backend-api/accounts/{quote(account, safe='')}"
+    spend = _first(data, ("spend_control", "spendControl"))
+    if isinstance(spend, Mapping) and codex_individual_limit(data) is None:
+        try:
+            async with asyncio.timeout(4):
+                monthly = parse_codex_monthly(await _get(client, base + "/spend-controls/current-user/monthly-usage", headers))
+            if monthly is not None:
+                result["windows"] = [monthly, *result["windows"]][:MAX_WINDOWS]
+            else:
+                result["notes"].append("No enforced individual monthly credit limit reported.")
+        except (UsageError, httpx.HTTPError, TimeoutError):
+            result["notes"].append("Individual monthly credit usage could not be read.")
+    credits = data.get("credits")
+    if (isinstance(credits, Mapping) and credits.get("has_credits") is True
+            and credits.get("unlimited") is not True and _number(credits.get("balance")) is None):
+        try:
+            async with asyncio.timeout(4):
+                balance = _number((await _get(client, base + "/remaining_balance", headers)).get("balance"))
+            if balance is not None:
+                result["notes"].append(f"Workspace credits balance: {balance:g}")
+        except (UsageError, httpx.HTTPError, TimeoutError):
+            result["notes"].append("Workspace credits balance is unavailable to this account.")
+    return result
 
 
 async def _copilot(client: httpx.AsyncClient) -> dict[str, Any]:
@@ -418,47 +514,58 @@ async def _grok(client: httpx.AsyncClient) -> dict[str, Any]:
     return parse_xai(billing, plan if isinstance(plan, str) else "")
 
 
-async def _run_claude(argv: list[str], timeout: float) -> tuple[int, bytes] | None:
-    process = None
-    try:
-        async with asyncio.timeout(timeout):
-            process = await asyncio.create_subprocess_exec(
-                *argv, env=child_env(), stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-            output = bytearray()
-            while chunk := await process.stdout.read(4096):
-                output.extend(chunk)
-                if len(output) > CLAUDE_MAX_OUTPUT:
-                    return None
-            return await process.wait(), bytes(output)
-    except (OSError, TimeoutError):
-        return None
-    finally:
-        if process is not None and process.returncode is None:
-            process.kill()
-            await process.wait()
+def parse_claude_oauth(data: Mapping[str, Any], plan: str = "") -> dict[str, Any]:
+    windows = []
+    for key, item in data.items():
+        if key != "five_hour" and not key.startswith("seven_day"):
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        label = "5-hour session" if key == "five_hour" else "Weekly" + (
+            " (" + key[len("seven_day_"):].replace("_", " ").title() + ")" if key != "seven_day" else "")
+        windows.append(_window(label, _percent(item.get("utilization")), _epoch(item.get("resets_at")),
+                               period=FIVE_HOURS if key == "five_hour" else WEEK,
+                               kind="five_hour" if key == "five_hour" else "weekly" if key == "seven_day" else "other"))
+    notes = []
+    extra = data.get("extra_usage")
+    if isinstance(extra, Mapping) and extra.get("is_enabled") is True:
+        cap, used = _number(extra.get("monthly_limit")), _number(extra.get("used_credits"))
+        percent = _percent(extra.get("utilization"))
+        if percent is None and cap is not None and cap > 0 and used is not None and used >= 0:
+            percent = _percent(used / cap * 100)
+        currency = _text(extra.get("currency") or "USD", 8).upper()
+        detail = f"{currency} {used / 100:,.2f} of {cap / 100:,.2f}" if cap is not None and used is not None else ""
+        if cap is not None and cap > 0:
+            label = "Spend limit" if not windows or plan.casefold() == "enterprise" else "Monthly extra usage"
+            windows.append(_window(label, percent, None, kind="monthly", detail=detail))
+        else:
+            notes.append("Extra usage is enabled; no monthly cap reported.")
+    if not windows and not notes:
+        notes.append("No subscription usage or limit windows reported by Claude.")
+    return {"plan": _text(plan, 40).title(), "windows": windows[:MAX_WINDOWS], "notes": notes}
 
 
-async def _claude(_client: httpx.AsyncClient) -> dict[str, Any]:
+async def _claude(client: httpx.AsyncClient) -> dict[str, Any]:
     executable = cli_path()
     if executable is None:
         raise UsageError("Claude Code is not installed")
-    argv = [executable, "-p", "/usage", "--output-format", "json", "--setting-sources", "",
-            "--no-session-persistence", "--strict-mcp-config"]
-    ran = await _run_claude(argv, CLAUDE_USAGE_TIMEOUT)
-    if ran is None:
-        raise UsageError("the Claude CLI did not answer /usage in time")
-    code, output = ran
-    try:
-        value = json.loads(output)
-    except ValueError:
-        raise UsageError("the Claude CLI returned unreadable /usage output") from None
-    text = value.get("result") if isinstance(value, dict) else None
-    if code != 0 or not isinstance(text, str) or value.get("is_error"):
-        raise UsageError("the Claude CLI could not read usage; run `claude auth login`")
-    result = parse_claude(text)
     status = await asyncio.to_thread(claude_status)
     plan = status.get("subscriptionType") if isinstance(status, dict) else None
+    credential = await asyncio.to_thread(oauth_credentials, child_env())
+    if credential is not None:
+        token, credential_plan = credential
+        try:
+            data = await _get(client, CLAUDE_URL, {
+                "authorization": f"Bearer {token}", "accept": "application/json",
+                "anthropic-beta": "oauth-2025-04-20", "user-agent": "claude-code/2.1.248"})
+            return parse_claude_oauth(data, plan or credential_plan)
+        except UsageError as exc:
+            if not str(exc).startswith(("HTTP 401", "HTTP 403")):
+                raise
+    text = await interactive_usage(executable, child_env(), CLAUDE_USAGE_TIMEOUT)
+    if text is None:
+        raise UsageError("Claude CLI usage unavailable; open `claude` and run /usage to check sign-in or setup")
+    result = parse_claude(text)
     result["plan"] = _text(plan, 40).title()
     return result
 
