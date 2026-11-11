@@ -146,13 +146,17 @@ export function disabledOf(session: { disabled_tools?: unknown } | null | undefi
 
 /** The sections of a frozen starting context (`GET …/snapshot`), as the timeline shows them. */
 /** A ZMX child's starting context: what Nexus knows about the CLI run, never a complete prompt (the CLI adds context Nexus cannot see). */
-export function zmxSections(w: { label: string; disclosure?: string; permission_mode?: string; directory?: string; model?: string; not_applied?: string[]; session_id?: string }): { sections: CtxSection[]; total: number } {
+export function zmxSections(w: { label: string; disclosure?: string; permission_mode?: string; directory?: string; model?: string; not_applied?: string[]; session_id?: string; status?: string; error?: string; denied_actions?: string[] }): { sections: CtxSection[]; total: number } {
   const facts = [w.model ? `model ${w.model}` : "", w.permission_mode ? `permission ${w.permission_mode}` : "", w.directory ? `cwd ${w.directory}` : ""].filter(Boolean).join(" · ");
   const section = (key: string, title: string, meta: string, detail: string): CtxSection => ({ key, title, meta, body: { kind: "none" }, detail });
+  const denied = Array.isArray(w.denied_actions) ? w.denied_actions : [];
   return {
     total: 0,
     sections: [
       section("zmx", w.label, "context incomplete", w.disclosure ?? "The CLI adds context Nexus cannot see."),
+      // The CLI stopped for a prompt it cannot answer here; Nexus approved nothing and says what to do by hand.
+      ...(w.status === "needs_attention" ? [section("zmx-attention", "Needs attention", w.error ?? "Run the CLI interactively to continue.", w.error ?? "Run the CLI interactively to continue.")] : []),
+      ...(denied.length ? [section("zmx-denied", "Denied by the CLI", `${denied.length} action${denied.length === 1 ? "" : "s"}`, denied.join("\n"))] : []),
       section("zmx-run", "Run", facts || "not started", facts || "The CLI has not started yet."),
       section("zmx-settings", "Settings", "CLI inherited", "The CLI's own settings, memory, MCP servers and plugins apply."),
       section("zmx-not-applied", "Not applied", (w.not_applied ?? []).join(", "), "Nexus permission rules, disabled tools and step limits do not reach inside the CLI, which ran its own tools."),

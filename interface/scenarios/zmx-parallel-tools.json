@@ -1,0 +1,171 @@
+{
+  "session": {
+    "title": "ZMX parallel tools",
+    "agent": "scout",
+    "model": "claude-code/claude-haiku-5-5",
+    "permission": "allow",
+    "worker": {
+      "label": "ZMX · Claude Code",
+      "provider": "claude-code",
+      "model": "claude-code/claude-haiku-5-5",
+      "permission_mode": "auto",
+      "context_complete": false,
+      "status": "completed",
+      "usage": null,
+      "disclosure": "The CLI runs its own tools, permissions, settings, MCP servers and plugins. Nexus tool restrictions, permission rules and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.",
+      "not_applied": [
+        "Nexus permission rules",
+        "disabled tools",
+        "step limits"
+      ],
+      "directory": "/work/demo"
+    }
+  },
+  "starting": {
+    "system_prompt": "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "tools": [
+      "read"
+    ],
+    "tool_definitions": {
+      "read": {
+        "description": "TOOL MUST NOT APPEAR",
+        "parameters": {}
+      }
+    },
+    "instruction_file": {
+      "status": "missing"
+    }
+  },
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "created": 1,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Check the notes"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "seq": 2,
+      "created": 2,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Looking in parallel."
+        },
+        {
+          "type": "tool_call",
+          "id": "t1",
+          "name": "Read",
+          "arguments": "{\"file_path\": \"/work/demo/note.txt\"}"
+        },
+        {
+          "type": "tool_call",
+          "id": "t2",
+          "name": "Grep",
+          "arguments": "{\"pattern\": \"zmx\"}"
+        },
+        {
+          "type": "tool_call",
+          "id": "ta",
+          "name": "Agent",
+          "arguments": "{\"description\": \"Read note.txt and summarize\", \"subagent_type\": \"general-purpose\", \"prompt\": \"Read note.txt\"}"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "seq": 3,
+      "created": 3,
+      "role": "tool",
+      "parts": [
+        {
+          "type": "tool_result",
+          "call_id": "t2",
+          "output": "note.txt:1:hello zmx"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "t1",
+          "output": "1\thello zmx"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "ta",
+          "output": "note.txt contains: hello zmx",
+          "raw": {
+            "sidechain": {
+              "agent_id": "a2a37",
+              "agent_type": "general-purpose",
+              "description": "Read note.txt and summarize",
+              "finished": true,
+              "clipped": false,
+              "entries": [
+                {
+                  "kind": "prompt",
+                  "text": "Read note.txt in /work/demo and reply in one sentence."
+                },
+                {
+                  "kind": "tool",
+                  "id": "tb",
+                  "name": "Read",
+                  "input": "{\"file_path\": \"/work/demo/note.txt\"}"
+                },
+                {
+                  "kind": "result",
+                  "id": "tb",
+                  "output": "1\thello zmx",
+                  "error": false
+                },
+                {
+                  "kind": "text",
+                  "text": "note.txt contains: hello zmx"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "m4",
+      "seq": 4,
+      "created": 4,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The note says hello zmx."
+        }
+      ]
+    }
+  ],
+  "expect": [
+    "ZMX · Claude Code",
+    "context incomplete",
+    "Check the notes",
+    "The note says hello zmx."
+  ],
+  "absent": [
+    "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "TOOL MUST NOT APPEAR",
+    "System prompt"
+  ],
+  "expect_open": [
+    "Read",
+    "Grep",
+    "Agent",
+    "Claude subagent · general-purpose · Read note.txt and summarize",
+    "│ prompt: Read note.txt in /work/demo and reply in one sentence.",
+    "│ Read {\"file_path\": \"/work/demo/note.txt\"}",
+    "│ → 1",
+    "│ note.txt contains: hello zmx",
+    "╰ read-only; Nexus did not run these tools"
+  ]
+}

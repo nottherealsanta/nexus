@@ -610,3 +610,29 @@ async def test_daemon_with_zmx_off_probes_no_cli_reads_no_credentials_and_regist
     assert not [x for x in flat if "agy" in x or "antigravity" in x or "--version" in x or "--help" in x or " models" in x], flat
     assert not any(path.endswith("auth.json") and "claude-code" in path for path in opened)
     assert not [p for p in opened if "oauth_creds" in p or ".claude/.credentials" in p]
+
+
+async def test_config_api_reports_why_zmx_is_unavailable_on_a_non_posix_platform(tmp_path, monkeypatch):
+    """The registry's reason reaches both clients' Settings through GET /api/config (`zmx_unavailable`)."""
+    import types
+
+    import httpx
+
+    from nexus import server
+    from nexus.store import Store
+    from nexus.workers import registry
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    assert registry.unavailable() is None
+    monkeypatch.setattr(registry, "os", types.SimpleNamespace(name="nt", environ=os.environ, getuid=os.getuid))
+    reason = registry.unavailable()
+    assert reason and "unavailable on this platform" in reason
+    with pytest.raises(ValueError, match="unavailable on this platform"):
+        registry.require("agy")
+    monkeypatch.undo()
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(server, "zmx_unavailable", lambda: reason)
+    app = server.build_app(server.make_runtime(Store(tmp_path / "nexus.db")), token="t", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer t"}) as client:
+        assert (await client.get("/api/config")).json()["zmx_unavailable"] == reason

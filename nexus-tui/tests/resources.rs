@@ -173,8 +173,14 @@ fn a_running_shell_can_be_stopped_from_the_modal() {
     assert!(shown.contains("[stop]"), "{shown}");
     assert!(shown.contains("s stop"), "{shown}");
     // Only the running shell has a stop action.
-    assert!(app.hits.rect_of(&Target::ResourceStop("job_1".into())).is_some());
-    assert!(app.hits.rect_of(&Target::ResourceStop("job_2".into())).is_none());
+    assert!(app
+        .hits
+        .rect_of(&Target::ResourceStop("job_1".into()))
+        .is_some());
+    assert!(app
+        .hits
+        .rect_of(&Target::ResourceStop("job_2".into()))
+        .is_none());
     // `s` on a finished shell does nothing; on the running one it stops it.
     press(&mut app, &["down"]);
     press(&mut app, &["s"]);
@@ -184,7 +190,10 @@ fn a_running_shell_can_be_stopped_from_the_modal() {
     assert_eq!(stops(&app), vec!["job_1".to_owned()]);
     app.effects.clear();
     draw(&mut app, 160, 50);
-    let stop = app.hits.rect_of(&Target::ResourceStop("job_1".into())).unwrap();
+    let stop = app
+        .hits
+        .rect_of(&Target::ResourceStop("job_1".into()))
+        .unwrap();
     click(&mut app, stop.x + 1, stop.y);
     assert_eq!(stops(&app), vec!["job_1".to_owned()]);
 }

@@ -1,0 +1,98 @@
+{
+  "session": {
+    "title": "ZMX interrupted",
+    "agent": "scout",
+    "model": "claude-code/claude-haiku-5-5",
+    "permission": "allow",
+    "worker": {
+      "label": "ZMX · Claude Code",
+      "provider": "claude-code",
+      "model": "claude-code/claude-haiku-5-5",
+      "permission_mode": "auto",
+      "context_complete": false,
+      "status": "failed",
+      "usage": null,
+      "disclosure": "The CLI runs its own tools, permissions, settings, MCP servers and plugins. Nexus tool restrictions, permission rules and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.",
+      "not_applied": [
+        "Nexus permission rules",
+        "disabled tools",
+        "step limits"
+      ],
+      "directory": "/work/demo",
+      "error": "interrupted"
+    }
+  },
+  "starting": {
+    "system_prompt": "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "tools": [
+      "read"
+    ],
+    "tool_definitions": {
+      "read": {
+        "description": "TOOL MUST NOT APPEAR",
+        "parameters": {}
+      }
+    },
+    "instruction_file": {
+      "status": "missing"
+    }
+  },
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "created": 1,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Run the long build"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "seq": 2,
+      "created": 2,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Starting the build."
+        },
+        {
+          "type": "tool_call",
+          "id": "tb",
+          "name": "Bash",
+          "arguments": "{\"command\": \"make all\"}"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "seq": 3,
+      "created": 3,
+      "role": "tool",
+      "parts": [
+        {
+          "type": "tool_result",
+          "call_id": "tb",
+          "output": "interrupted by the user while this tool was running; its result is unknown and it may have changed the workspace",
+          "is_error": true
+        }
+      ]
+    }
+  ],
+  "expect": [
+    "ZMX · Claude Code",
+    "Run the long build",
+    "Starting the build."
+  ],
+  "absent": [
+    "NEXUS SYSTEM PROMPT MUST NOT APPEAR"
+  ],
+  "expect_open": [
+    "Bash",
+    "interrupted by the user while this tool was running"
+  ]
+}

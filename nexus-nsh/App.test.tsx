@@ -293,6 +293,24 @@ describe("shell", () => {
     expect(expected[expected.length - 1]).toBe("About");
   });
 
+  test("ZMX settings show Core's unavailable reason and change nothing (Windows)", async () => {
+    const reason = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform";
+    const config = (extra: object) => ({ body: { revision: "rev1", values: { zmx: { claude_backend: "sdk", antigravity: false }, defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [], ...extra } });
+    const patched: string[] = [];
+    const app = await open("./App.tsx", {
+      network: { ...core(), "GET */api/config": config({ zmx_unavailable: reason }), "PATCH */api/config": () => { patched.push("patch"); return config({}); } } as any,
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.press("id:rail-settings");
+    await app.press("id:section-zmx");
+    await app.waitFor("id:setting-zmx.claude_backend");
+    const shown = app.texts().join("\n");
+    // Both ZMX rows say why, with the exact reason Core reported.
+    expect(shown.split(reason).length - 1).toBeGreaterThanOrEqual(2);
+    expect(patched).toEqual([]);
+  });
+
   test("palette opens with the key, lists disabled commands with reasons, Esc walks the chain", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:rail-project-prj_1");

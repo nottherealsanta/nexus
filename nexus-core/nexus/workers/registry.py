@@ -25,6 +25,14 @@ def external(ref: str) -> bool:
     return ref.partition("/")[0] in IDS
 
 
+UNAVAILABLE_PLATFORM = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform"
+
+
+def unavailable() -> str | None:
+    """Why ZMX cannot run on this machine at all, for the Settings rows; None where it can."""
+    return None if os.name == "posix" else UNAVAILABLE_PLATFORM
+
+
 def enabled(pid: str) -> bool:
     values = ConfigFile().read()["values"]["zmx"]
     return os.name == "posix" and (values["claude_backend"] == "zmx" if pid == "claude-code" else bool(values["antigravity"]))
@@ -32,7 +40,7 @@ def enabled(pid: str) -> bool:
 
 def require(pid: str) -> None:
     if os.name != "posix":
-        raise ValueError("ZMX requires POSIX PTYs/process groups; it is unavailable on this platform")
+        raise ValueError(UNAVAILABLE_PLATFORM)
     if not enabled(pid):
         key = "zmx.claude_backend = 'zmx'" if pid == "claude-code" else "zmx.antigravity = true"
         raise ValueError(f"{LABELS[pid]} is disabled; enable {key} in user Settings first")

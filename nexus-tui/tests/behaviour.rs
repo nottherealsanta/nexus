@@ -3238,3 +3238,54 @@ fn configuration_problems_are_listed_in_settings_instead_of_toasted() {
         rows.join("\n")
     );
 }
+
+#[test]
+fn zmx_settings_show_core_s_unavailable_reason_and_change_nothing() {
+    let reason = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform";
+    let mut a = app();
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1", "zmx_unavailable": reason,
+        "values": {"zmx": {"claude_backend": "sdk", "antigravity": false}}
+    }));
+    a.execute("app.settings");
+    a.ui.settings_section = "zmx".into();
+    a.ui.settings_nav_focus = false;
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    for id in ["zmx.claude_backend", "zmx.antigravity"] {
+        let at = rows
+            .iter()
+            .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
+            .unwrap();
+        let SettingsItem::Row {
+            row,
+            section_reason,
+            ..
+        } = &items[rows[at]]
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            a.settings_reason(row, section_reason.as_deref()).as_deref(),
+            Some(reason)
+        );
+        a.ui.settings_row = at;
+        a.effects.clear();
+        press(&mut a, &["right"]);
+        assert!(
+            a.effects.is_empty(),
+            "{id} must not patch while ZMX is unavailable"
+        );
+    }
+    // Where ZMX can run, the rows are editable again.
+    a.state.config.as_mut().unwrap()["zmx_unavailable"] = serde_json::Value::Null;
+    let found = rows.iter().find_map(|at| match &items[*at] {
+        SettingsItem::Row {
+            row,
+            section_reason,
+            ..
+        } if row.id == "zmx.antigravity" => Some(a.settings_reason(row, section_reason.as_deref())),
+        _ => None,
+    });
+    assert_eq!(found, Some(None));
+}
