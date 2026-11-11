@@ -121,6 +121,18 @@ export type OverviewRow =
   | { kind: "session"; id: string; project: string; archived: boolean; last: boolean }
   | { kind: "toggle"; project: string; count: number; expanded: boolean };
 
+/** Announce the same context as the visible overview tree, including its parent project. */
+export function overviewRowLabel(row: OverviewRow, project: Project | undefined, session: Session | undefined, state: string): string {
+  const name = project?.name || (row.kind === "project" ? row.id : row.kind === "group" ? "" : row.project);
+  switch (row.kind) {
+    case "group": return row.title;
+    case "project": return `Project ${name}, ${PROJECT_STATUS_LABEL[project ? projectStatus(project) : PROJECT_STATUS.current]}`;
+    case "empty": return `${name}, no active sessions`;
+    case "session": return `${session?.title || row.id}, ${row.archived ? "archived" : state}, project ${name}`;
+    case "toggle": return `${name}, ${row.count} archived ${row.count === 1 ? "session" : "sessions"}, ${row.expanded ? "expanded" : "collapsed"}`;
+  }
+}
+
 /**
  * Projects in their saved order, each followed by a tree of its active root sessions (newest first) and,
  * when it has archived ones, a toggle (and the archived sessions while it is open). Inactive projects

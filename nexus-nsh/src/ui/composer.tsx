@@ -19,7 +19,8 @@ import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
-import { structure } from "../gen/theme";
+import { activityOffsetPercent, activityPhase } from "./activity-motion";
+import { RetryNotices } from "./retry-notices";
 import { openTerminal, refreshTerminals, restoreTerminalDock, terminalAvailable, terminalItems, terminalOpen } from "../terminal-panel";
 
 import { imageDrafts, readImage } from "../images";
@@ -423,8 +424,9 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full rounded-(--radius-card) bg-card px-4 pb-1" testID="composer-surface">
-          <View class="h-6" testID="composer-top-padding" />
+          <View class="w-full rounded-(--radius-card) border border-border bg-card px-4 pb-2" testID="composer-surface">
+          <RetryNotices />
+          <View class="h-4" testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
@@ -467,10 +469,10 @@ function EditableComposer() {
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
               </If>
-              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
+              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
-          <View class="h-4" />
+          <View class="h-2" />
           <View class="flex-row items-center gap-1 min-w-0 min-h-8">
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
               <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
@@ -488,7 +490,6 @@ function EditableComposer() {
           </View>
           </View>
         </View>
-        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-card" testID="composer-bottom-edge">{structure.card_bottom.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(dockWidth() / 9.6))))}</Text>
         <LocationStrip working={working()} />
         <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
     </TimelineColumn>
@@ -575,7 +576,7 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
       <Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink-[2] ${T.meta}`}>{p.sub!}</Text></If>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -602,22 +603,21 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const reduced = () => !!config()?.values?.ui?.reduced_motion;
   effect(() => {
     if (!p.busy || reduced()) { phase.set(0.5); return; }
-    const start = Date.now();
-    const id = setInterval(() => phase.set(((Date.now() - start) / 3000) % 1), 33);
+    // Use an absolute clock so reactive effect restarts never jump the pulse back to its start.
+    const id = setInterval(() => phase.set(activityPhase(Date.now())), 33);
     return () => clearInterval(id);
   });
-  const left = () => 40 * (1 - Math.cos(phase() * Math.PI * 2));
+  const left = () => activityOffsetPercent(phase());
   const full = () => !p.busy && p.fraction >= 0.8;
   const tone = () => (p.fraction >= 0.95 ? "bg-error" : "bg-warning");
-  // The 1 px track is always laid out, so the dock does not move when the line appears.
-  return <View class="w-full">
-      <View class="relative w-full" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`} onLayout={(b: any) => trackWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
-        <Text accessible={false} style={{ numberOfLines: 1 }} class="w-full font-mono leading-6 text-border">{structure.rule.unicode.repeat(Math.max(1, Math.min(4096, Math.floor(trackWidth() / 9.6))))}</Text>
+  // This rule is the card's single bottom edge; the pulse is overlaid on that line.
+  return <View class="w-full -mt-1" testID="composer-bottom-edge">
+      <View class="relative w-full h-px bg-border" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`} onLayout={(b: any) => trackWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         <If when={p.busy}>
-          <View class={`absolute -top-px h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
+          <View class={`absolute top-0 h-px ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
         </If>
         <If when={full()}>
-          <View class={`absolute -top-px h-0.5 left-0 ${tone()}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
+          <View class={`absolute top-0 h-px left-0 ${tone()}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
         </If>
       </View>
     </View>;
@@ -1067,7 +1067,7 @@ function QuestionBody(p: { q: Question }) {
               <Text class="text-[16px] leading-6 font-medium text-foreground">{qq().question}</Text>
               <Each of={qq().options} key={(o) => o.id}>
                 {(o, n) => (
-                  <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={[o().label, o().preview].filter(Boolean).join('. ')}
+                  <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={`${qq().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
                     onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
                     class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
                     <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
@@ -1078,7 +1078,7 @@ function QuestionBody(p: { q: Question }) {
                   </Button>
                 )}
               </Each>
-              <Input value={answers()[id()]?.text ?? ""} placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel="Free-text answer" class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
+              <Input value={answers()[id()]?.text ?? ""} placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel={`${qq().question} Free-text answer`} class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
             </View>
           );
         }}

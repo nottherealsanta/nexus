@@ -98,6 +98,10 @@ describe("waiting card (D14)", () => {
     expect(app.shows("id:choice-mark-b")).toBe(true);
     expect(app.shows("id:choice-mark-x")).toBe(true);
     expect(app.shows("id:choice-mark-y")).toBe(true);
+    expect(app.shows("label:Which cache? mtime")).toBe(true);
+    expect(app.shows("label:Extras? tests")).toBe(true);
+    expect(app.shows("label:Which cache? Free-text answer")).toBe(true);
+    expect(app.shows("label:Extras? Free-text answer")).toBe(true);
     expect(app.texts().includes("( )")).toBe(false);
     expect(app.texts().includes("[ ]")).toBe(false);
     expect(app.texts().some((t) => t.includes("submit · tab next question"))).toBe(true);
@@ -168,5 +172,11 @@ describe("alerts (D15)", () => {
     const app = await open("./App.tsx", { network: { ...network(), "GET */api/info": { status: 500, body: {} } }, width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:banner");
     expect(app.shows("id:banner")).toBe(true);
+  });
+
+  test("a narrow connection banner shows the recovery explanation", async () => {
+    const app = await open("./App.tsx", { network: { ...network(), "GET */api/info": { status: 500, body: {} } }, width: 390, height: 844, platform: "web" });
+    await app.waitFor("id:banner-detail");
+    expect(app.texts().some((text) => text.includes("read-only") || text.includes("Start it with"))).toBe(true);
   });
 });

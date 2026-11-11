@@ -1,7 +1,7 @@
 // Regression coverage for the shared timeline reading column: the new-session
 // starting context and the started session use the same column, card and inset.
 import { describe, expect, open, test } from "nsh/test";
-import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
+import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, TURN_INSET, USER_BAND_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
 import { iconGlyphs } from "./src/ui/kit";
 import { sidebarGlyphs, verbGlyphs, structure } from "./src/gen/theme";
 import { contextGrid, defaultLeftSidebarWidth, rightSidebarWidth, workspaceTabCells } from "./src/ui/geometry";
@@ -86,7 +86,9 @@ describe("timeline reading column", () => {
     expect(CARD_INSET).toBe("px-2");
     expect(TEXT_INDENT).toBe("pl-2");
     expect(TEXT_INSET).toBe("px-2");
-    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-[3px]");
+    expect(TURN_INSET).toBe("pl-4");
+    expect(USER_BAND_INSET).toBe("pl-4 pr-2");
+    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-1");
   });
 
   test("the new-session starting context renders in the timeline's shared column and card", async () => {
@@ -99,8 +101,8 @@ describe("timeline reading column", () => {
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:send")).toBe(true);
     expect(app.texts().includes("Send message")).toBe(false);
-    expect(app.texts().includes("Sessions")).toBe(true);
-    expect(app.texts().includes("Files")).toBe(true);
+    expect(app.shows("id:tab-sessions")).toBe(true);
+    expect(app.shows("id:tab-files")).toBe(true);
     expect(app.shows("id:right-rail")).toBe(false);
     expect(app.shows("id:composer-bottom-edge")).toBe(true);
     expect(app.shows("id:activity-bar")).toBe(true);

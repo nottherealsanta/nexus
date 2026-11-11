@@ -523,7 +523,7 @@ function control(r: Row): JSX.Element {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
     return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
       const off = disabled.includes(name);
-      return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 min-h-7 justify-center hover:bg-accent ${FOCUS}`}>
+      return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 ${isNarrow() ? "min-h-11" : "min-h-7"} justify-center hover:bg-accent ${FOCUS}`}>
         <Text class={`${TS.mono} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
       </View>;
     })}</View>;

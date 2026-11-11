@@ -13,6 +13,32 @@ use ratatui::style::Color;
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
 
 #[test]
+fn session_sidebar_places_new_session_before_search_and_archive_after_list() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let new_session = app
+        .hits
+        .rect_of(&Target::NewSession)
+        .expect("new session hit");
+    let search = app.hits.rect_of(&Target::RailSearch).expect("search hit");
+    let session = app
+        .hits
+        .rect_of(&Target::SideRow(0))
+        .expect("session row hit");
+    let archive = app
+        .hits
+        .rect_of(&Target::ArchivedFilter)
+        .expect("archive hit");
+    assert_eq!(new_session.y + 1, search.y);
+    assert!(search.y < session.y);
+    assert!(session.y < archive.y);
+    let text = rows.join("\n");
+    assert!(text.contains("New session"), "{text}");
+    assert!(text.contains("Search sessions"), "{text}");
+    assert!(text.contains("Show archive"), "{text}");
+}
+
+#[test]
 fn terminal_command_opens_a_bottom_dock() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("terminal.open");

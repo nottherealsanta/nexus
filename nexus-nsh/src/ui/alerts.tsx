@@ -79,6 +79,7 @@ export function Banners() {
                 <Text style={{ numberOfLines: isNarrow() ? 2 : 1 }} class="flex-1 shrink min-w-0 text-[13px] leading-5 font-semibold text-foreground">{a().text}</Text>
                 <If when={isNarrow() && a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
               </View>
+              <If when={isNarrow() && !!a().sub}><Text style={{ numberOfLines: 3 }} testID="banner-detail" class={`${T.sec} pl-[26px]`}>{a().sub!}</Text></If>
               <If when={!isNarrow() && !!a().sub}><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{a().sub!}</Text></If>
               <If when={!isNarrow() && !a().sub}><View class="flex-1" /></If>
               <If when={!isNarrow() || a().actions.length > 0 || all().length > 1}><View class={`flex-row items-center gap-2 ${isNarrow() ? "justify-end" : ""}`}>

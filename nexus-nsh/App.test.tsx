@@ -447,6 +447,21 @@ describe("history", () => {
     expect(latestUsage(m.selected!.turns, m.selected!.scratch)).toEqual({ input: 12, model: "codex/gpt-5" });
   });
 
+  test("retry status clears when a provider response arrives and remains scoped to its session", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    m.applyEvent(ev(1, "retry_scheduled", { attempt: 1 }));
+    expect(m.selected!.retryPending).toBe(true);
+    m.select("ses_2");
+    expect(!!m.selected!.retryPending).toBe(false);
+    m.applyEvent(ev(2, "retry_started", { attempt: 2 }));
+    m.select("ses_1");
+    expect(m.selected!.retryPending).toBe(true);
+    m.applyEvent(ev(3, "text_delta", { request_id: "r", seq: 1, part_index: 0, text: "ok" }));
+    expect(m.selected!.retryPending).toBe(false);
+    expect(m.selected!.scratch.some((event) => event.type === "retry_scheduled")).toBe(true);
+  });
+
   test("global live-only events advance the cursor without entering session scratch", () => {
     const m = live(new Model());
     m.select("ses_1");
@@ -1057,10 +1072,15 @@ describe("turn summaries", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:msg-diag");
-    const shown = app.texts().join("\n");
-    expect(shown.includes("provider retry 2/2 in 2.0s")).toBe(true);
-    expect(shown.includes("provider retries exhausted")).toBe(true);
-    expect(shown.includes("provider: overloaded")).toBe(true);
+    await app.waitFor("id:retry-notices");
+    expect(app.texts().join("\n").includes("provider retry attempt 2 in 2.0s")).toBe(false);
+    expect(app.texts().join("\n").includes("provider retries exhausted")).toBe(true);
+    expect(app.texts().join("\n").includes("provider: overloaded")).toBe(true);
+    expect(app.count("id:msg-diag")).toBe(1);
+    await app.press("id:retry-notices");
+    await app.waitFor("id:context-detail");
+    expect(app.texts().join("\n").includes("provider retry attempt 2 in 2.0s")).toBe(true);
+    expect(app.texts().join("\n").includes("provider retries exhausted")).toBe(true);
   });
 
   test("a turn the client cannot read details for is announced, and the timeline still loads", async () => {

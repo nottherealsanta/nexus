@@ -43,17 +43,17 @@ const network = {
 
 
 describe("Session search (K5)", () => {
-  test("a session whose user message matches is listed with the snippet", async () => {
+  test("the search button opens the switcher and finds matching message snippets", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     expect(app.shows("id:session-ses_2")).toBe(true);
-    await app.type("id:session-search", "carry");
-    await app.waitFor("id:session-snippet-ses_2");
+    await app.press("id:session-search");
+    await app.waitFor("id:session-switcher-input");
+    await app.type("id:session-switcher-input", "carry");
+    await app.waitFor("id:switch-session-ses_2");
     expect(app.texts().some((t) => t.includes("please carry on with the chores"))).toBe(true);
-    expect(app.shows("id:session-ses_1")).toBe(false);
-    await app.keyboard.press("mod+3");
-    await app.press("id:tab-sessions");
-    await app.waitFor("id:session-snippet-ses_2");
-    expect(app.shows("id:session-ses_1")).toBe(false);
+    expect(app.shows("id:switch-session-ses_1")).toBe(false);
+    await app.keyboard.press("escape");
+    expect(app.shows("id:session-switcher")).toBe(false);
   });
 });

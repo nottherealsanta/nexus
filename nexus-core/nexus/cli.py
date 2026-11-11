@@ -762,6 +762,20 @@ async def _agent(args: argparse.Namespace) -> None:
         await client.close()
 
 
+def _agents_reinit() -> None:
+    """Copy the built-in agent files over the global ones in <home>/agents."""
+    from .agents import BUILTIN_DIR
+    from .paths import home
+
+    target = home() / "agents"
+    target.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in sorted(BUILTIN_DIR.glob("*.md")):
+        shutil.copyfile(path, target / path.name)
+        copied += 1
+    print(f"copied {copied} built-in agents to {target}")
+
+
 async def _project(args: argparse.Namespace) -> None:
     client = Client.connect()
     try:
@@ -1116,6 +1130,8 @@ def main(argv: list[str] | None = None) -> int:
     project = sub.add_parser("project", help="projects (a project is a directory)")
     project.add_argument("action", choices=["list", "open"])
     project.add_argument("path", nargs="?")
+    agents_cmd = sub.add_parser("agents", help="manage agent files")
+    agents_cmd.add_argument("action", choices=["reinit"], help="reinit copies the built-in agents over the global ones in <home>/agents")
     agent = sub.add_parser("agent", help="agents available in the current project, or one agent's prompt")
     agent.add_argument("name", nargs="?")
     agent.add_argument("--workspace", default=".")
@@ -1217,6 +1233,8 @@ def main(argv: list[str] | None = None) -> int:
             daemon.serve(args.port, args.host)
         elif args.command == "daemon":
             _daemon(args.action)
+        elif args.command == "agents":
+            _agents_reinit()
         elif args.command == "agent":
             asyncio.run(_agent(args))
         elif args.command == "project":

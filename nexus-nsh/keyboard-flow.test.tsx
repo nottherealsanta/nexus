@@ -1,6 +1,6 @@
 // PLAN 15.4: the keyboard flow from an empty composer, and the projects overview it ends in.
 import { describe, expect, open, test } from "nsh/test";
-import { overviewRows, sessionStateWord } from "./src/project-rail";
+import { overviewRowLabel, overviewRows, sessionStateWord } from "./src/project-rail";
 import type { Project, Session } from "./src/core/api";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -49,6 +49,13 @@ describe("projects overview rows (logic)", () => {
     expect(sessionStateWord({ archived: false, status: "idle" }, false, false, true)).toBe("finished");
     expect(sessionStateWord({ archived: false, status: "idle" }, false, false, false)).toBe("idle");
   });
+  test("overview labels describe projects, empty states and session status", () => {
+    const alpha = projects[0];
+    expect(overviewRowLabel({ kind: "project", id: alpha.id }, alpha, undefined, "")).toBe("Project Alpha, Current");
+    expect(overviewRowLabel({ kind: "empty", project: alpha.id }, alpha, undefined, "")).toBe("Alpha, no active sessions");
+    expect(overviewRowLabel({ kind: "session", id: "ses_a1", project: alpha.id, archived: false, last: true }, alpha, sessions[0] as unknown as Session, "needs input")).toBe("Alpha chat, needs input, project Alpha");
+    expect(overviewRowLabel({ kind: "toggle", project: alpha.id, count: 2, expanded: true }, alpha, undefined, "")).toBe("Alpha, 2 archived sessions, expanded");
+  });
 });
 
 describe("keyboard flow from an empty composer (app)", () => {
@@ -67,6 +74,9 @@ describe("keyboard flow from an empty composer (app)", () => {
     await app.waitFor("id:project-cursor-prj_bravo");
     await app.keyboard.press("left");
     await app.waitFor("id:projects-overview");
+    expect(app.shows("label:Project Alpha, Current")).toBe(true);
+    expect(app.shows("label:Alpha chat, idle, project Alpha")).toBe(true);
+    expect(app.shows("label:Alpha, 1 archived session, collapsed")).toBe(true);
     expect(app.shows("id:overview-row-0")).toBe(true);
   });
 
@@ -117,6 +127,7 @@ describe("keyboard flow from an empty composer (app)", () => {
     await app.screenshot("/private/tmp/nexus-nsh-overview.png");
     await app.press("id:overview-row-2"); // Alpha's archived toggle
     await app.waitUntil(() => app.texts().join("\n").replace(/\u00a0/g, " ").includes("Alpha old chat"));
+    expect(app.shows("label:Alpha, 1 archived session, expanded")).toBe(true);
     expect(app.texts().join("\n").replace(/\u00a0/g, " ")).toContain("▾ 1 archived");
     await app.screenshot("/private/tmp/nexus-nsh-overview-archived.png");
     await app.press("id:overview-row-2");

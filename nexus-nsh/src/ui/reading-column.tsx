@@ -23,8 +23,11 @@ export const CARD_INSET = "px-2";
 export const TEXT_INSET = "px-2";
 /** Prose and activity rows sit one card inset in from the column edge. */
 export const TEXT_INDENT = "pl-2";
-/** The activity row's chevron slot: the glyph's ink starts on the text edge, under the user message and the reply. */
-export const ACTIVITY_CHEVRON = "w-4 shrink-0 -ml-[3px]";
+/** User bands and activity affordances have a little extra breathing room. */
+export const TURN_INSET = "pl-4";
+export const USER_BAND_INSET = "pl-4 pr-2";
+/** The activity row's chevron slot starts on the shared turn text edge. */
+export const ACTIVITY_CHEVRON = "w-4 shrink-0 -ml-1";
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (

@@ -3430,7 +3430,6 @@ enum SRow {
     Title(usize),
     Detail(usize),
     Spacer,
-    New,
 }
 
 /// The title of a session row: the shimmer while it runs, an ellipsis when it
@@ -3478,22 +3477,22 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     if r.height < 3 {
         return;
     }
-    let toggle = Rect::new(r.right().saturating_sub(3).max(r.x), r.y, r.width.min(3), 1);
-    let toggle_style = if a.ui.show_archived {
-        cx.st(MULTI, SIDEBAR).add_modifier(Modifier::BOLD)
-    } else {
-        cx.st(MUTED, SIDEBAR)
-    };
-    let icon = cx.t.control("archive");
+    let new_session = Rect::new(r.x, r.y, r.width, 1);
+    let mut new_style = cx.st(MUTED, SIDEBAR);
+    if cx.hovered(new_session) {
+        new_style = new_style.patch(cx.st(PRIMARY, SIDEBAR));
+        clear(buf, new_session, new_style);
+    }
+    put(buf, r.x + 1, new_session.y, "+", new_style, 1);
     put(
         buf,
-        toggle.x + toggle.width / 2,
-        toggle.y,
-        icon,
-        toggle_style,
-        1,
+        r.x + 3,
+        new_session.y,
+        "New session",
+        new_style,
+        r.width.saturating_sub(3),
     );
-    hits.add(toggle, Target::ArchivedFilter);
+    hits.add(new_session, Target::NewSession);
     let search = Rect::new(r.x, r.y + 1, r.width, 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
@@ -3526,7 +3525,34 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     );
     put(buf, kx, search.y, key, style, kw);
     hits.add(search, Target::RailSearch);
-    let list = Rect::new(r.x, r.y + 3, r.width, r.height.saturating_sub(3));
+    let archive_y = r.bottom().saturating_sub(1);
+    let archive = Rect::new(r.x, archive_y, r.width, 1);
+    let archive_style = if a.ui.show_archived {
+        cx.st(MULTI, SIDEBAR).add_modifier(Modifier::BOLD)
+    } else {
+        cx.st(SECONDARY, SIDEBAR)
+    };
+    if cx.hovered(archive) {
+        clear(buf, archive, cx.st(PRIMARY, SIDEBAR));
+    }
+    put(
+        buf,
+        r.x + 1,
+        archive.y,
+        cx.t.control("archive"),
+        archive_style,
+        1,
+    );
+    put(
+        buf,
+        r.x + 3,
+        archive.y,
+        "Show archive",
+        archive_style,
+        r.width.saturating_sub(3),
+    );
+    hits.add(archive, Target::ArchivedFilter);
+    let list = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(3));
     if list.height == 0 {
         return;
     }
@@ -3566,7 +3592,6 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         }
         rows.extend([SRow::Title(i), SRow::Detail(i), SRow::Spacer]);
     }
-    rows.push(SRow::New);
     let cursor = a.cursor(Tab::Sessions);
     let cur_row = rows
         .iter()
@@ -3582,24 +3607,6 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         let rr = Rect::new(list.x, y, list.width, 1);
         match *v {
             SRow::Spacer => {}
-            SRow::New => {
-                let style = if cx.hovered(rr) {
-                    clear(buf, rr, cx.st(PRIMARY, SIDEBAR));
-                    cx.st(PRIMARY, SIDEBAR)
-                } else {
-                    muted
-                };
-                put(buf, rr.x + 1, y, "+", style, 1);
-                put(
-                    buf,
-                    rr.x + 3,
-                    y,
-                    "New session",
-                    style,
-                    rr.width.saturating_sub(3),
-                );
-                hits.add(rr, Target::NewSession);
-            }
             SRow::Project(i) => {
                 let name = entries[i].project.as_deref().unwrap_or("");
                 put(
