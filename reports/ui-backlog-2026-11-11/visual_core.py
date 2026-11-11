@@ -57,6 +57,9 @@ async def main():
     turn = rt.store.start_turn(parent.id, data={"origin": "prompt"})
     rt.store.append_message(parent.id, Message("user", (Text("Check the session"),)))
     rt.store.finish_turn(turn["id"], "interrupted", error={"kind": "interrupted", "message": "interrupted by the user"})
+    for i, text in enumerate(["fix the login bug", "write the release notes\nwith two lines", "run the tests", "explain the retry policy in the loader"]):
+        rt.store.db.execute("insert into prompt_history (session_id, text, image_count, created) values (?, ?, ?, ?)", (parent.id, text, 0, time.time() - 100 + i))
+    rt.store.db.commit()
     url = f"http://127.0.0.1:{os.environ['NEXUS_PORT']}"
     token = "isolated-visual-check"
     _write_info({"url": url, "pid": os.getpid(), "token": token, "started": time.time()})

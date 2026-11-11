@@ -260,9 +260,7 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 - [ ] **Audit navigation, pickers and panel interactions** across the clients (the 11-02 audit covered tool
   groups, palette, child rows, banners, rail, footer, composer, starting context, waiting cards and notices).
-- [ ] **Ctrl+R prompt history search** in both clients (in the TUI `ctrl+r` is bound to `app.reconnect`,
-  `app.rs:8162`, so pick the binding first; Up/Down recall exists in `composer.rs:69`); verify cross-client per-project recall after restarting
-  both, including multiline drafts and images.
+- [~] **Ctrl+R prompt history search** in both clients: new shared command `composer.history_search`, bound to `ctrl+r` in both (TUI reconnect keeps its leader key `r`, banner and palette). TUI palette mode and NSH picker list Core's per-project history newest first, each once, filtered live; Enter replaces the draft. Verified 2026-11-11: TUI `shell` test `ctrl_r_searches_the_prompt_history_and_fills_the_composer`, NSH `prompt-history.test.tsx` 1/1, `check_manifest.py` ok, paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Not verified: recall after restarting both clients, multiline drafts and images end to end (images are `[N images]` text in both).
 - [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
   completion from the start result.
 - [x] **Background shells and archive** (was TODO 3). Manual archive now refuses a tree with a live background job before changing state. Both clients show the Core error. A real background-job regression test passes (2026-11-07).

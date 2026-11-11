@@ -60,4 +60,16 @@ describe("Handoff and side questions (K1-K3)", () => {
     expect(app.texts().some((t) => t.includes("Continued from ses_abcdef12"))).toBe(true);
     expect(app.count("id:handoff-open-original")).toBe(0);
   });
+
+  test("with the original in the list the card opens it, and the viewed tab changes to it", async () => {
+    const both = { ...network, "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, original] } } };
+    const app = await open("./App.tsx", { network: both, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:handoff-open-original");
+    await app.press("id:handoff-open-original");
+    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_0/message")));
+    await app.waitUntil(() => app.count("id:msg-handoff") === 0);
+    expect(app.texts().some((t) => t.includes("Original work"))).toBe(true);
+  });
 });

@@ -602,6 +602,10 @@ chmod 700 $NEXUS10_HOME          # Core requires a private home
 NEXUS_TUI_CORE_CMD="uv run --project ../nexus-core nexus" cargo run
 ```
 
+## Prompt history search
+
+`Ctrl+R` (`composer.history_search`, the same command and key as NSH) opens the palette in a prompt-history mode: this project's earlier prompts from Core (the list Up/Down recall walks), newest first and each once, filtered as you type. Enter replaces the draft with the chosen prompt and focuses the composer; Esc leaves the draft alone. Reconnect to Core is on its leader key (`Ctrl+X` then `r`), the banner button and the palette; `Ctrl+R` no longer reconnects. Images appear as `[N images]` text, as they do in Up/Down recall.
+
 ## Voice dictation
 
 `/voice`, `ctrl+d`, or the TUI's `ctrl+x v` shortcut starts dictation. The TUI

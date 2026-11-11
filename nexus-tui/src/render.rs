@@ -9561,6 +9561,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Export => "Export session",
         PaletteMode::LearnScope => "Install skills for",
         PaletteMode::Turns => "Go to turn",
+        PaletteMode::History => "Prompt history",
         PaletteMode::RowMenu => "Actions",
     };
     let m = modal(cx, buf, area, b, title, hits);
@@ -9581,6 +9582,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::Export => "choose a format and scope",
             PaletteMode::LearnScope => "choose where the skills go",
             PaletteMode::Turns => "type to find a turn",
+            PaletteMode::History => "type to find an earlier prompt",
             PaletteMode::RowMenu => "choose an action",
         };
         put(

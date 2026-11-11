@@ -204,6 +204,7 @@ pub const WIRED: &[&str] = &[
     "session.resources",
     "session.worktree_info",
     "turn.go_to",
+    "composer.history_search",
     "model.change",
     "model.effort",
     "agent.change",
@@ -4442,6 +4443,36 @@ impl App {
                     }
                 }
             }
+            PaletteMode::History => {
+                let entries = self.composer_ref().history_entries();
+                let mut seen = std::collections::HashSet::new();
+                // Newest first; the same prompt sent twice is listed once.
+                for (i, text) in entries.iter().rev().enumerate() {
+                    if text.trim().is_empty() || !seen.insert(text.as_str()) {
+                        continue;
+                    }
+                    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let Some(score) = fuzzy(&q, &flat) else {
+                        continue;
+                    };
+                    let lines = text.lines().count();
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::History(text.clone()),
+                            label: flat,
+                            hint: if lines > 1 {
+                                format!("{lines} lines")
+                            } else {
+                                String::new()
+                            },
+                            category: "prompt".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
             PaletteMode::Export => {
                 for (i, (format, scope, label)) in [
                     ("markdown", "session", "Markdown transcript"),
@@ -4538,7 +4569,7 @@ impl App {
                 }
             }
         }
-        if p.mode == PaletteMode::Models {
+        if matches!(p.mode, PaletteMode::Models | PaletteMode::History) {
             // favorites first, then newest first, as Core lists them; the
             // filter only removes rows
             scored.sort_by_key(|(_, i, _)| *i);
@@ -4747,6 +4778,14 @@ impl App {
             }
             PaletteKind::Agent(agent) => self.apply_agent(agent),
             PaletteKind::Block(i) => self.select_block(i),
+            PaletteKind::History(text) => {
+                if self.question_pending() {
+                    self.toast(Level::Info, QUESTION_LOCK);
+                } else {
+                    self.composer().set_text(&text);
+                    self.ui.focus = Focus::Composer;
+                }
+            }
             PaletteKind::Learn(scope) => {
                 if let (Some(source), Some(project)) =
                     (self.ui.learn_source.take(), self.current_project())
@@ -6684,6 +6723,7 @@ impl App {
                 "Type /learn followed by owner/repo, a GitHub URL or ./folder",
             ),
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
+            "composer.history_search" => self.open_palette(PaletteMode::History),
             // The new-session screen; the session exists once the first message is sent.
             "session.new" => {
                 if self.edit_blocks() {
@@ -10870,7 +10910,7 @@ impl App {
                     return;
                 }
                 "ctrl+r" => {
-                    self.run_command("app.reconnect");
+                    self.run_command("composer.history_search");
                     return;
                 }
                 "ctrl+t" => {

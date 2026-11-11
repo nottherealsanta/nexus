@@ -63,6 +63,8 @@ Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
 
+**Ctrl+R** (`composer.history_search`, the same key and list as the TUI) opens a filterable list of this project's earlier prompts from Core, newest first and each once; Enter replaces the draft with the chosen prompt and focuses the composer (a pending question still locks it). Up and Down recall in the composer is unchanged. Reconnect to Core keeps its leader key and banner button.
+
 Question cards scroll to reveal all questions, choices and option previews. A one-question ask answers in
 one step: choosing a single-choice option submits it at once and Enter in the free-text line submits that;
 a multi-select still has one `Submit answers` button, and a two-or-more-question card keeps the current

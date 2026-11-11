@@ -3173,6 +3173,32 @@ fn agent_model_rows_step_effort_with_right_and_left_returns_to_sections() {
 }
 
 #[test]
+fn ctrl_r_searches_the_prompt_history_and_fills_the_composer() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
+    app.composer().set_history(vec![
+        "fix the login bug".into(),
+        "write the release notes\nwith two lines".into(),
+        "fix the login bug".into(),
+        "run the tests".into(),
+    ]);
+    app.composer().set_text("half typed draft");
+    press(&mut app, &["ctrl+r"]);
+    let all = joined(&draw(&mut app, 120, 40).1);
+    assert!(all.contains("Prompt history") && all.contains("type to find an earlier prompt"), "{all}");
+    // Newest first, and the repeated prompt is listed once.
+    assert_eq!(all.matches("fix the login bug").count(), 1, "{all}");
+    assert!(all.find("run the tests").unwrap() < all.find("fix the login bug").unwrap());
+    assert!(all.contains("2 lines"), "{all}");
+    press(&mut app, &["r", "e", "l", "e", "a", "s", "e", "enter"]);
+    assert_eq!(app.composer_ref().text(), "write the release notes\nwith two lines");
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    // Esc leaves the draft alone.
+    app.composer().set_text("keep me");
+    press(&mut app, &["ctrl+r", "esc"]);
+    assert_eq!(app.composer_ref().text(), "keep me");
+}
+
+#[test]
 fn the_claude_provider_detail_shows_core_s_install_note() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
     app.state.providers = vec![serde_json::json!({"id": "claude", "label": "Claude", "connected": false, "methods": ["browser"],
