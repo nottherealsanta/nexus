@@ -129,6 +129,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
 | POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
+| GET | `/api/mcp/{name}/resources`, `/resource`, `/prompts`, `/prompt` | `?uri=` / `?name=&arguments=` | read-only MCP resources and prompts, fenced untrusted text; connects the server; also under `/api/project/{id}/mcp/{name}/` ([mcp.md](mcp.md#api-and-events)) |
 | GET | `/api/extension` | `?project=` or `?directory=` | `{tools: [{name, description, scope, path, sha256, timeout}], problems: [{path, error}]}`: user tools ([tools.md](tools.md#user-tools)) |
 | GET | `/api/voice` | | `{stt, tts}` status; never loads or downloads a model ([voice.md](voice.md#status)) |
 | POST | `/api/voice/transcribe` | raw mono 16 kHz PCM16 WAV; `?partial=1` | `{text}`; 409 `voice_busy` for an overlapping preview; transcript is not sent to a model ([voice.md](voice.md#speech-to-text)) |
