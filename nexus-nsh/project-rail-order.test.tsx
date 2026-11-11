@@ -103,6 +103,21 @@ describe("project rail (app)", () => {
     expect(JSON.parse(patch.body)).toEqual({ status: "passive" });
   });
 
+  test("Move up is unavailable on the first project and Move down on the last, with their reasons", async () => {
+    const app = await open("./App.tsx", { network: network(projects, { "POST */api/project/*/move": { body: { projects } } }), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:rail-project-prj_bravo");
+    await app.rightClick("id:rail-project-prj_bravo");
+    await app.waitFor("id:row-action-project.move_up");
+    expect(app.texts().includes("It is already first.")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.rightClick("id:rail-project-prj_alpha");
+    await app.waitFor("id:row-action-project.move_down");
+    expect(app.texts().includes("It is already last.")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.wait(300);
+    expect(app.requests().some((r) => r.url.endsWith("/move"))).toBe(false);
+  });
+
   test("removing a project asks first and only unregisters it", async () => {
     const app = await open("./App.tsx", {
       network: network(projects, { "POST */api/project/prj_alpha/remove": { body: { id: "prj_alpha", removed: true, sessions_kept: 0 } } }),

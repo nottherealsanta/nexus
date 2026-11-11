@@ -320,25 +320,25 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 The feature landed on 2026-11-06 (Core order, move API, drag and menu in both clients). The old plan said not to mark it landed until verified; this is that verification.
 
-- [ ] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
+- [x] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
   equivalent to creation time then ID. Append new projects; remove deleted projects; never expose the Manager's
   hidden project. Preserve existing project `created`/`updated` and revision semantics. Include the order in the
   consistent `/api/snapshot` and publish a durable global event on changes, with reducers in both clients; ensure
   snapshot watermark and event ordering cannot lose a move. Keep older snapshots/servers usable with the existing
-  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded.
-- [ ] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
+  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded. Verified 2026-11-11: `uv run pytest -q tests -k "move or order"` 53 passed; documented in `docs/api.md`.
+- [x] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
   (including an explicit end position), applied against Core's current order rather than replacing a stale whole
   list. Specify validation, no-op/self moves, concurrent moves, deleted or hidden IDs, retries, and how clients
   reconcile failures or a disconnected/reconnecting Core. Make ordering and event publication follow the existing
-  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them.
-- [ ] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
+  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them. Verified 2026-11-11 with the same 53 tests; request shape in `docs/api.md` (`before`/`after`, null = end/start).
+- [~] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
   while Escape or dropping outside the valid rail cancels. A click without a drag still selects/toggles the
   project. Support moving to either end and through a scrollable/overflowing rail, without confusing the add or
   Settings buttons for projects. Support touch in NSH without interfering with scrolling or accidental selection.
   Add accessible **Move up** / **Move down** project-menu actions in both clients (including disabled boundary and
   offline states), with shared manifest commands and keyboard access. Keep initials assigned in creation order,
-  independently of display order. Handle resize, project deletion and incoming reorder during an active drag.
-- [ ] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
+  independently of display order. Handle resize, project deletion and incoming reorder during an active drag. 2026-11-11: both clients' tests cover drag with a live insertion position, click versus drag, Esc and outside-rail cancel, Move up/down commands and (new) the first/last boundaries with their reasons (TUI `project_rail` 7/7, NSH `project-rail-order.test.tsx` 10/10). Not verified: touch, a scrolling or overflowing rail, resize/deletion/incoming reorder during a drag.
+- [~] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
   projects, restart, snapshots, replay, concurrency, idempotency and failure handling; add shared scenarios and
   interaction tests for both clients (click vs drag, cancel, boundaries, menus, scrolling and sync between clients).
   Run Core tests, TUI tests, NSH web tests and manifest checks; capture and compare matching TUI/NSH screenshots,
@@ -346,7 +346,7 @@ The feature landed on 2026-11-06 (Core order, move API, drag and menu in both cl
   Nexus behavior changes. Do not mark the work landed until it is verified.
 
 ## 9.13 Extensions, skills, MCP and hooks (old 9)
-
+ 2026-11-11: Core, TUI and NSH suites above pass; READMEs/docs not re-audited and paired drag-target screenshots not captured.
 - [ ] Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
   tool; process memory limits; validate project-only names in `[tools] disabled`. Exercise a user tool in a real
   session and run the reload stress test.
