@@ -11615,27 +11615,32 @@ impl App {
                     self.ui.pending_selected = None;
                 }
             }
-            "n" => {
-                if self
-                    .state
-                    .inputs
-                    .get(self.viewed_id().unwrap_or(""))
-                    .is_some_and(|v| v["held"] == true)
-                {
-                    if let Some(session) = self.viewed_id().map(str::to_owned) {
-                        self.api(ApiCall::Input {
-                            session,
-                            id: String::new(),
-                            action: "next".into(),
-                            before: None,
-                            parts: vec![],
-                        });
-                    }
-                }
-            }
+            "n" => self.pending_next(),
             _ => return false,
         }
         true
+    }
+
+    fn pending_next(&mut self) {
+        if self.question_pending() || !self.writable() {
+            return;
+        }
+        if self
+            .state
+            .inputs
+            .get(self.viewed_id().unwrap_or(""))
+            .is_some_and(|v| v["held"] == true)
+        {
+            if let Some(session) = self.viewed_id().map(str::to_owned) {
+                self.api(ApiCall::Input {
+                    session,
+                    id: String::new(),
+                    action: "next".into(),
+                    before: None,
+                    parts: vec![],
+                });
+            }
+        }
     }
 
     /// Run one right-aligned action on queued input `index`. Steer rows have no
@@ -15676,6 +15681,7 @@ impl App {
                 }
             }
             Target::PendingAction(index, action) => self.pending_action(index, action),
+            Target::PendingNext => self.pending_next(),
             Target::Continue => self.run_command("session.continue"),
             Target::BannerAction(i) => {
                 if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {

@@ -35,6 +35,7 @@ interface Flags {
   overflow?: boolean;
   snapshots?: number;
   inputs?: unknown[];
+  held?: boolean;
   questions?: unknown[];
   answerFailures?: number;
   archiveError?: boolean;
@@ -90,7 +91,7 @@ function network(flags: Flags = {}) {
       ...worktrees, session_directory: flags.directory,
       worktrees: [scenario.worktrees[0], { ...scenario.worktrees[1], path: flags.directory }],
     } : worktrees },
-    "GET */api/session/ses_1/input": () => ({ body: { held: true, inputs: flags.inputs ?? [] } }),
+    "GET */api/session/ses_1/input": () => ({ body: { held: flags.held ?? true, inputs: flags.inputs ?? [] } }),
     "GET */api/session/ses_2/message*": { body: [] },
     "GET */api/session/ses_2/snapshot": { body: null },
     "GET */api/session/ses_2/context": { body: { used: 0, window: null, exact: false } },
@@ -107,6 +108,8 @@ function network(flags: Flags = {}) {
     },
     "POST */api/session/ses_1/question/qst_two": { body: {}, delay: 200 },
     "POST */api/session/ses_1/input/*/move": { body: {} },
+    "POST */api/session/ses_1/input/next": { body: {} },
+    "PATCH */api/session/ses_1/input/*": { body: {} },
     "DELETE */api/session/ses_1/input/*": (r: any) => {
       const id = r.url.split("/").pop();
       const input = (flags.inputs as any[] | undefined)?.find((i) => i.id === id);
@@ -162,6 +165,21 @@ describe("archive closes its tab (plan 29)", () => {
     await app.keyboard.press("tab");
     await app.waitUntil(() => app.value("id:composer-input") === "/archive ");
     await app.submit("id:composer-input");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/ses_1/archive")));
+    await app.waitUntil(() => !app.shows("id:session-tab-ses_1"), { timeout: 8000 });
+    expect(app.shows("id:session-tab-ses_2")).toBe(true);
+  });
+
+  test("the sidebar row menu's Archive session runs the same command", async () => {
+    const flags: Flags = {};
+    const app = await openApp(flags);
+    await openSession(app, "ses_1");
+    await openSession(app, "ses_2", "Chores");
+    await app.press("id:session-tab-ses_1");
+    await app.waitFor("label:/^Rename Migration plan,/");
+    await app.press("id:row-menu-ses_1");
+    await app.waitFor("id:row-action-session.archive");
+    await app.press("id:row-action-session.archive");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/ses_1/archive")));
     await app.waitUntil(() => !app.shows("id:session-tab-ses_1"), { timeout: 8000 });
     expect(app.shows("id:session-tab-ses_2")).toBe(true);
@@ -338,16 +356,19 @@ describe("queued row actions (plan 31)", () => {
     { id: "in_q3", session_id: "ses_1", mode: "queue", parts: [{ type: "text", text: scenario.queue[2] }] },
   ];
   test("only queued rows show edit, up, down and remove; bounds follow the queued group", async () => {
-    const app = await open("./ComposerFixture.tsx", { network: network({ inputs }), width: 1280, height: 768, platform: "web" });
+    const ordered = [...inputs.slice(1), inputs[0]];
+    const app = await open("./ComposerFixture.tsx", { network: network({ inputs: ordered, held: false }), width: 1280, height: 768, platform: "web" });
     await app.waitFor("id:splash", { state: "gone" });
     await openSession(app, "ses_1");
     await app.wait(500);
     await app.screenshot("../reports/session-controls-2026-11-11/nsh-queue-state.png");
     await app.waitFor("id:pending-in_q1");
-    await app.screenshot("../reports/session-controls-2026-11-11/nsh-queue-actions-dark.png");
+    expect(app.texts().some((t) => t.startsWith("Pending ·"))).toBe(false);
     await app.hover("id:pending-in_steer");
     expect(app.shows("id:pending-edit-in_steer")).toBe(false);
     expect(app.shows("id:pending-steer-in_q1")).toBe(false);
+    await app.hover("id:pending-in_q2");
+    await app.screenshot("../reports/session-controls-2026-11-11/nsh-queue-actions-dark.png");
     await app.hover("id:pending-in_q1");
     for (const id of scenario.queue_actions) expect(app.shows(`id:pending-${id}-in_q1`)).toBe(true);
     expect(app.enabled("id:pending-up-in_q1")).toBe(false);
@@ -367,6 +388,52 @@ describe("queued row actions (plan 31)", () => {
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/input/in_q3/move")));
     const up = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/input/in_q3/move"))!;
     expect(JSON.parse(up.body as string)).toEqual({ before: "in_q2" });
+  });
+
+  test("keyboard selection exposes the shared hints and releases a held queue with n", async () => {
+    const ordered = [...inputs.slice(1), inputs[0]];
+    const app = await open("./ComposerFixture.tsx", { network: network({ inputs: ordered, held: true }), width: 1280, height: 768, platform: "web" });
+    await app.waitFor("id:splash", { state: "gone" });
+    await openSession(app);
+    await app.waitFor("id:pending-in_q1");
+    await app.type("id:composer-input", "");
+    await app.keyboard.press("up");
+    await app.keyboard.press("up");
+    await app.waitUntil(() => app.texts().some((t) => t.includes("Third queued message held") && t.includes("n send next")));
+    expect(app.enabled("id:pending-send-next")).toBe(true);
+    await app.screenshot("../reports/session-controls-2026-11-11/nsh-queue-held-selected-dark.png");
+    await app.keyboard.press("n");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/input/next")));
+    await app.press("id:pending-send-next");
+    await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.endsWith("/input/next")).length === 2);
+    expect(app.value("id:composer-input")).toBe("");
+  });
+
+  test("selected-row keys edit, confirm removal, reorder and steer without adding icon buttons to steers", async () => {
+    const ordered = [...inputs.slice(1), inputs[0]];
+    const app = await open("./ComposerFixture.tsx", { network: network({ inputs: ordered, held: false }), width: 1280, height: 768, platform: "web" });
+    await app.waitFor("id:splash", { state: "gone" });
+    await openSession(app);
+    await app.waitFor("id:pending-in_q1");
+    await app.type("id:composer-input", "");
+    await app.keyboard.press("up"); // steer row
+    expect(app.shows("id:pending-edit-in_steer")).toBe(false);
+    await app.keyboard.press("escape");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.endsWith("/interrupt"))).toBe(false);
+    await app.keyboard.press("up");
+    await app.keyboard.press("up"); // last queued row
+    await app.keyboard.press("shift+up");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/input/in_q3/move")));
+    await app.keyboard.press("s");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/input/in_q3")));
+    await app.keyboard.press("backspace");
+    await app.waitFor("id:confirm-dialog");
+    await app.press("id:confirm-cancel");
+    await app.type("id:composer-input", "");
+    await app.keyboard.press("up");
+    await app.keyboard.press("up");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.value("id:composer-input") === scenario.queue[2]);
   });
 });
 
@@ -459,18 +526,24 @@ describe("session control failure and edge cases", () => {
     expect(app.value("id:composer-input")).toBe("");
   });
 
-  test("a long worktree path wraps, scrolls, and copies exactly", async () => {
+  test("a long worktree path keeps its exact value and scrolls to its tail", async () => {
     const directory = `/work/${"unbroken_component_".repeat(60)}final-tail`;
     const app = await openApp({ directory });
     await openSession(app);
     await app.waitFor("id:location-worktree");
     await app.press("id:location-worktree");
     await app.waitFor("id:worktree-path-copy");
+    // The visible row soft-wraps, but the value the copy action uses (its accessible name) is unchanged.
+    const exact = directory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("/", "\\/");
+    expect(app.count(`label:/^${exact}$/`)).toBe(1);
     await app.press("id:worktree-path-copy");
     await app.waitUntil(() => app.clipboard() === directory);
+    // The path is taller than the modal, so the body must scroll; the step fails if it cannot.
+    // The capture below is checked by eye: the tail and the last row must be on screen.
     await app.scroll("id:worktree-info-scroll", 10000);
-    await app.waitUntil(() => app.shows("id:worktree-info-dialog"));
+    await app.wait(200);
     expect(app.shows("id:worktree-info-dialog")).toBe(true);
+    expect(app.texts().some((t) => t.includes("final-tail"))).toBe(true);
     await app.screenshot("../reports/session-controls-2026-11-11/nsh-worktree-long-path-dark.png");
   });
 });

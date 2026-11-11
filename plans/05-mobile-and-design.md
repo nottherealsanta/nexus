@@ -53,7 +53,7 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
   drawer. Rows show the title, a project colour dot, the status (spinner while busy, a `Needs your input` line for a
   pending approval or question) and a relative time. The top of the drawer has the **project switcher** (current
   project name + chevron → a list of projects and "All projects") and a search button that opens the search modal
-  focused (see [29](29-session-commands.md)). Reuse `EdgeDrawer` in `nexus-nsh/src/ui/overlays.tsx`; the gesture must not fight
+  focused (see [29](done/29-session-commands.md)). Reuse `EdgeDrawer` in `nexus-nsh/src/ui/overlays.tsx`; the gesture must not fight
   iOS back-swipe or horizontal scrolling inside code blocks.
 - [ ] **Sessions tab** is the same list full screen: project switcher title, search button, then sections. Proposed
   sections: *Needs you* (waiting sessions, with a count), *Running*, *Recent*. Long-press for the row menu (rename,

@@ -405,7 +405,8 @@ function WorktreeInfoBody() {
     <View class="gap-1" testID={`${p.testID}-row`}>
       <View class="flex-row items-center gap-2">
         <Text class={`flex-1 ${T.meta}`}>{p.label}</Text>
-        <IconButton icon="copy" label={`Copy ${p.label.toLowerCase()}`} testID={`${p.testID}-copy`} disabled={!p.value()} onPress={() => copy(p.value())} class="size-6" />
+        {/* Keep the kit's 32px geometry: shrinking this button breaks center pointer hits in an overflowing Scroll. */}
+        <IconButton icon="copy" label={`Copy ${p.label.toLowerCase()}`} testID={`${p.testID}-copy`} disabled={!p.value()} onPress={() => copy(p.value())} />
       </View>
       <Text testID={p.testID} accessibilityLabel={p.value()} style={{ userSelect: "text" }} class={`${T.mono} text-foreground`}>{softWrap(p.value()) || "unavailable"}</Text>
     </View>

@@ -24,7 +24,8 @@ Input is sent only while this attachment has control. Terminal applications rece
 mouse events when they request them; hold Shift to select text instead.
 The compact dock toolbar offers new, rename, close, take/release control, copy and
 hide; hover a control for its label. The dock holds only the user's terminals; the
-agent's running background shells have their own `N shell` indicator, which opens the jobs list.
+agent's running background shells have their own `N shell` indicator, which opens the Shells modal.
+In the Shells modal, ↑/↓ select a shell and `s` (or its `[stop]` / **Stop** action) stops a running one (`DELETE /api/bash/{id}`).
 Closed resources are hidden and opening the dock prefers a running terminal.
 Exit immediately disables input and updates the tab; a late control acknowledgment
 cannot make an ended terminal writable again. `--dump-frame` also runs the real
@@ -143,7 +144,8 @@ after the message. Hovering or selecting a **queued** row right-aligns `✎ ↑ 
 the queued group only (disabled on the first and last queued row), and remove asks
 before deleting it. Steer rows keep the keyboard selection and the existing keys
 but have no action icons. The keyboard path is unchanged: Enter edits, Backspace
-removes, Shift+↑/↓ moves.
+removes, Shift+↑/↓ moves. Up from an empty composer selects the last pending row;
+on a held queue, `n` or the shared **Send next** control releases the next input.
 The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`) in one fixed-width cell for every tab, root or New session, so the strip keeps its rhythm and a long title ellipsises; hovering a title too wide for its tab scrolls it to its end inside its dedicated title region, so the status mark and the fixed `×` never move or get overwritten; reduced motion instead shows the full title in a tooltip. Below the tabs the page keeps exactly one heading row: a root session leaves it blank (the full title is already its tab), while a viewed subagent shows its title on the left and right-aligned `agent · model · provider · effort` metadata, shifted right by a full-height four-cell muted-grey back strip at the page's far left. The strip runs from the heading through the composer, centres its `←` both vertically and horizontally, and the whole strip is clickable; it and Left outside the composer, text fields, the editor and overlays return straight to the root. Esc still returns to the immediate parent, and a root session has no strip. There is no second subagent-tab row; child cards remain the navigation path to a subagent. The viewed tab is bold on the page surface, the others muted on the band. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high

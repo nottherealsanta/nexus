@@ -4,17 +4,16 @@ User requests (2026-11-11), items 11 and 12. Both clients in the same change; mo
 
 ## Progress checkpoint (2026-11-11)
 
+- Follow-up: phone-idiom headless question route passes; physical device remains unverified. Desktop captures now use the same question and preserved draft; surrounding session histories differ. TUI shows a focused choice and keyboard hints, NSH a reading hint and elapsed time.
 Both clients implement and pass the focused single-/multi-question, free-text, composer-lock and multiple-question
-scenarios. The final TUI session-controls suite passes 34/34, including failed-answer retry coverage. The latest NSH
-session-controls run passed its question and failed-answer-retry scenarios; queue and long-worktree tests fail
-separately. The phone route and a physical device remain unverified; paired screenshots remain to review.
+scenarios, including failed-answer retry coverage.
 
 ## Before this change
 
 - A waiting question shows a card; answers are reviewed, then submitted with `waiting.submit_answers`
   ("Submit answers", TUI `ctrl+enter`, NSH `cmd+enter`). TUI renders "rows, then review answers one at a time"
   (`render.rs` ~5759); NSH `composer.tsx` ~1060–1090 has the option buttons and a `Submit answers` button.
-- The question UI's readability pass (wrapping, scrolling) landed 11-08 ([02-terminal.md](02-terminal.md) side job).
+- The question UI's readability pass (wrapping, scrolling) landed 11-08 ([02-terminal.md](../02-terminal.md) side job).
 
 ## 30.1 One question: answer and done
 

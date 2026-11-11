@@ -214,7 +214,7 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   then the existing 600 ms flash; no animation with reduced motion.
 - [ ] A shared scenario (`interface/scenarios/`) with a group that finishes live, plus frame tests in TUI
   `tests/frames.rs` and an NSH test using a fake clock. Ledger row: ported from old Nexus.
-- Pending-row (steer/queue) hover actions: moved to [31-pending-row-actions.md](31-pending-row-actions.md) on 2026-11-11.
+- Pending-row (steer/queue) hover actions: moved to [31-pending-row-actions.md](done/31-pending-row-actions.md) on 2026-11-11.
 - [ ] A side-by-side review of both clients against the shared scenarios (`interface/scenarios/`) in dark and light,
   at TUI 80×24 / 120×40 / 160×48 and NSH 390 / 1024 / 1440 px; list every misalignment, inconsistent spacing,
   wording or state and fix them in pairs.

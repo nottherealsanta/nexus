@@ -190,6 +190,44 @@ fn archive_is_a_slash_command_in_the_shared_manifest() {
 }
 
 #[test]
+fn row_menu_archive_refusal_keeps_the_tab_and_explains_why() {
+    let mut app = app();
+    draw(&mut app, 120, 36);
+    let row = app.hits.rect_of(&Target::SideRow(0)).expect("session row");
+    right_click(&mut app, row.x + 2, row.y);
+    draw(&mut app, 120, 36);
+    let index = app
+        .palette_items()
+        .iter()
+        .position(|item| item.label == "Archive session")
+        .expect("archive menu item");
+    let item = app
+        .hits
+        .rect_of(&Target::PaletteItem(index))
+        .expect("archive hit");
+    click(&mut app, item.x + 1, item.y);
+    let call = app
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::Archive { archived: true, .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("archive request");
+    app.apply_done(nexus_tui::actions::ActionDone {
+        call,
+        result: Err("A background job is running".into()),
+    });
+    assert_eq!(app.viewed_id(), Some(SESSION));
+    assert!(app
+        .ui
+        .alerts
+        .toasts
+        .iter()
+        .any(|toast| toast.text.contains("A background job is running")));
+}
+
+#[test]
 fn search_opens_the_sessions_switcher_with_a_focused_query() {
     let mut app = app();
     app.composer().set_text("/search");
@@ -737,14 +775,23 @@ fn screenshots() {
 
     let mut question = app();
     scenario_worktree(&mut question);
+    let scenario: serde_json::Value = serde_json::from_str(SCENARIO).unwrap();
+    question
+        .composer()
+        .set_text(scenario["draft"].as_str().unwrap());
     ask(&mut question, scenario_question());
     shot("tui-question-lock-120x36-dark", &mut question, (120, 36));
 
     let mut queued = pending_app();
     scenario_worktree(&mut queued);
     hover_row(&mut queued, "Second queued message");
-    queued.ui.pending_selected = Some(3);
     shot("tui-queued-actions-120x36-dark", &mut queued, (120, 36));
+
+    let mut held = pending_app();
+    scenario_worktree(&mut held);
+    held.state.inputs.get_mut(SESSION).unwrap()["held"] = true.into();
+    held.ui.pending_selected = Some(2);
+    shot("tui-queue-held-selected-120x36-dark", &mut held, (120, 36));
 
     let mut tooltip = app();
     scenario_worktree(&mut tooltip);
@@ -762,6 +809,35 @@ fn screenshots() {
         .unwrap();
     click(&mut worktree, icon.x, icon.y);
     shot("tui-worktree-modal-120x36-dark", &mut worktree, (120, 36));
+}
+
+#[test]
+fn selected_held_queue_explains_and_sends_next() {
+    let mut app = pending_app();
+    app.state.inputs.get_mut(SESSION).unwrap()["held"] = true.into();
+    app.ui.pending_selected = Some(2);
+    let rows = draw(&mut app, 200, 40).1.join("\n");
+    assert!(rows.contains("n send next"), "{rows}");
+    press(&mut app, &["n"]);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Input { action, .. }) if action == "next")));
+    app.effects.clear();
+    draw(&mut app, 200, 40);
+    let button = app
+        .hits
+        .rect_of(&Target::PendingNext)
+        .expect("held queue button");
+    click(&mut app, button.x, button.y);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Input { action, .. }) if action == "next")));
+    app.effects.clear();
+    ask(&mut app, scenario_question());
+    draw(&mut app, 200, 40);
+    assert!(app.hits.rect_of(&Target::PendingNext).is_none());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
@@ -32,6 +32,7 @@ import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // a Working row above it while busy, the completion block on its top edge and the project strip below.
 const focused = signal(false);
+const pendingSelection = signal<{ session: string; id: string } | null>(null);
 const selected = signal(0);
 /** The completion token the user closed with Esc; it reopens when the token changes. */
 const dismissed = signal<string | null>(null);
@@ -297,7 +298,7 @@ function EditableComposer() {
     if (project) void loadPromptHistory(project).catch(() => { historyKey = ""; });
   });
   effect(() => {
-    if (!focused() || open()) return;
+    if (!focused() || open() || pendingSelection() || (!(draft()[draftKey()] ?? "").length && (pendingInputs()[viewed()?.id ?? ""]?.inputs.length ?? 0) > 0)) return;
     const entries = promptHistory().entries;
     if (!entries.length) return;
     // A recalled prompt lands with its caret at the end: Up then walks its lines before the next one.
@@ -448,7 +449,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : "Type a message…")}
+            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : busy() ? "Type a message… Enter steer · Tab queue" : "Type a message…")}
             readonly={!live() || questionPending()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
@@ -686,7 +687,7 @@ function PendingStack() {
         const sid = s.id;
         confirmDialog.set({
           title: "Remove pending input",
-          body: `Remove the queued message "${text}"?\n\nThis cannot be undone.`,
+          body: `Remove the ${item?.mode === "steer" ? "steer" : "queued message"} "${text}"?\n\nThis cannot be undone.`,
           confirm: "Remove", destructive: true,
           run: async () => { await request("DELETE", `/api/session/${sid}/input/${id}`); await loadInputs(sid); },
         });
@@ -709,6 +710,52 @@ function PendingStack() {
       await loadInputs(s.id);
     } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
   };
+  effect(() => {
+    const s = session();
+    const items = stack().inputs;
+    const selected = pendingSelection();
+    if (selected && (selected.session !== s?.id || !items.some((item) => item.id === selected.id))) pendingSelection.set(null);
+  });
+  effect(() => {
+    const s = session();
+    const items = stack().inputs;
+    const selection = pendingSelection();
+    if (!s || !items.length || !focused() || questionLocked() || !live() || term("overlay.open") || term("dialog.open")) return;
+    const at = selection?.session === s.id ? items.findIndex((item) => item.id === selection.id) : -1;
+    const choose = (index: number) => pendingSelection.set(index < 0 || index >= items.length ? null : { session: s.id, id: items[index].id });
+    if (at < 0) {
+      const k = draftKey();
+      if ((draft()[k] ?? "").length || (imageDrafts()[k] ?? []).length) return;
+      return bindOpenKeys({ up: () => choose(items.length - 1) });
+    }
+    const item = items[at];
+    const move = async (direction: -1 | 1) => {
+      const other = items[at + direction]; if (!other) return;
+      try {
+        const id = direction < 0 ? item.id : other.id;
+        const before = direction < 0 ? other.id : item.id;
+        await request("POST", `/api/session/${s.id}/input/${id}/move`, { body: { before } });
+        await loadInputs(s.id);
+      } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+    };
+    const steer = async () => {
+      if (item.mode !== "queue") return;
+      try { await request("PATCH", `/api/session/${s.id}/input/${item.id}`, { body: { mode: "steer" } }); await loadInputs(s.id); }
+      catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+    };
+    const next = async () => {
+      if (!stack().held) return;
+      try { await request("POST", `/api/session/${s.id}/input/next`, { body: {} }); await loadInputs(s.id); }
+      catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
+    };
+    return bindOpenKeys({
+      up: () => choose(Math.max(0, at - 1)), down: () => choose(at + 1), escape: () => choose(-1),
+      enter: () => { choose(-1); void perform(item.id, "edit"); },
+      backspace: () => { choose(-1); void perform(item.id, "remove"); },
+      "shift+up": () => void move(-1), "shift+down": () => void move(1),
+      s: () => void steer(), n: () => void next(),
+    });
+  });
   // Quiet ghost actions: icons that appear on hover (and on focus) on a pointer, always shown below the
   // text on touch and on a narrow window. Only queued rows carry actions.
   const always = () => touch || isNarrow();
@@ -719,29 +766,26 @@ function PendingStack() {
     const ids = () => queueIds();
     const at = () => ids().indexOf(q.i().id);
     return <>
-      <IconButton icon="pencil" label="Edit" class={reveal()} testID={`pending-edit-${q.i().id}`} onPress={() => void perform(q.i().id, "edit")} />
-      <IconButton icon="arrow-up" label="Move up" class={reveal()} testID={`pending-up-${q.i().id}`} disabled={at() <= 0} onPress={() => void perform(q.i().id, "up")} />
-      <IconButton icon="arrow-down" label="Move down" class={reveal()} testID={`pending-down-${q.i().id}`} disabled={at() < 0 || at() >= ids().length - 1} onPress={() => void perform(q.i().id, "down")} />
-      <IconButton icon="x" label="Remove" class={reveal()} testID={`pending-remove-${q.i().id}`} onPress={() => void perform(q.i().id, "remove")} />
+      <IconButton icon="pencil" label="Edit" testID={`pending-edit-${q.i().id}`} onPress={() => void perform(q.i().id, "edit")} />
+      <IconButton icon="arrow-up" label="Move up" testID={`pending-up-${q.i().id}`} disabled={at() <= 0} onPress={() => void perform(q.i().id, "up")} />
+      <IconButton icon="arrow-down" label="Move down" testID={`pending-down-${q.i().id}`} disabled={at() < 0 || at() >= ids().length - 1} onPress={() => void perform(q.i().id, "down")} />
+      <IconButton icon="x" label="Remove" testID={`pending-remove-${q.i().id}`} onPress={() => void perform(q.i().id, "remove")} />
     </>;
   };
   return <View><If when={stack().inputs.length > 0}><View class="mb-3 rounded-(--radius-card) border border-border bg-card px-2 py-1" testID="pending-inputs">
-    <View class="flex-row items-center min-h-6">
-      <Text class={`flex-1 min-w-0 ${T.meta}`} style={{ numberOfLines: 1 }}>{stack()?.held ? "Queue held · enter steer · tab queue" : "Pending · enter steer · tab queue"}</Text>
-      <If when={stack()?.held}><View class="-mr-3"><Btn label="Send next" kind="ghost" testID="pending-send-next" disabled={questionLocked()} onPress={() => { if (questionLocked()) return; const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></View></If>
-    </View>
+    <If when={stack().held}><View class="flex-row items-center justify-end min-h-6 -mr-3"><Btn label="Send next" kind="ghost" testID="pending-send-next" disabled={questionLocked() || !live()} onPress={() => { const s = session(); if (s && live() && !questionLocked()) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></View></If>
     <Each of={stack().inputs} key={(i) => i.id}>{(i) => <View class="group/pend relative" testID={`pending-${i().id}`}>
       <If when={i().mode === "queue"} else={<View class="flex-row items-center gap-2 min-h-8 rounded-(--radius) px-0">
         <Text class={`w-5 shrink-0 ${TS.base} text-foreground`}>S</Text>
-        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec} group-hover/pend:text-foreground`}>{pendingLabel(i())}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${pendingSelection()?.id === i().id ? T.body : T.sec} group-hover/pend:text-foreground`}>{`${pendingLabel(i())}${stack().held ? " held" : ""}${pendingSelection()?.id === i().id ? `  ${stack().held ? "n send next · " : ""}enter edit · backspace remove · shift+↑/↓ move` : ""}`}</Text>
       </View>}>
         <Button disabled={!always()} onPress={() => opened.set(opened() === i().id ? null : i().id)} selected={opened() === i().id}
           accessibilityLabel={`Queued: ${pendingLabel(i())}`}
-          class={`flex-row items-center gap-2 min-h-8 rounded-(--radius) ${FOCUS}`}>
+          class={`flex-row items-center gap-2 min-h-8 rounded-(--radius) ${always() ? "" : "pr-36"} ${FOCUS}`}>
           <Text class={`w-5 shrink-0 ${TS.base} text-foreground`}>Q</Text>
-          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec} group-hover/pend:text-foreground`}>{pendingLabel(i())}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${pendingSelection()?.id === i().id ? T.body : T.sec} group-hover/pend:text-foreground`}>{`${pendingLabel(i())}${stack().held ? " held" : ""}${pendingSelection()?.id === i().id ? `  ${stack().held ? "n send next · " : ""}enter edit · backspace remove · s steer · shift+↑/↓ move` : ""}`}</Text>
         </Button>
-        <If when={always()} else={<View class="absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar"><PendingActions i={i} /></View>}>
+        <If when={always()} else={<View class={`absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar ${pendingSelection()?.id === i().id ? "" : reveal()}`}><PendingActions i={i} /></View>}>
           <If when={opened() === i().id}><View class="flex-row items-center justify-end gap-0.5"><PendingActions i={i} /></View></If>
         </If>
       </If>

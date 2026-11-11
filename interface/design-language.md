@@ -154,6 +154,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   `e ^ v x`; NSH `pencil`, `arrow-up`, `arrow-down`, `x`). Up/down are disabled at
   that queue group's bounds. Touch uses tap-to-reveal. There is no Steer row button;
   pending steer rows retain their existing keyboard actions without action icons.
+  The unheld card has no header. The busy NSH composer keeps the Enter/Tab send-mode hint in its empty
+  placeholder. Up from an empty composer selects a pending row; the selected row shows the same key hints in
+  both clients. Held rows are marked `held`, with `n send next` in the selected-row hint and a shared
+  **Send next** control; the control is disabled while a question is pending.
 - Collapsed sidebar content starts at the same vertical origin as the expanded
   sidebar. Context omits a separate Child agents section. Each section heading
   opens a scrollable modal with stored content and metadata. The top Context label

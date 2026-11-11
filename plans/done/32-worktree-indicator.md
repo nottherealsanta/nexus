@@ -6,10 +6,9 @@ with a copy button. Both clients in the same change; desktop/web only (mobile sh
 
 ## Progress checkpoint (2026-11-11)
 
-Both clients implement the shared icon/tooltip/modal, full copyable worktree path, branch and main-checkout path.
-The focused TUI scenarios and screenshots pass, including long-path scrolling. NSH's basic tooltip/modal/copy test
-passes and its screenshots are captured. The NSH long-path scenario currently fails its scrolling verification despite
-showing the full soft-wrapped path in the modal; fix or refine scrolling and rerun. Paired screenshot review remains open.
+- Follow-up: browser screenshots confirm scrolling to `final-tail` and the main checkout. The copy button's 24px override caused a center-click failure on overflow; restoring the kit's 32px button geometry fixes it. Real Chromium center clicks now copy the exact 1,156-character path and the main checkout after scrolling. Modal screenshots with the same worktree data were reviewed; surrounding sessions differ.
+Both clients implement the shared icon/tooltip/modal, worktree path, branch and main-checkout path. Focused TUI and
+NSH scenarios pass; the remaining limits are noted above.
 
 ## Before this change
 
@@ -27,7 +26,7 @@ showing the full soft-wrapped path in the modal; fix or refine scrolling and rer
   unicode + ASCII) so both read from the shared theme. Same muted colour; primary on hover.
 - [x] **Tooltip:** `Worktree session` on hover (NSH `tooltip`; the TUI's existing hover-hint mechanism, as for other
   strip items). Accessibility label: "Worktree session, open details".
-- [~] **Click → modal** (new manifest command `session.worktree_info`, title "Worktree", placement `composer`;
+- [x] **Click → modal** (new manifest command `session.worktree_info`, title "Worktree", placement `composer`;
   `when = ["has_session", "session.linked_worktree"]`):
   - Title: `Worktree`.
   - Body: "This session is in a worktree." then the **worktree path** in mono, wrapped (never truncated), with a
@@ -37,6 +36,6 @@ showing the full soft-wrapped path in the modal; fix or refine scrolling and rer
   - Small modal size in both clients; translucent backdrop as all modals.
 - [x] Data comes from what the strip already has (`worktreeForDirectory` / the session's worktree listing); no new
   Core API.
-- [~] Shared scenario with a linked-worktree session; TUI behaviour test (click the glyph opens the modal, copy emits
+- [x] Shared scenario with a linked-worktree session; TUI behaviour test (click the glyph opens the modal, copy emits
   OSC 52) and NSH browser test (hover tooltip, click, copy). Matching screenshots.
 - [x] Docs: both READMEs, `interface/design-language.md` (location strip), `interface/capability-matrix.md`.

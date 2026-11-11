@@ -2,7 +2,16 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Stop background shells from the Shells modal (11-11, plan 41).** Both clients: ↑/↓ select, `s` or `[stop]`/**Stop** kills a running job; TUI `resources` 7/7, NSH `resources.test.tsx` 5/5, both modals compared.
 - **Terminal is the user's (11-11, plan 41).** The dock holds only user terminals; `bash` (foreground and background) is pipe-only and never creates a terminal resource; `N shell` counts every running job in both clients and opens the jobs list; terminal evidence provenance, inspector `terminal` lane/`resource_spans` and `terminal.updated` removed; old job-linked terminals load as `closed`. The inspector `job` lane and paired screenshots remain open.
+
+- **Pending queue selected/held parity (11-11; plan 31).** Both clients expose selected-row keyboard actions and a held-only Send next control plus `n` hint, with question locking; focused tests and paired held/selected captures pass. Physical touch unverified. [Evidence](../reports/session-controls-2026-11-11/).
+
+- **Session-control geometry and parity follow-up (11-11).** Removed the unheld NSH queue header and restored the copy button's 32px kit geometry; real-browser center clicks copy a 1,156-character worktree path and the main checkout after scrolling. Plans 29, 30 and 32 moved to done; plan 31 retains selected-row hint/held-control parity checks. Physical phone unverified. [Evidence](../reports/session-controls-2026-11-11/).
+
+- **Session controls evidence follow-up (11-11; plans 29–32).** Matched queue, question and worktree component states for reviewed captures; added a real-browser long-path copy reproducer. Keyboard and edge pointer copying are exact, but center pointer fails on overflow; NSH's extra queue header also differs from TUI. Both remain open. [Evidence](../reports/session-controls-2026-11-11/).
+
+- **Session controls follow-up (11-11; plans 29–32).** Fixed NSH pending-row rendering and unhovered disabled-icon leakage; desktop focused suites, phone-idiom routes, Core contracts and interface checks pass. Physical device, controlled paired captures and exact long-path copy remain open; full TUI suite is blocked by an unrelated private-method compilation error. [Evidence](../reports/session-controls-2026-11-11/).
 
 - **Subscription usage sources (11-11).** Core parses Codex personal/managed monthly limits and optional workspace lookups; Claude uses OAuth usage or a guarded interactive `/usage` fallback, including weekly-only and enterprise spend-only accounts. Both clients retain their shared table contract. Approved read-only current-account checks and 56 focused tests passed; Ruff passed. Full Core run timed out; other plans and screenshots remain unverified. [Usage contract](../docs/api.md#usage-k11).
 

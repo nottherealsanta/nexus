@@ -6775,6 +6775,30 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .x;
         let mark_x = input_x.saturating_sub(2);
         let end = card.right().saturating_sub(2);
+        if held && card.width >= 15 {
+            let label = "Send next";
+            let x = end.saturating_sub(width(label) as u16);
+            let button = Rect::new(x, r.y, width(label) as u16, 1);
+            let enabled = !cx.app.question_pending() && cx.app.writable();
+            put(
+                buf,
+                x,
+                r.y,
+                label,
+                cx.st(
+                    if enabled && cx.hovered(button) {
+                        PRIMARY
+                    } else {
+                        MUTED
+                    },
+                    PANEL,
+                ),
+                button.width,
+            );
+            if enabled {
+                hits.add(button, Target::PendingNext);
+            }
+        }
         let queued: Vec<usize> = inputs
             .iter()
             .enumerate()
@@ -6817,6 +6841,10 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             let held_suffix = if held { " held" } else { "" };
             let hint = if !selected {
                 ""
+            } else if queued_row && held {
+                "  n send next · enter edit · backspace remove · s steer · shift+↑/↓ move"
+            } else if held {
+                "  n send next · enter edit · backspace remove · shift+↑/↓ move"
             } else if queued_row {
                 "  enter edit · backspace remove · s steer · shift+↑/↓ move"
             } else {

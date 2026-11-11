@@ -306,7 +306,8 @@ ends with context usage. The location strip is its own row under the controls at
 muted home-shortened path and branch on the left, centered gray indicators for a live
 kernel, running background shells and terminal shells when present. The kernel and
 background-shell indicators (the agent's running bash jobs) open separate detail lists;
-terminal shells (the user's terminals) open the dock. A linked
+terminal shells (the user's terminals) open the dock.
+In the Shells modal, ↑/↓ select a shell and `s` (or its `[stop]` / **Stop** action) stops a running one (`DELETE /api/bash/{id}`). A linked
 worktree adds a bundled fork icon (muted, primary on hover) with the tooltip `Worktree session`; clicking it
 opens the small **Worktree** modal with the copyable worktree path, branch and main-checkout path, and a
 `Copied` toast. The context reading (`82k · 41%`) stays on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a
@@ -330,6 +331,12 @@ narrow windows keep them below the line); the order is edit, move up, move down,
 the first queued row and down on the last, counting only queued rows, and each icon runs the same move as
 the keyboard. Steer rows keep their keyboard behaviour and carry no row-action icons or Steer text button.
 Removing asks first; edit restores the message into an empty draft.
+The unheld card has no heading. While a turn is busy, the empty composer explains Enter to steer and Tab to queue.
+Up from an empty composer selects the last pending row: Up/Down select, Enter edits, Backspace asks to remove,
+Shift+↑/↓ moves and `s` steers a queued input. Held rows carry `held`; `n` or the shared **Send next** control
+releases the next input. A pending question disables these actions.
+The focused `session-controls.test.tsx` browser scenarios cover the queue and desktop session controls;
+`phone-session-controls.test.tsx` exercises the cut-down phone routes headlessly, not on a physical device.
 
 The starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Its text uses a consistent

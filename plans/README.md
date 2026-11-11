@@ -35,15 +35,11 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | --- | --- | --- | --- |
 | 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11 (working tree)**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
-| 30 | [Questions: one-step answer, locked composer, free-text focus](30-questions.md) | Implemented; focused question scenarios pass in both clients; paired screenshots pending | Final verification; phone route/device unverified |
 | 38 | [Ctrl+V pastes text too](38-ctrl-v-text.md) | **new**; TUI Ctrl+V reads images only | Fall back to clipboard text in the TUI |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
 | 35 | [Timeline: item icons, "Subagent done" row + modal](35-timeline-notice-rows.md) | **new** | Core notice metadata, then both clients |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
 | 33 | [Remove Git from the right sidebar](33-remove-git-from-right-sidebar.md) | **new** | Confirm only the right-sidebar section goes |
-| 32 | [Worktree indicator: icon, tooltip, info modal](32-worktree-indicator.md) | Shared modal and basic tests in both; TUI long-path test/screenshots pass; NSH long-path scroll check fails | Fix/verify NSH long-path scrolling; paired screenshot review |
-| 31 | [Pending queue rows: hover edit, up, down, remove](31-pending-row-actions.md) | TUI implementation/tests pass; NSH rows still do not render in focused browser tests | Fix NSH pending-row rendering; rerun both; paired screenshots |
-| 29 | [Archive closes its tab, `/archive`, `/search`](29-session-commands.md) | Desktop implementation and focused scenarios pass in both; mobile behavior not verified | Verify mobile archive navigation; archive menu/refusal coverage; screenshots |
 | 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **new**; reference in `nexus01` | Decide what happens to the queue; resolve the NSH `alt+enter` clash |
 | 26 | [Launch: animate from the first frame, no progress bar](26-launch-splash.md) | **new** | Reproduce a cold daemon start |
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
@@ -60,7 +56,9 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
 Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
-[22 remove `/continuation`](done/22-remove-continuation.md).
+[22 remove `/continuation`](done/22-remove-continuation.md), [29 session commands](done/29-session-commands.md),
+[30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md),
+[32 worktree indicator](done/32-worktree-indicator.md). Physical phone/touch was not verified.
 
 Section 7 of the old plan (the backlog overview) is now the top of [09-backlog.md](09-backlog.md). The GPUI host spike
 is in [decisions.md](decisions.md).

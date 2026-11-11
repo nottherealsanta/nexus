@@ -762,6 +762,7 @@ pub enum Target {
     WaitInput,
     /// One action on queued pending input `i`, right-aligned on its row.
     PendingAction(usize, PendingAction),
+    PendingNext,
     /// Copy one value out of the open worktree modal.
     WorktreeCopy(WorktreeCopy),
     Continue,
