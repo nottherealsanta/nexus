@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]    [Git]     · Fork subagents ×    +                                                                                                        □
+     │
+▏    │▏  Fork subagents            1m
+▏ W  │▏                           2 ↳     System prompt ~992
+▏  1 │
+     │                                    AGENTS.md  not found · /private/tmp/nexus-fork.SlHfrs/workspace/AGENTS.md
+     │
+     │                                    Tools [17] ~3.3K
+     │                                      ● read                      ● bash_kill                 ● ask
+     │                                      ● grep                      ● edit                      ● code
+     │                                      ● glob                      ● patch                     ● fork
+     │                                      ● ls                        ● write                     ● expose_workspace_tools
+     │                                      ● bash                      ● web_search                ● message_session
+     │                                      ● bash_output               ● web_fetch
+     │
+     │                                    Skills [0]  none
+     │
+     │                                    MCP [0]  none
+     │
+     │                                    total  ~4,258 tok · 2.1% of the window
+     │
+     │
+     │                                  │
+     │                                  │  Exercise fork sub agents.                                                                                      #1 · 10:27 PM
+     │                                  │
+     │
+     │                                     Looking at the workspace before splitting the work.
+     │
+     │                                     ▸ 1 tool
+     │
+     │                                     Forking twice from here; both forks already know what I have seen.
+     │
+     │                                     ▸ 2 forks
+     │
+     │                                     Both forks reported back.
+     │
+     │                                     ✓ mock verdict — fork-subagent: 2/2 checks passed
+     │
+     │                                     • ✓ fork called == 2 times
+     │                                     • ✓ exactly 0 tool error(s)
+     │
+     │                                                        Builds context, then launches two forks that share it · 3 tools · 653i · 0o · 0r · 14%c · 0.1s · 10:27 PM
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · Builds context, then launches two forks that share it mock · default                                   522 · 0.3%
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/nexus-fork.SlHfrs/workspace
+     │                                   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
