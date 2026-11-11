@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Backlog audit notes (11-11, plan 09).** NSH handoff open-original test, project-rail boundary tests, `nsh-syntaxes.bin` served, split-diff and scroll coverage located; see 9.2, 9.5, 9.7, 9.11.
+
 - **Ctrl+R prompt history search (11-11, plan 09 9.7).** Shared `composer.history_search` in both clients; Ctrl+R no longer reconnects in the TUI. TUI shell test and NSH `prompt-history.test.tsx` pass; paired captures in [reports](../reports/ui-backlog-2026-11-11/). Dump-frame runs now load prompt history for `--open first`.
 
 - **Shared motion durations (11-11, plan 09 9.6).** `[motion.durations]` in theme.toml (flash, scroll bar visible/fade) drives both clients; NSH's 600 ms flash and 900/1300 ms scroll-bar timing now match the TUI. Draw-cost bench re-run: paced 1.4–1.5 ms, chrome 0.38 ms, so the 11-04 regression does not reproduce.

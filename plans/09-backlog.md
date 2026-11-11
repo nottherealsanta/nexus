@@ -66,7 +66,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   layout as NSH's find bar (`cmd+f`, next/previous, count, Esc closes it before the modal).
 - [~] Both clients now open files in one editable mode; the shared `editor.edit` command was removed. TUI behavior verification remains incomplete. A
   clean file reloads when it changes on disk; a modified one shows "changed on disk".
-- [ ] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then).
+- [x] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then). Verified 2026-11-11: the built bundle serves `nsh-syntaxes.<hash>.bin` (200, 921,717 bytes) from the static host.
 - [ ] Measure the TUI binary before and after each language beyond the starting 13 (Rust, Python, JavaScript,
   TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
 - [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
@@ -261,8 +261,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] **Audit navigation, pickers and panel interactions** across the clients (the 11-02 audit covered tool
   groups, palette, child rows, banners, rail, footer, composer, starting context, waiting cards and notices).
 - [~] **Ctrl+R prompt history search** in both clients: new shared command `composer.history_search`, bound to `ctrl+r` in both (TUI reconnect keeps its leader key `r`, banner and palette). TUI palette mode and NSH picker list Core's per-project history newest first, each once, filtered live; Enter replaces the draft. Verified 2026-11-11: TUI `shell` test `ctrl_r_searches_the_prompt_history_and_fills_the_composer`, NSH `prompt-history.test.tsx` 1/1, `check_manifest.py` ok, paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Not verified: recall after restarting both clients, multiline drafts and images end to end (images are `[N images]` text in both).
-- [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
-  completion from the start result.
+- [~] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
+  completion from the start result. 2026-11-11 audit: both clients already show model/effort, elapsed time and a `Background` tag on the card. Still open: the completed token count (needs per-child usage, `GET /api/session/{id}/usage`) and telling a background completion from the start result.
 - [x] **Background shells and archive** (was TODO 3). Manual archive now refuses a tree with a live background job before changing state. Both clients show the Core error. A real background-job regression test passes (2026-11-07).
 - [ ] Review both clients side by side in light and dark; establish large-session performance budgets; test
   keyboard-only paths; decide the focus-ring colour.
@@ -302,10 +302,10 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] `path:line` and OSC 8 link hit regions in the timeline (NSH already opens prose links). Checked 2026-11-04:
   no OSC 8 output and no link `Target`; Markdown links render as plain text with the URL (`markdown.rs:947–965`); choose a
   syntax-highlighting library for the file view (or reuse the vendored editor's Tree-sitter).
-- [ ] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
-  lacks them.
-- [ ] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
-  (`interface/review.md`).
+- [~] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
+  lacks them. Continuation alignment is covered by `diff::tests::split_continuation_rows_start_at_the_text_column` and the CJK wrap test (8/8 diff tests pass, 2026-11-11). Line numbers for edit/patch diffs whose input lacks them are still open: `Diff::from_replace` carries no position and Core does not send one.
+- [~] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
+  (`interface/review.md`). Frame-level (not PTY) coverage exists: `timeline.rs::following_anchors_and_jump_to_latest_hold_at_every_size`, `alerts.rs` jump pill at 80x24, `first_prompt.rs` pin; NSH `timeline-scroll.test.tsx` covers stream-while-scrolled-up, session switch restore, older-page prepend and the pin. A real PTY run and the fixed-fixture gallery are not done.
 - [ ] Timeline mouse selection: selection across scrolling, copying the underlying unwrapped text, OSC 52 in real
   terminals.
 - [ ] Session info: failed child count, enabled/disabled tools and kernels.
