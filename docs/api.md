@@ -599,6 +599,7 @@ durable reconciliation for a lost HTTP response.
 | `POST /api/project/{id}/move` | yes | — | Applied against Core's current order (not a client's list); replay returns the original list; an unknown id is 400 |
 | `POST /api/project/{id}/remove` | yes | — | Replay returns the original answer; a project already removed is 404 |
 | `POST /api/project/{id}/git/action` | required | — | External effect: a pending outcome after a crash is `mutation_outcome_unknown`, never blindly replayed |
+| `POST /api/project/{id}/worktree/integrate` | required | — | External effect on the base checkout; a pending outcome after a crash is `mutation_outcome_unknown`, never blindly replayed |
 | `POST /api/session` | yes | — | Replay returns the same session; a child is not created twice |
 | `PATCH /api/session/{id}` | yes | `If-Match` / `expected_revision` | Replay before recheck; stale revision 409 |
 | `DELETE /api/session/{id}` | yes | — | Replay is 204; tombstones already recorded |
@@ -1396,6 +1397,32 @@ returns an error. Status exposes at most 10,000 changes and 10,000 branches, wit
 `git.changed`; switch, pull and discard also publish
 `files.changed`. These events do not enter a session timeline. The desktop Git
 surface and remaining actions are not yet implemented.
+
+### Worktree review and integration
+
+Control-plane only (no task or control tool reaches it; agent access needs its own approval design, see plan 9.15).
+`GET /api/project/{id}/worktree/review?worktree=&base=` reads, never writes. `worktree` must be a registered,
+non-main checkout on a branch; `base` defaults to the main checkout's branch and must be checked out in a
+worktree. It returns `{worktree, branch, head, base, base_head, base_worktree, merge_base, ahead, behind,
+fast_forward, commits (50 newest: sha, author, time, subject), commits_omitted, files (500: path, status,
+added, deleted), files_omitted, conflicts (names; null when this Git is older than 2.38 and cannot predict),
+blockers, live}`. `blockers` lists why integrating would be refused now: nothing to integrate, uncommitted
+changes in either checkout, a Git operation in progress on the base, a predicted conflict. `live` is the
+`/git/live` record of both checkouts.
+
+`POST /api/project/{id}/worktree/integrate` requires `Idempotency-Key`:
+`{worktree, expected_head, mode: "ff" | "merge", base?, message?, remove?, confirmed_live?}`. `expected_head` is
+the full branch tip the user reviewed; a branch that moved since is refused. `ff` is `git merge --ff-only` (a
+base that moved on is refused); `merge` is `git merge --no-ff` with `message` or Git's default. Everything is
+rechecked under the worktree lock, a conflicting or failing merge is aborted and changes nothing, nothing is
+forced, and hooks and Git's own identity rules apply. As for Git actions, a session working in either checkout
+that `confirmed_live` does not list gives 409 `worktree_live` with `{live: {worktree, base}}`. With `remove`,
+a session, project, pending directory move or background job using the worktree refuses the whole call before
+anything is merged; after the merge Nexus removes the clean worktree and runs `git branch -d` in the base
+checkout. The reply is `{merged, mode, branch, base, worktree, base_worktree, previous_base_head, head,
+branch_head, removed: {worktree, branch, error}}`; if a removal step fails the merge still stands and `error`
+says what was left. It publishes global `git.changed` and `files.changed` for the base checkout and
+`worktree.integrated`. Archive and delete never touch a worktree.
 
 ### Image prompts
 

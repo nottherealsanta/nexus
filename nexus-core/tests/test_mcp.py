@@ -794,7 +794,7 @@ async def test_resources_and_prompts_are_read_only_fenced_and_bounded(env):
     assert resource["uri"] == "note://hello" and resource["mime_type"] == "text/plain"
     read = await client.get("/api/mcp/fx/resource", params={"uri": "note://hello"})
     text = read.json()["text"]
-    assert text.startswith("<untrusted-mcp-data>") and text.count("</untrusted-mcp-data>") == 1 and "‮" not in text
+    assert text.startswith("<untrusted-mcp-data>") and text.count("</untrusted-mcp-data>") == 1 and "\u202e" not in text
     assert "hello from a resource" in text and "kind: resource" in text
     prompts = (await client.get("/api/mcp/fx/prompts")).json()["prompts"]
     assert prompts[0]["name"] == "summarize" and prompts[0]["arguments"][0] == {

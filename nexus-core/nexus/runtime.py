@@ -15,6 +15,7 @@ is published on the bus:
 | `session.message_tool` | `message_session` was exposed to a session by its first `session` call |
 | `session.directory_changed` | a session's working directory moved (with the destination instructions) |
 | `worktree.listed` / `worktree.created` / `worktree.deleted` | worktree control operations |
+| `worktree.integrated` | global `{project_id, branch, base, mode, head, worktree, removed}` after a user integrated a worktree's branch |
 | `session.error` | a turn failed (provider, auth or tool-loop error) |
 | everything else | the loop and stream events, unchanged (`wire_request`, `text_delta`, `tool_start`, …) |
 
@@ -1731,6 +1732,27 @@ class Runtime:
             self.bus.publish("worktree.created", data, session_id=session_id)
             return data
 
+    def worktree_removal_blocker(self, target: Path) -> str | None:
+        """Why Nexus itself must not remove this worktree (a session, project, pending move or job uses it), or None."""
+        users = sorted(item.id for item in self.store.sessions()
+                       if Path(item.directory).resolve().is_relative_to(target))
+        if users:
+            return (f"refusing to delete worktree {target}: it is the directory of session(s) "
+                    f"{', '.join(users)}; change those sessions' directories first")
+        projects = sorted(item.id for item in self.store.projects() if Path(item.path).resolve().is_relative_to(target))
+        if projects:
+            return (f"refusing to delete worktree {target}: it is the path of project(s) "
+                    f"{', '.join(projects)}; remove those projects first")
+        pending = sorted(sid for sid, change in self.pending_directories.items()
+                         if Path(change["to"]).resolve().is_relative_to(target))
+        if pending:
+            return f"refusing to delete worktree {target}: a directory change for session(s) {', '.join(pending)} is pending"
+        jobs = sorted(job.id for job in self.jobs.list()
+                      if job.finished is None and Path(job.directory).resolve().is_relative_to(target))
+        if jobs:
+            return f"refusing to delete worktree {target}: running background job(s) {', '.join(jobs)}"
+        return None
+
     async def delete_worktree(self, session_id: str, path: Any) -> dict[str, Any]:
         """Remove one clean worktree that no session or pending move is using."""
         if not isinstance(path, str) or not path.strip():
@@ -1749,27 +1771,9 @@ class Runtime:
                 raise ToolError(f"refusing to delete the main checkout {target}")
             self.removing_worktrees.add(target)
             try:
-                users = sorted(item.id for item in self.store.sessions()
-                               if Path(item.directory).resolve().is_relative_to(target))
-                if users:
-                    raise ToolError(
-                        f"refusing to delete worktree {target}: it is the directory of session(s) "
-                        f"{', '.join(users)}; change those sessions' directories first")
-                projects = sorted(item.id for item in self.store.projects() if Path(item.path).resolve().is_relative_to(target))
-                if projects:
-                    raise ToolError(
-                        f"refusing to delete worktree {target}: it is the path of project(s) "
-                        f"{', '.join(projects)}; remove those projects first")
-                pending = sorted(sid for sid, change in self.pending_directories.items()
-                                 if Path(change["to"]).resolve().is_relative_to(target))
-                if pending:
-                    raise ToolError(
-                        f"refusing to delete worktree {target}: a directory change for session(s) "
-                        f"{', '.join(pending)} is pending")
-                jobs = sorted(job.id for job in self.jobs.list()
-                              if job.finished is None and Path(job.directory).resolve().is_relative_to(target))
-                if jobs:
-                    raise ToolError(f"refusing to delete worktree {target}: running background job(s) {', '.join(jobs)}")
+                blocker = self.worktree_removal_blocker(target)
+                if blocker:
+                    raise ToolError(blocker)
                 try:
                     data = await worktrees.remove(session.directory, path)
                 except worktrees.WorktreeError as exc:
@@ -1779,6 +1783,70 @@ class Runtime:
                 return data
             finally:
                 self.removing_worktrees.discard(target)
+
+    async def review_worktree(self, project_id: str, worktree: str, base: str | None = None) -> dict[str, Any]:
+        """Read-only: what integrating a worktree's branch into its base would do (`worktree_merge.review`)."""
+        from . import worktree_merge
+        project = self.project(project_id)
+        async with self.worktree_lock:
+            try:
+                data = await worktree_merge.review(project.path, worktree, base)
+            except worktrees.WorktreeError as exc:
+                raise ToolError(str(exc)) from exc
+            data["live"] = {"worktree": self.git_live_sessions(Path(data["worktree"])),
+                            "base": self.git_live_sessions(Path(data["base_worktree"]))}
+            return data
+
+    async def integrate_worktree(self, project_id: str, worktree: str, *, expected_head: str, mode: str,
+                                 base: str | None = None, message: str | None = None, remove: bool = False,
+                                 confirmed_live: list[str] | None = None) -> dict[str, Any]:
+        """Merge a worktree's reviewed branch into its base checkout, then optionally remove both.
+
+        Refused first, before anything changes: a session working in either checkout that the caller did not
+        confirm (409 `worktree_live`), or, with `remove`, a session, project, pending move or job using the
+        worktree. Removal never forces: Git refuses a dirty or locked worktree, and `branch -d` an unmerged branch.
+        """
+        from . import worktree_merge
+        project = self.project(project_id)
+        confirmed = set(confirmed_live or [])
+        async with self.worktree_lock:
+            try:
+                reviewed = await worktree_merge.review(project.path, worktree, base)
+                root, base_root = Path(reviewed["worktree"]), Path(reviewed["base_worktree"])
+                live = {"worktree": self.git_live_sessions(root), "base": self.git_live_sessions(base_root)}
+                working = {item["id"] for part in live.values() for item in part["working"]}
+                if working - confirmed:
+                    raise Conflict("worktree has newly working sessions", code="worktree_live",
+                                   payload={"live": live})
+                if remove:
+                    blocker = self.worktree_removal_blocker(root)
+                    if blocker:
+                        raise ToolError(blocker)
+                self.removing_worktrees.add(root)
+                try:
+                    result = await worktree_merge.integrate(project.path, root, expected_head=expected_head,
+                                                            mode=mode, base=reviewed["base"], message=message)
+                    result["removed"] = {"worktree": False, "branch": False, "error": None}
+                    self.bus.publish("git.changed", {"project_id": project.id, "worktree": str(base_root),
+                                                     "workspace": str(base_root), "source": "worktree"})
+                    self.bus.publish("files.changed", {"project_id": project.id, "worktree": str(base_root),
+                                                       "workspace": str(base_root), "source": "worktree", "all": True})
+                    if remove:
+                        try:
+                            await worktrees.remove(project.path, str(root))
+                            result["removed"]["worktree"] = True
+                            await worktree_merge.delete_merged_branch(base_root, reviewed["branch"])
+                            result["removed"]["branch"] = True
+                        except worktrees.WorktreeError as exc:  # the merge happened; say what was left behind
+                            result["removed"]["error"] = str(exc)
+                    self.bus.publish("worktree.integrated", {
+                        "project_id": project.id, "branch": result["branch"], "base": result["base"],
+                        "mode": mode, "head": result["head"], "worktree": str(root), "removed": result["removed"]})
+                    return result
+                finally:
+                    self.removing_worktrees.discard(root)
+            except worktrees.WorktreeError as exc:
+                raise ToolError(str(exc)) from exc
 
     async def _worktree_tool(self, session_id: str, args: dict[str, Any]) -> str:
         action = args.get("action")

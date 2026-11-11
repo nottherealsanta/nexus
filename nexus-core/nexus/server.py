@@ -37,6 +37,8 @@ are in docs/api.md.
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
 | GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
+| GET | /api/project/{id}/worktree/review | `?worktree=`, `?base=`: what integrating the worktree's branch into its base would do (commits, files, conflicts, blockers) |
+| POST | /api/project/{id}/worktree/integrate | keyed; `{worktree, expected_head, mode: ff or merge, base?, message?, remove?, confirmed_live?}`: merge the reviewed branch into its base checkout |
 | GET | /api/project/{id}/mcp | this project's MCP files (.mcp.json, .agents/mcp.json): files, duplicates, revision, error, warnings and server rows |
 | GET | /api/project/{id}/mcp/{name} | one project server, plus `tool_names` and `log`; never connects |
 | POST | /api/project/{id}/mcp/{name}/restart | close and reconnect a project server |
@@ -1164,6 +1166,34 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 runtime.bus.publish("files.changed", {"project_id": project.id, "worktree": str(root), "workspace": str(root), "source": "git", "all": True})
             return JSONResponse(result)
 
+    async def project_worktree_review(request: Request) -> Response:
+        project = runtime.project(p(request, "id"))
+        worktree = request.query_params.get("worktree")
+        if not worktree:
+            raise ValueError("worktree is required")
+        return JSONResponse(await runtime.review_worktree(project.id, worktree, request.query_params.get("base") or None))
+
+    async def project_worktree_integrate(request: Request) -> Response:
+        if _idempotency_key(request) is None:
+            raise ValueError("Idempotency-Key is required to integrate a worktree")
+        body = await _body(request)
+        project = runtime.project(p(request, "id"))
+        for key in ("worktree", "expected_head", "mode"):
+            if not isinstance(body.get(key), str):
+                raise TypeError(f"{key} must be a string")
+        for key in ("base", "message"):
+            if body.get(key) is not None and not isinstance(body[key], str):
+                raise TypeError(f"{key} must be a string")
+        confirmed = body.get("confirmed_live", [])
+        if not isinstance(confirmed, list) or not all(isinstance(sid, str) for sid in confirmed):
+            raise ValueError("confirmed_live must be an array of session IDs")
+        if body.get("remove", False) not in (True, False):
+            raise TypeError("remove must be true or false")
+        return JSONResponse(await runtime.integrate_worktree(
+            project.id, body["worktree"], expected_head=body["expected_head"], mode=body["mode"],
+            base=body.get("base"), message=body.get("message"), remove=bool(body.get("remove", False)),
+            confirmed_live=confirmed))
+
     async def project_worktrees(request: Request) -> Response:
         return JSONResponse(await runtime.list_project_worktrees(p(request, "id")))
 
@@ -1947,6 +1977,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}/move", route(project_move), methods=["POST"]),
         Route("/api/project/{id}/remove", route(project_remove), methods=["POST"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
+        Route("/api/project/{id}/worktree/review", route(project_worktree_review)),
+        Route("/api/project/{id}/worktree/integrate", route(project_worktree_integrate), methods=["POST"]),
         Route("/api/project/{id}/git", route(project_git)),
         Route("/api/project/{id}/git/diff", route(project_git_diff)),
         Route("/api/project/{id}/git/live", route(project_git_live)),
