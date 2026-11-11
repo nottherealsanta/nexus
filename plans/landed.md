@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Subscription usage sources (11-11).** Core parses Codex personal/managed monthly limits and optional workspace lookups; Claude uses OAuth usage or a guarded interactive `/usage` fallback, including weekly-only and enterprise spend-only accounts. Both clients retain their shared table contract. Approved read-only current-account checks and 56 focused tests passed; Ruff passed. Full Core run timed out; other plans and screenshots remain unverified. [Usage contract](../docs/api.md#usage-k11).
+
 - **Session controls, partial (11-11, working tree; plans 29–32).** Shared `/archive`, `/search [text]`, linked-worktree
   command/glyph/scenario and docs are in place; Core archive/input contracts pass 28/28. TUI implements all four areas;
   its final dedicated suite passes 34/34. The latest NSH session-controls run passed 12/16: archive/search, questions,

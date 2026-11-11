@@ -2,7 +2,7 @@
 
 Nexus does not ship Claude Code. The Agent SDK drives the `claude` the user installed, and when there is none the
 Claude provider fails with `NOT_INSTALLED`; nothing else is affected. The CLI owns the credential store and Nexus never
-reads token files: it asks `claude auth status --json` whether it is signed in with a claude.ai subscription, and signs
+reads token files for inference (the usage probe may read the CLI's OAuth file): it asks `claude auth status --json` whether it is signed in with a claude.ai subscription, and signs
 in by running `claude auth login`, handing the printed URL to the client.
 
 `cli_path()` finds `$NEXUS10_CLAUDE_CLI`, else `claude` on `PATH`, else the places Claude Code installs itself.
@@ -47,7 +47,7 @@ def cli_path() -> str | None:
 
 
 def child_env() -> dict[str, str]:
-    keep = ("HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR",
+    keep = ("HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR",
             "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE")
     return {k: os.environ[k] for k in keep if k in os.environ}
 

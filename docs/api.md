@@ -1625,6 +1625,38 @@ The planned usage table shows a ten-cell usage gauge, percent left, reserve and 
 available to other API consumers but is not shown in the table. Reserve is elapsed period percentage minus used
 percentage, calculated by the client only for periods of at least seven days with a future reset and known usage.
 
+Subscription usage is data-driven, not a table of hardcoded quotas by plan name:
+
+- Codex reads `wham/usage`, including individual monthly credit limits at the root,
+  within `rate_limit`, or within `spend_control`. Managed accounts with spend controls
+  can additionally read their selected account's `spend-controls/current-user/monthly-usage`
+  and `remaining_balance`. Optional lookup failures preserve the main windows and add
+  an availability note. Individual limits and workspace balances are distinct.
+- Claude reads `api.anthropic.com/api/oauth/usage` with the selected CLI profile's
+  existing OAuth file when available. The CLI still owns sign-in and refresh; Nexus
+  never rotates or persists its tokens, and never reads Keychain through `security`.
+  Missing/stale file credentials or rejected authorization fall back to an isolated
+  interactive CLI `/usage` probe, with hooks, tools and ambient MCP disabled. The probe
+  verifies the usage command palette before pressing Enter; unknown setup fails closed.
+  This fallback requires POSIX. Personal, Max, Team and Enterprise response shapes
+  include five-hour, weekly, model-specific and spend-only limits. Extra-usage money
+  is in minor currency units. A spend-only response is valid even without quota windows.
+- Missing utilization or reset times stay unknown, not zero or unlimited. Monthly spend
+  endpoints without a reset do not get an invented expiry or reserve. API-key providers'
+  note means limits are not exposed by this integration, not that the provider has none.
+
+Both desktop clients consume these same windows and notes without a client-specific
+subscription implementation. Monetary amounts remain in API `detail` (the table still
+shows percentage left). Account plan labels reflect provider metadata; a reported
+`Business` is not silently relabeled `Enterprise`. Protocols were researched against
+[CodexBar](https://github.com/steipete/CodexBar). Approved read-only checks on 2026-11-11
+returned a Codex monthly credit limit and a Claude Enterprise spend cap through CLI
+2.1.322. The CLI fallback accepts both known usage-action captions; it never submits
+an unverified command. Date-only CLI spend resets remain unknown until their exact
+reset instant can be established. Other subscription types have offline fixture
+coverage, not live-account verification. UI screenshots were not captured for this
+backend-only change.
+
 ### Leased workspace watching
 
 `POST /api/project/{id}/watch?session=` accepts `{client_id, action: "renew" | "release"}`.
