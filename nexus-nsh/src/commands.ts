@@ -11,7 +11,7 @@ import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
+  composerFocused, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -704,6 +704,23 @@ function closeEditor() {
 }
 on("editor.close", closeEditor);
 on("app.usage", () => void showUsage());
+/** Ctrl+R: this project's earlier prompts (Core lists them newest first), each once; choosing one replaces the draft. */
+on("composer.history_search", () => {
+  const seen = new Set<string>();
+  const items = promptHistory().entries.filter((t) => t.trim() && !seen.has(t) && !!seen.add(t)).map((text, i) => {
+    const lines = text.split("\n").length;
+    return {
+      id: `history-${i}`, label: text.split(/\s+/).filter(Boolean).join(" "), hint: lines > 1 ? `${lines} lines` : undefined,
+      run: () => {
+        picker.set(null);
+        if (questionLocked()) { toast("info", "Answer the question above"); return; }
+        draft.update((d) => ({ ...d, [draftKey()]: text }));
+        focusComposer.fn?.();
+      },
+    };
+  });
+  picker.set({ title: "Prompt history", items, note: "No earlier prompts in this project." });
+});
 on("turn.load_older", () => { void loadOlderMessages(true); });
 /** The project picker is also the restore action for an inactive project. */
 on("project.switch", () => {

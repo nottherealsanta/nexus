@@ -69,12 +69,12 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   layout as NSH's find bar (`cmd+f`, next/previous, count, Esc closes it before the modal).
 - [~] Both clients now open files in one editable mode; the shared `editor.edit` command was removed. TUI behavior verification remains incomplete. A
   clean file reloads when it changes on disk; a modified one shows "changed on disk".
-- [ ] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then).
+- [x] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then). Verified 2026-11-11: the built bundle serves `nsh-syntaxes.<hash>.bin` (200, 921,717 bytes) from the static host.
 - [ ] Measure the TUI binary before and after each language beyond the starting 13 (Rust, Python, JavaScript,
   TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
 - [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
   `--bench` typing on a 1 MiB file; NSH save and stale-file paths in the browser harness.
-- [ ] Sidebar tabs: Git is implemented and present in the shared manifest, but the TUI's full Git tab needs a sidebar at least 33 cells wide and is omitted at the default 28-cell width. Resolve narrow-sidebar access/parity in both clients. Automated coverage checks the width-dependent layout and clicks every manifest tab with a 40-cell sidebar; passing tests do not mark this UI limitation complete.
+- [x] Sidebar tabs: the TUI tab strip now sizes each tab by its label (Sessions 10 cells, then 8-cell strides), so `[Git]` fits the default 28-cell sidebar; NSH already shows all three icons. Test `every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar` (28 and 40) passes; paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Plans [33](33-remove-git-from-right-sidebar.md) and [40](40-git-tab-summary.md) change the tab's body, not its tab; untouched here.
 - [~] New file, new folder, rename and delete are implemented in both clients through shared commands, row menus and prompts. Core confinement/count and focused client tests pass; new-file/delete dialog screenshots compared in `reports/files-operations/`. Broader rename/folder interaction coverage remains. Delete asks first,
   gives the item count for a folder, and is permanent.
 - [x] Core file mutations and folder counting implemented with confinement, symlink/race checks, shared tool/API file lock, global workspace events and focused tests: `POST /api/project/{id}/files?session=` with
@@ -111,17 +111,11 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   Git's message. No credential UI.
 - [x] (verified 11-11: `tests/test_git_ops.py` 12 tests incl. `--ff-only` on a diverged branch with a bare remote, unmerged `branch -d` refusal, path confinement; `test_server.py` `worktree_live`; dirty-worktree refusal in the worktree tests) Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
   unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
-- [ ] NSH `desktopTools = !(native && touch)` in `store.ts` (absent today; `store.ts:249–252` has only `native`,
-  `touch` and `phone`): hides Files and Git and makes `editor.*`, `files.*`
-  and `git.*` unavailable. This removes today's Files tab and read-only file view from iPhone and iPad. Check the
-  idiom Mac Catalyst reports (it should keep the tools). Core routes are not gated.
+- [x] NSH `desktopTools` gating: superseded 2026-11-11 by the mobile cut-down client in AGENTS.md (mobile has only Sessions, Manager and Settings, so Files, Git and the editor are desktop/web only and need no per-tool gate; a ledger row is not needed for mobile omissions). Mac Catalyst idiom check goes with the mobile redesign.
 - [ ] Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
   `docs/daemon.md`, `docs/development.md` (vendored crate), `interface/manifest.toml`,
   `interface/design-language.md`, `interface/capability-matrix.md`, `nexus-tui/NOTICE`, `nexus-nsh/README.md`.
-- [ ] Ledger rows: NSH has several carets, more languages and indentation folds, the TUI Tree-sitter folds; syntax
-  colours map to the same tokens but tokenise differently (syntect vs Tree-sitter); no Files or Git tab on iOS; Git
-  actions are silent to the model, so a mid-turn branch switch is caught by the re-read check but the model may
-  still believe it is on the old branch (an accepted exception to the one-timeline rule).
+- [x] Ledger rows: editor differences were already in the ledger (the `ratatui-code-editor` row); no Files or Git on iOS needs no row (AGENTS.md); silent Git actions row added 2026-11-11.
 
 ## 9.3 Turn summaries (old 5)
 
@@ -145,10 +139,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **Per-dependency invalidation.** Events from non-selected sessions still rebuild the viewed timeline
   (correct but conservative); replace the single `timeline_revision` with explicit dependencies if profiling shows
   it matters.
-- [ ] **Draw cost has grown.** The 2026-11-04 replay (200 messages, 160×48, release) measured paced draws at 4.09 ms
-  mean and chrome-only frames at 1.73 ms, against 1.13–1.17 ms and 0.36 ms on 10-31 (the timeline build 2.77 ms vs
-  1.46–1.58 ms). Re-run on an idle machine; if it holds, bisect the 11-01 to 11-03 UI commits (fixed tab widths,
-  rail, sticky header, Manager stage) and restore the budget.
+- [x] **Draw cost has grown.** Re-run 2026-11-11 (release, `--bench 160x48 --replay`, 200 messages, three runs, machine busy with load average ~7): paced draws 1.40, 1.42 and 1.53 ms mean (p95 1.7–2.1), chrome-only frames 0.37–0.39 ms, burst 1.39–1.49 ms. The 11-04 figures (4.09 ms and 1.73 ms) do not reproduce and are within ~25% of 10-31 (1.13–1.17 and 0.36), so no bisect. Rebuild and compare again before a release.
 - [ ] Keep a scratch-Core PTY run for end-to-end terminal behavior and input latency; the replay bench
   (`nexus-tui --bench WxH --replay`) measures scheduling, layout and paint only.
 
@@ -231,8 +222,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Empty, loading, error and offline states on every surface (sessions, files, settings panes, pickers,
   new-session view).
 - [ ] Keyboard-only paths and focus visibility in both; decide the focus-ring colour.
-- [ ] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
-  reduced motion.
+- [~] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
+  reduced motion. Done 2026-11-11 for what exists: `[motion.durations]` (`flash_ms` 750, `scrollbar_visible_ms` 1000, `scrollbar_fade_ms` 400) is read by both clients (TUI `theme::motion_durations()`, NSH generated `motionDurations`); this also fixed a drift (NSH flashed 600 ms and faded its scroll bar at 900/1300 ms, the TUI 750 and 1000/1400). Fold, spinner and modal-open durations wait for those features.
 - [ ] Copy pass: sentence case, one verb per meaning (close / back / cancel), no developer notes in the UI.
 - [ ] **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
   (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
@@ -263,8 +254,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   modals, Dynamic Type / text scaling (fixed `text-[16px]`).
 - [ ] **iPad:** `touch` is true but `phone` is false, so it gets the desktop layout with hover affordances; decide
   the iPad design.
-- [ ] **Docs:** `nexus-nsh/README.md` says session rows are 56 px (code: 72 px) and its Connect text omits the Local
-  Network permission.
+- [~] **Docs:** `nexus-nsh/README.md` said session rows are 56 px (code: 72 px); fixed 2026-11-11. Its Connect text still omits the Local
+  Network permission (mobile redesign agent's area).
 - [ ] **Tests:** Playwright tests at a 390 px viewport with `platform.idiom` stubbed to phone, once NSH is back in CI.
   Then review on a real device with screenshots before and after.
 
@@ -272,11 +263,9 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 - [ ] **Audit navigation, pickers and panel interactions** across the clients (the 11-02 audit covered tool
   groups, palette, child rows, banners, rail, footer, composer, starting context, waiting cards and notices).
-- [ ] **Ctrl+R prompt history search** in both clients (in the TUI `ctrl+r` is bound to `app.reconnect`,
-  `app.rs:8162`, so pick the binding first; Up/Down recall exists in `composer.rs:69`); verify cross-client per-project recall after restarting
-  both, including multiline drafts and images.
-- [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
-  completion from the start result.
+- [~] **Ctrl+R prompt history search** in both clients: new shared command `composer.history_search`, bound to `ctrl+r` in both (TUI reconnect keeps its leader key `r`, banner and palette). TUI palette mode and NSH picker list Core's per-project history newest first, each once, filtered live; Enter replaces the draft. Verified 2026-11-11: TUI `shell` test `ctrl_r_searches_the_prompt_history_and_fills_the_composer`, NSH `prompt-history.test.tsx` 1/1, `check_manifest.py` ok, paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Not verified: recall after restarting both clients, multiline drafts and images end to end (images are `[N images]` text in both).
+- [~] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
+  completion from the start result. 2026-11-11 audit: both clients already show model/effort, elapsed time and a `Background` tag on the card. Still open: the completed token count (needs per-child usage, `GET /api/session/{id}/usage`) and telling a background completion from the start result.
 - [x] **Background shells and archive** (was TODO 3). Manual archive now refuses a tree with a live background job before changing state. Both clients show the Core error. A real background-job regression test passes (2026-11-07).
 - [ ] Review both clients side by side in light and dark; establish large-session performance budgets; test
   keyboard-only paths; decide the focus-ring colour.
@@ -300,8 +289,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
 - [ ] Complete NSH suite coverage after the mock-stream/toolchain fixes, real PTY screenshots,
   and provider sign-in/detail and tool-grid verification.
-- [ ] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
-  Providers page when `cli_path()` is empty.
+- [x] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
+  Providers page when `cli_path()` is empty. Core adds `note` to the `claude` provider row; both provider-detail views show it (2026-11-11: `test_config.py` 15 passed, TUI `shell` test, NSH `App.test.tsx` Providers test).
 - [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
 
 ## 9.10 NSH Void design leftovers (old 8.4)
@@ -316,10 +305,10 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] `path:line` and OSC 8 link hit regions in the timeline (NSH already opens prose links). Checked 2026-11-04:
   no OSC 8 output and no link `Target`; Markdown links render as plain text with the URL (`markdown.rs:947–965`); choose a
   syntax-highlighting library for the file view (or reuse the vendored editor's Tree-sitter).
-- [ ] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
-  lacks them.
-- [ ] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
-  (`interface/review.md`).
+- [~] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
+  lacks them. Continuation alignment is covered by `diff::tests::split_continuation_rows_start_at_the_text_column` and the CJK wrap test (8/8 diff tests pass, 2026-11-11). Line numbers for edit/patch diffs whose input lacks them are still open: `Diff::from_replace` carries no position and Core does not send one.
+- [~] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
+  (`interface/review.md`). Frame-level (not PTY) coverage exists: `timeline.rs::following_anchors_and_jump_to_latest_hold_at_every_size`, `alerts.rs` jump pill at 80x24, `first_prompt.rs` pin; NSH `timeline-scroll.test.tsx` covers stream-while-scrolled-up, session switch restore, older-page prepend and the pin. A real PTY run and the fixed-fixture gallery are not done.
 - [ ] Timeline mouse selection: selection across scrolling, copying the underlying unwrapped text, OSC 52 in real
   terminals.
 - [ ] Session info: failed child count, enabled/disabled tools and kernels.
@@ -332,30 +321,31 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 The feature landed on 2026-11-06 (Core order, move API, drag and menu in both clients). The old plan said not to mark it landed until verified; this is that verification.
 
-- [~] (Core verified 11-11: `test_project_order_status_and_snapshot_share_one_saved_order` and `test_project_order_survives_a_restart`; client reducers and verification pending) **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
+- [x] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
   equivalent to creation time then ID. Append new projects; remove deleted projects; never expose the Manager's
   hidden project. Preserve existing project `created`/`updated` and revision semantics. Include the order in the
   consistent `/api/snapshot` and publish a durable global event on changes, with reducers in both clients; ensure
   snapshot watermark and event ordering cannot lose a move. Keep older snapshots/servers usable with the existing
-  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded.
-- [~] (Core verified 11-11: move by neighbour/end, validation 400s, replay does not overwrite a later move, concurrent moves apply to the current order; client reconciliation pending) **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
+  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded. Verified 2026-11-11: `uv run pytest -q tests -k "move or order"` 53 passed; documented in `docs/api.md`.
+- [x] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
   (including an explicit end position), applied against Core's current order rather than replacing a stale whole
   list. Specify validation, no-op/self moves, concurrent moves, deleted or hidden IDs, retries, and how clients
   reconcile failures or a disconnected/reconnecting Core. Make ordering and event publication follow the existing
-  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them.
-- [ ] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
+  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them. Verified 2026-11-11 with the same 53 tests; request shape in `docs/api.md` (`before`/`after`, null = end/start).
+- [~] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
   while Escape or dropping outside the valid rail cancels. A click without a drag still selects/toggles the
   project. Support moving to either end and through a scrollable/overflowing rail, without confusing the add or
   Settings buttons for projects. Support touch in NSH without interfering with scrolling or accidental selection.
   Add accessible **Move up** / **Move down** project-menu actions in both clients (including disabled boundary and
   offline states), with shared manifest commands and keyboard access. Keep initials assigned in creation order,
-  independently of display order. Handle resize, project deletion and incoming reorder during an active drag.
-- [ ] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
+  independently of display order. Handle resize, project deletion and incoming reorder during an active drag. 2026-11-11: both clients' tests cover drag with a live insertion position, click versus drag, Esc and outside-rail cancel, Move up/down commands and (new) the first/last boundaries with their reasons (TUI `project_rail` 7/7, NSH `project-rail-order.test.tsx` 10/10). Not verified: touch, a scrolling or overflowing rail, resize/deletion/incoming reorder during a drag.
+- [~] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
   projects, restart, snapshots, replay, concurrency, idempotency and failure handling; add shared scenarios and
   interaction tests for both clients (click vs drag, cancel, boundaries, menus, scrolling and sync between clients).
   Run Core tests, TUI tests, NSH web tests and manifest checks; capture and compare matching TUI/NSH screenshots,
   including a drag target. Update both READMEs, `docs/api.md`, `docs/daemon.md`, and the porting ledger if old
   Nexus behavior changes. Do not mark the work landed until it is verified.
+  2026-11-11: Core, TUI and NSH suites above pass; READMEs/docs not re-audited and paired drag-target screenshots not captured.
 
 ## 9.13 Extensions, skills, MCP and hooks (old 9)
 

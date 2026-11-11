@@ -177,6 +177,9 @@ fn alt_up_and_down_step_the_project_through_the_order() {
     app.ui.project = Some("charlie".into());
     app.run_command("project.move_down");
     assert!(api_calls(&app).is_empty());
+    app.ui.project = Some(first.clone());
+    app.run_command("project.move_up");
+    assert!(api_calls(&app).is_empty());
 }
 
 #[test]

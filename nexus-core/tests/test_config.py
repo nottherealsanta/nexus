@@ -275,11 +275,14 @@ async def test_provider_list_says_how_to_sign_in(tmp_path: Path, monkeypatch) ->
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("GROQ_API_KEY", "from-env")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("nexus.server.claude_cli_path", lambda: None)
     runtime = make_runtime(Store(tmp_path / "store.db"))
     app = build_app(runtime, token="token", url="http://test")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer token"}) as client:
         providers = {p["id"]: p for p in (await client.get("/api/provider")).json()}
+    assert providers["claude"]["note"].startswith("Claude Code is not installed") and "2.1.248" in providers["claude"]["note"]
+    assert "note" not in providers["codex"]
     assert providers["codex"]["methods"] == ["browser", "device"] and "key_hint" not in providers["codex"]
     assert providers["copilot"]["methods"] == ["device"]
     assert providers["ollama"]["methods"] == ["local"]

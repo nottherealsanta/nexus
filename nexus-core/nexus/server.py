@@ -127,6 +127,7 @@ from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
+from .llmhub.auth.claude import cli_path as claude_cli_path
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .llmhub.types import ProviderError
@@ -706,6 +707,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         out: dict[str, Any] = {"methods": list(kind.methods)}
         if issubclass(kind, ApiKeyAuth):
             out |= {"key_hint": kind.hint, "key_env": kind.env, "key_source": kind().key_source()}
+        if provider == "claude":
+            out["note"] = ("Needs Claude Code 2.1.248 or newer." if claude_cli_path() else
+                           "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in.")
         return out
 
     async def providers(request: Request) -> Response:
