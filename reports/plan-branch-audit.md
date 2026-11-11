@@ -108,3 +108,62 @@ Local history review only; branches with unique commits are preserved pending ex
 
 `git worktree list` contains only this checkout and the old Nexus reference checkout.
 The previously listed `.claude/worktrees/` checkouts are no longer registered.
+
+## Deleted 2026-11-11 (user-approved)
+
+Recover with `git branch <name> <sha>`. Remote deletions: `origin/ci/nsh`, `feat/update-notice`, `fix/default-model-client`, `fix/native-binary-needs-host`.
+
+```
+feat/update-notice 9d900a945e386e3ee4d08c21fa66e16d183c358b
+fix/default-model-client 053c3c3459361af2f3cd26044cedcf55c29984c1
+fix/native-binary-needs-host 87550aa574e46d3440a8d9cb657d2eb91ffef1ca
+design/void a64a88f00ec4e8dd96a1455614107b5ef5603703
+design/void-impl b5241a3b11cbd8715e7068dd0659b133b204161b
+polish-timeline d6b1f2c35a40489656d45a06b1408d87c4a0efeb
+origin/ci/nsh 9c5a1277c0737f4f2e367028db20db54f64ec44c
+origin/feat/update-notice 9d900a945e386e3ee4d08c21fa66e16d183c358b
+origin/fix/default-model-client 053c3c3459361af2f3cd26044cedcf55c29984c1
+origin/fix/native-binary-needs-host 87550aa574e46d3440a8d9cb657d2eb91ffef1ca
+design/void-impl b5241a3b
+feat/design-mockups 23247afe
+feat/grok-style-tui e19e9403
+feat/ios-session-experience 01fec6a8
+feat/xai-supergrok 0aca0c40
+fix/pty-snapshot-order ec66fced
+live-pane-and-consent-fix 4443a9de
+nexus/session/Check-subagent-reuse c7ae7a03
+nexus/session/Release-0-7-0 c7ae7a03
+nexus/session/apple-container-option 9de32cea
+nexus/session/build-prompt-change c95c12dd
+nexus/session/candid-cougar 11c652bb
+nexus/session/candid-violet-tern-895046 c7ae7a03
+nexus/session/child-1-dacaf1 60d70ba5
+nexus/session/exact-deer 2b0af036
+nexus/session/image-preview-fix 71f30cb4
+nexus/session/lucky-ginger-dunlin-cc933d 60d70ba5
+nexus/session/major-gannet b96c511b
+nexus/session/mermaid-fix 688a0ae7
+nexus/session/mermaid-fix-2 f2c62a27
+nexus/session/mindful-egret 8cbd2112
+nexus/session/still-moose b96c511b
+nexus/session/sturdy-dragonfly b96c511b
+nexus/session/test-test-test-worktree c7ae7a03
+nexus/session/worktree-name 04d11384
+nexus/wt/animate-status-dots 358d6ccc
+nexus/wt/code-mode-kernel 18395bb6
+nexus/wt/explain-nexus-architecture 64980716
+nexus/wt/list-llm-providers 64980716
+nexus/wt/nsh-web-replacement 7f247be5
+nexus/wt/orchestrator-one-child e972fd82
+nexus/wt/project-explorer 69ba540f
+nexus/wt/project-switch 9c5d4447
+nexus/wt/quick-provider-list 64980716
+nexus/wt/ratatui-image-debug 64980716
+nexus/wt/worktree-auto-delete-guidance c55af409
+nexus10-osc7501 81b81e57
+osc-7501-program-status e4c35ebf
+polish-timeline d6b1f2c3
+release/patch-0.5.3 8a693047
+worktree-agent-a37ac9db7839666ee 64980716
+worktree-agent-aee1118494a82411e 64980716
+```

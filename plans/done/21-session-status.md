@@ -15,4 +15,6 @@ desktop inspector action.
 - [x] **Actions:** applicable `/continue` plus desktop Inspect for the full HTTP status/body/history.
 - [x] **Paired implementation and tests:** shared `interface/scenarios/session-status-btw.json`, failed/interrupted
   timeline exclusion, busy clearing and restoration; both client READMEs, API docs and porting ledger updated.
-- [ ] **Visual verification:** compare matching TUI/NSH status-strip captures.
+- [x] **Visual verification:** compare matching TUI/NSH status-strip captures. **11-11:** retaken from current code
+  with the isolated `reports/sections21-23/visual_core.py` Core: `tui-status.png` (170×50), `nsh-desktop-status.png`
+  (1440×900) and `nsh-phone-status.png` (390×844). Same strip, wording and `/continue` · Inspect actions in both.

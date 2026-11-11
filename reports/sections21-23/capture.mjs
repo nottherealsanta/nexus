@@ -14,6 +14,8 @@ try {
     p.on("pageerror", (e) => console.log("page error:", e.message));
     await p.goto("http://127.0.0.1:48733");
     const session = p.locator(`[data-testid="session-${ids.parent}"]`);
+    await p.locator('[data-testid="app"]').waitFor({ timeout: 15000 });
+    if (width < 500) await p.locator('[data-testid="toggle-left"]').click();
     await session.waitFor({ timeout: 15000 });
     await session.click();
     await p.locator('[data-testid="session-status"]').waitFor();

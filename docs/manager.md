@@ -2,7 +2,7 @@
 
 The Manager is a voice agent above all sessions: one per daemon, across every project. It finds, reads, starts,
 steers and answers sessions, and it shows things to the user (cards) and can move the user's screen. It is not a
-coding agent: it reads no files and runs no commands. [manager-design.md](manager-design.md) is the design and [plans/03-manager.md](../plans/03-manager.md)
+coding agent: it reads no files and runs no commands. [manager-design.md](manager-design.md) is the design and [plans/done/03-manager.md](../plans/done/03-manager.md)
 the milestone status; this page describes the code as it is.
 
 What is built in Core: the typed Manager (M2), the pipeline-voice server side (M3: `manager.speech` per sentence,

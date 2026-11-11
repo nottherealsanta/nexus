@@ -72,7 +72,7 @@ any response event (the loop only retries then).
   so the child's fallback list contained a model this account can't use. Validate fallbacks against the live catalog
   when the child starts.
 - [ ] **Visible state:** while waiting, show "Waiting for network · retrying in Ns" (new `waiting_network` phase on
-  `RetryScheduled`) in the session status strip ([21](21-session-status.md)) and on the parent's child card, in both
+  `RetryScheduled`) in the session status strip ([21](done/21-session-status.md)) and on the parent's child card, in both
   clients. Today's `retry_scheduled` events don't say they are network waits. Nothing is added to model context.
   Inspector Timing shows the waiting span.
 - [ ] Parent `wait: true` / child-notice paths: a child that is waiting is still running, not failed. Make sure no

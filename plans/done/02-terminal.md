@@ -1,21 +1,25 @@
 # 2. Terminal inside Nexus
 
+**Done (2026-11-11); moved to done/.** Everything is implemented and tested on macOS; the last box (Linux/other
+platforms, native AppKit WebView, authenticated remote matrix) is an unscheduled platform check, and plan 41 has since
+made the dock user-only.
+
 Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
 Side job (user, 2026-11-08): **implemented and visually checked** full question,
 option-label and preview wrapping with narrow/short scrolling in both clients.
 TUI footer hints wrap in reserved rows; NSH's reading hint no longer overlaps
-scrolling content. [Screenshots and interaction evidence](../reports/question-readability/README.md).
+scrolling content. [Screenshots and interaction evidence](../../reports/question-readability/README.md).
 The existing paged-TUI versus single-card-NSH question interaction is not redesigned here.
 
 Goal (user, 2026-11-06): a real interactive terminal in Nexus, in the TUI and in NSH (desktop and web, never mobile),
 with the same operations in both. Not the old `nexus nsh tui` launcher and not a list of bash jobs. Design inputs:
-[reports/section14/spikes.md](../reports/section14/spikes.md) (PTY + pyte, `vt100`, `@xterm/headless` all proven in
+[reports/section14/spikes.md](../../reports/section14/spikes.md) (PTY + pyte, `vt100`, `@xterm/headless` all proven in
 spikes) and the archived 14.2/14.3.
 
-**Reversed 2026-11-11 (user, [plan 41](41-terminal-user-only.md)): the dock is user-only and agent bash jobs are pipe processes again with their own `N shell` indicator; the paragraph below is history.**
+**Reversed 2026-11-11 (user, [plan 41](../41-terminal-user-only.md)): the dock is user-only and agent bash jobs are pipe processes again with their own `N shell` indicator; the paragraph below is history.**
 
-Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job/inspector tests: **58 passed**. Paired real-Core smoke checks and screenshots pass; the previously reported TUI 404 was not reproduced. [Terminal work and remaining release gates](../reports/terminal-work-2026-11-08.md).
+Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job/inspector tests: **58 passed**. Paired real-Core smoke checks and screenshots pass; the previously reported TUI 404 was not reproduced. [Terminal work and remaining release gates](../../reports/terminal-work-2026-11-08.md).
 
 Defaults to confirm at the first design review (change any of them freely):
 

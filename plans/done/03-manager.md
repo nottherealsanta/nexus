@@ -1,10 +1,10 @@
 # 3. Manager: done
 
-**Declared done by the user on 2026-11-11.** M1–M5 are built ([docs/manager.md](../docs/manager.md)) and a real
+**Declared done by the user on 2026-11-11.** M1–M5 are built ([docs/manager.md](../../docs/manager.md)) and a real
 TUI GPT-Live call with delegated tools worked on 2026-11-04. The verification items below did not run. They are no
 longer the Manager's exit gate. They stay as an unscheduled checklist so nothing is lost. Pick one up only when the
 user asks, or when a bug points at it. New Manager work lives in its own sections:
-[27 Manager inspector](27-manager-inspector.md) and [28 Manager indicator and voice](28-manager-indicator.md).
+[27 Manager inspector](../27-manager-inspector.md) and [28 Manager indicator and voice](../28-manager-indicator.md).
 
 ## Unscheduled verification (was the exit gate)
 

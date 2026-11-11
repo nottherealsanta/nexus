@@ -3,7 +3,7 @@
 User request (2026-11-11): "plan to have terminal different from shell tool, separate them please, terminal is only
 for user".
 
-This reverses the 2026-11-08 decision in [02](02-terminal.md) ("running background bash jobs appear in the terminal
+This reverses the 2026-11-08 decision in [02](done/02-terminal.md) ("running background bash jobs appear in the terminal
 dock and allow interactive input") and the porting-ledger row "Background bash jobs were non-interactive pipe
 processes, separate from terminal resources". After this change:
 
@@ -79,7 +79,7 @@ Desktop/web TUI and NSH in the same change; mobile has neither surface.
   agent-control table), `docs/tools.md` (pipe jobs only), `docs/api.md`, `docs/inspector.md`, manifest notes. Ledger:
   replace row 30 with "Terminal dock is user-only; agent bash jobs are pipe processes with their own indicator
   (2026-11-11)". Add the reversal to [decisions.md](decisions.md) and a note at the 11-08 decision in
-  [02](02-terminal.md).
+  [02](done/02-terminal.md).
 - [x] Verify: `uv run pytest -q`, ruff, TUI and NSH test suites; paired TUI/NSH screenshots of the dock with a user
   terminal while a background job runs (job only under `1 shell`, dock shows `Terminals (1)`).
 

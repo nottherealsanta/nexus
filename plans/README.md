@@ -34,6 +34,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | # | File | State | Next step |
 | --- | --- | --- | --- |
 | 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
+| 42 | [`/btw` modal parity](42-btw-modal-parity.md) | **new**; found in 23's captures: NSH extra buttons, no footer | Decide the shared shape |
 | 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **new** | Confirm summary shape and per-file actions, then Core line counts |
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
@@ -46,20 +47,18 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
 | 5 | [Mobile client and the NSH look](05-mobile-and-design.md) | 5.1 implemented, unverified on device; 5.2 mobile redesign and 5.3 web/macOS look **new** | Answer the open questions in 5.2; audit screenshots for 5.3 |
-| 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Further than the old plan said:** M1 and most of M2 implemented offline in Core and both clients; 1 stale test; docs stale; no live run | Fix the test and docs; M0 live spikes need approval |
-| 23 | [`/btw` on the fork](23-btw.md) | Implemented; partially done: screenshots and paid cache check open | Matching screenshots |
-| 21 | [Session status above the composer](21-session-status.md) | Implemented; screenshots open | Matching screenshots |
-| 10 | [Fork subagent](10-fork.md) | Implemented; screenshots open | Matching screenshots |
-| 2 | [Terminal inside Nexus](02-terminal.md) | Implemented; platform/native/remote checks open | Platform matrix |
-| 1 | [Release and installation](01-release.md) | 0.12.0 released; Linux/platform matrix, branch pruning open | Platform matrix |
+| 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Further than the old plan said:** M1 and most of M2 implemented offline in Core and both clients; isolation test fixed (daemon-start check still missing); docs stale; no live run | Fix the docs, D2 record; M0 live spikes need approval |
+| 10 | [Fork subagent](10-fork.md) | Implemented; offline seed Core in `reports/10-fork/`; screenshots open (TUI dump mode cannot reach fork cards) | Capture parent and a fork interactively in both |
 | 24 | [Harness workflow audit](24-harness-audit.md) | One observation item open | Observe larger heaps |
-| 3 | [Manager](03-manager.md) | **Done (user, 2026-11-11)**; unrun checks kept as an unscheduled list | — |
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
 Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
 [22 remove `/continuation`](done/22-remove-continuation.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md),
-[32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md).
+[32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md),
+[1 release](done/01-release.md), [2 terminal](done/02-terminal.md), [3 Manager](done/03-manager.md),
+[21 session status](done/21-session-status.md), [23 `/btw`](done/23-btw.md) (11-11; each keeps its unscheduled
+hardware/approval-only checks).
 Physical phone/touch was not verified.
 
 Section 7 of the old plan (the backlog overview) is now the top of [09-backlog.md](09-backlog.md). The GPUI host spike

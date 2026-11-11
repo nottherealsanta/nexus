@@ -2,6 +2,13 @@
 
 Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+**Audit 2026-11-11 (first pass, grep/spot-check, boxes not ticked):** of 147 unchecked items, about 22 look done
+(9.19 and 9.20 entirely, via [02](done/02-terminal.md); most of the Git-safety items in 9.2; 9.12 Core order/move
+API; 9.5 provider limits via [08](done/08-provider-usage-table.md); 9.13 MCP inventory row), about 57 are doable
+offline (largest: 9.6 interface polish, 9.11, 9.13 hooks, 9.14 Anthropic/Gemini dialects, 9.16 reliability, 9.17
+legacy fallback removal now that 0.12.0 shipped), and about 68 need a device, a paid call, a decision or are deferred.
+Confirm each "done" against the code before ticking it.
+
 Everything else open in the previous plan is in the sections below, in full.
 The areas, at a glance:
 

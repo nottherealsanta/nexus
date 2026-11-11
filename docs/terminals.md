@@ -1,6 +1,6 @@
 # Terminal resources: Core contract
 
-This is the Core terminal slice of [plans/02-terminal.md](../plans/02-terminal.md).
+This is the Core terminal slice of [plans/done/02-terminal.md](../plans/02-terminal.md).
 The browser resource is separate work. Both desktop clients expose the shared
 terminal dock, resource list, creation, attachment, screen, control, input and
 resize operations described below; see their READMEs for current limitations.

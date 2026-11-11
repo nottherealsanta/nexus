@@ -31,8 +31,11 @@ asserts the old "no production caller" isolation and is now intentionally wrong 
 
 ## Remaining
 
-- [ ] **Fix the stale isolation test.** Replace it with the real invariant: importing `nexus.workers` and starting
+- [~] **Fix the stale isolation test.** Replace it with the real invariant: importing `nexus.workers` and starting
   the daemon with ZMX off probes no CLI, reads no credentials and registers no provider.
+  **11-11:** `test_no_import_or_registry_coupling` now allows `server.py` (its gated `workers.registry` import) and
+  checks that importing `nexus.workers` loads neither vendor module; `tests/test_zmx_workers.py` 77/77 pass. Still
+  missing: the daemon-start-with-ZMX-off check (no CLI probe, no credential read, no provider registered).
 - [ ] **Docs are stale.** `docs/external-workers.md` says "no provider, configuration switch, runtime routing, API or
   client UI"; rewrite it for the current state. Then `llm-providers.md`, `auth.md`, `models.md`, `config.md` (`[zmx]`),
   `daemon.md`, `api.md` (`session.worker`, `worker` snapshot, `zmx: true` on models), `stream-events.md`, both client

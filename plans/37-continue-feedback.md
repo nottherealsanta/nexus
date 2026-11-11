@@ -43,7 +43,7 @@ mobile too (it has all slash commands).
   `/continue` already sends) and send it once connected; show `Waiting for Core…`. The key makes a resend after a
   reconnect safe (`/continue` is in `_KEYED` in `server.py`). Esc cancels the pending command before it is sent.
 - [ ] **Failure:** Core refusing (`Conflict`: running turn, unfinished durable turn, ZMX, archived, empty session)
-  removes the pending row at once and shows the reason in the status strip ([21](21-session-status.md)), not only a
+  removes the pending row at once and shows the reason in the status strip ([21](done/21-session-status.md)), not only a
   toast. A timeout with no 202 after e.g. 10 s says so and offers Retry.
 - [ ] **Same treatment for `/prompt` sends?** The user message already appears immediately; check whether the gap
   until the first output also needs the `Waiting for the model…` phase. Default: yes, the same row for every turn

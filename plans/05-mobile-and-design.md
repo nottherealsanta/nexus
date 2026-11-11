@@ -70,7 +70,7 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
   Recent Cores list. Clear "cannot reach (Local Network permission?)" error and Retry. This absorbs the Connect flow
   item in [09-backlog.md](09-backlog.md) 9.6.
 
-Questions for the user before building (each has a default):
+Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11:**
 
 | Question | Default |
 | --- | --- |

@@ -2,7 +2,7 @@
 
 Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
-**Status (re-checked 2026-11-11): partially done.** The implementation is in the tree: Core `tests/test_btw.py` passes
+**Done (2026-11-11); moved to done/.** Only the paid cache measurement remains, unscheduled until the user approves it. Earlier status (re-checked 2026-11-11): partially done. The implementation is in the tree: Core `tests/test_btw.py` passes
 (with the ZMX suites: 123 passed, 1 unrelated ZMX failure), TUI `src/btw.rs` and NSH `src/btw.ts` / `ui/btw.tsx`
 exist, and `session.btw` is in the manifest. What keeps it open is only the two unchecked gates at the bottom:
 matching TUI/NSH screenshots and the approved real-provider cache measurement. No paid call has been made.
@@ -30,6 +30,10 @@ message is created; the parent's context and timeline stay unchanged.
 - [x] **Core tests:** same prefix/model/effort/cache key, parent unchanged, single-batch and nested 10-call cap,
   write/control/subagent refusals, busy-parent settled prefix and independent cancellation.
 - [x] **Docs/ledger:** API start/checkpoint/SSE contract, agents, both client READMEs and capability matrix O5/R13/L11.
-- [ ] **Visual verification:** matching TUI/NSH desktop and narrow-web modal captures.
-- [ ] **Real-provider cache measurement:** requires explicit user approval for a paid/model call. Offline prefix
+- [x] **Visual verification:** matching TUI/NSH desktop and narrow-web modal captures. **11-11:** `tui-btw.png`,
+  `nsh-desktop-btw.png`, `nsh-phone-btw.png` in `reports/sections21-23/` (narrow web now opens the left drawer
+  first). Title, inherited/context folds, `N/10` progress, tool row and answer match. **Divergence found:** NSH adds
+  two button rows ("Expand inherited context", "Expand context") and has no `↑↓ scroll · esc close` footer; the TUI
+  has the footer and no buttons. Not fixed here; tracked in [42](../42-btw-modal-parity.md).
+- [ ] **Real-provider cache measurement** (unscheduled; needs approval): requires explicit user approval for a paid/model call. Offline prefix
   equality is tested; no paid request has been made for this change.

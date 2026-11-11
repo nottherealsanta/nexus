@@ -54,14 +54,14 @@ async def run(worker: AntigravityWorker, tmp_path: Path, **kwargs):
 
 def test_no_import_or_registry_coupling():
     root = Path(__file__).parents[1] / "nexus"
-    allowed = {"runtime.py", "config.py", "llmhub/hub.py", "llmhub/catalog.py"}
+    allowed = {"runtime.py", "config.py", "server.py", "llmhub/hub.py", "llmhub/catalog.py"}
     for path in root.rglob("*.py"):
         relative = path.relative_to(root)
         if "workers" not in relative.parts and relative.as_posix() not in allowed:
             assert "nexus.workers" not in path.read_text(), path
             assert "from .workers" not in path.read_text(), path
             assert "from ..workers" not in path.read_text(), path
-    code = "import sys; import nexus.workers; assert 'nexus.workers.antigravity' not in sys.modules"
+    code = "import sys; import nexus.workers; assert 'nexus.workers.antigravity' not in sys.modules; assert 'nexus.workers.claude_code' not in sys.modules"
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
