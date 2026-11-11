@@ -6,7 +6,7 @@ import { mobileClient } from "./mobile";
 import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
-import { Compat, Info, Message, Session } from "./core/api";
+import { Compat, Info, Message, Session, SubagentNotice } from "./core/api";
 import { ApiError, apiBase, localCore, request, setApiBase } from "./core/transport";
 import { ClientView, ViewReporter, sameClientView } from "./core/view";
 import type { ProjectMcpSummary } from "./project-mcp";
@@ -24,6 +24,8 @@ export const model = new Model();
 /** A tool, skill or server in the context modal: its description, and its full definition once opened. */
 export type ContextEntry = { key: string; name: string; description: string; full?: string; load?: () => Promise<string>; markdown?: boolean };
 export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows } | null>(null);
+/** The `Subagent done` modal: the exact model text and the facts Core attached to it. */
+export const subagentDone = signal<{ text: string; notice: SubagentNotice } | null>(null);
 type InventorySkillRows = { rows: import("./skills-mcp").InventoryRow[]; toggle?: (kind: import("./skills-mcp").InventoryKind, name: string, locked: boolean) => void };
 /** The attachment open in the full-size preview modal (composer or timeline). */
 export const imagePreview = signal<{ name: string; src: string } | null>(null);

@@ -291,6 +291,29 @@ impl Session {
     }
 }
 
+/// Structured Core metadata about a notice in the model context. The message
+/// text is still exactly what the model received; older Core and older stored
+/// notices have no metadata, and clients parse the text instead.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Notice {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub duration: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -309,6 +332,9 @@ pub struct Message {
     /// `manager` when the Manager sent this on the user's words; absent when a person typed it.
     #[serde(default)]
     pub origin: Option<String>,
+    /// Structured notices Core attached to this message (never sent to the model).
+    #[serde(default)]
+    pub notices: Vec<Notice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -4,14 +4,14 @@ import { phoneRow } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
+import { Btn, FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
-import type { CoreEvent, Message, Part, TurnSummary } from "../core/api";
+import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
 import type { IconName } from "../icons";
@@ -21,6 +21,7 @@ import { keepIdentity } from "./keep-identity";
 import { END_SLOP, followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
+import { Modal, ModalTitle, modalBodyHeight } from "./modal";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
@@ -45,7 +46,7 @@ type RowKind =
       key: string; kind: "context"; reconstructed?: boolean;
       sections: CtxSection[]; total: number; window?: number;
     }
-  | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
+  | { key: string; kind: "notice"; text: string; label: string; tone: Tone; subagent?: SubagentNotice }
   | { key: string; kind: "handoff"; from: string; summary: string; time: string }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
@@ -219,6 +220,47 @@ function bashExit(output: string | undefined): number | undefined {
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 function firstLine(s: string): string {
   return (s.split("\n").find((l) => l.trim().length > 0) ?? "").trim();
+}
+
+/** One-line previews drop raw Markdown emphasis (`**bold**`, `_italic_`, `~~gone~~`). */
+export function stripEmphasis(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/(^|[^\p{L}\p{N}])_([^_]+)_(?=$|[^\p{L}\p{N}])/gu, "$1$2");
+}
+
+/** Core's old notice text: `Sub agent ses_… (agent build) finished.` */
+export function parseSubagentNotice(text: string): { sessionId: string; agent: string; state: SubagentNotice["state"] } | null {
+  if (!text.startsWith("[Notification: sub agent finished]")) return null;
+  const line = text.split("\n").slice(1).map((l) => l.trim()).find(Boolean);
+  if (!line) return null;
+  const m = /^Sub agent (\S+) \(([^)]+)\) (finished|failed:|was interrupted by the user)/.exec(line);
+  if (!m) return null;
+  const state = m[3] === "finished" ? "finished" : m[3] === "failed:" ? "failed" : "interrupted";
+  const label = m[2].startsWith("agent ") ? m[2].slice(6) : m[2];
+  return { sessionId: m[1], agent: label, state } as const;
+}
+
+/** Structured Core metadata first; an older notice falls back to its text and the child session. */
+export function subagentNoticeOf(msg: Message, text: string): SubagentNotice | null {
+  const meta = msg.notices?.find((n) => n.kind === "subagent");
+  const parsed = meta ? null : parseSubagentNotice(text);
+  if (!meta && !parsed) return null;
+  const sessionId = meta?.session_id || parsed!.sessionId;
+  const agent = meta?.agent || parsed!.agent;
+  const state = (meta?.state || parsed!.state) as SubagentNotice["state"];
+  const child = model.sessions.get(sessionId);
+  const title = meta?.title || child?.title || "";
+  const ref = meta?.model || child?.model || "";
+  const effort = meta?.effort || child?.effort || "";
+  const modelRef = effort && !["default", "none"].includes(effort) && ref ? `${ref}/${effort}` : ref;
+  const duration = typeof meta?.duration === "number"
+    ? fmtDuration(meta.duration)
+    : child ? fmtDuration(Math.max(0, child.updated - child.created)) : "";
+  return { sessionId, agent, title, model: modelRef, duration, state, known: !!child };
 }
 function fmtCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -519,9 +561,10 @@ function buildStableRows(): Row[] {
         const { from, summary } = handoffParts(body);
         out.push({ key: msg.id, kind: "handoff", from, summary, time: clock(msg.created) });
       } else if (NOTICE.test(body)) {
+        const subagent = subagentNoticeOf(msg, body);
         out.push({
-          key: msg.id, kind: "notice", text: body,
-          label: body.startsWith("[Nexus recovery") ? roles.diagnostic.label : roles.context_notice.label,
+          key: msg.id, kind: "notice", text: body, subagent: subagent ?? undefined,
+          label: subagent ? "Subagent done" : body.startsWith("[Nexus recovery") ? roles.diagnostic.label : roles.context_notice.label,
           tone: body.startsWith("[Nexus recovery") ? "warning" : "info",
         });
       } else {
@@ -894,7 +937,9 @@ function RowView(p: { r: () => Row; sid: string }) {
           <View class="py-2"><HandoffCard r={r as any} /></View>
         </If>
         <If when={r().kind === "notice"}>
-          <NoticeRow text={() => (r() as any).text} />
+          <If when={!!(r() as any).subagent} else={<NoticeRow text={() => (r() as any).text} />}>
+            <SubagentDoneRow text={() => (r() as any).text} notice={() => (r() as any).subagent} />
+          </If>
         </If>
         <If when={r().kind === "assistant"}>
           <View class={`py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
@@ -981,20 +1026,87 @@ function NoteLine(p: { tone: Tone; label: string; text: string; detail?: string;
   );
 }
 
-/** `▸ context · Notification: sub agent finished · show details`: one muted row whose full text opens in a dialog. */
+/** `▸ context · Notification: … · show details`: one muted row whose full text opens in a dialog.
+ * A single finished background shell shows the shell icon instead of the fold, and drops `→ `. */
 function NoticeRow(p: { text: () => string }) {
-  const shell = () => p.text().startsWith("→ Background Shell Done:");
-  const head = () => firstLine(p.text()).replace(/^\[/, "").replace(/\]$/, "");
-  const label = () => shell() ? `${firstLine(p.text())} · show full output` : `context · ${head()} · show details`;
+  const shell = () => p.text().startsWith("→ Background Shell Done:") || p.text().startsWith("[Notification: background bash");
+  const head = () => firstLine(p.text()).replace(/^→ /, "").replace(/^\[/, "").replace(/\]$/, "");
+  const label = () => shell() ? `${head()} · show full output` : `context · ${head()} · show details`;
   return (
     <View class={`py-0.5 ${TURN_INSET}`}>
       <Button onPress={() => contextDetail.set({ title: shell() ? "Background shell" : "Context", detail: p.text() })} testID={shell() ? "background-shell-done" : "msg-notice"} accessibilityLabel={label()}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
-        <View class={ACTIVITY_CHEVRON}><Icon name="chevron-right" size={14} class="tint-muted-foreground" /></View>
+        <View class={ACTIVITY_CHEVRON}>
+          <If when={shell()} else={<Icon name="chevron-right" size={14} class="tint-muted-foreground" />}>
+            <Icon name="shell" size={MEMBER_ICON} class="tint-muted-foreground" />
+          </If>
+        </View>
         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{label()}</Text>
       </Button>
     </View>
   );
+}
+
+/** `<icon> Subagent done · Build · title · failed`: one row whose modal shows the exact model text. */
+function SubagentDoneRow(p: { text: () => string; notice: () => SubagentNotice }) {
+  const notice = p.notice;
+  const label = () => {
+    const n = notice();
+    return ["Subagent done", capitalize(n.agent), n.title].filter(Boolean).join(" · ");
+  };
+  const outcome = () => notice().state === "failed" ? "failed" : notice().state === "interrupted" ? "interrupted" : "";
+  return (
+    <View class={`py-0.5 ${TURN_INSET}`}>
+      <Button onPress={() => subagentDone.set({ text: p.text(), notice: notice() })} testID="subagent-done"
+        accessibilityLabel={`${label()}${outcome() ? `, ${outcome()}` : ""}`}
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+        <View class={ACTIVITY_CHEVRON}><Text class={`${TS.base} ${agentColor(notice().agent)}`}>⣿</Text></View>
+        <Text class={`shrink-0 ${TS.base} text-foreground`}>Subagent done</Text>
+        <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-muted-foreground`}>{` · ${capitalize(notice().agent)}${notice().title ? ` · ${notice().title}` : ""}`}</Text>
+        <If when={!!outcome()}><Text class={`shrink-0 ${TS.base} text-error`}>{` · ${outcome()}`}</Text></If>
+      </Button>
+    </View>
+  );
+}
+
+/**
+ * The `Subagent done` modal: the child's agent, title, model and duration, then
+ * the full notice text exactly as the model received it (selectable, scrollable).
+ * `Open session` is the child-card navigation; Esc closes.
+ */
+export function SubagentDoneModal() {
+  const done = subagentDone;
+  const body = () => done()!;
+  const close = () => done.set(null);
+  const n = () => body().notice;
+  const outcome = () => n().state === "failed" ? "failed" : n().state === "interrupted" ? "interrupted" : "";
+  return <If when={done()}>{() => <Modal size="large" label="Subagent done details" testID="subagent-done-modal" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
+    <View class="gap-3">
+      <ModalTitle title="Subagent done" />
+      <View class="gap-0.5">
+        <View class="flex-row items-center gap-1.5 min-w-0">
+          <Text class={`shrink-0 ${TS.base} font-medium ${agentColor(n().agent)}`}>{capitalize(n().agent)}</Text>
+          <If when={!!n().title}><Text class={T.meta}>·</Text></If>
+          <If when={!!n().title}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{n().title}</Text></If>
+        </View>
+        <View class="flex-row flex-wrap items-center gap-x-1.5">
+          <If when={!!n().model}><Text class={META}>{n().model}</Text></If>
+          <If when={!!n().model && !!n().duration}><Text class={META}>·</Text></If>
+          <If when={!!n().duration}><Text class={META}>{n().duration}</Text></If>
+          <If when={!!outcome()}><Text class={META}>·</Text><Text class={`${META} text-error`}>{outcome()}</Text></If>
+        </View>
+      </View>
+      <Scroll focusable ref={(node: any) => { setTimeout(() => node?.focus(), 0); }} style={{ height: Math.min(480, modalBodyHeight(56)) }} testID="subagent-done-text">
+        <Text testID="subagent-done-exact" style={{ userSelect: "text" }} class={`${TS.mono} text-foreground-secondary`}>{body().text}</Text>
+      </Scroll>
+      <View class="flex-row items-center gap-3 pt-3">
+        <Text class={T.meta}>esc close</Text>
+        <View class="flex-1" />
+        <Btn label="Open session" icon="session" disabled={!n().known} reason={!n().known ? "That session is no longer available" : undefined}
+          onPress={() => { const id = n().sessionId; close(); void selectSession(id); }} testID="subagent-open-session" />
+      </View>
+    </View>
+  </Modal>}</If>;
 }
 
 /** A fenced code block (DESIGN_PLAN D08): a panel card with the language and a Copy button over the code. */
@@ -1325,14 +1437,12 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
   const rows = signal(0);
   const hidden = () => x().running ? Math.max(0, rows() - 10) : 0;
   const key = () => x().running ? "reason:streaming" : `reason:${x().key}`;
-  const preview = () => x().encrypted ? "encrypted, replayed to the provider" : firstLine(x().text);
+  const preview = () => x().encrypted ? "encrypted, replayed to the provider" : stripEmphasis(firstLine(x().text));
   return (
     <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS} ${p.nested ? "gap-2" : ""}`}>
-        <If when={!!p.nested} else={<View class={ACTIVITY_CHEVRON}><Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>}>
-          <Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" />
-        </If>
+        <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" /></View>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
           <Text class={`${TS.base} font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>

@@ -32,6 +32,17 @@ const network = {
 };
 
 describe("Thought row (D07)", () => {
+  test("a one-line preview drops raw Markdown emphasis", async () => {
+    const withEmphasis = [...messages, { id: "m3", session_id: "ses_1", seq: 3, role: "assistant", parts: [{ type: "reasoning", summary: "**Delegating focused tests**" }], created: 3 }];
+    const app = await open("./App.tsx", { network: { ...network, "GET */api/session/ses_1/message*": { body: withEmphasis } }, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:reasoning");
+    const shown = app.texts().join("\n");
+    expect(shown).toContain("Delegating focused tests");
+    expect(shown.includes("**Delegating")).toBe(false);
+  });
+
   test("a reasoning part renders one Thought row with its preview, not a group around a Thought", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");

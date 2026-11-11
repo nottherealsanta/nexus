@@ -12,6 +12,7 @@ import { FilePanel } from "./src/ui/editor";
 import { TerminalPanel } from "./src/ui/terminal";
 import { terminalOpen } from "./src/terminal-panel";
 import { ContextDetailModal } from "./src/ui/newsession";
+import { SubagentDoneModal } from "./src/ui/timeline";
 import { ManagerContextModal } from "./src/ui/manager/context-modal";
 import { ResourcesModal } from "./src/ui/resources";
 import { InspectorModal } from "./src/ui/inspector";
@@ -155,6 +156,7 @@ function App() {
         <If when={terminalOpen()}><TerminalPanel /></If>
         </>}><PhoneShell /></If>
         <ContextDetailModal />
+        <SubagentDoneModal />
         <ResourcesModal />
         <InspectorModal />
         <Palette />

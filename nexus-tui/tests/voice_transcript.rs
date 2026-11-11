@@ -53,6 +53,7 @@ fn voice_notice_is_visible_in_composer_and_sent_context() {
             parts: vec![serde_json::json!({"type": "text", "text": scenario["message"]})],
             delivery: None,
             origin: None,
+            notices: Vec::new(),
         });
     let (buffer, rows) = draw(&mut a, 160, 48);
     assert_eq!(

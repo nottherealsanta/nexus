@@ -147,3 +147,5 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
   its own `Dialog`, the terminal-only modal block is gone, and the ledger and `interface/design-language.md` say so.
   Verified: paint unit tests, manifest and theme checks; the TUI suite shows the same failures as before. Not
   re-captured in a terminal screenshot.
+
+- **Timeline notice rows (11-11).** Core attaches durable `notices` metadata to a finished `wait: false` subagent while the model text stays exactly as received; older notices parse the child id/agent/outcome and fill title/model/duration from the child session. Both desktop clients draw single thoughts as `◇` and one finished background shell as `$`, and show `⣿ Subagent done · Agent · title` with a `Subagent done` modal (agent, title, model, duration, exact text) whose footer opens the child. Mobile is unchanged. Core notice tests, TUI scenario/frame tests, NSH scenario/thought tests and paired dark/light captures in `reports/35-timeline-notice-rows/`; see [done/35](done/35-timeline-notice-rows.md) for the honest limits.

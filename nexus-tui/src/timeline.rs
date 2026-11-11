@@ -99,6 +99,22 @@ pub struct Block {
     pub target: Option<String>,
     /// A tool whose detail is longer than the head and tail the UI shows.
     pub clipped: bool,
+    /// Structured facts for the `Subagent done` modal; `target` stays the exact model text.
+    pub subagent: Option<SubagentNotice>,
+}
+
+/// A finished subagent's notice, from Core's metadata or an older notice's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentNotice {
+    pub session_id: String,
+    pub agent: String,
+    pub title: String,
+    /// `model/effort`, as a child card names it.
+    pub model: String,
+    /// Formatted duration (`5m 10s`), when known.
+    pub duration: String,
+    /// `finished`, `failed` or `interrupted`.
+    pub state: String,
 }
 
 pub struct Timeline {
@@ -657,6 +673,118 @@ fn is_background_done(text: &str) -> bool {
     t.starts_with("→ Background Shell Done:") || t.starts_with("[Notification: background bash")
 }
 
+/// Core's old notice text for a finished child: `Sub agent ses_… (agent build) finished.`
+/// The structured metadata is preferred; this keeps sessions stored before it readable.
+fn parse_subagent_notice(text: &str) -> Option<(String, String, String)> {
+    let body = text.strip_prefix("[Notification: sub agent finished]")?;
+    let line = body.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let rest = line.strip_prefix("Sub agent ")?;
+    let (session_id, rest) = rest.split_once(" (")?;
+    let (label, outcome) = rest.split_once(") ")?;
+    let state = if outcome.starts_with("finished") {
+        "finished"
+    } else if outcome.starts_with("failed") {
+        "failed"
+    } else if outcome.starts_with("was interrupted by the user") {
+        "interrupted"
+    } else {
+        return None;
+    };
+    let agent = label.strip_prefix("agent ").unwrap_or(label);
+    Some((session_id.to_owned(), agent.to_owned(), state.to_owned()))
+}
+
+/// A finished subagent's notice facts: Core metadata when present, else the
+/// older text plus the child session the clients already know.
+pub(crate) fn subagent_notice(
+    m: &crate::api::Message,
+    sessions: &std::collections::BTreeMap<String, crate::api::Session>,
+) -> Option<SubagentNotice> {
+    let meta = m.notices.iter().find(|n| n.kind == "subagent");
+    let (session_id, agent, state) = match meta {
+        Some(n) => (n.session_id.clone(), n.agent.clone(), n.state.clone()),
+        None => parse_subagent_notice(&parts_text(m))?,
+    };
+    let child = sessions.get(&session_id);
+    let title = meta
+        .map(|n| n.title.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| child.map(|s| s.title.clone()))
+        .unwrap_or_default();
+    let model = meta
+        .and_then(|n| n.model.clone())
+        .filter(|m| !m.is_empty())
+        .or_else(|| child.and_then(|s| s.model.clone()))
+        .unwrap_or_default();
+    let effort = meta.and_then(|n| n.effort.clone()).or_else(|| {
+        child
+            .and_then(|s| s.extra.get("effort").and_then(Value::as_str))
+            .map(str::to_owned)
+    });
+    let effort = effort.filter(|e| !e.is_empty() && e != "default" && e != "none");
+    let model = match effort {
+        Some(effort) if !model.is_empty() => format!("{model}/{effort}"),
+        _ => model,
+    };
+    let duration = meta
+        .and_then(|n| n.duration)
+        .or_else(|| child.map(|s| (s.updated - s.created).max(0.0)))
+        .map(fmt_duration)
+        .unwrap_or_default();
+    Some(SubagentNotice {
+        session_id,
+        agent,
+        title,
+        model,
+        duration,
+        state,
+    })
+}
+
+/// Strip one-line Markdown emphasis markers (`**bold**`, `*italic*`, `~~gone~~`,
+/// `__bold__`, `_italic_`) from a thought preview. Underscores inside words stay.
+pub(crate) fn plain_preview(text: &str) -> String {
+    let mut out = text.to_owned();
+    for marker in ["**", "__", "~~", "*", "_"] {
+        out = strip_pair(&out, marker, marker == "_");
+    }
+    out
+}
+
+fn strip_pair(text: &str, marker: &str, word_boundary: bool) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(marker) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + marker.len()..];
+        let boundary_ok = !word_boundary
+            || !rest[..start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric);
+        let Some(end) = after.find(marker).filter(|end| *end > 0) else {
+            out.push_str(marker);
+            rest = after;
+            continue;
+        };
+        let inner = &after[..end];
+        let close_ok = !word_boundary
+            || !after[end + marker.len()..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric);
+        if boundary_ok && close_ok {
+            out.push_str(inner);
+            rest = &after[end + marker.len()..];
+        } else {
+            out.push_str(marker);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub(crate) fn is_notice(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("→ Background Shell Done:")
@@ -1156,6 +1284,7 @@ impl Builder<'_> {
             default_open: None,
             target: None,
             clipped: false,
+            subagent: None,
         });
         self.blank();
     }
@@ -2343,6 +2472,7 @@ impl Builder<'_> {
                 default_open: Some(false),
                 target: Some(message.id.clone()),
                 clipped: false,
+                subagent: None,
             });
         }
     }
@@ -2566,15 +2696,20 @@ impl Builder<'_> {
             default_open: None,
             target: Some(details.join("\n")),
             clipped: false,
+            subagent: None,
         });
     }
 
     // -- items -----------------------------------------------------------------
 
     /// One muted row that opens its full text in a modal (Enter or a click).
-    fn notice_row(&mut self, key: String, label: &str, full: String) {
+    /// A single item shows its own icon where a group's fold glyph would be.
+    fn notice_row(&mut self, key: String, label: &str, full: String, icon: Option<&'static str>) {
         self.block(key, BlockKind::Notice, self.turn, false, |b| {
-            let marker = format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(false));
+            let marker = match icon {
+                Some(icon) => format!("{}{} ", " ".repeat(ACTIVITY_INDENT), icon),
+                None => format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(false)),
+            };
             let label = truncate(label, b.bw.saturating_sub(width(&marker)), b.ell());
             b.line(vec![
                 Span::styled(marker, b.meta()),
@@ -2586,13 +2721,57 @@ impl Builder<'_> {
         }
     }
 
+    /// `<icon> Subagent done · Agent · title`, with the outcome in the error
+    /// colour. Enter opens the modal; its footer opens the child session.
+    fn subagent_notice_row(&mut self, m: &crate::api::Message, info: &SubagentNotice, text: &str) {
+        let key = format!("notice:{}", m.id);
+        self.block(key, BlockKind::Notice, self.turn, false, |b| {
+            let icon = b.t.dots_full().to_owned();
+            let marker = format!("{}{} ", " ".repeat(ACTIVITY_INDENT), icon);
+            let outcome = match info.state.as_str() {
+                "failed" => Some("failed"),
+                "interrupted" => Some("interrupted"),
+                _ => None,
+            };
+            let sep = b.sep();
+            let tail = outcome.map(|o| format!("{sep}{o}")).unwrap_or_default();
+            let used = width(&marker) + width("Subagent done") + width(&tail);
+            let mut detail = format!("{sep}{}", crate::text::capitalize(&info.agent));
+            if !info.title.is_empty() {
+                detail.push_str(&format!("{sep}{}", info.title));
+            }
+            let detail = truncate(&detail, b.bw.saturating_sub(used), b.ell());
+            let mut spans = vec![
+                Span::styled(format!("{}", " ".repeat(ACTIVITY_INDENT)), b.meta()),
+                Span::styled(icon, b.t.agent_style(&info.agent)),
+                Span::styled(" ", b.meta()),
+                Span::styled("Subagent done".to_owned(), b.st(PRIMARY, CANVAS)),
+                Span::styled(detail, b.meta()),
+            ];
+            if let Some(o) = outcome {
+                spans.push(Span::styled(
+                    format!("{sep}{o}"),
+                    b.st("status.error", CANVAS),
+                ));
+            }
+            b.line(spans);
+        });
+        if let Some(block) = self.blocks.last_mut() {
+            block.target = Some(text.to_owned());
+            block.subagent = Some(info.clone());
+        }
+    }
+
     fn background_notices(&mut self, notices: &mut Vec<(String, String)>) {
         if notices.is_empty() {
             return;
         }
         let key = format!("notice:{}", notices[0].0);
-        let label = if notices.len() == 1 {
-            format!("{} · show full output", first_line(&notices[0].1))
+        let single = notices.len() == 1;
+        let label = if single {
+            let head = first_line(&notices[0].1);
+            let head = head.strip_prefix("→ ").unwrap_or(&head);
+            format!("{head} · show full output")
         } else {
             format!(
                 "→ {} background shells done · show full output",
@@ -2604,7 +2783,8 @@ impl Builder<'_> {
             .map(|(_, text)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
-        self.notice_row(key, &label, full);
+        let icon = single.then(|| crate::paint::verb_glyph("bash", self.t.opts.ascii));
+        self.notice_row(key, &label, full, icon);
         notices.clear();
     }
 
@@ -2714,8 +2894,12 @@ impl Builder<'_> {
     fn notice(&mut self, m: &crate::api::Message, text: &str) {
         let head = first_line(text);
         let head = head.trim().trim_start_matches('[').trim_end_matches(']');
+        if let Some(info) = subagent_notice(m, &self.app.state.model.sessions) {
+            self.subagent_notice_row(m, &info, text);
+            return;
+        }
         let label = format!("context · {head} · show details");
-        self.notice_row(format!("notice:{}", m.id), &label, text.to_owned());
+        self.notice_row(format!("notice:{}", m.id), &label, text.to_owned(), None);
     }
 
     fn assistant_block(&mut self, key: &str, text: &str) {
@@ -3033,7 +3217,8 @@ impl Builder<'_> {
             let prefix = match tree {
                 Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
                 Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
-                None => format!("{pad}{} ", b.t.fold(open)),
+                // A lone thought is one item: its own icon replaces the fold.
+                None => format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" }),
             };
             let mut head = vec![
                 Span::styled(
@@ -3058,7 +3243,7 @@ impl Builder<'_> {
                 let preview = if encrypted {
                     "encrypted, replayed to the provider".to_owned()
                 } else {
-                    first_line(&summary)
+                    plain_preview(&first_line(&summary))
                 };
                 if !preview.is_empty() {
                     let used: usize = head.iter().map(|s| width(s.content.as_ref())).sum();
@@ -3100,7 +3285,8 @@ impl Builder<'_> {
             let prefix = match tree {
                 Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
                 Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
-                None => format!("{pad}{} ", b.t.fold(open)),
+                // A lone thought is one item: its own icon replaces the fold.
+                None => format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" }),
             };
             let mut head = vec![
                 Span::styled(prefix, if tree.is_some() { tree_style } else { muted }),
@@ -3981,6 +4167,7 @@ impl Builder<'_> {
                         default_open: None,
                         target: Some(fence.source),
                         clipped: false,
+                        subagent: None,
                     });
                 }
                 return;
@@ -4072,6 +4259,7 @@ impl Builder<'_> {
                     default_open: None,
                     target: Some(source.clone()),
                     clipped: false,
+                    subagent: None,
                 });
             }
         }
@@ -4530,7 +4718,10 @@ fn patch_arg(patch: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{band_meta, fmt_count, fmt_duration, line_count, patch_arg};
+    use super::{
+        band_meta, fmt_count, fmt_duration, line_count, parse_subagent_notice, patch_arg,
+        plain_preview,
+    };
 
     #[test]
     fn patch_arg_names_the_file_and_counts_the_others() {
@@ -4555,6 +4746,53 @@ mod tests {
             "*** Begin Patch"
         );
         assert_eq!(patch_arg(""), "patch");
+    }
+
+    #[test]
+    fn one_line_thought_previews_drop_markdown_emphasis() {
+        assert_eq!(
+            plain_preview("**Delegating focused tests**"),
+            "Delegating focused tests"
+        );
+        assert_eq!(
+            plain_preview("*Check* the _renderer_"),
+            "Check the renderer"
+        );
+        assert_eq!(plain_preview("~~old~~ plan"), "old plan");
+        // Intraword underscores are identifiers, not emphasis.
+        assert_eq!(
+            plain_preview("parse_session_id in loader"),
+            "parse_session_id in loader"
+        );
+        assert_eq!(plain_preview("plain title"), "plain title");
+    }
+
+    #[test]
+    fn older_subagent_notices_still_parse() {
+        let finished =
+            "[Notification: sub agent finished]\nSub agent ses_1 (agent build) finished.\n\nDone.";
+        assert_eq!(
+            parse_subagent_notice(finished),
+            Some(("ses_1".into(), "build".into(), "finished".into()))
+        );
+        let failed = "[Notification: sub agent finished]\nSub agent ses_2 (fork) failed: network.";
+        assert_eq!(
+            parse_subagent_notice(failed),
+            Some(("ses_2".into(), "fork".into(), "failed".into()))
+        );
+        let stopped = "[Notification: sub agent finished]\nSub agent ses_3 (agent quick) was interrupted by the user. It is idle";
+        assert_eq!(
+            parse_subagent_notice(stopped).map(|(_, _, state)| state),
+            Some("interrupted".into())
+        );
+        assert_eq!(
+            parse_subagent_notice("[Notification: background bash]\nsub agent"),
+            None
+        );
+        assert_eq!(
+            parse_subagent_notice("[Notification: sub agent finished]\nother"),
+            None
+        );
     }
 
     #[test]

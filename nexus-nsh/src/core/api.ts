@@ -25,7 +25,17 @@ export interface Session {
   [k: string]: unknown;
 }
 export interface Part { type: string; text?: string; summary?: string; id?: string; name?: string; arguments?: string; call_id?: string; output?: string; is_error?: boolean; [k: string]: unknown }
-export interface Message { id: string; session_id: string; seq: number; created: number; role: "user" | "assistant" | "tool"; delivery?: "steer" | "queued" | "handoff" | null; /** `"manager"` when the Manager sent it on the user's words. */ origin?: string | null; parts: Part[] }
+/** Structured Core metadata about a notice; the message text is exactly what the model received. */
+export interface NoticeMeta {
+  kind: string; state?: string; session_id?: string; agent?: string; title?: string;
+  model?: string | null; effort?: string | null; duration?: number | null;
+}
+/** A subagent-finished notice as a row and modal show it: Core metadata, or the old text. */
+export interface SubagentNotice {
+  sessionId: string; agent: string; title: string; model: string; duration: string;
+  state: "finished" | "failed" | "interrupted"; known: boolean;
+}
+export interface Message { id: string; session_id: string; seq: number; created: number; role: "user" | "assistant" | "tool"; delivery?: "steer" | "queued" | "handoff" | null; /** `"manager"` when the Manager sent it on the user's words. */ origin?: string | null; parts: Part[]; /** Structured notices Core attached (never sent to the model). */ notices?: NoticeMeta[] }
 export interface Approval { id: string; session_id: string; tool: string; call_id: string; args: Record<string, unknown> }
 export interface QuestionOption { id: string; label: string; preview?: string }
 export interface QuestionItem { id: string; question: string; options: QuestionOption[]; multiple: boolean; allow_free_text: boolean }

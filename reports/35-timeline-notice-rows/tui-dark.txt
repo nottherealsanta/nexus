@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]    [Git]     · Subagent done demo ×    +                                                                                                    □
+     │
+▏    │▏  Subagent done demo        2m
+▏ N  │▏  ⌥ master                 2 ↳
+▏  8 │                                    System prompt ~998
+     │   Probe 1                   3m
+     │   ⌥ master                         AGENTS.md  not found · /private/tmp/plan35-final.466gzP/root/ws/nexus-demo/AGENTS.md
+  S  │
+   1 │   Subagent done demo        5m     Tools [14] ~2.9K
+     │   ⌥ master                 2 ↳       ● read                      ● edit                      ● ask
+     │                                      ● grep                      ● patch                     ● code
+     │   Subagent notices          8m       ● glob                      ● write                     ● fork
+     │   ⌥ master                 2 ↳       ● ls                        ● web_search                ● expose_workspace_tools
+     │                                      ● bash                      ● web_fetch
+     │   Refactor the loader       9m
+     │   ⌥ master                 1 ↳     Skills [0]  none
+     │
+     │   Review the CJK width han… 9m     MCP [0]  none
+     │   ⌥ master
+     │                                    total  ~3,942 tok · 0.4% of the window
+     │   Release notes for 0.10    9m
+     │   ⌥ master
+     │                                  │
+     │   Fix flaky test in sync    9m   │  fix the build                                                                                                   #1 · 9:19 PM
+     │   ⌥ master                       │
+     │
+     │                                     ⣿ Build Subagent heading and root-back navigation  Background
+     │                                       opencode/deepseek-v4.1-flash/high · 5m 10s
+     │
+     │                                     $ Background Shell Done: 'cd nexus-tui && cargo test …' · show full output
+     │
+     │                                     ◇ Thought · Delegating focused tests
+     │
+     │                                     ⣿ Subagent done · Build · Subagent heading and root-back navigation
+     │
+     │                                     ⣿ Subagent done · Quick · Quick check · failed
+     │
+     │                                     Done.
+     │
+     │                                                                                             GPT-6.1 Terra · 1 tool · 7.2Ki · 360o · 120r · 67%c · 0.0s · 9:19 PM
+     │
+     │
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · GPT-6.1 Terra codex · default                                                                  3.6K · 1.3% · 0.3%
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/plan35-final.466gzP/root/ws/nexus-demo  ⌥ master
+     │                                   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

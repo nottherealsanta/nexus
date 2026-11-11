@@ -39,7 +39,6 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
 | 38 | [Ctrl+V pastes text too](38-ctrl-v-text.md) | **new**; TUI Ctrl+V reads images only | Fall back to clipboard text in the TUI |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
-| 35 | [Timeline: item icons, "Subagent done" row + modal](35-timeline-notice-rows.md) | **new** | Core notice metadata, then both clients |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
 | 33 | [Remove Git from the right sidebar](33-remove-git-from-right-sidebar.md) | **new** | Confirm only the right-sidebar section goes |
 | 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **new**; reference in `nexus01` | Decide what happens to the queue; resolve the NSH `alt+enter` clash |
@@ -60,7 +59,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
 [22 remove `/continuation`](done/22-remove-continuation.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md),
-[32 worktree indicator](done/32-worktree-indicator.md). Physical phone/touch was not verified.
+[32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md).
+Physical phone/touch was not verified.
 
 Section 7 of the old plan (the backlog overview) is now the top of [09-backlog.md](09-backlog.md). The GPUI host spike
 is in [decisions.md](decisions.md).

@@ -8880,6 +8880,18 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::ContextDoc { title, text, top } => {
             draw_context_doc(cx, buf, area, title, text, *top, hits)
         }
+        OverlayKind::SubagentDone {
+            session_id,
+            agent,
+            title,
+            model,
+            duration,
+            state,
+            text,
+            top,
+        } => draw_subagent_done(
+            cx, buf, area, session_id, agent, title, model, duration, state, text, *top, hits,
+        ),
         OverlayKind::ContextEntries {
             title,
             entries,
@@ -10208,6 +10220,128 @@ fn draw_context_detail(
         );
     }
     hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
+}
+
+/// The `Subagent done` modal: fixed facts, then the exact notice text the model
+/// received (wrapped, not re-rendered), scrollable; Enter opens the child.
+fn subagent_done_text_rows(area: Rect, text: &str) -> (Rect, Vec<String>) {
+    let wide = MODAL_LARGE;
+    let inner = modal_box(area, wide, 10).width.saturating_sub(4) as usize;
+    let rows: Vec<String> = text
+        .split('\n')
+        .flat_map(|line| {
+            if line.is_empty() {
+                vec![String::new()]
+            } else {
+                text::wrap(line, inner.max(1))
+            }
+        })
+        .collect();
+    (
+        modal_box(area, wide, (rows.len() + 9).clamp(10, 40) as u16),
+        rows,
+    )
+}
+
+pub(crate) fn subagent_done_max(area: Rect, text: &str) -> usize {
+    let (rect, rows) = subagent_done_text_rows(area, text);
+    let body = Modal::of(rect).body.height.saturating_sub(3) as usize;
+    rows.len().saturating_sub(body)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_subagent_done(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    session_id: &str,
+    agent: &str,
+    title: &str,
+    model: &str,
+    duration: &str,
+    state: &str,
+    text: &str,
+    top: usize,
+    hits: &mut HitMap,
+) {
+    let (b, rows) = subagent_done_text_rows(area, text);
+    let m = modal(cx, buf, area, b, "Subagent done", hits);
+    if m.body.height < 4 {
+        hint_row(cx, buf, &m, &[("esc", "close")]);
+        return;
+    }
+    let sep = cx.sep();
+    let agent_style = cx
+        .st(PRIMARY, RAISED)
+        .patch(cx.t.agent_style(agent))
+        .add_modifier(Modifier::BOLD);
+    let mut x = put(
+        buf,
+        m.x,
+        m.body.y,
+        &crate::text::capitalize(agent),
+        agent_style,
+        m.w,
+    );
+    if !title.is_empty() {
+        let rest = format!("{sep}{title}");
+        put(
+            buf,
+            x,
+            m.body.y,
+            &truncate(&rest, m.r.right().saturating_sub(x) as usize, cx.ell()),
+            cx.st(SECONDARY, RAISED),
+            m.r.right().saturating_sub(x),
+        );
+    }
+    let mut meta: Vec<&str> = Vec::new();
+    if !model.is_empty() {
+        meta.push(model);
+    }
+    if !duration.is_empty() {
+        meta.push(duration);
+    }
+    let meta_line = meta.join(&sep);
+    x = put(
+        buf,
+        m.x,
+        m.body.y + 1,
+        &truncate(&meta_line, m.w as usize, cx.ell()),
+        cx.st(MUTED, RAISED),
+        m.w,
+    );
+    if state == "failed" || state == "interrupted" {
+        let tail = format!("{sep}{state}");
+        put(
+            buf,
+            x,
+            m.body.y + 1,
+            &truncate(&tail, m.r.right().saturating_sub(x) as usize, cx.ell()),
+            cx.st("status.error", RAISED),
+            m.r.right().saturating_sub(x),
+        );
+    }
+    let body = m.body.height.saturating_sub(3) as usize;
+    let top = top.min(rows.len().saturating_sub(body));
+    for (i, row) in rows.iter().skip(top).take(body).enumerate() {
+        put(
+            buf,
+            m.x,
+            m.body.y + 3 + i as u16,
+            row,
+            cx.st(PRIMARY, RAISED),
+            m.w,
+        );
+    }
+    let mut hints: Vec<(&str, &str)> = Vec::new();
+    if subagent_done_max(area, text) > 0 {
+        hints.push((updown(cx), "scroll"));
+    }
+    if cx.app.state.model.sessions.contains_key(session_id) {
+        hints.push(("enter", "open session"));
+    }
+    hints.push(("esc", "close"));
+    hint_row(cx, buf, &m, &hints);
 }
 
 /// Live kernels and background shells of the viewed session tree, newest

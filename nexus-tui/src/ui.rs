@@ -212,6 +212,18 @@ pub enum OverlayKind {
         text: String,
         top: usize,
     },
+    /// A finished subagent notice: its facts, the exact model text, and a way
+    /// to open the child session. Enter opens it; Esc closes.
+    SubagentDone {
+        session_id: String,
+        agent: String,
+        title: String,
+        model: String,
+        duration: String,
+        state: String,
+        text: String,
+        top: usize,
+    },
     /// A system prompt or instruction file, rendered as Markdown.
     ContextDoc {
         title: String,
