@@ -10,6 +10,9 @@ export interface Project {
 export interface SessionSkill { name: string; description: string; scope: string; state: "on" | "off"; locked: boolean }
 export interface SessionMcp { server: string; tools: number | null; state: "on" | "off" | "unavailable"; locked: boolean; error: string | null; warnings?: string[] }
 export interface SessionFork { parent_id: string; inherited: number }
+/** A ZMX child's launch facts (`session.worker`): the CLI runs its own loop, so the context is never complete. */
+export interface SessionWorker { label: string; provider: string; context_complete: boolean; disclosure: string; status: string; usage: Record<string, number> | null;
+  not_applied: string[]; permission_mode?: string; directory?: string; model?: string; session_id?: string; error?: string | null; notes?: string[]; denied_actions?: string[] }
 export interface Session {
   id: string; project_id: string; directory: string; title: string; agent: string;
   parent_id: string | null; children?: string[]; model?: string | null; model_source?: string;
@@ -18,6 +21,7 @@ export interface Session {
   continued_from?: string | null; continued_to?: string | null;
   /** A fork child (the `fork` agent): its parent and how many of its first messages were copied from it. */
   fork?: SessionFork | null;
+  worker?: SessionWorker | null;
   [k: string]: unknown;
 }
 export interface Part { type: string; text?: string; summary?: string; id?: string; name?: string; arguments?: string; call_id?: string; output?: string; is_error?: boolean; [k: string]: unknown }

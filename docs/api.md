@@ -188,7 +188,8 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
-| POST | `/api/session/{id}/btw` | `{question}` | 200 `{answer, usage}`. One request with the session's context up to its last completed tool call plus the question; no tool runs and nothing is stored (the request and reply are a `oneshot` event, kind `btw`). 400 empty, 502 provider failure |
+| POST | `/api/session/{id}/btw` | `{question, request_id?}` | 200 `{session, request_id, inherited, inherited_context}` immediately starts a hidden read-only fork, even while the parent is busy. `inherited_context` is the frozen inherited request prefix as JSON text. Follow the child's ordinary SSE events; nothing enters the parent. 400 empty/invalid question, 409 archived |
+| GET | `/api/session/{id}/btw` | child session id | `{session, head, inherited, calls, running, error, messages, partial, events}`: reconnect checkpoint for a side run. Messages exclude the inherited prefix; events are compact tool/nested-call progress. 400 for a non-btw session |
 | POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
 | POST | `/api/draft/context` | session-creation fields | the first request a new session would send, with nothing stored ([Configuration](#configuration-provider-login-and-context-budget)) |
 | GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
@@ -991,7 +992,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `session.created` / `session.updated` | `Session`, stored in that session's log |
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |
-| `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
+| `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived, revisions: {id: revision}}`: one transition for a whole tree, stored in the root's event log; it bumps each session's revision, and `revisions` carries the new values |
 | `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?, turn_finished?}` before and after each turn and when child activity changes the parent's status. A parent remains busy while a child runs; `turn_finished: true` marks its own turn ending while its status remains busy. A recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
@@ -1016,7 +1017,9 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `worktree.created` / `worktree.deleted` | `{path, branch, head, repository, main, session_directory}` |
 | `session.error` | `{kind: "provider" or "auth" or "request" or "interrupted", message, status?, body?}` |
 | `bus.overflow` | `{dropped_after, generation, head}`: stream control, never stored; resume from your cursor or resync |
-| `oneshot` | `{kind: "handoff" or "title" or "btw", request, text, usage, model?}`: a tool-free request and reply, stored, never model context |
+| `oneshot` | `{kind: "handoff" or "title", request, text, usage, model?}`: a tool-free request and reply, stored, never model context. Historical `btw` events remain readable |
+| `btw.started` | On the parent: `{session, request_id, question, inherited}` correlates a modal with its hidden child, without adding a message |
+| `btw.budget` | On the child: `{calls}` includes outer and nested code calls, up to 10. Further calls are refused |
 | `session.handoff` / `session.handoff_failed` | `{from, to, reason}` on the old session, or `{session_id, error}` when an automatic handoff failed |
 | loop and stream events | from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end`, `hook_fired` |
 
@@ -1473,9 +1476,9 @@ message, whose text joins them with newlines, and their events carry the same
 
 ## Handoff, titles and `/btw`
 
-Three features make one tool-free model request (`nexus/oneshot.py`); tool specs ride along so the prefix matches
+Titles and handoff make one tool-free model request (`nexus/oneshot.py`); tool specs ride along so the prefix matches
 the session's cache, and a tool call in the reply is ignored. Each request and reply is stored as a `oneshot` event
-(`kind` `handoff`, `title`, `btw`), never as model context.
+(`kind` `handoff`, `title`), never as model context.
 
 - **Handoff.** `POST …/handoff` or, after a completed turn of a root session whose newest measured request used at
   least `[context] handoff_percent` (default 80, 0 = off) of the model's window, automatically. The new session's
@@ -1483,9 +1486,37 @@ the session's cache, and a tool call in the reply is ignored. Each request and r
   `session.handoff {from, to, reason}` on the old session (reason `user` or `auto`), `session.created` and the
   message on the new one, and `session.handoff_failed {error}` when an automatic attempt failed (the session is
   unchanged and the next completed turn tries again). The new session reloads the MCP configuration and connects
-  enabled servers like any new root session; see [mcp.md](mcp.md#lifecycle). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). Both clients use them: the handoff card names the original and `/origin` (`/continuation` the other way) opens it.
+  enabled servers like any new root session; see [mcp.md](mcp.md#lifecycle). Session JSON carries `continued_from` (the session whose summary this one starts from; stored on the session row and cleared if that session is deleted) and `continued_to` (the newest session started from this one). The handoff card names the original and `/origin` opens it. `/continuation` has been removed from both clients; manual `/continue` is unchanged.
 - **Titles.** The first words of the first prompt are the title at once; a model-written title (Title Case, a few
   words, from the first message only) replaces it unless the user renamed the session meanwhile. The model comes from `[context] title_models`, tried in order; if all fail the first words stay. The `mock/` provider is skipped.
+
+`/btw <question>` opens a live modal in both clients, including mobile. Core copies the parent's settled
+request prefix, model, effort and prompt-cache key into a hidden `kind: "btw"` fork, with its own marker,
+messages, turn records and inspector history. Its relational `parent_id` is null so it does not make the parent
+busy or deliver a report; `fork.parent_id` records the source. Session JSON includes `kind`; clients exclude
+btw creation/update events from user-facing session lists. Deleting the source session cleans up its side runs;
+project removal/deletion includes them in its pending-work checks and shutdown.
+
+The daemon permits at most 10 tool calls, counting nested code calls and refused attempts. On the tenth it adds
+a visible answer-now notice; every subsequent call is refused. Write tools, workspace/control tools, subagents,
+forks, messaging, user extensions, interactive questions and MCP tools without an explicit read-only annotation
+are refused. Shell execution is limited to a small exact foreground allowlist (`pwd`, `git status`,
+`git status --short`, `git diff`, `git diff --stat`, `git log -5 --oneline`); Git optional locks, external diff,
+textconv and filesystem-monitor hooks are disabled where applicable. Ordinary configured command hooks do not
+run in a btw. Tool definitions remain identical to the parent's for caching, not as an execution grant.
+
+The modal folds the inherited request prefix (`i`) and full ordered side-run context (`c`); expanding context
+shows the marker, canonical tool arguments/results, model-visible notices and replies. Compact tool progress,
+the `N/10` counter and streamed Markdown answer stay visible when folded. Closing/Esc cancels only the side run
+with `POST …/interrupt`. A request token prevents late responses attaching to a different modal; periodic child
+checkpoints recover missed SSE events and an idle outcome after reconnect. Past-answer navigation remains deferred.
+The parent's messages and timeline never change. Real-provider cache reuse for this new path has not been measured.
+
+Session outcomes (errors, interruptions, retries, recovery and cancelled waits) are displayed above the composer,
+not as timeline/footer rows. The non-dismissible strip derives the latest outcome and count from the newest turn
+summary or its live scratch, restores on revisit and clears on busy. It offers `/continue` when applicable and the
+desktop inspector for full HTTP/body/history details. Model-visible notice/recovery messages and `via Manager`
+decisions remain in the timeline; ordinary directory/notification/wait metadata is inspector-only.
 
 ## Search, paging, approvals, artifacts, writes, usage (K5–K11)
 

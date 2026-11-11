@@ -389,6 +389,17 @@ describe("history", () => {
     expect(m.selected!.turns.map((t) => [t.id, t.status])).toEqual([["trn_1", "completed"], ["trn_2", "completed"]]);
   });
 
+  test("archive transitions carry the bumped revisions so the next If-Match write is current", () => {
+    const m = live(new Model());
+    m.applyEvent(ev(1, "session.updated", { id: "ses_1", project_id: "prj_1", title: "t", revision: 4, archived: false }));
+    m.applyEvent(ev(2, "session.archived", { root: "ses_1", sessions: ["ses_1"], archived: true, revisions: { ses_1: 5 } }));
+    expect(m.sessions.get("ses_1")!.archived).toBe(true);
+    expect(m.sessions.get("ses_1")!.revision).toBe(5);
+    m.applyEvent(ev(3, "session.unarchived", { root: "ses_1", sessions: ["ses_1"], archived: false, revisions: { ses_1: 6 } }));
+    expect(m.sessions.get("ses_1")!.archived).toBe(false);
+    expect(m.sessions.get("ses_1")!.revision).toBe(6);
+  });
+
   test("a view left behind is cached, kept current by events and restored on select", () => {
     const m = live(new Model());
     m.select("ses_1");
@@ -1041,7 +1052,7 @@ describe("turn summaries", () => {
     expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/event"))).toBe(false);
   });
 
-  test("retries and the turn error come from the summary's attempts", async () => {
+  test("the turn error and retry count come from the summary into the status strip", async () => {
     const failed = turnSummary("trn_1", 0, [["codex/gpt-5", null]], {
       status: "failed", stop: null, ended: null, error: { kind: "provider", message: "overloaded", status: 529 },
     }) as any;
@@ -1056,11 +1067,11 @@ describe("turn summaries", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.waitFor("id:msg-diag");
+    await app.waitFor("id:session-status");
     const shown = app.texts().join("\n");
-    expect(shown.includes("provider retry 2/2 in 2.0s")).toBe(true);
-    expect(shown.includes("provider retries exhausted")).toBe(true);
-    expect(shown.includes("provider: overloaded")).toBe(true);
+    expect(shown).toContain("provider: overloaded · HTTP 529 (+2)");
+    expect(shown.includes("provider retry")).toBe(false);
+    expect(shown.includes("provider retries exhausted")).toBe(false);
   });
 
   test("a turn the client cannot read details for is announced, and the timeline still loads", async () => {

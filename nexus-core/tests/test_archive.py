@@ -236,7 +236,9 @@ async def test_archive_and_unarchive_are_idempotent_and_publish_one_transition(e
         assert response.status_code == 200 and response.json()["archived"] is True
     archived = [e for e in rt.store.events(root["id"], limit=5000) if e["type"] == "session.archived"]
     assert len(archived) == 1
-    assert archived[0]["data"] == {"root": root["id"], "sessions": [root["id"], child["id"]], "archived": True}
+    revisions = {sid: rt.store.session(sid).revision for sid in (root["id"], child["id"])}
+    assert archived[0]["data"] == {"root": root["id"], "sessions": [root["id"], child["id"]], "archived": True,
+                                   "revisions": revisions}
 
     for _ in range(2):
         response = await client.post(f"/api/session/{root['id']}/unarchive")
@@ -244,6 +246,13 @@ async def test_archive_and_unarchive_are_idempotent_and_publish_one_transition(e
     unarchived = [e for e in rt.store.events(root["id"], limit=5000) if e["type"] == "session.unarchived"]
     assert len(unarchived) == 1
     assert unarchived[0]["data"]["archived"] is False
+    assert unarchived[0]["data"]["revisions"][root["id"]] == rt.store.session(root["id"]).revision
+
+    # A client that applied the event's revision can change the model with If-Match.
+    response = await client.post(f"/api/session/{root['id']}/model",
+                                 json={"model": root["model"] or "test/model",
+                                       "expected_revision": unarchived[0]["data"]["revisions"][root["id"]]})
+    assert response.status_code == 200, response.text
 
 
 async def test_busy_root_waiting_for_approval_refuses_archive(env):

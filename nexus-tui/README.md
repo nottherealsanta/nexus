@@ -224,14 +224,23 @@ where Enter on `+ add …` picks a model, `d` removes one, `K`/`J` move a
 fallback and Right on a model cycles its effort (`effort default`, then the levels the
 catalog lists for it; a model with none listed shows no effort). Tools shows one permission choice and one tool grid; Right chooses a tool
 and Enter toggles it.
-Consecutive diagnostics (a provider retry sequence) form one tight stack with
-delays rounded to tenths.
+Session outcomes appear in a non-dismissible strip immediately above the composer, not in the timeline or
+footer. The latest error/interruption, retry or recovery wins, with a count of additional diagnostics. The strip
+restores on revisit, clears on busy and offers `/continue` when applicable plus Inspect for the full HTTP/body/history.
+Context notices and `via Manager` decisions remain in the timeline; operational metadata stays in the inspector.
+
+`/btw <question>` opens a live read-only side-question modal, even while the parent is busy. It shares the parent's
+settled cached prefix but never changes its context. Compact tool rows and a `N/10` budget accompany streamed
+Markdown replies. `i` expands the inherited request prefix; `c` expands the full ordered side-run context, including
+the marker, tool arguments/results and notices. Esc/close cancels a running side question, not the parent.
+Checkpoints recover missed stream events after reconnect. Past-answer navigation is not yet offered.
+`/continuation` is removed; `/continue` and `/origin` stay.
 
 The timeline is complete for one session: turn headers and footers, folding,
 collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams draw
 as shared text rows or the shared PNG, with a clickable label to copy their
 source; unsupported diagrams show the source), tool-specific expansion (diffs, output
-caps, raw arguments/results), child cards, context notices, diagnostics, and the
+caps, raw arguments/results), child cards, context notices, Manager decisions, and the
 frozen starting-context section. Selecting a session loads its stored history
 in the background while the event stream stays open: the newest messages, the
 starting-context snapshot and its turn summaries, fetched together. The event

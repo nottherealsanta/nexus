@@ -263,6 +263,7 @@ export class Model {
         break;
       case "session.created":
       case "session.updated": {
+        if (d.kind === "btw") break;
         const old = this.sessions.get(d.id);
         if (old && (d.revision ?? 0) < old.revision) break;
         const ses = normalizeSession(d);
@@ -273,7 +274,14 @@ export class Model {
       case "session.deleted": this.dropSession(d.id ?? sid); break;
       case "session.archived":
       case "session.unarchived":
-        for (const id of d.sessions ?? []) { const s = this.sessions.get(id); if (s) s.archived = e.type === "session.archived"; }
+        for (const id of d.sessions ?? []) {
+          const s = this.sessions.get(id);
+          if (!s) continue;
+          s.archived = e.type === "session.archived";
+          // The transition bumps revisions; keep them current so the next If-Match write is not stale.
+          const rev = d.revisions?.[id];
+          if (typeof rev === "number" && rev > s.revision) s.revision = rev;
+        }
         break;
       case "session.status": {
         if (!sid) break;

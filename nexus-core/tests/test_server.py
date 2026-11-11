@@ -1,5 +1,6 @@
 import asyncio
 import json
+from importlib.metadata import version
 
 import httpx
 import pytest
@@ -99,6 +100,7 @@ async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
     assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 5}
+    assert info["version"] == version("nexus10")
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retention_status",
                          "retry", "idempotency"}
     assert info["retention"]["wire_success_seconds"] == 3600
@@ -271,17 +273,27 @@ async def test_code_nested_write_needs_no_approval_and_kernel_api(setup):
     await rt.shutdown()
 
 
-async def test_code_child_shares_tree_kernel(setup):
+async def test_code_child_is_private_and_can_share_a_kernel_explicitly(setup):
     rt, client, provider, workspace = setup
     parent = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     provider.replies = [[ToolCall("c1", "code", '{"code": "x = 41"}')], [Text("ok")]]
     await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "set x"})
     await _wait_idle(rt, parent["id"])
+    [parent_kernel] = (await client.get("/api/kernel")).json()
     child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()
     provider.replies = [[ToolCall("c2", "code", '{"code": "x + 1"}')], [Text("42")]]
     await client.post(f"/api/session/{child['id']}/prompt", json={"text": "read x"})
     await _wait_idle(rt, child["id"])
-    [kernel] = (await client.get("/api/kernel")).json()
+    kernels = (await client.get("/api/kernel")).json()
+    assert len(kernels) == 2
+    own = next(k for k in kernels if k["created_by"] == child["id"])
+    assert "NameError" in own["cells"][0]["error"]
+    assert own["users"] == [child["id"]]
+    provider.replies = [[ToolCall("c3", "code", json.dumps({"code": "x + 1", "kernel_id": parent_kernel["id"]}))],
+                        [Text("42")]]
+    await client.post(f"/api/session/{child['id']}/prompt", json={"text": "share explicitly"})
+    await _wait_idle(rt, child["id"])
+    kernel = (await client.get(f"/api/kernel/{parent_kernel['id']}")).json()
     assert kernel["cell_count"] == 2 and kernel["cells"][1]["value"] == "42"
     assert set(kernel["users"]) == {parent["id"], child["id"]}
     await rt.shutdown()

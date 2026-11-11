@@ -1,5 +1,6 @@
 import { loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput, openGitDiff } from "./store";
 import { PHONE_UNAVAILABLE, desktopOnly } from "./mobile";
+import { btw, closeBtw, startBtw } from "./btw";
 import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
@@ -102,7 +103,6 @@ function evalTerm(t: string): boolean {
     case "session.archived": return inSession && !!ses!.archived;
     case "session.child": return inSession && !!ses!.parent_id;
     case "session.continued": return inSession && !!ses!.continued_from;
-    case "session.continued_on": return inSession && !!ses!.continued_to;
     case "session.in_worktree": return currentWorktree()?.main === false;
     case "has_waiting": return model.approvals.size + model.questions.size > 0;
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
@@ -122,7 +122,7 @@ function evalTerm(t: string): boolean {
     case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
     case "editor.markdown": return openFile() !== null && markdownFile();
-    case "overlay.open": return !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
+    case "overlay.open": return !!btw() || !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -582,11 +582,7 @@ export async function handoff() {
 /** `/btw question`: answered from the context so far in a modal; nothing is added to the session. */
 export async function sideQuestion(question: string) {
   const s = viewed(); if (!s) return;
-  toast("info", "Asking…");
-  try {
-    const r = await request<{ answer: string }>("POST", `/api/session/${s.id}/btw`, { body: { question } });
-    contextDetail.set({ title: `Side question · ${question.slice(0, 40)}`, detail: `${r.answer}\n\nNot added to the session's context.` });
-  } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+  await startBtw(s.id, question);
 }
 
 export const blurComposer = { fn: (() => {}) as () => void };
@@ -605,7 +601,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (btw()) { closeBtw(); return; } if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -736,7 +732,6 @@ export function openLinked(which: "continued_from" | "continued_to") {
   void selectSession(id);
 }
 on("session.open_origin", () => openLinked("continued_from"));
-on("session.open_continuation", () => openLinked("continued_to"));
 on("session.btw", () => toast("info", "Usage: /btw your question"), true);
 on("session.speak", async () => {
   const session = viewed();
@@ -870,7 +865,7 @@ function applyModel(model: string) {
 
 on("model.change", () => void pickOne("Change model", async () => {
   const cat = await request<any>("GET", "/api/model");
-  const models = (cat.models ?? []) as any[];
+  const models = ((cat.models ?? []) as any[]).filter((m) => !m.zmx); // ZMX models are for subagent pools only
   const s = viewed();
   const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
   const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
@@ -1011,6 +1006,7 @@ const GLOBAL_CONTEXTS = new Set(["global"]);
 const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d+$/.test(k);
 /** Esc is not a per-command lookup: the manifest's ordered rules decide (interface/README.md "Esc precedence"). */
 export function escape() {
+  if (btw()) { closeBtw(); return "btw"; }
   if (terminalFocused()) return null;
   if (terminalOpen() && terminalRename()) { terminalRename.set(false); return "terminal_rename"; }
   if (terminalOpen() && !confirmDialog() && !term("overlay.open")) { closeTerminalPanel(); return "terminal"; }

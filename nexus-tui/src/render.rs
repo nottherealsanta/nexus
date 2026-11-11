@@ -6797,6 +6797,52 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         return;
     }
     draw_activity_line(cx, buf, r);
+    if !cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id)) {
+        if let Some((text, tone)) = cx
+            .app
+            .state
+            .model
+            .selected
+            .as_ref()
+            .and_then(crate::timeline::session_outcome)
+        {
+            let label = format!("{} {text}", if tone == "error" { "×" } else { "!" });
+            let available = r.width.saturating_sub(28);
+            put(
+                buf,
+                r.x + 2,
+                r.y,
+                &truncate(&label, available as usize, cx.ell()),
+                cx.st(
+                    if tone == "error" {
+                        "status.error"
+                    } else {
+                        "status.warning"
+                    },
+                    CANVAS,
+                ),
+                available,
+            );
+            let x = r.right().saturating_sub(24);
+            if cx
+                .app
+                .manifest
+                .command("session.continue")
+                .is_some_and(|c| cx.app.availability(c).is_ok())
+            {
+                put(buf, x, r.y, "/continue", cx.st(SECONDARY, CANVAS), 9);
+                hits.add(
+                    Rect::new(x, r.y, 9, 1),
+                    Target::Command("session.continue".into()),
+                );
+            }
+            put(buf, x + 11, r.y, "Inspect", cx.st(SECONDARY, CANVAS), 7);
+            hits.add(
+                Rect::new(x + 11, r.y, 7, 1),
+                Target::Command("app.open_inspector".into()),
+            );
+        }
+    }
     let full_r = r;
     let r = composer_content(r);
     let a = cx.app;
@@ -7728,6 +7774,20 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             .as_ref()
             .and_then(|c| c["values"]["mcp"]["full_definitions"].as_bool())
             .map(on_off),
+        "zmx.claude_backend" => a.state.config.as_ref().map(|c| {
+            if c["values"]["zmx"]["claude_backend"].as_str() == Some("zmx") {
+                "ZMX".to_owned()
+            } else {
+                "Agent SDK".to_owned()
+            }
+        }),
+        "zmx.antigravity" => a.state.config.as_ref().map(|c| {
+            if c["values"]["zmx"]["antigravity"].as_bool() == Some(true) {
+                "ZMX".to_owned()
+            } else {
+                "off".to_owned()
+            }
+        }),
         "context.title_models" => a.state.config.as_ref().map(|c| {
             let list: Vec<&str> = c["values"]["context"]["title_models"]
                 .as_array()
@@ -8685,7 +8745,11 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         }
         OverlayKind::Help { top } => draw_help(cx, buf, area, *top, hits),
         OverlayKind::ContextDetail { title, text, top } => {
-            draw_context_detail(cx, buf, area, title, text, *top, hits)
+            if cx.app.ui.btw.is_some() {
+                draw_context_doc(cx, buf, area, title, text, *top, hits)
+            } else {
+                draw_context_detail(cx, buf, area, title, text, *top, hits)
+            }
         }
         OverlayKind::ContextDoc { title, text, top } => {
             draw_context_doc(cx, buf, area, title, text, *top, hits)

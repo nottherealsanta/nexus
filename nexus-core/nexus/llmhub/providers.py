@@ -32,7 +32,7 @@ from .responses import HeaderSource, ResponsesProvider, ResponsesQuirks
 class ProviderInfo:
     id: str
     label: str
-    dialect: Literal["responses", "chat", "agent-sdk", "scripted"]
+    dialect: Literal["responses", "chat", "agent-sdk", "scripted", "external-cli"]
     base_url: str
     catalog_id: str  # provider id on models.dev
     quirks: ResponsesQuirks | ChatQuirks | None

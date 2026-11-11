@@ -14,6 +14,14 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+`/btw <question>` opens a live read-only side-question modal, including on mobile and while the parent is busy.
+It shares the parent's settled cached prefix but never changes its context. Compact tool rows and a `N/10`
+budget accompany streamed Markdown replies. `i`/Expand inherited context shows the copied request prefix;
+`c`/Expand context shows the full ordered side-run context, including its marker, tool arguments/results and
+notices. Esc/close cancels a running side question, not the parent. Child checkpoints recover missed stream
+events after reconnect. Past-answer navigation is not yet offered. `/continuation` is removed;
+`/continue` and `/origin` stay.
+
 The timeline lets the NSH virtual list preserve the visible row when measurements
 or splices change content above it; the app does not apply a second height
 correction. Following the latest message and restoring a session's position remain
@@ -135,8 +143,10 @@ scrolls, then fades out after about a second; Settings → Appearance → Scroll
 it off. Its scroll offset and
 measured row heights are keyed by session, so a root's band cannot place the sticky
 header over a child. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
-status word: a failed turn shows its first error line above it, and an
-interrupted one adds `/continue`. A turn with no usage says `usage unknown`. A running turn has no footer; it appears only
+status word. Outcomes sit in a non-dismissible strip above the composer instead of timeline/footer rows: latest
+error/interruption, retry or recovery, with an additional-diagnostic count. It restores on revisit, clears on busy,
+offers `/continue` when applicable and Inspect on desktop. Full HTTP/body/history stays in the inspector; model-visible
+notices/recovery messages and `via Manager` decisions stay in the timeline. A turn with no usage says `usage unknown`. A running turn has no footer; it appears only
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long

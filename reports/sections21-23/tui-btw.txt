@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]    [Git]     · Status and side questions ×    +                                                                                             □
+     │                                  Status and side questions
+▏    │                              ▣
+▏ W  │ ⌕ Search sessions       ctrl+k
+▏  1 │                                     System prompt ~847
+     │▏  Status and side questions 1m
+     │▏                                    AGENTS.md  not found · /private/tmp/nexus-21-23.vf1tya/workspace/AGENTS.md
+  +  │
+     │ + New session                       Tools [16] ~3.0K
+     │                                       ● read                      ● bash_kill                 ● ask
+     │                                       ● grep                      ● edit                      ● code
+     │                                       ● glob                      ● patch                     ● fork
+     │                                       ● ls                        ● write                     ● expose_workspace_tools
+     │                                       ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+     │
+     │
+     │                                     Side question · Which port?
+     │
+     │                                     Inherited context · 1 messages · [i] expand
+     │
+     │                                     Read-only side question · 1/10 tool calls · Running…
+     │
+     │                                     •  read  · done
+     │                                                                                                                                                    #1 · 3:09 PM
+     │                                     The
+     │
+     │                                     Context · [c] expand                                                                  ock/visual · 0 tools · 0.0s · 3:09 PM
+     │
+     │                                     Not added to the session's context.
+     │
+     │                                     ↑↓ scroll · esc close
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                   ! Interrupted by the user                                                                                /continue  Inspect
+     │
+     │                                      Type a message…
+     │
+     │                                      Build · visual mock · default                                                                                    continue
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/nexus-21-23.vf1tya/workspace
+     │  Settings               ctrl+,    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

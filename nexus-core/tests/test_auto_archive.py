@@ -45,7 +45,8 @@ def test_default_threshold_is_one_hour_and_strict(env):
     assert sessions["fresh"].archived == 0 and sessions["exactly"].archived == 0
     assert sessions["just-over"].archived == 1 and sessions["old"].archived == 1
     events = [e for e in store.events(created["old"].id, limit=50) if e["type"] == "session.archived"]
-    assert events[0]["data"] == {"root": created["old"].id, "sessions": [created["old"].id], "archived": True}
+    assert events[0]["data"] == {"root": created["old"].id, "sessions": [created["old"].id], "archived": True,
+                                 "revisions": {created["old"].id: store.session(created["old"].id).revision}}
 
 
 def test_zero_disables_and_the_threshold_is_read_live(env):

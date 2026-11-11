@@ -42,8 +42,6 @@ class Fake:
             reply = "done"
         yield TextDelta(reply)
         yield PartDone(Text(reply))
-        if "side question" in last:  # a tool call here must be ignored, not run
-            yield PartDone(ToolCall("x1", "bash", '{"command": "echo no"}'))
         yield Usage(input_tokens=self.input_tokens, output_tokens=5)
         yield Done("end_turn")
 
@@ -112,13 +110,17 @@ async def test_btw_answers_without_changing_the_context(env):
     provider.requests.clear()
     response = await client.post(f"/api/session/{sid}/btw", json={"question": "what colour is the sky?"})
     assert response.status_code == 200, response.text
-    assert response.json()["answer"] == "It is blue."
+    child = response.json()["session"]
+    await rt.turns[child]
+    state = (await client.get(f"/api/session/{child}/btw")).json()
+    assert state["messages"][-1]["parts"][0]["text"] == "It is blue."
     request = provider.requests[0]
     assert _last_user(request).endswith("Question: what colour is the sky?")
     assert [m.role for m in request.messages] == ["user", "assistant", "user"]
     assert (await client.get(f"/api/session/{sid}/message")).json() == before
     events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
-    assert [e["data"]["kind"] for e in events if e["type"] == "oneshot"] == ["btw"]
+    assert not any(e["type"] == "oneshot" for e in events)
+    assert any(e["type"] == "btw.started" for e in events)
     assert (await client.post(f"/api/session/{sid}/btw", json={"question": " "})).status_code == 400
 
 

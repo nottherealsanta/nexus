@@ -6,7 +6,7 @@ import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
 import { DiffView } from "./diff";
-import { disabledOf, startingSections, StartingContext } from "./newsession";
+import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
@@ -295,7 +295,7 @@ function viaManager(what: "approval" | "question", d: any, key: string, label: s
   return { key, kind: "diag", label, text: `${what} ${outcome} ${WORDS.via}`, detail: heard, tone: outcome === "denied" ? "warning" : "info" };
 }
 const DIAG_TYPES = new Set(["session.error", "retry_scheduled", "retry_started", "retry_exhausted", "turn.recovered", "session.directory_changed", "session.notified", "permission.replied", "question.replied"]);
-function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
+export function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
   const d = e.data ?? {};
   const k = `ev-${e.id}`;
   const label = roles.diagnostic.label;
@@ -316,7 +316,7 @@ function diag(e: CoreEvent): Extract<Row, { kind: "diag" }> | null {
 }
 
 /** A closed turn's retry, error and recovery rows, from its summary (never from stored events). */
-function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "diag" }> }[] {
+export function summaryDiags(t: TurnSummary): { t: number; row: Extract<Row, { kind: "diag" }> }[] {
   if (t.status === "running") return [];
   const label = roles.diagnostic.label;
   const out: { t: number; row: Extract<Row, { kind: "diag" }> }[] = [];
@@ -509,7 +509,7 @@ function buildStableRows(): Row[] {
   if (sel.starting) {
     const s = sel.starting;
     const session = viewed();
-    const { sections, total } = startingSections(s, disabledOf(session), { skills: session?.skills, mcp: session?.mcp });
+    const { sections, total } = session?.worker ? zmxSections(session.worker) : startingSections(s, disabledOf(session), { skills: session?.skills, mcp: session?.mcp });
     const ref = effectiveModelRef();
     const rawWindow = Number(catalogModel(ref)?.context);
     const window = Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : undefined;
@@ -589,7 +589,7 @@ function buildStableRows(): Row[] {
             const key = `child:${id}`;
             const title = (follow ? "" : a.title || firstLine(a.prompt ?? "")) || child?.title || "";
             out.push({
-              key, kind: "child", childId: child?.id, agent: child?.fork || a.agent === "fork" ? "fork" : follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
+              key, kind: "child", childId: child?.id, agent: child?.worker?.label ? child.worker.label : child?.fork || a.agent === "fork" ? "fork" : follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
               title: title.length > 48 ? `${title.slice(0, 47)}…` : title,
               state: running && !waits && !done ? "running" : done ? "done" : "idle", background: background && !follow, meta,
               outcome: done?.is_error ? (failure ? `failed ${failure.length > 60 ? `${failure.slice(0, 59)}…` : failure}` : "failed") : waits && !done ? "waiting for input" : "",
@@ -682,9 +682,8 @@ function buildStableRows(): Row[] {
   }
   // Closed turns: retries and errors from their summaries. The running turn: live diagnostics
   // (its scratch), replaced by its summary when it closes.
-  for (const t of sel.turns) for (const r of summaryDiags(t)) rows.push({ t: r.t, r: [r.row] });
   for (const e of sel.scratch) {
-    if (!DIAG_TYPES.has(e.type)) continue;
+    if (!DIAG_TYPES.has(e.type) || e.data?.origin !== "manager") continue;
     const r = diag(e);
     if (r) rows.push({ t: e.time, r: [r] });
   }
@@ -907,7 +906,6 @@ function RowView(p: { r: () => Row; sid: string }) {
                       </Text>
                     )}
                   </Each>
-                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning">{" · /continue"}</Text></If>
                 </View>
               </View>
             );

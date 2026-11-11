@@ -411,13 +411,14 @@ Run a command with `/bin/bash -c` in the workspace.
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `command` (required) | string | | Non-empty |
-| `timeout` | number | none | Optional seconds; omitted means no time limit |
+| `timeout` | number | 120 foreground; none background | Foreground maximum 600 seconds; longer work uses a background job |
 | `background` | boolean | false | Return a job id at once instead of waiting |
 
 * stdout and stderr are combined. Foreground stdin is `/dev/null`; daemon
   background jobs normally use a PTY with explicit user-controlled input.
-* There is **no default time limit**. A foreground call waits until the command
-  exits, the caller passes `timeout`, or the call is cancelled. Cancelling it
+* Foreground commands default to **120 seconds**, with an explicit maximum of
+  **600 seconds**. Servers and longer work use managed background jobs, not long
+  sleeps. Background jobs have no default timeout. Cancelling a foreground call
   (an interrupted turn, or a code cell's `timeout_s`) sends SIGKILL to the whole
   process group, because the command runs in its own session.
 * The output starts with `[exit code N]`, or `[exit code N, no output]`, or
@@ -689,13 +690,15 @@ large results down to relevant evidence. Single simple operations should stay di
 See [agents.md](agents.md#choosing-code-mode) for rollout and evaluation.
 
 `code {code, kernel_id?, timeout_s?}` runs Python in a persistent Monty 1.1.0
-sandbox. Omit `kernel_id` to use the session tree's main kernel (created on
-first use); pass a live `krn_…` to share another kernel. Variables persist
-between cells, including across sessions. Kernels survive session deletion,
+sandbox, not full CPython. Omit `kernel_id` for a session-private kernel (created on
+first use); pass a live `krn_…` to share deliberately with a named child. Forks
+cannot borrow another session's kernel. Variables persist between cells. Kernels survive session deletion,
 but archiving their owning session tree releases them, as does daemon shutdown.
 Variables are memory-only: cell history and outputs are durable, but no kernel
-checkpoint is saved. Workers are recycled after one kernel checkout, so closing
-a kernel also retires its process instead of keeping it warm. Unarchiving creates a fresh kernel on the next code call.
+checkpoint is saved to disk. Between cells, a trusted idle heap snapshot is kept
+in memory and restored into a fresh worker checkout. This resets Monty's per-checkout
+suspension counter without replaying source or tool calls. Workers are recycled after
+each checkout. Unarchiving creates a fresh kernel on the next code call.
 An owned kernel busy in another tree makes archive refuse until it is idle;
 merely borrowing another tree's kernel does not transfer ownership. At most eight kernels are live, with one cell at a
 time per kernel. Waiting for a busy kernel counts toward the timeout.
@@ -712,6 +715,9 @@ control tools such as `session` are excluded. Each function takes keyword
 arguments and returns the usual text result. It runs in the caller's directory
 and uses the caller's approval policy. Saved tool references cannot retain a
 previous caller's permissions. `code` itself asks no approval; nested calls do.
+A nested call uses the same pre-hook, modified-input approval, execution and
+post-hook pipeline as a direct call. Hook notices reach ordinary visible context;
+the raw nested result remains retained unless the cell prints it.
 A failed or denied tool raises catchable `RuntimeError`. Each finished nested
 call emits `code.call` with arguments, output, error, kernel, cell, index and
 parent call id; a call stopped by a timeout or interrupt has an error and no
@@ -728,7 +734,8 @@ The whole-cell timeout defaults to 300 seconds (greater than zero, maximum
 calls before the result is reported: a running command is killed, a pending
 approval is withdrawn, and no further call can change the workspace afterwards.
 Monty separately bounds compute to ten seconds per feed, memory to 64 MiB,
-recursion to 200 and suspensions to 256. Nested calls are capped at 64 per cell.
+recursion to 200 and suspensions to 1024 per fresh cell checkout. Nested calls
+are independently capped at 64 per cell, including failed attempts.
 No mounts, filesystem or OS handler are provided.
 
 Ordinary Python errors preserve the kernel. **Interrupts, active-cell host
@@ -758,21 +765,29 @@ never see the daemon's API keys, tokens or working directory. The worker still
 has the daemon's uid and no OS-level sandbox (no seccomp or `sandbox-exec`);
 containment rests on Monty having no filesystem, network or OS handler.
 
-### Live parent/child smoke test
+### Evidence and partial failures
 
-From `nexus-core/` with Codex signed in:
+Tools are already bound; do not import `functions`. Modules such as `subprocess`,
+`sqlite3` and `pprint` are unavailable. Use a bounded shell command when full local
+Python is needed. Inspect printed current text before editing; there is no separate
+read-coverage mechanism. Do not print every result by default.
 
-```sh
-uv run nexus run --agent orchestrate --model codex/gpt-6.1-terra "$(cat ../artifacts/shared_kernel_smoke.txt)"
+For independent lookups where a failure is expected, keep successful evidence:
+
+```python
+import asyncio
+async def inspect(path):
+    try:
+        return await read(path=path, limit=60)
+    except RuntimeError as error:
+        return str(error)
+results = await asyncio.gather(inspect("README.md"), inspect("optional.md"))
+print(results[0][:1200])
+print(results[1][:300])
 ```
 
-The built-in orchestrator has every task tool `build` has, including `code`. The prompt asks
-it to store a dictionary, launch a build child that receives only the variable
-name (not its contents), and verify the child's changes in a third cell. All
-three code results should show the same `krn_…` and successive cell numbers.
-The child computes 42 and sets `child_seen` to true. No files or bash are used
-for communication. This sequence was verified live against Codex; the evidence
-is in `artifacts/shared_kernel_live_proof.json`.
+The earlier shared-default parent/child smoke is historical. Sharing now requires
+passing the kernel id explicitly; forks always keep their own default kernel.
 
 
 Workspace-control delivery details: activation describes enabled tools only and
@@ -795,6 +810,7 @@ DESCRIPTION = "Greet someone."
 PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}
 GUIDANCE = "Use to say hello."   # optional; appended to the description
 TIMEOUT = 30                     # optional seconds, at most 600 (default 60)
+READ_ONLY = True                 # optional boolean, default False; required for forks
 
 def run(args):                   # or `async def`; returns text
     return f"Hello, {args['who']}!"
@@ -810,6 +826,9 @@ def run(args):                   # or `async def`; returns text
   name to grant it to a restricted agent. A name may not shadow a built-in tool
   or start with `mcp__`. Approval follows the session's permission setting and
   the permission rules (`my_tool(...)` keys are not defined; use `my_tool` alone).
+- **Effects:** forks refuse user tools unless their frozen metadata declares
+  `READ_ONLY = True`. Missing metadata, including older snapshots, fails closed.
+  This is the tool author's declaration, not an OS sandbox.
 - **Frozen per session:** a new session's snapshot stores each granted tool's
   source (`snapshot.extensions`). A running session keeps running that code. If
   the file differs on disk, the result ends with a line saying so, so the

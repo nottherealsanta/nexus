@@ -56,19 +56,31 @@ consolidation commit.
 
 ## Status at a glance
 
+**Review 2026-11-10: not all done.** The release and its automated gate are recorded complete;
+that does not verify later working-tree changes. Sections 21–23 are implemented in the working tree,
+not merely proposed, but their visual/runtime and paid-cache gates below remain open. Device/platform
+checks, Manager end-to-end work and the unscheduled backlog are not complete. ZMX resumed as isolated transport
+groundwork on 11-10; browser work and CI remain deferred. No paid calls, real-home deployment or branch pruning are implied.
+
 | # | Work | State | First step |
 | --- | --- | --- | --- |
-| 4 | Tests and lints | **Complete 11-09: Core 1290 passed/1 skipped; TUI 861 passed/10 ignored; NSH 371/371; lints and builds pass** | [4](#4-fix-all-tests-and-lints) |
+| 4 | Tests and lints | **Release gate complete 11-09:** Core 1290 passed/1 skipped; TUI 861 passed/10 ignored; NSH 371/371; lints and builds pass. Not a full rerun of later working-tree changes | [4](#4-fix-all-tests-and-lints) |
 | 1 | Release | **0.12.0 released** with all eight assets and verified checksums; isolated published macOS arm64 install/plain TUI smoke passed. No open PRs remain | [1](#1-merge-what-is-unmerged) |
 | 5 | Mobile cut-down client | Three-tab implementation and capability guards present for iPhone/iPad; 4 rule tests pass. Native/device and compact-card runtime verification pending | [5](#5-mobile-cut-down-client-sessions-manager-settings) |
-| 6 | ZMX mode (Claude Code, Antigravity) | **Later (user, 11-06).** Plan only, nothing built; kept here for reference | [6](#6-zmx-mode-for-claude-code-and-antigravity-later) |
+| 6 | ZMX mode (Claude Code, Antigravity) | **In progress (user, 11-10).** Isolated agy transport and offline tests; no runtime/provider/UI integration yet | [6](#6-zmx-mode-for-claude-code-and-antigravity) |
 | 3 | Manager, finished and tested end to end | M1–M5 built; real GPT-Live call worked 11-04; evals, long calls, iOS/native audio and hands-free open | [3](#3-manager-finish-and-test-end-to-end) |
 | 2 | Terminal inside Nexus | Implemented in Core, TUI and NSH web, including explicit evidence and inspector spans (11-08). Platform/native/remote release checks remain | [2](#2-terminal-inside-nexus) |
 | 7 | Everything else carried over | Full backlog in section 9, not scheduled | [7](#7-carried-over-not-scheduled) |
 | 8 | Provider usage panel (table) | Landed and visually compared in both clients | [8](#8-provider-usage-panel-usage-table) |
-| 10 | Fork subagent | **Core built (11-08):** the `fork` tool (granted to `build`), API `fork` field, mock `fork_subagent`; Client UI in both (tests only, no screenshots); cache hit verified on Codex, Copilot, OpenCode, Grok; **11-09:** read-only minor task (20 steps), tool row in the parent | [10](#10-fork-subagent) |
+| 10 | Fork subagent | Implemented in Core and both clients; four-provider cache reuse recorded. Matching screenshots and ongoing observation remain | [10](#10-fork-subagent-verification-follow-ups) |
+| 21 | Session status above the composer | **Implemented in working tree (11-09).** Paired status strip and tests; matching visual review pending | [21](#21-session-status-above-the-composer-not-in-the-timeline) |
+| 22 | Remove `/continuation` | **Implemented in working tree (11-09).** Removed from both clients and the shared manifest; `/continue` stays | [22](#22-remove-the-continuation-slash-command) |
+| 23 | `/btw` on the fork | **Implemented in working tree (11-09).** Read-only side fork and live modal in both clients, mobile too; visual review and approved real-provider cache measurement pending | [23](#23-btw-rebuilt-on-the-fork) |
 
-Suggested order: 5, then 2 and 3 in whatever order the user prefers (3 needs real-model approvals). The 0.12.0 release, section 4 (automated tests) and section 8 (usage panel) are complete; remaining installation/platform checks stay in 1.1. Section 6 (ZMX) is for later.
+Next unblocked work: finish matching visual review for 10, 21 and 23 and rerun the current-tree automated gate.
+Then 5, followed by 2 and 3 as device/platform access and explicit real-model approvals permit. The 0.12.0
+release, section 4's release-time automated gate and section 8 are complete; remaining installation/platform
+checks stay in 1.1. Section 6 (ZMX) is now active, kept separate from non-ZMX behavior.
 
 ## Decisions
 
@@ -83,6 +95,7 @@ Made (user):
 | 2026-11-06 | **Modals are translucent in the TUI again** (the 50% `paint::scrim` blend), reverting the solid cover of `0452ee80`; NSH is back to its translucent backdrop, so they match |
 | 2026-11-06 | **Mobile = Sessions, Manager and Settings tabs only** (section 5). It can approve and answer everything a desktop client can (allow/deny, questions), showing less on the small screen |
 | 2026-11-06 | **ZMX is for later.** Keep `ZMX_plan.md` and section 6 as they are; build nothing now. The Claude Code Agent SDK / ZMX Settings toggle is part of that later work |
+| 2026-11-10 | **Resume ZMX implementation**, referencing `nexus01`, and keep it separate so non-ZMX behavior does not change. Start with isolated worker transports; no live/paid calls are authorized by this direction. |
 | 2026-11-06 | **macOS GPUI direction:** spike a Rust GPUI host embedding the existing NSH app; keep the current AppKit client intact and expose the spike separately as `nexus gpui`. |
 
 ### GPUI host spike
@@ -127,7 +140,7 @@ Rechecked 2026-11-09 against freshly fetched refs and GitHub. Release PR #100 me
 
 - [x] **0.12.0 published (11-09):** four TUI binaries, Core wheel/sdist, `install.sh` and `SHA256SUMS`; all payload checksums independently verified. Release workflow [42564022608](https://github.com/nottherealsanta/nexus/actions/runs/42564022608) passed. Published installer succeeded in an isolated macOS arm64 home, including SDK source build, daemon start/stop and plain `nexus` PTY launch/quit. No real home was migrated or updated. Details: [validation report](reports/release-0.12.0-validation.md).
 - [ ] Execute the published installer on Linux; complete the wider platform runtime matrix below. No NSH web bundle is published by the existing workflow.
-- [ ] Correct the existing daemon info/version label (`0.10.0.dev0`); installed distribution metadata and all release package versions are 0.12.0.
+- [x] Correct the daemon info/version label (11-10, working tree): use installed `nexus10` distribution metadata instead of `0.10.0.dev0`, also for SSE `connected` and the CLI update fallback. Server/doctor/event-log suites: 93 passed; focused Ruff passed. No running daemon was restarted or deployed.
 - [x] Linux: installer checks and `docs/development.md` list `pkg-config`, ALSA headers, a C toolchain, `git`, `uv`,
   Rust, Node 22; source install checks `/usr/bin/env`, which the Monty launcher explicitly executes. Real Linux kernel execution remains part of the platform matrix.
 - [x] Remove `nexus-design-mockup/` (11-07); no leftover `nexus10` branch wording remains in `AGENTS.md` or `docs/development.md`.
@@ -201,9 +214,9 @@ Work:
   behavior ledger updated. No new client-specific differences introduced.
 - [x] Terminal parts of 9.22: immutable selection preview → draft → ordinary send; exact UTF-8 clipping/provenance and untrusted-data encoding;
   exact-tool-linked inspector lifecycle bars and sanitized change invalidation. Interactive agent typing remains deliberately unavailable.
-- [ ] Remaining release verification: Linux/other platforms, native AppKit WebView, authenticated remote failure/reconnect matrix, and a
-  final all-green consolidated suite. Full Core reruns expose intermittent Manager/kernel timeout failures outside the terminal paths;
-  focused terminal suites and isolated reruns pass. See the report rather than treating implementation ticks as release approval.
+- [ ] Remaining release verification: Linux/other platforms, native AppKit WebView and authenticated remote failure/reconnect matrix.
+  The final consolidated automated suite passed on 11-09 (section 4), superseding the 11-08 timeout/failure notes;
+  later working-tree changes still need their own full gate. See the report rather than treating implementation ticks as platform approval.
 - Exit: a terminal is not done if it renders only line-oriented output.
 
 ## 3. Manager: finish and test end to end
@@ -255,6 +268,8 @@ and nothing else: no tool groups, no context header. Everything else (files, edi
 projects overview and the other desktop surfaces) is desktop/web only. Adding anything beyond this needs the user's
 approval. `AGENTS.md` is updated with this change.
 
+Decision (user, 2026-11-09): **mobile gets all slash commands** in its composer (for example `/btw`, section 23).
+
 Implemented in the working tree for iPhone and iPad: three tabs, reduced timeline, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
 
 - [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
@@ -275,11 +290,13 @@ Implemented in the working tree for iPhone and iPad: three tabs, reduced timelin
 - [ ] Tests on the phone idiom at 390 px, a phone screenshot of each tab, a real simulator run and a signed device build
   (see the `nexus-ios-device` skill); update `nexus-nsh/README.md` and `docs/`.
 
-## 6. ZMX mode for Claude Code and Antigravity (later)
+## 6. ZMX mode for Claude Code and Antigravity
 
-**Parked (user, 2026-11-06): not for now.** Keep the plan and `ZMX_plan.md` as they are; do not start M0 or any code until the user asks.
+**Resumed (user, 2026-11-10).** Reference `nexus01` and keep ZMX separate from normal sessions and providers.
+The first slice is transport groundwork only: `nexus/workers/` has no callers outside its own package/tests and
+does not register providers, discover CLIs on import, change settings, or touch runtime/client behavior.
 
-Full design, lessons, milestones and risks: [ZMX_plan.md](ZMX_plan.md) (written 11-04; nothing built). Summary: a
+Full design, lessons, milestones and risks: [ZMX_plan.md](ZMX_plan.md) (written 11-04; M1 not complete). Summary: a
 subagent runs on the real `claude` (interactive PTY, hooks, transcript) or `agy` (stream-json) CLI, which runs its own
 loop, tools, permissions and sign-in; Nexus shows it as a child session. Off by default, always labelled, no Nexus
 permissions inside it, never answers a CLI prompt (it ends as `needs_attention`).
@@ -300,7 +317,11 @@ same drawback line (Z2). Scope follows decision Z1.
 - [ ] **M0 spikes** with real, small runs and the user's approval: Claude transcript request shape, `--resume`,
   `--append-system-prompt`, `StopFailure`, `--mcp-config`; agy 1.4.12 stream-json turn, `--conversation`,
   `--mode auto`, soft denial, interrupt. Record each answer and a fixture.
-- [ ] **M1** agy as a child session (smallest slice): workers, provider row, catalog, `ExternalAgent`, guards,
+- [x] **Isolated transport groundwork:** agy stream-json parser/supervisor and shared bounds, environment,
+  diagnostics and process-group cleanup, referenced from `nexus01` at `c3f18489`. Offline fake-CLI tests cover
+  explicit completion, stdin lifetime, denials, mode fallback, raw-first events, bounds and cancellation.
+  See [external-workers.md](docs/external-workers.md). Claude PTY support and live schema verification remain open.
+- [ ] **M1** agy as a child session (remaining integration): provider row, catalog, `ExternalAgent`, guards,
   `session.worker`, the switch, root refusal, docs, offline suite.
 - [ ] **M2** Claude Code as a child session: PTY, hooks, transcript reader, tool-name display mapping, `--resume`
   follow-ups, Claude's own subagents.
@@ -633,8 +654,8 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   request body per call (5–12 ms warm, 30–130 ms first read). No Core-side cache: a stale one would show context
   the model does not have.
 - [ ] Return per-section starting-context detail text from Core for session drafts.
-- [ ] Allow `/btw` during a running turn in both clients; NSH browser coverage for opening the original session from
-  a handoff.
+- [x] Allow `/btw` during a running turn in both clients (implemented in working tree; section 23 tracks remaining verification).
+- [ ] NSH browser coverage for opening the original session from a handoff.
 - [ ] Decide whether to persist session grants; expose grant listing and clearing in the clients.
 - [ ] A Settings section for provider limits; verify `/api/usage` with a real account.
 
@@ -1077,71 +1098,122 @@ final consolidated green-suite gates remain open. See [terminal report](reports/
   tools/inspector/MCP docs and the ledger where behavior changes. Land in vertical slices, each with a
   usable backend and both clients; no mock terminal/browser can be marked MVP complete.
 
-## 10. Fork subagent
+## 10. Fork subagent verification follow-ups
 
-**Proposed (user, 2026-11-08); Core built 2026-11-08, clients in progress.** A subagent that forks the calling session: it starts with the
-parent's exact system prompt, tools, model, effort and history, gets one task appended, runs, and returns only its
-final report to the parent. Named subagents (`quick`, `scout`, `plan`) start from a fresh brief instead.
+Fork subagents are implemented in Core, TUI and NSH; completed work is recorded under [Landed](#landed).
 
-Why: no briefing loss (the fork already knows what the parent knows), the parent's context stays clean (only the
-report comes back), and an identical request prefix makes the fork a prompt-cache hit. Prior art: Claude Code's
-Agent tool `subagent_type: "fork"`, Qwen Code's
-[fork-subagent design](https://qwenlm.github.io/qwen-code-docs/en/design/fork-subagent/fork-subagent-design/),
-pi-subagents' fork spec. No peer-reviewed work on the pattern found.
+- [ ] **Visual verification:** side-by-side TUI/NSH screenshots from mock `fork_subagent` (not taken).
+  Review the right sidebar's Agent row (still the parent's agent in both clients) and the inherited
+  block's presentation (NSH has no tree lines beside the open rows).
+- [ ] **Ongoing observation:** watch parents re-tasking finished forks via `message_session`, terse task
+  prompts and use across more models. This is monitoring, not unfinished implementation.
 
-| Decision | Decided (2026-11-08) |
+## 21. Session status above the composer, not in the timeline
+
+**Implemented (2026-11-09).** Both clients show a non-dismissible status strip immediately above the composer.
+It uses the newest turn's summary (or live scratch until the summary arrives), newest outcome wins with an
+additional-diagnostic count. It restores on revisit and clears while busy. Mobile reuses the strip without the
+desktop inspector action.
+
+- [x] **List:** errors/interruption, retry phases/exhaustion, recovery and cancelled waits leave the timeline.
+  Directory/notification and ordinary wait-reply metadata is inspector-only. Model-visible recovery/notice messages
+  and `via Manager` decisions remain in their ordered timeline positions.
+- [x] **Lifecycle:** derived state, no manual dismissal; busy suppresses it immediately, including continuation,
+  steer and queued-input turns. Successful later turns replace older failures.
+- [x] **Actions:** applicable `/continue` plus desktop Inspect for the full HTTP status/body/history.
+- [x] **Paired implementation and tests:** shared `interface/scenarios/session-status-btw.json`, failed/interrupted
+  timeline exclusion, busy clearing and restoration; both client READMEs, API docs and porting ledger updated.
+- [ ] **Visual verification:** compare matching TUI/NSH status-strip captures.
+
+## 22. Remove the `/continuation` slash command
+
+**Implemented (2026-11-09).** `/continuation` (`session.open_continuation`) and its unused
+`session.continued_on` condition are removed from the shared manifest, generated NSH manifest and both clients,
+including mobile. Manual `/continue` and `POST …/continue`, `/origin`, and Core's `continued_to` links remain.
+
+- [x] Both clients, shared command regression tests, manifest validation and generated module.
+- [x] API/client docs, capability matrix and porting-ledger row.
+
+## 23. `/btw` rebuilt on the fork
+
+**Implemented (2026-11-09); real-provider cache measurement remains unverified.** `/btw <question>` starts a
+hidden `kind: btw` fork and opens a live modal immediately, including while the parent is busy and on mobile.
+It copies the frozen system prompt, tool definitions, resolved model/effort, longest settled history and effective
+parent cache key. Its marker identifies the read-only side question. No parent tool call, notification, report or
+message is created; the parent's context and timeline stay unchanged.
+
+| Decision | Implemented behavior |
 | --- | --- |
-| **F1. Name** | `fork`, the term the other harnesses use. **Changed:** a tool, not an agent file or `session` enum value (a file brings its own prompt and breaks the prefix); no agent file may be named `fork` |
-| **F2. How it is launched** | The control-plane `fork` tool (its own tool, granted by `control: [fork]`, in `build`), never a task tool. Same `message_session` follow-ups as other children |
-| **F3. What it inherits** | The parent's request prefix byte for byte: system prompt, tool definitions, model, effort/thinking settings, canonical history. No model or effort override (any change breaks the cache hit) |
-| **F4. Timeline** | Client side. The fork's timeline must show what the model receives: a collapsed, labelled "Forked from ‹parent› at ‹message›" block for the inherited prefix (expandable, not copied into the UI as new items), then the fork marker and its own work. Same in both clients. Core gives `fork: {parent_id, inherited}`; the first `inherited` messages are the copied ones |
-| **F5. Recursion** | A fork cannot launch any subagent or fork (said in the tool description; hard refusal in the control plane with a clear error) |
-| **F6. Minor task (2026-11-09, user)** | A fork is a minor task run like a tool call: read-only (write tools, workspace controls and non-read-only MCP refused; bash a guard only), at most 20 steps per turn, and a tool row in the parent's timeline. The marker only says "forked session" and read-only; the tool description explains forks |
+| **B1. Trigger and UI** | Immediate modal titled with the query; compact live tool rows, `N/10`, streamed Markdown. `i` expands the inherited request prefix; `c` expands the full ordered side context (marker, arguments/results, notices, replies). Esc/close cancels only the side run |
+| **B2. Tool budget** | At most **10 outer/nested calls**, persisted and daemon-enforced, including refused attempts. The tenth queues an answer-now notice; further calls are refused. The fork's 20-model-step ceiling also applies |
+| **B3. No fork, no subagent** | Daemon refusals for `fork`, `session`, `message_session`, workspace/control/write tools, unannotated or mutating MCP and user extensions. Shell is an exact foreground read allowlist; ordinary command hooks do not run |
+| **B4. Mobile** | Same `/btw` modal and context folds; no desktop-only session surface is added |
 
-- [x] **Decide F1–F5** (2026-11-08; F1 changed as above, F4 is the clients').
-- [x] **Core:** the fork's snapshot is a copy of the parent's (tool definitions with `session` itself), with the
-  parent's resolved model/effort, permission and switches, and its prompt-cache key is the parent's id. Its first
-  messages are the parent's longest settled prefix (the pending `session` call is left out), then a user message
-  that starts with the constant `runtime.FORK_MARKER` (`[Nexus fork] You are a fork of session ‹id›: … Task: ‹prompt›`).
-  F5: a fork's `session` and `message_session` calls are refused in the control plane. Claude Code has an open bug
-  where forks resume the parent's orchestration ([#89101](https://claudeissues.com/issue/89101-forked-subagents-resume-the-parents-orchestration-they-bypass-the-nested-fork-bl)),
-  so the marker and the F5 guard are both present. Session JSON/events carry `fork: {parent_id, inherited}`
-  (session column, migrated in place). Mock scenario `fork_subagent`. Verified offline only (`tests/test_fork.py`:
-  the fork's first request has the parent's instructions, tools, model, effort and settled messages).
-- [x] **Cache:** verified 2026-11-08 with one real run each: the fork's first request read 96–100% of the
-  reusable prefix from cache on `codex/gpt-6-luna`, `copilot/gpt-6-luna`, `opencode/deepseek-v4.1-flash` and
-  `grok/grok-4.7` ([reports/fork-cache](reports/fork-cache/README.md)). Claude provider not checked (user).
-- [x] **Context size:** refused (tool error suggesting a named sub agent) when the parent's context leaves under 10%
-  of the window; skipped when the window is unknown.
-- [x] **Parallel writes:** ~~forks get the parent's tools and workspace, no read-only restriction~~ superseded
-  2026-11-09 by F6: forks are read-only, so they cannot conflict.
-- [x] **Minor task (F6, 11-09):** `FORK_MARKER` cut to "forked session" + read-only; tool description rewritten
-  for minor read-only tasks; `FORK_REFUSED` gate in `_approve` (inside `code` too) and non-read-only `mcp_call`
-  refused; `FORK_MAX_STEPS = 20`. Both clients: a parent's `fork` call is a `Fork ‹title›` tool row in its activity
-  group (`N forks`), opened it shows the task and report and ends with `open fork ↗` (TUI: its own `Child` block,
-  Enter/click opens; NSH: `tool-open-fork-<call>` button). Tests: `tests/test_fork.py`, TUI
-  `a_fork_call_renders_as_a_tool_row_in_the_parent`, NSH `fork-subagent.test.tsx`. Screenshots not taken.
-- [x] **Usage audit (2026-11-08):** 7 real fork calls (2 sessions, `codex/gpt-6.1-sol`, effort low) behaved
-  correctly in Core, but the parent ran two forks on `nexus-tui/src/app.rs` and a later session took a fork's
-  uncommitted edits for user work. Fixed in guidance: the tool description asks for one owner per file across
-  running forks, named in the task, and for the parent to say which fork changed what; `FORK_MARKER` asks the fork
-  to edit only its files and list them in its report.
-- [ ] **Watch:** parents re-tasking a finished fork with new scope via `message_session`, terse task prompts, and
-  fork use on other models (only one model seen so far). Re-audit after more sessions before changing anything.
-- [x] **UI (both clients):** strip labelled `Fork` (the parent's child card is replaced by a tool row, F6); the fork's timeline opens with one collapsed
-  `Forked from ‹parent› · N messages` group (key `fork:<sid>`, existing group fold), inherited rows indented when
-  open; phone keeps the folded row. TUI and NSH tests pass (11-08).
-- [ ] **UI verification:** side-by-side TUI/NSH screenshots from mock `fork_subagent` (not taken). Open questions:
-  the right sidebar's Agent row still shows the parent's agent in both clients; NSH draws no tree lines beside the
-  open block's rows (compare with the TUI).
-- [x] **Docs and ledger:** docs/agents.md (`fork`), docs/daemon.md (session trees), docs/api.md (`fork` field),
-  docs/llm-providers.md (mock scenario) and a porting-ledger row. Client docs belong with the UI item.
+- [x] **Run storage:** hidden fork session, separate from the source's relational tree so an idle parent does not
+  become busy. `fork.parent_id` retains provenance. Parent deletion cleans up side runs; project removal/deletion
+  includes them in safety/shutdown checks. Default snapshots/lists/search and client creation events keep them hidden.
+- [x] **Modal:** opening, streaming, canonical context folds and close cancellation in both clients. Per-request
+  tokens prevent late responses attaching to a newer modal; checkpoint refresh recovers missed stream/idle events.
+  Past-answer navigation (R13) remains deferred, not an implementation gate.
+- [x] **Running turns:** the in-flight unsettled tool-call suffix is left out. This completes section 9.5's busy-btw item.
+- [x] **Core tests:** same prefix/model/effort/cache key, parent unchanged, single-batch and nested 10-call cap,
+  write/control/subagent refusals, busy-parent settled prefix and independent cancellation.
+- [x] **Docs/ledger:** API start/checkpoint/SSE contract, agents, both client READMEs and capability matrix O5/R13/L11.
+- [ ] **Visual verification:** matching TUI/NSH desktop and narrow-web modal captures.
+- [ ] **Real-provider cache measurement:** requires explicit user approval for a paid/model call. Offline prefix
+  equality is tested; no paid request has been made for this change.
 
-When to prefer a fresh `scout` instead: an independent second opinion, since a fork inherits the parent's assumptions
-and mistakes.
+## 24. Harness workflow audit follow-up
 
+User approved implementing the cross-project tool/prompt audit, with bounded real
+Copilot GPT-6 Luna checks if needed (2026-11-10). Existing session-status/btw/UI and
+ZMX work is preserved; no personal daemon restart or deployment is part of this change.
+
+- [x] Fresh Monty checkout per cell with trusted in-memory heap restoration; no replay,
+  suspension exhaustion regression, saved-handle permissions and failed-transfer cleanup.
+- [x] Common direct/nested hooks, modified-input approval and visible notices; completed
+  results survive post-hook expiry, with honest uncertain-effects cancellation messages.
+- [x] Session-private default kernels, explicit named-agent sharing, no fork borrowing;
+  cancellation and variable isolation tested. Ordinary forks: 40 total tool attempts,
+  180-second tool deadline, 20 model steps; btw's persistent 10-call cap stays separate.
+- [x] Fork job/background restrictions and explicit frozen read-only extension effects;
+  foreground shell default 120 seconds, maximum 600; longer work uses background jobs.
+- [x] Corrected restricted-Python/read-coverage/delegation guidance, selective evidence,
+  partial-failure examples, paused objectives and bounded validation; docs and ledger.
+- [x] Focused/expanded integration: 221 passed. Approved real Copilot GPT-6 Luna smoke:
+  direct/code/fork all correct; nested hook block and unchanged parent state verified.
+  Tiny-cell snapshot overhead measured (~7 ms warm median); no broad speed claim.
+- [x] Final whole-Core rerun recorded: **1400 passed, 1 skipped, 4 failures** confined
+  to concurrent ZMX worker expectations/launch events; those files are left untouched.
+  This is not an all-green whole-tree gate. [Exact report](reports/harness-audit-2026-11-10.md).
+- [ ] Observe larger-heap checkpoint overhead and longer real workflows before changing
+  the current eight-kernel resource cap or claiming general performance gains.
 
 ## Landed
+
+- **Harness workflow hardening (11-10, working tree).** Session-private kernels with
+  fresh-checkout heap restoration, common nested/direct policy, fork call/time/effect
+  boundaries, bounded foreground shell and corrected workflow prompts. Expanded
+  integration 221 passed; approved Copilot GPT-6 Luna direct/code/fork smoke passed.
+  [Evidence, limits and final gate](reports/harness-audit-2026-11-10.md).
+
+- **Isolated ZMX transport groundwork (11-10, working tree).** Added `nexus/workers/` with agy stream-json
+  transport, shared safety helpers and fake-CLI tests based on `nexus01`; no production caller, provider/config
+  registration or UI changes. Baseline Core: 1310 passed/1 skipped; final Core: 1387 passed/1 skipped;
+  focused worker suite: 77 passed; full Ruff and `git diff --check` passed.
+  M0 live checks and M1 integration are not complete. [Scope and limits](docs/external-workers.md).
+
+- **Daemon version and plan reconciliation (11-10, working tree).** Daemon identity now uses installed package metadata;
+  regression reproduced before the fix, then server/doctor/event-log suites passed 93/93 and focused Ruff passed.
+  Summary rows now match sections 10 and 21–23; release-time checks are distinguished from current-tree and platform gates.
+
+- **Fork subagents complete (11-09).** Core and both clients implement inherited context, parent tool rows,
+  expandable inherited timelines, report delivery, persistence, recursion/context guards, read-only
+  enforcement and a 20-step budget. Prompt-cache reuse was verified on Codex, Copilot, OpenCode and Grok
+  ([report](reports/fork-cache/README.md)); Claude was not checked. Focused rerun: Core 9/9 and TUI 7/7
+  pass. NSH has implementation and tests and the recorded release-wide suite passed 371/371; the latest
+  focused rerun was blocked by the runner not finding Chrome/Chromium. Screenshot review remains above.
+
 
 - **0.12.0 released (11-09).** PR #100 merged, release branch removed, no open PRs remain. Four platform binaries, wheel/sdist, installer and checksums published; every payload hash verified. Isolated published macOS arm64 install, daemon and plain TUI smoke passed; Linux installer/runtime and native/device gates remain explicit. [Release](https://github.com/nottherealsanta/nexus/releases/tag/v0.12.0).
 

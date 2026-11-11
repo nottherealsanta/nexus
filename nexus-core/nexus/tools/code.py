@@ -7,13 +7,16 @@ from .base import Tool, ToolContext, ToolError
 SPEC = ToolSpec(
     name="code",
     description=(
-        "Run Python in a persistent Monty sandbox. Variables survive cells and are shared by the session tree. "
+        "Run restricted Python in a persistent Monty sandbox, not full CPython. Variables survive cells; each session has a private default kernel. "
         "Prefer this for multi-step inspection, independent tool batches, and filtering large results before returning evidence. Use direct calls for single simple operations. "
-        "Use await tool_name(keyword=value) for the task tools granted in this request; results are strings. import asyncio and asyncio.gather allow concurrent calls. "
+        "Tools are already bound: use await tool_name(keyword=value), never import functions. Results are strings. "
+        "import asyncio and asyncio.gather allow concurrent calls; OS/CPython modules such as subprocess, sqlite3 and pprint are unavailable. "
         "No filesystem or network access except through these tools. Control tools and code are unavailable inside. "
         "Example: import asyncio; results = await asyncio.gather(grep(pattern='TODO', path='src'), ls(path='tests')); print(results[0]). "
-        "Reads inside cells do not establish read-before-edit coverage, even if printed; read affected lines directly before editing. "
-        "Print or return only the results you need. Omit kernel_id for the tree's main kernel; use an id to share another."
+        "Inspect current affected text before editing: retained-but-unprinted results have not been inspected by the model. "
+        "Print only relevant excerpts or summaries, not every result. For independent operations that may fail, catch RuntimeError per operation "
+        "so one failure does not discard other evidence. Omit kernel_id for your private kernel; pass an id to share deliberately. "
+        "Forks cannot borrow other sessions' kernels."
     ),
     parameters={"type": "object", "properties": {
         "code": {"type": "string"}, "kernel_id": {"type": "string"},

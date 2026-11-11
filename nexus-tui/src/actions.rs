@@ -184,6 +184,11 @@ pub enum ApiCall {
     Btw {
         session: String,
         question: String,
+        request_id: String,
+    },
+    BtwState {
+        session: String,
+        request_id: String,
     },
     /// The full text of a skill or an MCP server for the context modal.
     ContextEntry {
@@ -448,7 +453,7 @@ impl ApiCall {
             ApiCall::Continue { .. } => "Continuing",
             ApiCall::Speak { .. } => "Finished speaking",
             ApiCall::Handoff { .. } => "Handed off to a new session",
-            ApiCall::Btw { .. } | ApiCall::ContextEntry { .. } => "",
+            ApiCall::Btw { .. } | ApiCall::BtwState { .. } | ApiCall::ContextEntry { .. } => "",
             ApiCall::SpeakStop => "Stopped speaking",
             ApiCall::VoiceStatus { .. }
             | ApiCall::VoicePrepare { .. }
@@ -577,6 +582,8 @@ pub struct Done {
     pub transcript: Option<String>,
     /// The answer to a `/btw` question.
     pub answer: Option<String>,
+    pub btw_context: Option<String>,
+    pub btw_state: Option<Value>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -1125,21 +1132,42 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 .body;
             done.open = body["to"].as_str().map(str::to_owned);
         }
-        ApiCall::Btw { session, question } => {
+        ApiCall::BtwState { session, .. } => {
+            done.btw_state = Some(
+                api.http
+                    .call(
+                        reqwest::Method::GET,
+                        &format!("/api/session/{session}/btw"),
+                        &[],
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .map_err(e)?
+                    .body,
+            );
+        }
+        ApiCall::Btw {
+            session,
+            question,
+            request_id,
+        } => {
             let body = api
                 .http
                 .call(
                     reqwest::Method::POST,
                     &format!("/api/session/{session}/btw"),
                     &[],
-                    Some(&json!({ "question": question })),
+                    Some(&json!({ "question": question, "request_id": request_id })),
                     None,
                     None,
                 )
                 .await
                 .map_err(e)?
                 .body;
-            done.answer = body["answer"].as_str().map(str::to_owned);
+            done.answer = body["session"].as_str().map(str::to_owned);
+            done.btw_context = body["inherited_context"].as_str().map(str::to_owned);
         }
         ApiCall::ContextEntry {
             kind,

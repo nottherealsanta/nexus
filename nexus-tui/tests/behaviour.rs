@@ -2555,20 +2555,48 @@ fn handoff_threshold_setting_steps_by_five_and_zero_is_off() {
 fn btw_answer_opens_in_an_overlay_without_touching_the_timeline() {
     let mut a = app();
     let before = draw(&mut a, 110, 34).1.join("\n");
+    typing(&mut a, "/btw what is the port?");
+    press(&mut a, &["enter"]);
+    assert!(draw(&mut a, 110, 34).1.join("\n").contains("Running"));
     a.apply_done(ActionDone {
         call: ApiCall::Btw {
             session: SESSION.into(),
             question: "what is the port?".into(),
+            request_id: a.ui.btw.as_ref().unwrap().request_id.clone(),
         },
         result: Ok(Done {
-            answer: Some("It is 4747.".into()),
+            answer: Some("ses_btw".into()),
             ..Done::default()
         }),
     });
+    for (kind, data) in [
+        ("btw.budget", serde_json::json!({"calls": 1})),
+        (
+            "tool_start",
+            serde_json::json!({"call": {"id": "r1", "name": "read"}}),
+        ),
+        (
+            "tool_end",
+            serde_json::json!({"call": {"id": "r1", "name": "read"}, "result": {"is_error": false}}),
+        ),
+        ("text_delta", serde_json::json!({"text": "It is 4747."})),
+        ("session.status", serde_json::json!({"status": "idle"})),
+    ] {
+        a.apply_sync(SyncMsg::Event(nexus_tui::api::Event {
+            id: 0,
+            cursor: None,
+            seq: None,
+            time: 0.0,
+            kind: kind.into(),
+            session_id: Some("ses_btw".into()),
+            data,
+        }));
+    }
     let (_, rows) = draw(&mut a, 110, 34);
     let text = rows.join("\n");
     assert!(text.contains("Side question"), "{text}");
     assert!(text.contains("It is 4747."));
+    assert!(text.contains("1/10 tool calls"));
     assert!(text.contains("Not added to the session's context."));
     press(&mut a, &["esc"]);
     assert!(a.ui.overlay.is_none());

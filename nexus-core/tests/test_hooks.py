@@ -126,3 +126,131 @@ async def test_prompt_block_ends_the_turn_without_a_model_call(tmp_path):
     assert provider.requests == []
     assert next(e for e in events if isinstance(e, TurnEnd)).stop == "blocked"
     assert "not today" in agent.messages[-1].parts[0].text
+
+
+@pytest.mark.parametrize("decision", ["block", "modify", "allow"])
+async def test_nested_tools_use_hooks_modified_approval_and_visible_notes(tmp_path, decision):
+    from nexus.kernels import Kernels
+    from nexus.tools.code import SPEC
+
+    ran, approvals, published = [], [], []
+    kernels = Kernels()
+
+    async def fake_bash(args, ctx):
+        ran.append(args)
+        return "ran"
+
+    tool = Tool(ToolSpec("bash", "fake shell", {"type": "object"}), fake_bash)
+
+    async def allow(call, args):
+        approvals.append((call.name, args))
+        return True
+
+    async def code(args, ctx):
+        return await kernels.run(args, root="r", caller="s", ctx=ctx, tools=[tool], approve=allow,
+                                 publish=lambda kind, data: published.append((kind, data)))
+
+    class NestedScript(Script):
+        async def stream(self, request):
+            self.requests.append(request)
+            yield PartDone(ToolCall("cell", "code", json.dumps({"code": "print(await bash(command='original'))"}))
+                           if len(self.requests) == 1 else Text("done"))
+            yield Done("stop")
+
+    payload = {"decision": decision, "tool_input": {"command": "changed"}, "message": "guard"}
+    entries = {"PreToolUse": [{"name": "guard", "matcher": "bash", "command": py(f"print({json.dumps(json.dumps(payload))})")}],
+               "PostToolUse": [{"name": "after", "matcher": "bash", "command": py("print('{\"context\":\"post evidence\"}')")}]}
+    hooks, problems = parse_hooks(entries)
+    assert not problems
+    provider = NestedScript()
+    agent = Agent(provider, model="m", workspace=tmp_path, tools=(tool, Tool(SPEC, code)), approve=allow,
+                  hooks=HookRunner(hooks, tmp_path, session_id="s"))
+    try:
+        events = [e async for e in agent.turn("go")]
+        assert ran == ([] if decision == "block" else [{"command": "changed" if decision == "modify" else "original"}])
+        assert any(isinstance(e, HookFired) and e.hook == "guard" for e in events)
+        text = " ".join(p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
+        assert "post evidence" in text
+        calls = [data for kind, data in published if kind == "code.call"]
+        assert len(calls) == 1
+        if decision == "block":
+            assert "blocked by hook" in calls[0]["error"] and not any(name == "bash" for name, args in approvals)
+        elif decision == "modify":
+            assert ("bash", {"command": "changed"}) in approvals
+            assert "changed the input" in text
+    finally:
+        await kernels.shutdown()
+
+
+async def test_tool_time_budget_cancels_work_and_disables_tools(tmp_path):
+    import asyncio
+
+    finished = []
+
+    async def slow(args, ctx):
+        await asyncio.sleep(5)
+        finished.append(True)
+        return "late"
+
+    provider = Script()
+    agent = Agent(provider, model="m", workspace=tmp_path,
+                  tools=(Tool(ToolSpec("bash", "fake", {"type": "object"}), slow),), max_tool_seconds=0.05)
+    events = [event async for event in agent.turn("go")]
+    assert not finished and not provider.requests[-1].tools
+    assert any(isinstance(event, ToolEnd) and "time budget expired" in event.result.output for event in events)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+async def test_post_hook_deadline_preserves_completed_effect_and_result(tmp_path, nested):
+    import asyncio
+
+    from nexus.kernels import Kernels
+    from nexus.tools import ToolContext
+    from nexus.tools.code import SPEC
+
+    kernels, effects, records = Kernels(), [], []
+
+    async def allow(*_):
+        return True
+
+    async def effect(args, ctx):
+        effects.append(True)
+        return "IMPORTANT SUCCESS RESULT"
+
+    tool = Tool(ToolSpec("bash", "fake effect", {"type": "object"}), effect)
+
+    async def code(args, ctx):
+        return await kernels.run(args, root="r", caller="s", ctx=ctx, tools=[tool], approve=allow,
+                                 publish=lambda kind, data: records.append((kind, data)))
+
+    class Provider(Script):
+        async def stream(self, request):
+            self.requests.append(request)
+            call = ToolCall("c", "code", json.dumps({"code": "print(await bash(command='fake'))"})) if nested else ToolCall("c", "bash", "{}")
+            yield PartDone(call if len(self.requests) == 1 else Text("partial report"))
+            yield Done("stop")
+
+    provider = Provider()
+    agent = Agent(provider, model="m", workspace=tmp_path, tools=(tool, Tool(SPEC, code)), max_tool_seconds=0.2)
+    fire = agent._fire
+
+    async def slow_post(event, **kwargs):
+        if event == "PostToolUse" and kwargs.get("tool") == "bash":
+            await asyncio.sleep(5)
+        return await fire(event, **kwargs)
+
+    agent._fire = slow_post
+    try:
+        await kernels.run({"code": "0"}, root="r", caller="s", ctx=ToolContext(tmp_path), tools=[],
+                          approve=allow, publish=lambda *_: None)
+        events = [event async for event in agent.turn("go")]
+        assert effects == [True] and not provider.requests[-1].tools
+        if nested:
+            calls = [data for kind, data in records if kind == "code.call"]
+            assert len(calls) == 1 and calls[0]["output"] == "IMPORTANT SUCCESS RESULT" and calls[0]["error"] is None
+        else:
+            [end] = [event for event in events if isinstance(event, ToolEnd)]
+            assert end.result.output == "IMPORTANT SUCCESS RESULT" and not end.result.is_error
+        assert any("result is preserved" in p.text for m in provider.requests[-1].messages for p in m.parts if isinstance(p, Text))
+    finally:
+        await kernels.shutdown()

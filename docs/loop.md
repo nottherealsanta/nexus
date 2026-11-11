@@ -111,6 +111,18 @@ outer call finishes; control tools are never available inside cells.
 
 ## Tool execution
 
+`execute_tool` is shared by direct calls and calls nested inside `code`: pre-hooks,
+modified-input approval, execution, then post-hooks. Nested hook events are published
+live by the daemon and their notices are flushed into context before the next model
+request. `ToolContext.execute` carries the active caller's pipeline into a kernel,
+so refreshing tool bindings cannot detach nested policy or budget accounting.
+
+Optional `max_tool_calls` and `max_tool_seconds` bound a turn's tool work, including
+the outer code call, all nested attempts, hooks and approvals. Exhaustion removes
+tool schemas from subsequent requests and adds a visible partial-report notice.
+The time budget starts with the turn, includes provider waiting, and cancels an
+active tool at its deadline; it does not cut off the model's final report.
+
 `_parse_args` parses `call.arguments` as JSON (empty text counts as `{}`). A
 result that is not a JSON object, or invalid JSON, gives `args=None`.
 

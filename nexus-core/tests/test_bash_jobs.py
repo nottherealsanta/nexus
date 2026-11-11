@@ -1,4 +1,4 @@
-"""Foreground bash without a default limit, plus daemon background jobs."""
+"""Bounded foreground bash, plus daemon background jobs."""
 import asyncio
 import os
 import signal
@@ -11,19 +11,24 @@ from nexus.tools.bash import report
 from nexus.tools.bash import run as bash
 
 
-async def test_foreground_bash_has_no_default_timeout_and_accepts_one(tmp_path):
+async def test_foreground_bash_is_bounded_and_accepts_an_explicit_timeout(tmp_path, monkeypatch):
+    from nexus.tools import bash as module
+
     ctx = ToolContext(tmp_path)
     assert (await bash({"command": "printf hi"}, ctx)).startswith("[exit code 0]\nhi")
     started = asyncio.get_running_loop().time()
     assert "killed after 0.1s timeout" in await bash({"command": "sleep 5", "timeout": 0.1}, ctx)
     assert asyncio.get_running_loop().time() - started < 2
-    for bad in (0, -1, True, "2", float("inf")):
+    for bad in (0, -1, True, "2", float("inf"), 601):
         with pytest.raises(ToolError, match="timeout"):
             await bash({"command": "true", "timeout": bad}, ctx)
     with pytest.raises(ToolError, match="requires the daemon"):
         await bash({"command": "true", "background": True}, ctx)
     with pytest.raises(ToolError, match="boolean"):
         await bash({"command": "true", "background": "false"}, ctx)
+    monkeypatch.setattr(module, "DEFAULT_FOREGROUND_TIMEOUT", 0.05)
+    assert "killed after 0.05s timeout" in await bash({"command": "sleep 5"}, ctx)
+    assert module.timeout_value(None) is None
 
 
 async def test_job_output_finish_timeout_kill_and_tree_scope(tmp_path):

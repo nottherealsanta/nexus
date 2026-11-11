@@ -27,6 +27,10 @@ timeout_s = 10                  # default 10, at most 600
 | `SessionEnd` | when a session is deleted | side effects only |
 
 `matcher` works for `PreToolUse` and `PostToolUse` only.
+Both events apply to nested task-tool calls inside `code`, not only the outer
+cell. Modified nested arguments are approved after modification; blocks and
+context notices follow the same rules as direct calls. Nested hook events keep
+the nested call id and are delivered live.
 
 ## Protocol
 

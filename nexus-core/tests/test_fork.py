@@ -245,3 +245,122 @@ async def test_a_fork_has_a_small_step_budget(env, monkeypatch):
              if isinstance(p, Text)]
     assert any(t.startswith("[Nexus notice: step limit]") for t in texts)
     assert provider.replies == []
+
+
+async def test_fork_kernel_is_private_and_cancellation_does_not_destroy_parent(env):
+    rt, client, provider, workspace, _ = env
+    provider.replies = [[_call("setup", "code", code="x = 41")], [Text("ready")]]
+    parent = await _parent(client, workspace)
+    try:
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "set up"})
+        await _idle(rt)
+        parent_kernel = rt.kernels.main[parent["id"]]
+        provider.replies = [
+            [_call("fork", prompt="inspect")],
+            [_call("borrow", "code", kernel_id=parent_kernel, code="x = 99")],
+            [_call("undefined", "code", code="print(x)")],
+            [_call("own", "code", code="x = 999")],
+            [_call("timeout", "code", code="await bash(command='sleep 5')", timeout_s=0.05)],
+            [Text("partial report")],
+            [_call("verify", "code", code="print(x)")],
+            [Text("parent done")],
+        ]
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "check"})
+        await _idle(rt)
+        [child] = rt.store.children(parent["id"])
+        outputs = _outputs(rt, child.id)
+        assert any("cannot borrow" in o for o in outputs)
+        assert any("NameError" in o for o in outputs)
+        assert any("kernel discarded" in o for o in outputs)
+        assert "41" in _outputs(rt, parent["id"])[-1]
+        assert parent_kernel in rt.kernels.items and child.id not in rt.kernels.main
+    finally:
+        await rt.kernels.shutdown()
+
+
+async def test_fork_total_call_budget_counts_nested_calls(env, monkeypatch):
+    rt, client, provider, workspace, _ = env
+    monkeypatch.setattr(runtime_module, "FORK_MAX_CALLS", 3)
+    provider.replies = [
+        [_call("fork", prompt="inspect")],
+        [_call("batch", "code", code="for _ in range(3):\n print(await read(path='README.md'))")],
+        [Text("partial report")], [Text("parent done")],
+    ]
+    parent = await _parent(client, workspace)
+    try:
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+        await _idle(rt)
+        [child] = rt.store.children(parent["id"])
+        assert "3-call tool budget" in _outputs(rt, child.id)[0]
+        child_final = provider.requests[2]
+        assert not child_final.tools
+        assert any("honest partial report" in p.text for m in child_final.messages for p in m.parts if isinstance(p, Text))
+    finally:
+        await rt.kernels.shutdown()
+
+
+async def test_fork_refuses_job_control_and_unknown_extension_effects(env):
+    rt, client, provider, workspace, _ = env
+    provider.replies = [[_call("fork", prompt="inspect")], [Text("report")], [Text("done")]]
+    parent = await _parent(client, workspace)
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+    await _idle(rt)
+    [child] = rt.store.children(parent["id"])
+    for name, args in [("bash_kill", {"job_id": "parent-job"}), ("bash", {"command": "true", "background": True})]:
+        with pytest.raises(runtime_module.ToolError, match="refused"):
+            await rt._approve(child.id, ToolCall("check", name, json.dumps(args)), args)
+    snapshot = rt.snapshot_for(child)
+    snapshot["extensions"] = {"custom": {"extension": {}}}
+    rt.store.set_snapshot(child.id, snapshot)
+    with pytest.raises(runtime_module.ToolError, match="READ_ONLY"):
+        await rt._approve(child.id, ToolCall("custom", "custom", "{}"), {})
+
+
+async def test_declared_read_only_extensions_work_directly_and_nested_from_frozen_source(env):
+    rt, client, provider, workspace, _ = env
+    folder = workspace / ".agents" / "tools"
+    folder.mkdir(parents=True)
+    path = folder / "custom.py"
+    path.write_text('DESCRIPTION = "read only"\nREAD_ONLY = True\ndef run(args):\n return "frozen read result"\n')
+    parent = await _parent(client, workspace)
+    path.write_text('DESCRIPTION = "changed"\nREAD_ONLY = False\ndef run(args):\n return "changed result"\n')
+    provider.replies = [
+        [_call("fork", prompt="inspect")],
+        [_call("direct", "custom")],
+        [_call("nested", "code", code="print(await custom())")],
+        [Text("report")], [Text("done")],
+    ]
+    try:
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+        await _idle(rt)
+        [child] = rt.store.children(parent["id"])
+        outputs = _outputs(rt, child.id)
+        assert len(outputs) == 2 and all("frozen read result" in output for output in outputs)
+        assert all("changed result" not in output for output in outputs)
+    finally:
+        await rt.kernels.shutdown()
+
+
+async def test_fork_deadline_stops_nested_work_once_and_preserves_parent(env, monkeypatch):
+    rt, client, provider, workspace, _ = env
+    parent = await _parent(client, workspace)
+    provider.replies = [[_call("setup", "code", code="x=41")], [Text("ready")]]
+    try:
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "setup"})
+        await _idle(rt)
+        parent_kernel = rt.kernels.main[parent["id"]]
+        monkeypatch.setattr(runtime_module, "FORK_MAX_SECONDS", 0.15)
+        provider.replies = [
+            [_call("fork", prompt="inspect")],
+            [_call("cell", "code", code="await bash(command='sleep 5')")],
+            [Text("partial report")], [Text("parent done")],
+        ]
+        await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
+        await _idle(rt)
+        [child] = rt.store.children(parent["id"])
+        records = [e["data"] for e in rt.store.events(child.id, limit=5000) if e["type"] == "code.call"]
+        assert len(records) == 1 and records[0]["error"]
+        assert child.id not in rt.kernels.main and parent_kernel in rt.kernels.items
+        assert not provider.requests[-2].tools
+    finally:
+        await rt.kernels.shutdown()

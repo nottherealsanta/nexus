@@ -27,5 +27,6 @@ const railClasses: Record<string, string> = {
 export const agentColor = (name: string) => classes[agentSlot(name)];
 export const agentRailColor = (name: string) => railClasses[agentSlot(name)];
 
-/** The agent name a child session shows: a fork reads `fork`, whatever agent it inherited from its parent. */
-export const agentLabel = (s: { agent?: string | null; fork?: unknown } | null | undefined): string => (s?.fork ? "fork" : s?.agent ?? "");
+/** The agent name a child session shows: a ZMX child reads its label, a fork reads `fork`, whatever agent it inherited from its parent. */
+export const agentLabel = (s: { agent?: string | null; fork?: unknown; worker?: { label?: string } | null } | null | undefined): string =>
+  (s?.worker?.label ? s.worker.label : s?.fork ? "fork" : s?.agent ?? ""); // a ZMX child always reads `ZMX · <vendor>`

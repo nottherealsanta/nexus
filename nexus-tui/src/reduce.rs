@@ -597,6 +597,9 @@ impl Model {
                 }
             }
             "session.created" | "session.updated" => {
+                if e.data["kind"].as_str() == Some("btw") {
+                    return;
+                }
                 if let Some(mut s) = decode::<Session>(&e.data) {
                     let old = self.sessions.get(&s.id);
                     if old.is_some_and(|o| s.revision < o.revision) {
@@ -621,6 +624,11 @@ impl Model {
                     for id in ids.iter().filter_map(Value::as_str) {
                         if let Some(s) = self.sessions.get_mut(id) {
                             s.archived = archived;
+                            // The transition bumps revisions; keep them current so the
+                            // next If-Match write is not stale.
+                            if let Some(rev) = e.data["revisions"][id].as_i64() {
+                                s.revision = s.revision.max(rev);
+                            }
                         }
                     }
                 }
@@ -899,6 +907,8 @@ mod tests {
         assert_eq!(m.sessions[SESSION].revision, 2);
         m.apply_event(&evs[1]);
         assert!(m.sessions[SESSION].archived);
+        // Archiving bumps the revision; the event carries it so the next If-Match write is current.
+        assert_eq!(m.sessions[SESSION].revision, 3);
         m.apply_event(&evs[2]);
         assert!(m.sessions.is_empty());
         assert!(m.selected.is_none());

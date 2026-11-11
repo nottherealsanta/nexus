@@ -34,7 +34,7 @@ MAX_KERNELS = 8
 MAX_CALLS = 64
 MAX_CELLS = 100  # retained metadata; cell numbers keep increasing
 LIMITS = {"max_feed_duration_secs": 10, "max_memory": 64 * 1024 * 1024,
-          "max_recursion_depth": 200, "max_suspensions": MAX_CALLS * 4}
+          "max_recursion_depth": 200, "max_suspensions": 1024}
 
 
 def write_launcher(directory: Path, binary: str) -> Path:
@@ -70,6 +70,7 @@ class Kernel:
     dispatch: Any = None
     task: asyncio.Task[Any] | None = None  # the task running the current cell, if any
     closed: bool = False
+    snapshot: bytes | None = None
 
     def json(self, *, summary: bool = False) -> dict[str, Any]:
         """Kernel metadata; `summary` omits retained cell bodies for compact listings."""
@@ -127,8 +128,28 @@ class Kernels:
             return
         kernel.closed = True
         # Closing is cleanup; a broken worker must not mask the cell error or fail a delete.
-        with contextlib.suppress(Exception):
-            await kernel.worker.__aexit__(None, None, None)
+        if kernel.worker is not None:
+            with contextlib.suppress(Exception):
+                await kernel.worker.__aexit__(None, None, None)
+            kernel.worker = None
+        kernel.snapshot = None
+
+    async def _restore(self, kernel: Kernel) -> None:
+        if kernel.worker is None:
+            kernel.worker = self.pool.checkout(limits=LIMITS)
+            await kernel.worker.__aenter__()
+            if kernel.snapshot is not None:
+                await kernel.worker.load_session(kernel.snapshot)
+                kernel.snapshot = None
+
+    async def _checkpoint(self, kernel: Kernel) -> None:
+        if kernel.id not in self.items:
+            return
+        # Restore a finished heap, never replay source or side-effecting tool calls.
+        # Monty's suspension allowance is per checkout, not per feed.
+        kernel.snapshot = await kernel.worker.dump()
+        await kernel.worker.__aexit__(None, None, None)
+        kernel.worker = None
 
     def _forget(self, kernel: Kernel) -> None:
         self.items.pop(kernel.id, None)
@@ -182,7 +203,7 @@ class Kernels:
             self.helper_dir = None
 
     async def run(self, args: dict[str, Any], *, root: str, caller: str, ctx: ToolContext,
-                  tools: list[Tool], approve: Approve, publish: Publish) -> str:
+                  tools: list[Tool], approve: Approve, publish: Publish, isolated: bool = False) -> str:
         code = args.get("code")
         timeout = args.get("timeout_s", 300)
         kid = args.get("kernel_id")
@@ -196,18 +217,34 @@ class Kernels:
             kernel = await self.select(root, caller, kid)
         except KeyError as exc:
             raise ToolError(str(exc)) from exc
+        if isolated and kernel.created_by != caller:
+            raise ToolError("a fork cannot borrow another session's kernel; omit kernel_id to use its private kernel")
         # Queueing time is bounded too; a cancelled waiter never cancels the active cell.
         try:
             async with asyncio.timeout(timeout):
                 async with kernel.lock:
                     if kernel.id not in self.items:
                         raise ToolError(f"no kernel {kernel.id}")
+                    kernel.task = asyncio.current_task()
                     try:
-                        return await self._cell(kernel, code, caller, ctx, tools, approve, publish)
+                        await self._restore(kernel)
+                        try:
+                            result = await self._cell(kernel, code, caller, ctx, tools, approve, publish)
+                        except ToolError:
+                            await self._checkpoint(kernel)
+                            raise
+                        await self._checkpoint(kernel)
+                        return result
                     except asyncio.CancelledError:
                         await self._retire(kernel)
                         publish("kernel.deleted", {"id": kernel.id, "reason": "cell cancelled; state discarded"})
                         raise
+                    except (MontyError, OSError, ValueError, RuntimeError) as exc:
+                        await self._retire(kernel)
+                        publish("kernel.deleted", {"id": kernel.id, "reason": "kernel checkpoint failed; state discarded"})
+                        raise ToolError(f"kernel state transfer failed; kernel discarded; do not replay tool calls: {exc}") from exc
+                    finally:
+                        kernel.task = None
         except TimeoutError as exc:
             state = "kernel discarded" if kernel.id not in self.items else "queued cell did not run; kernel preserved"
             raise ToolError(f"kernel {kernel.id} · cell timed out after {timeout:g} s (including queue and tool calls); {state}") from exc
@@ -246,11 +283,13 @@ class Kernels:
             tool = available.get(name)
             if tool is None:
                 raise ToolError(f"tool {name!r} is unavailable to the calling agent")
+            nested_ctx = ToolContext(ctx.workspace, call.id, file_lock=ctx.file_lock,
+                                     model_visible=False, cwd_changed=ctx.cwd_changed)
+            if ctx.execute is not None:
+                return await ctx.execute(call, arguments, nested_ctx)
             if not await approve(call, arguments):
                 raise ToolError("the user declined this tool call")
-            # Retained inside the kernel, not shown to the model.
-            return await tool.run(arguments, ToolContext(ctx.workspace, call.id, file_lock=ctx.file_lock,
-                                                         model_visible=False, cwd_changed=ctx.cwd_changed))
+            return await tool.run(arguments, nested_ctx)
 
         async def dispatch(name: str, arguments: dict[str, Any]) -> str:
             if len(cell["calls"]) >= MAX_CALLS:
@@ -318,7 +357,7 @@ class Kernels:
         except (MontyError, OSError, ValueError, RuntimeError) as exc:
             error = (str(exc).strip().splitlines() or [type(exc).__name__])[-1]
             if isinstance(exc, (MontyCrashedError, MontyDisconnectError)) or any(
-                marker in error for marker in ("MemoryError", "TimeoutError", "RecursionError")
+                marker in error for marker in ("MemoryError", "TimeoutError", "RecursionError", "suspension limit")
             ):
                 await self._retire(k)
                 error += "; kernel discarded"

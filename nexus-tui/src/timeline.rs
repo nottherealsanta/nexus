@@ -666,18 +666,7 @@ pub(crate) fn is_notice(text: &str) -> bool {
 }
 
 fn is_diagnostic(e: &crate::api::Event) -> bool {
-    matches!(
-        e.kind.as_str(),
-        "session.error"
-            | "retry_scheduled"
-            | "retry_started"
-            | "retry_exhausted"
-            | "turn.recovered"
-            | "session.directory_changed"
-            | "session.notified"
-    ) || (matches!(e.kind.as_str(), "permission.replied" | "question.replied")
-        && e.data["outcome"].as_str() == Some("cancelled"))
-        || is_manager_reply(e)
+    is_manager_reply(e)
 }
 
 /// An approval or a question the Manager answered on the user's words.
@@ -903,7 +892,7 @@ fn summary_rows(
         data,
     };
     let mut out = Vec::new();
-    for (n, t) in view.turns.iter().enumerate() {
+    for (n, t) in view.turns.iter().enumerate().rev().take(1) {
         let range = turn_messages(view, n);
         // After the turn's last message, or after the message before it.
         let Some(last) = range.end.checked_sub(1) else {
@@ -926,15 +915,9 @@ fn summary_rows(
                     format!("diag:{}:{k}:scheduled", r.id),
                     row(
                         "retry_scheduled",
-                        serde_json::json!({"attempt": prev.n, "delay": next.delay.unwrap_or(0.0),
+                        serde_json::json!({"attempt": next.n, "max_attempts": attempts.len(), "delay": next.delay,
                                            "reason": prev.error}),
                     ),
-                ));
-                out.push((
-                    anchor.0,
-                    anchor.1,
-                    format!("diag:{}:{k}:started", r.id),
-                    row("retry_started", serde_json::json!({"attempt": next.n})),
                 ));
             }
             if r.status == "failed" && attempts.len() > 1 {
@@ -962,8 +945,113 @@ fn summary_rows(
                 row("session.error", err.clone()),
             ));
         }
+        if t.recovery.as_deref() == Some("done") {
+            out.push((
+                last,
+                false,
+                format!("diag:{}:recovery", t.id),
+                row("turn.recovered", serde_json::json!({"outcome": t.status})),
+            ));
+        }
     }
     out
+}
+
+pub fn session_outcome(view: &crate::reduce::SelectedView) -> Option<(String, &'static str)> {
+    let rows = summary_rows(view);
+    let scratch: Vec<_> = view
+        .scratch
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind.as_str(),
+                "session.error"
+                    | "retry_scheduled"
+                    | "retry_started"
+                    | "retry_exhausted"
+                    | "turn.recovered"
+            ) || (matches!(e.kind.as_str(), "permission.replied" | "question.replied")
+                && e.data["outcome"] == "cancelled"
+                && !is_manager_reply(e))
+        })
+        .collect();
+    let e = scratch
+        .last()
+        .copied()
+        .or_else(|| rows.last().map(|r| &r.3))?;
+    let count = if scratch.is_empty() {
+        rows.len()
+    } else {
+        scratch.len()
+    };
+    let d = &e.data;
+    let (text, tone) = match e.kind.as_str() {
+        "session.error" => {
+            let kind = d["kind"].as_str().unwrap_or("error");
+            let message = d["message"]
+                .as_str()
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("");
+            let text = if message.is_empty() {
+                kind.into()
+            } else if message.to_lowercase().contains(&kind.to_lowercase()) {
+                let mut chars = message.chars();
+                format!("{}{}", chars.next().unwrap().to_uppercase(), chars.as_str())
+            } else {
+                format!("{kind}: {message}")
+            };
+            (
+                text,
+                if kind == "interrupted" {
+                    "warning"
+                } else {
+                    "error"
+                },
+            )
+        }
+        "retry_exhausted" => ("provider retries exhausted".into(), "error"),
+        "retry_scheduled" => (
+            format!(
+                "provider retry {}/{}{}",
+                d["attempt"],
+                d["max_attempts"],
+                d["delay"]
+                    .as_f64()
+                    .map(|delay| format!(" in {}", fmt_duration(delay)))
+                    .unwrap_or_default()
+            ),
+            "warning",
+        ),
+        "retry_started" => (
+            format!("provider retry started (attempt {})", d["attempt"]),
+            "warning",
+        ),
+        "permission.replied" => ("approval cancelled: interrupted".into(), "warning"),
+        "question.replied" => ("question cancelled: interrupted".into(), "warning"),
+        "turn.recovered" => (
+            format!(
+                "turn {}: recovered after a daemon restart",
+                d["outcome"].as_str().unwrap_or("interrupted")
+            ),
+            "warning",
+        ),
+        _ => return None,
+    };
+    let detail = d["status"]
+        .as_i64()
+        .map(|s| format!("HTTP {s}"))
+        .or_else(|| d["reason"].as_str().map(str::to_owned))
+        .filter(|detail| !text.contains(detail))
+        .map(|detail| format!(" · {detail}"))
+        .unwrap_or_default();
+    let count = if count > 1 {
+        format!(" (+{})", count - 1)
+    } else {
+        String::new()
+    };
+    Some((format!("{text}{detail}{count}"), tone))
 }
 
 /// Where the row saying older turns have no details goes: before the first
@@ -1272,8 +1360,6 @@ impl Builder<'_> {
             /// Message index in `view.messages` and the message itself.
             Msg(usize, &'a crate::api::Message),
             Ev(&'a crate::api::Event),
-            /// A row stored turns' summaries describe (a retry, an error).
-            Summary(&'a str, &'a crate::api::Event),
             /// Messages above this point have no turn summary.
             Floor,
         }
@@ -1289,11 +1375,6 @@ impl Builder<'_> {
         let mut items: Vec<(i64, usize, usize, Item)> = Vec::new();
         for (i, m) in view.messages.iter().enumerate() {
             items.push((key_of(i), 2 * i + 1, 0, Item::Msg(i, m)));
-        }
-        let synthetic = summary_rows(view);
-        for (rank, (at, before, key, e)) in synthetic.iter().enumerate() {
-            let slot = if *before { 2 * at } else { 2 * at + 1 };
-            items.push((key_of(*at), slot, rank + 1, Item::Summary(key, e)));
         }
         if let Some(at) = floor_at(view) {
             items.push((key_of(at), 2 * at, 0, Item::Floor));
@@ -1542,21 +1623,8 @@ impl Builder<'_> {
                             false,
                         );
                     }
-                    if !folded {
+                    if !folded && is_diagnostic(e) {
                         self.diagnostic(&format!("diag:{}", e.id), e);
-                    }
-                }
-                Item::Summary(key, e) => {
-                    if turn_open && !folded {
-                        self.activity_group(
-                            &mut activity,
-                            &results,
-                            &traces,
-                            &waiting,
-                            busy,
-                            false,
-                        );
-                        self.diagnostic(key, e);
                     }
                 }
                 Item::Floor => {
@@ -2480,27 +2548,6 @@ impl Builder<'_> {
                 rows.push(bit);
                 used = w;
             }
-        }
-        if end == End::Error {
-            let msg = meta
-                .error
-                .as_ref()
-                .map(|(kind, message)| {
-                    let line = first_line(message);
-                    if line.is_empty() {
-                        kind.clone()
-                    } else {
-                        line
-                    }
-                })
-                .unwrap_or_default();
-            let text = format!("{} {msg}", self.t.status("error").0);
-            let text = truncate(&text, self.bw, self.ell());
-            let pad = self.bw.saturating_sub(width(&text));
-            self.line(vec![
-                Span::raw(" ".repeat(pad)),
-                Span::styled(text, self.status_style("status.error")),
-            ]);
         }
         let start = self.out.len();
         for mut spans in rows {
@@ -3554,6 +3601,11 @@ impl Builder<'_> {
         // it runs as.
         let agent = if child.as_ref().is_some_and(|c| c.fork.is_some()) {
             "fork".to_owned()
+        } else if let Some(label) = child
+            .as_ref()
+            .and_then(|c| c.extra["worker"]["label"].as_str())
+        {
+            label.to_owned() // a ZMX child is always labelled
         } else {
             agent
         };

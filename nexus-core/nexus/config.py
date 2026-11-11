@@ -25,6 +25,7 @@ from .paths import home
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"effort": "", "agent": "", "permission": "allow"},
     "agents": {"models": {}, "fallbacks": {}, "efforts": {}},
+    "zmx": {"claude_backend": "sdk", "antigravity": False},
     "tools": {"disabled": [], "permission": {}},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
@@ -40,6 +41,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 
 
 SCHEMA: dict[str, dict[str, Any]] = {
+    "zmx.claude_backend": {"type": "string", "enum": ["sdk", "zmx"],
+                           "description": "Claude subagents: Agent SDK (default) or the CLI's own ZMX loop and tools"},
+    "zmx.antigravity": {"type": "boolean", "description": "Enable Antigravity ZMX subagents; CLI permissions apply, not Nexus rules"},
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
     "ui.reduced_motion": {"type": "boolean"},
     "ui.favorite_models": {"type": "array", "items": {"type": "string"},
@@ -86,6 +90,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
 
 
 def _valid(section: str, key: str, value: Any) -> bool:
+    if section == "zmx":
+        return isinstance(value, bool) if key == "antigravity" else value in ("sdk", "zmx")
     if section == "usage":
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1440
     if section == "agents" and key == "efforts":
@@ -158,7 +164,7 @@ def _valid(section: str, key: str, value: Any) -> bool:
             if not isinstance(value, str) or "/" not in value or value != value.strip() or len(value) > 200:
                 return False
             try:
-                return bool(split_ref(value)[1].strip())
+                return bool(split_ref(value)[1].strip()) and split_ref(value)[0] not in ("claude-code", "agy")
             except ValueError:
                 return False
         if key in ("idle_episode_minutes", "max_episode_tokens", "proactive_interval_seconds"):

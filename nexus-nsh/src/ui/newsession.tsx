@@ -145,6 +145,21 @@ export function disabledOf(session: { disabled_tools?: unknown } | null | undefi
 }
 
 /** The sections of a frozen starting context (`GET …/snapshot`), as the timeline shows them. */
+/** A ZMX child's starting context: what Nexus knows about the CLI run, never a complete prompt (the CLI adds context Nexus cannot see). */
+export function zmxSections(w: { label: string; disclosure?: string; permission_mode?: string; directory?: string; model?: string; not_applied?: string[]; session_id?: string }): { sections: CtxSection[]; total: number } {
+  const facts = [w.model ? `model ${w.model}` : "", w.permission_mode ? `permission ${w.permission_mode}` : "", w.directory ? `cwd ${w.directory}` : ""].filter(Boolean).join(" · ");
+  const section = (key: string, title: string, meta: string, detail: string): CtxSection => ({ key, title, meta, body: { kind: "none" }, detail });
+  return {
+    total: 0,
+    sections: [
+      section("zmx", w.label, "context incomplete", w.disclosure ?? "The CLI adds context Nexus cannot see."),
+      section("zmx-run", "Run", facts || "not started", facts || "The CLI has not started yet."),
+      section("zmx-settings", "Settings", "CLI inherited", "The CLI's own settings, memory, MCP servers and plugins apply."),
+      section("zmx-not-applied", "Not applied", (w.not_applied ?? []).join(", "), "Nexus permission rules, disabled tools and step limits do not reach inside the CLI, which ran its own tools."),
+    ],
+  };
+}
+
 export function startingSections(s: any, off: string[], inventory?: { skills?: SkillEntry[]; mcp?: McpEntry[] }): { sections: CtxSection[]; total: number } {
   const sys = String(s.system_prompt ?? "");
   const file = s.instruction_file ?? {};

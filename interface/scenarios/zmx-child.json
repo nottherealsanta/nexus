@@ -1,0 +1,23 @@
+{
+  "session": {
+    "title": "ZMX child", "agent": "scout", "model": "agy/gemini-3.8-flash-high", "permission": "allow",
+    "worker": {
+      "label": "ZMX · Antigravity", "provider": "agy", "context_complete": false, "status": "completed", "usage": null,
+      "disclosure": "The CLI runs its own tools, permissions, settings, MCP servers and plugins. Nexus tool restrictions, permission rules and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.",
+      "not_applied": ["Nexus permission rules", "disabled tools", "step limits"],
+      "permission_mode": "auto", "directory": "/work/demo", "model": "agy/gemini-3.8-flash-high"
+    }
+  },
+  "starting": {"system_prompt": "NEXUS SYSTEM PROMPT MUST NOT APPEAR", "tools": ["read"], "tool_definitions": {"read": {"description": "TOOL MUST NOT APPEAR", "parameters": {}}}, "instruction_file": {"status": "missing"}},
+  "messages": [
+    {"id":"m1","seq":1,"created":1,"role":"user","parts":[{"type":"text","text":"Look around"}]},
+    {"id":"m2","seq":2,"created":2,"role":"assistant","parts":[{"type":"text","text":"All done."}]}
+  ],
+  "expect": ["ZMX · Antigravity", "context incomplete", "CLI inherited", "Not applied", "Nexus permission rules"],
+  "absent": ["NEXUS SYSTEM PROMPT MUST NOT APPEAR", "TOOL MUST NOT APPEAR", "System prompt"],
+  "models": [
+    {"ref": "codex/gpt-6", "name": "GPT 6"},
+    {"ref": "agy/gemini-3.8-flash-high", "name": "ZMX · gemini-3.8-flash-high", "zmx": true}
+  ],
+  "root_picker_absent": ["gemini-3.8-flash-high", "ZMX"]
+}

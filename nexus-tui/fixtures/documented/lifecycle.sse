@@ -4,7 +4,7 @@ data: {"id": 20, "seq": 20, "time": 1793113320.0, "type": "session.updated", "se
 
 id: log_c915bfc9b6d826c4:21
 event: session.archived
-data: {"id": 21, "seq": 21, "time": 1793113321.0, "type": "session.archived", "session_id": "ses_1a17de160eccc428a38", "data": {"root": "ses_1a17de160eccc428a38", "sessions": ["ses_1a17de160eccc428a38"], "archived": true}, "cursor": "log_c915bfc9b6d826c4:21"}
+data: {"id": 21, "seq": 21, "time": 1793113321.0, "type": "session.archived", "session_id": "ses_1a17de160eccc428a38", "data": {"root": "ses_1a17de160eccc428a38", "sessions": ["ses_1a17de160eccc428a38"], "archived": true, "revisions": {"ses_1a17de160eccc428a38": 3}}, "cursor": "log_c915bfc9b6d826c4:21"}
 
 id: log_c915bfc9b6d826c4:22
 event: session.deleted

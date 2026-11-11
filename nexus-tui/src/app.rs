@@ -170,7 +170,6 @@ pub const WIRED: &[&str] = &[
     "session.speak_stop",
     "session.handoff",
     "session.open_origin",
-    "session.open_continuation",
     "manager.talk",
     "manager.start",
     "manager.header",
@@ -853,6 +852,7 @@ pub struct Ui {
     /// The agent list a model chosen in the palette is added to: (agent, fallback).
     pub pool_pick: Option<(String, bool)>,
     pub overlay: Option<Overlay>,
+    pub btw: Option<crate::btw::Btw>,
     pub dialog: Option<Dialog>,
     pub dictation: crate::dictation::DictationUi,
     /// The Manager's indicator, caption and card (`manager.rs`).
@@ -1297,6 +1297,7 @@ impl App {
                 provider_detail_row: 0,
                 pool_pick: None,
                 overlay: None,
+                btw: None,
                 dialog: None,
                 dictation: crate::dictation::DictationUi::default(),
                 manager: crate::manager::ManagerUi::default(),
@@ -3108,7 +3109,6 @@ impl App {
             "session.archived" => self.viewed().is_some_and(|s| s.archived),
             "session.child" => self.viewed().is_some_and(|s| s.parent_id.is_some()),
             "session.continued" => self.viewed().is_some_and(|s| s.continued_from.is_some()),
-            "session.continued_on" => self.viewed().is_some_and(|s| s.continued_to.is_some()),
             "session.in_worktree" => false,
             "has_waiting" => {
                 !self.state.model.approvals.is_empty() || !self.state.model.questions.is_empty()
@@ -3557,6 +3557,13 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
+        if let Some(btw) = self.ui.btw.take() {
+            if btw.running {
+                if let Some(session) = btw.session {
+                    self.api(ApiCall::Interrupt { session });
+                }
+            }
+        }
         if let Some(Overlay {
             kind: OverlayKind::ContextEntries {
                 title, open, top, ..
@@ -4137,6 +4144,9 @@ impl App {
                 );
                 let favorites = self.favorite_models();
                 for (i, m) in self.state.models.iter().enumerate() {
+                    if m["zmx"].as_bool() == Some(true) {
+                        continue; // ZMX models are for subagent pools only
+                    }
                     let r = m["ref"].as_str().unwrap_or_default();
                     let label = m["name"]
                         .as_str()
@@ -6572,14 +6582,8 @@ impl App {
                 }
             }
             "session.btw" => self.toast(Level::Info, "Usage: /btw your question"),
-            "session.open_origin" | "session.open_continuation" => {
-                let target = self.viewed().and_then(|s| {
-                    if id == "session.open_origin" {
-                        s.continued_from.clone()
-                    } else {
-                        s.continued_to.clone()
-                    }
-                });
+            "session.open_origin" => {
+                let target = self.viewed().and_then(|s| s.continued_from.clone());
                 match target {
                     Some(t) if self.state.model.sessions.contains_key(&t) => self.open_session(&t),
                     Some(_) => self.toast(
@@ -7345,10 +7349,17 @@ impl App {
                     if c.id == "session.btw" && !arg.is_empty() {
                         if let Some(id) = self.viewed_id().map(str::to_owned) {
                             if self.writable() {
-                                self.toast(Level::Info, "Asking…");
+                                self.ui.btw =
+                                    Some(crate::btw::Btw::new(id.clone(), arg.to_owned()));
+                                self.open_overlay(OverlayKind::ContextDetail {
+                                    title: format!("Side question · {arg}"),
+                                    text: self.ui.btw.as_ref().unwrap().detail(),
+                                    top: 0,
+                                });
                                 self.api(ApiCall::Btw {
                                     session: id,
                                     question: arg.to_owned(),
+                                    request_id: self.ui.btw.as_ref().unwrap().request_id.clone(),
                                 });
                             } else {
                                 self.toast(Level::Warning, READ_ONLY);
@@ -7751,6 +7762,17 @@ impl App {
             return self.manager_reply(&tag, result);
         }
         if let SyncMsg::Event(event) = &msg {
+            if let Some(btw) = self.ui.btw.as_mut() {
+                if btw.event(event) {
+                    if let Some(Overlay {
+                        kind: OverlayKind::ContextDetail { text, .. },
+                        ..
+                    }) = self.ui.overlay.as_mut()
+                    {
+                        *text = btw.detail();
+                    }
+                }
+            }
             if event.session_id.is_some()
                 && !matches!(
                     event.kind.as_str(),
@@ -8537,20 +8559,54 @@ impl App {
             }
             return;
         }
-        if let ApiCall::Btw { question, .. } = &done.call {
+        if let ApiCall::BtwState { request_id, .. } = &done.call {
+            if let Some(btw) = self.ui.btw.as_mut().filter(|b| &b.request_id == request_id) {
+                match done.result {
+                    Ok(r) => {
+                        if let Some(state) = r.btw_state {
+                            btw.snapshot(&state);
+                        }
+                    }
+                    Err(_) => {
+                        btw.refreshing = false;
+                    }
+                }
+                if let Some(Overlay {
+                    kind: OverlayKind::ContextDetail { text, .. },
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    *text = btw.detail();
+                }
+            }
+            return;
+        }
+        if let ApiCall::Btw { request_id, .. } = &done.call {
             match done.result {
-                Ok(r) => self.open_overlay(OverlayKind::ContextDetail {
-                    title: format!(
-                        "Side question · {}",
-                        question.chars().take(40).collect::<String>()
-                    ),
-                    text: format!(
-                        "{}\n\nNot added to the session's context.",
-                        r.answer.unwrap_or_else(|| "(no answer)".into())
-                    ),
-                    top: 0,
-                }),
-                Err(error) => self.toast(Level::Error, format!("Side question failed: {error}")),
+                Ok(r) => {
+                    if let Some(btw) = self.ui.btw.as_mut().filter(|b| &b.request_id == request_id)
+                    {
+                        btw.session = r.answer;
+                        btw.inherited_context = r.btw_context.unwrap_or_default();
+                    } else if let Some(session) = r.answer {
+                        self.api(ApiCall::Interrupt { session });
+                    }
+                }
+                Err(error) => {
+                    if let Some(btw) = self.ui.btw.as_mut().filter(|b| &b.request_id == request_id)
+                    {
+                        btw.running = false;
+                        btw.synced = true;
+                        btw.answer = format!("Side question failed: {error}");
+                        if let Some(Overlay {
+                            kind: OverlayKind::ContextDetail { text, .. },
+                            ..
+                        }) = self.ui.overlay.as_mut()
+                        {
+                            *text = btw.detail();
+                        }
+                    }
+                }
             }
             return;
         }
@@ -9434,6 +9490,23 @@ impl App {
 
     pub fn tick(&mut self, now: Instant) -> bool {
         self.clock = now;
+        if let Some(btw) = self.ui.btw.as_mut().filter(|b| {
+            !b.synced
+                && !b.refreshing
+                && b.last_refresh.is_none_or(|at| {
+                    now.saturating_duration_since(at) >= std::time::Duration::from_secs(1)
+                })
+        }) {
+            if let Some(session) = btw.session.clone() {
+                btw.refreshing = true;
+                btw.last_refresh = Some(now);
+                let request_id = btw.request_id.clone();
+                self.api(ApiCall::BtwState {
+                    session,
+                    request_id,
+                });
+            }
+        }
         self.renew_file_watch(now);
         let mut changed = false;
         if self.terminal_panel.reconnect_at.is_some_and(|at| now >= at) {
@@ -10688,6 +10761,24 @@ impl App {
     }
 
     fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if matches!(name, "i" | "c") {
+            if let Some(btw) = self.ui.btw.as_mut() {
+                if name == "i" {
+                    btw.inherited_open = !btw.inherited_open;
+                } else {
+                    btw.context_open = !btw.context_open;
+                }
+                if let Some(Overlay {
+                    kind: OverlayKind::ContextDetail { text, top, .. },
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    *text = btw.detail();
+                    *top = 0;
+                }
+                return true;
+            }
+        }
         if matches!(
             self.ui.overlay.as_ref().map(|o| &o.kind),
             Some(OverlayKind::Inspector(_))
@@ -12496,6 +12587,8 @@ impl App {
                 | "appearance.show_archived"
                 | "mcp.full_definitions"
                 | "mcp.max_listed_tools"
+                | "zmx.claude_backend"
+                | "zmx.antigravity"
                 | "context.handoff_percent"
                 | "context.usage_refresh_minutes"
                 | "context.title_models"
@@ -12595,6 +12688,27 @@ impl App {
                         .and_then(|v| v["mcp"]["full_definitions"].as_bool())
                         .unwrap_or(false),
                 ),
+            ),
+            "zmx.claude_backend" => pair(
+                &["Agent SDK", "ZMX"],
+                if values.and_then(|v| v["zmx"]["claude_backend"].as_str()) == Some("zmx") {
+                    "ZMX"
+                } else {
+                    "Agent SDK"
+                }
+                .to_owned(),
+            ),
+            "zmx.antigravity" => pair(
+                &["off", "ZMX"],
+                if values
+                    .and_then(|v| v["zmx"]["antigravity"].as_bool())
+                    .unwrap_or(false)
+                {
+                    "ZMX"
+                } else {
+                    "off"
+                }
+                .to_owned(),
             ),
             "tools.default_permission" => pair(
                 &["allow", "ask"],
@@ -12700,6 +12814,11 @@ impl App {
             "tools.default_permission" => {
                 self.patch_config_value("defaults.permission", json!(chosen))
             }
+            "zmx.claude_backend" => self.patch_config_value(
+                "zmx.claude_backend",
+                json!(if chosen == "ZMX" { "zmx" } else { "sdk" }),
+            ),
+            "zmx.antigravity" => self.patch_config_value("zmx.antigravity", json!(chosen == "ZMX")),
             "manager.enabled" => self.patch_manager_value("manager.enabled", json!(chosen == "on")),
             "manager.mode" => self.patch_manager_value("manager.mode", json!(chosen)),
             "manager.proactive" => self.patch_manager_value("manager.proactive", json!(chosen)),
@@ -13108,6 +13227,8 @@ impl App {
             "agents.default_effort"
             | "agents.default_root"
             | "tools.default_permission"
+            | "zmx.claude_backend"
+            | "zmx.antigravity"
             | "appearance.sidebar"
             | "notifications.sound"
             | "notifications.terminal"
@@ -14948,6 +15069,7 @@ impl App {
             }
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,
+            Target::Command(id) => self.run_command(&id),
             Target::ComposerAgent => self.run_command("agent.change"),
             Target::ComposerModel => self.run_command("model.change"),
             Target::ComposerEffort => self.run_command("model.effort"),
@@ -15446,7 +15568,7 @@ impl ActionDone {
             ApiCall::Continue { .. } => "Continue failed",
             ApiCall::Speak { .. } => "Speak failed",
             ApiCall::Handoff { .. } => "Handoff failed",
-            ApiCall::Btw { .. } => "Side question failed",
+            ApiCall::Btw { .. } | ApiCall::BtwState { .. } => "Side question failed",
             ApiCall::ContextEntry { .. } => "Could not load the details",
             ApiCall::SpeakStop => "Stop failed",
             ApiCall::VoiceStatus { .. } => "Voice status failed",

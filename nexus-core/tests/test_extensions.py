@@ -82,6 +82,17 @@ def test_discovery_reads_metadata_without_running_the_file(tmp_path, monkeypatch
     assert "side" in found.tools and not marker.exists()
 
 
+def test_read_only_effect_metadata_is_explicit_and_frozen(tmp_path):
+    path = tmp_path / "custom.py"
+    path.write_text(hello())
+    assert extensions.parse(path, "project").record()["extension"]["read_only"] is False
+    path.write_text("READ_ONLY = True\n" + hello())
+    assert extensions.parse(path, "project").record()["extension"]["read_only"] is True
+    path.write_text('READ_ONLY = "yes"\n' + hello())
+    with pytest.raises(ValueError, match="READ_ONLY must be a boolean"):
+        extensions.parse(path, "project")
+
+
 def test_bad_files_are_problems_and_names_cannot_shadow_builtins(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     tools = tmp_path / "home" / "tools"

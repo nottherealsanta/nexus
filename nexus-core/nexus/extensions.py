@@ -82,10 +82,12 @@ class UserTool:
     scope: str  # "global" | "project"
     sha256: str
     timeout: float = DEFAULT_TIMEOUT
+    read_only: bool = False
 
     def record(self, *, source: bool = True) -> dict[str, Any]:
         """The snapshot form: the schema a request needs, and (with `source`) the frozen code."""
-        info: dict[str, Any] = {"path": self.path, "scope": self.scope, "sha256": self.sha256, "timeout": self.timeout}
+        info: dict[str, Any] = {"path": self.path, "scope": self.scope, "sha256": self.sha256,
+                                "timeout": self.timeout, "read_only": self.read_only}
         if source:
             info["source"] = self.source
         return {"name": self.name, "description": self.description, "parameters": self.parameters,
@@ -125,7 +127,7 @@ def parse(path: Path, scope: str) -> UserTool:
             key, value = node.target.id, node.value
         else:
             continue
-        if key in ("NAME", "DESCRIPTION", "PARAMETERS", "GUIDANCE", "TIMEOUT"):
+        if key in ("NAME", "DESCRIPTION", "PARAMETERS", "GUIDANCE", "TIMEOUT", "READ_ONLY"):
             try:
                 meta[key] = ast.literal_eval(value)
             except (ValueError, SyntaxError) as exc:
@@ -147,10 +149,13 @@ def parse(path: Path, scope: str) -> UserTool:
     timeout = meta.get("TIMEOUT", DEFAULT_TIMEOUT)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or not 0 < timeout <= MAX_TIMEOUT:
         raise ValueError(f"TIMEOUT must be a number of seconds up to {int(MAX_TIMEOUT)}")
+    read_only = meta.get("READ_ONLY", False)
+    if not isinstance(read_only, bool):
+        raise ValueError("READ_ONLY must be a boolean")  # noqa: TRY004 - a content error, reported like the others
     description = description.strip() + (f"\n{guidance.strip()}" if guidance.strip() else "")
     return UserTool(name=name, description=description, parameters=parameters,
                     source=source, path=str(path), scope=scope, sha256=hashlib.sha256(raw).hexdigest(),
-                    timeout=float(timeout))
+                    timeout=float(timeout), read_only=read_only)
 
 
 def discover(project_path: str | None, reserved: frozenset[str] | set[str] = frozenset()) -> ExtensionSet:

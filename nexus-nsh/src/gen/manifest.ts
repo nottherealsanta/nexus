@@ -21,7 +21,6 @@ export const manifest = {
    "session.child",
    "session.in_worktree",
    "session.continued",
-   "session.continued_on",
    "has_waiting",
    "waiting.approval",
    "waiting.question",
@@ -556,6 +555,37 @@ export const manifest = {
       "scope": "core",
       "clients": "both",
       "command": "search.start"
+     }
+    ]
+   },
+   {
+    "id": "zmx",
+    "label": "ZMX",
+    "note": "ZMX runs a vendor CLI as a subagent with its own loop, tools, permissions and sign-in. Off by default; it never runs root sessions or the Manager. Not verified: whether the vendors permit this use of a subscription.",
+    "row": [
+     {
+      "id": "zmx.claude_backend",
+      "label": "Claude Code subagents",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "options": [
+       "Agent SDK",
+       "ZMX"
+      ],
+      "note": "Use Agent SDK for an enterprise or full-price API account. Otherwise ZMX is usually better, but it does not use Nexus agents or tools. Core key [zmx] claude_backend."
+     },
+     {
+      "id": "zmx.antigravity",
+      "label": "Antigravity subagents",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "options": [
+       "off",
+       "ZMX"
+      ],
+      "note": "Antigravity has only ZMX: it does not use Nexus agents or tools, and its permissions are the CLI's own. Core key [zmx] antigravity."
      }
     ]
    },
@@ -1670,21 +1700,6 @@ export const manifest = {
    "note": "Session JSON `continued_from` (cleared when the original is deleted); the handoff card names it."
   },
   {
-   "id": "session.open_continuation",
-   "title": "Open the session continued from this one",
-   "category": "session",
-   "slash": "continuation",
-   "when": [
-    "session.continued_on"
-   ],
-   "unavailable_reason": "No handoff was made from this session.",
-   "placement": [
-    "palette",
-    "composer"
-   ],
-   "note": "Session JSON `continued_to`: the newest session whose handoff started from this one."
-  },
-  {
    "id": "session.change_directory",
    "title": "Change session directory",
    "category": "session",
@@ -1944,7 +1959,7 @@ export const manifest = {
     "palette",
     "composer"
    ],
-   "note": "`/btw question`: one request with the session's context up to its last completed tool call, no tools. POST /api/session/{id}/btw. The answer is an overlay; nothing enters the session's context."
+   "note": "`/btw question`: a hidden read-only fork of the settled context, even while busy. At most 10 tool calls, no fork, subagents or messaging. A live modal shows tools and the streamed answer; closing cancels it. Nothing enters the parent's context."
   },
   {
    "id": "session.jump_latest",

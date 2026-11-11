@@ -100,3 +100,35 @@ fn mermaid() {
         "the pie did not fall back to text rows"
     );
 }
+
+#[test]
+fn zmx_child_card_discloses_the_incomplete_context_and_hides_nexus_prompt() {
+    let (scenario, mut app) = open(include_str!("../../interface/scenarios/zmx-child.json"));
+    let session = app.state.model.sessions.get_mut(SESSION).unwrap();
+    for (key, value) in scenario["session"].as_object().unwrap() {
+        session.extra.insert(key.clone(), value.clone());
+    }
+    app.state.model.selected.as_mut().unwrap().starting = Some(scenario["starting"].clone());
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    for fact in strings(&scenario["expect"]) {
+        assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
+    }
+    for fact in strings(&scenario["absent"]) {
+        assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
+    }
+}
+
+#[test]
+fn zmx_models_never_reach_the_root_model_picker() {
+    use nexus_tui::ui::PaletteMode;
+    let (scenario, mut app) = open(include_str!("../../interface/scenarios/zmx-child.json"));
+    app.state.models = scenario["models"].as_array().unwrap().clone();
+    app.open_palette(PaletteMode::Models);
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    assert!(shown.contains("GPT 6"), "{shown}");
+    for fact in strings(&scenario["root_picker_absent"]) {
+        assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
+    }
+    app.open_palette(PaletteMode::PoolModels);
+    assert!(draw(&mut app, 160, 50).1.join("\n").contains("agy/gemini-3.8-flash-high"));
+}

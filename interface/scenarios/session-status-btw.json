@@ -1,0 +1,20 @@
+{
+  "messages": [
+    {"id":"u1","seq":1,"created":1,"role":"user","parts":[{"type":"text","text":"Check the session"}]}
+  ],
+  "turn": {"id":"trn_failed","status":"interrupted","started":1,"finished":2,"start_seq":0,"error":{"kind":"interrupted","message":"interrupted by the user"},"requests":[],"tools":[]},
+  "status_expect": ["Interrupted by the user", "/continue", "Inspect"],
+  "timeline_absent": ["Interrupted by the user", "interrupted by the user", "/continue"],
+  "events": [
+    {"id":10,"type":"message.added","data":{"id":"btw_marker","seq":1,"role":"user","parts":[{"type":"text","text":"[Nexus side question] Read-only. Question: Which port?"}]}},
+    {"id":11,"type":"btw.budget","data":{"calls":1}},
+    {"id":12,"type":"tool_start","data":{"call":{"id":"read1","name":"read","arguments":"{\"path\":\"README.md\"}"}}},
+    {"id":13,"type":"tool_end","data":{"call":{"id":"read1","name":"read"},"result":{"is_error":false}}},
+    {"id":14,"type":"message.added","data":{"id":"btw_tools","seq":2,"role":"assistant","parts":[{"type":"tool_call","id":"read1","name":"read","arguments":"{\"path\":\"README.md\"}"}]}},
+    {"id":15,"type":"message.added","data":{"id":"btw_result","seq":3,"role":"tool","parts":[{"type":"tool_result","call_id":"read1","name":"read","output":"Port 4747","is_error":false}]}},
+    {"id":null,"type":"text_delta","data":{"request_id":"req_btw","seq":1,"text":"It is **4747**."}},
+    {"id":16,"type":"message.added","data":{"id":"btw_answer","seq":4,"role":"assistant","parts":[{"type":"text","text":"It is **4747**."}]}},
+    {"id":17,"type":"session.status","data":{"status":"idle"}}
+  ],
+  "btw_expect": ["1/10 tool calls", "Finished", "4747", "Not added to the session's context."]
+}

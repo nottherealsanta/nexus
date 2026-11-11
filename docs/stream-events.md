@@ -287,7 +287,7 @@ directory.
 ## Archive events
 
 `session.archived` and `session.unarchived` mark a whole root tree's transition.
-Data: `{root, sessions: [ids], archived}`. The event is stored in the root
+Data: `{root, sessions: [ids], archived, revisions: {id: revision}}`. The transition bumps each session's revision and `revisions` carries the new values, so a client's next `If-Match` write is current. The event is stored in the root
 session's event log; `sessions` includes the root and every descendant. An
 unchanged repeat publishes nothing. Session JSON carries `archived` separately
 from `status` (`busy`/`idle`).

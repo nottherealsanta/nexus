@@ -133,6 +133,12 @@ def _tiers(entry: dict[str, Any]) -> tuple[int, ...]:
 
 
 def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
+    if provider_id == "claude-code":
+        from dataclasses import replace
+        return [replace(m, provider=provider_id, name="ZMX · " + m.name, input_cost=None, output_cost=None,
+                        cache_read_cost=None, image_input=False) for m in models_for(catalog, "claude")]
+    if provider_id == "agy":
+        return []  # dynamic CLI list, never invented aliases
     info = PROVIDERS[provider_id]
     if provider_id == "mock":
         from ..mock.scenarios import CATALOG
@@ -198,6 +204,10 @@ async def discover_ollama(base_url: str, *, client: httpx.AsyncClient | None = N
 
 async def list_models(data: dict[str, Any], provider_id: str) -> list[ModelInfo]:
     """`models_for`, plus the providers that list their models themselves."""
+    if provider_id == "agy":
+        from ..workers.registry import agy_models
+        return [ModelInfo("agy", mid, "ZMX · " + mid, None, None, True, (), None, None, None, None)
+                for mid in await agy_models()]
     if provider_id == "ollama":
         from .hub import sign_in
 

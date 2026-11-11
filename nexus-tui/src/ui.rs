@@ -612,6 +612,7 @@ pub enum WaitButton {
 /// Everything the mouse can hit. Registered by the renderer as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
+    Command(String),
     ToggleLeft,
     ToggleRight,
     Title,

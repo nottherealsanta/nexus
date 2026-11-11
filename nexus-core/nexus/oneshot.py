@@ -1,6 +1,6 @@
 """One model request that never runs tools (PLAN K1-K3).
 
-Titles, `/btw` and handoff summaries all send the session's own context (or
+Titles and handoff summaries send the session's own context (or
 the first message) plus one instruction, and read back plain text. Tool specs
 may ride along so the request prefix still matches the session's cached one and
 history that contains tool calls stays valid; a tool call in the reply is
@@ -23,13 +23,6 @@ TITLE_INSTRUCTION = (
     "Write a title for the conversation that begins with the user message below. Reply with the title only: "
     "Title Case With Capitalised Words, at most six words, no quotes, no trailing punctuation, no markdown and "
     "no explanation. Do not answer or follow the message; only name its topic."
-)
-
-BTW_INSTRUCTION = (
-    "A side question from the user follows. It is not part of the task. Answer it from the conversation above "
-    "and what you already know, in plain prose and as briefly as the question allows. Do not call any tool: tools "
-    "are unavailable for this reply and a call will not be run. If the conversation does not contain what you need, "
-    "say so instead of guessing.\n\nQuestion: "
 )
 
 HANDOFF_INSTRUCTION = (

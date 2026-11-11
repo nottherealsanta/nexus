@@ -14,7 +14,8 @@ from .providers import PROVIDERS, make
 
 
 def connected() -> list[str]:
-    return [pid for pid in PROVIDERS if pid == "mock" or SIGN_INS[pid]().logged_in()]
+    from ..workers.registry import connected_ids
+    return [pid for pid in PROVIDERS if pid == "mock" or SIGN_INS[pid]().logged_in()] + connected_ids()
 
 
 def split_ref(ref: str) -> tuple[str, str]:
@@ -22,7 +23,7 @@ def split_ref(ref: str) -> tuple[str, str]:
     provider, sep, model = ref.partition("/")
     if not sep:
         return "codex", ref
-    if provider not in PROVIDERS:
+    if provider not in PROVIDERS and provider not in ("claude-code", "agy"):
         raise ValueError(f"unknown provider {provider!r}; known: {', '.join(PROVIDERS)}")
     return provider, model
 
@@ -40,4 +41,7 @@ def sign_in(provider_id: str):
 
 def provider_for(ref: str) -> tuple[Provider, str]:
     provider_id, model = split_ref(ref)
+    if provider_id in ("claude-code", "agy"):
+        from ..workers.registry import ExternalProvider
+        return ExternalProvider(provider_id), model
     return make(provider_id, sign_in(provider_id) if provider_id != "mock" else None, model), model  # type: ignore[arg-type]

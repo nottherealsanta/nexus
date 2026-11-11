@@ -214,6 +214,9 @@ class Agent:
         render: Callable[[Message], Message] | None = None,
         fallback_models: list[tuple[str, Provider, str]] | None = None,
         model_ref: str = "",
+        max_tool_calls: int | None = None,
+        max_tool_seconds: float | None = None,
+        publish_hook: Callable[[HookFired], None] | None = None,
     ) -> None:
         self.hooks = hooks
         self.render: Callable[[Message], Message] | None = render  # fills tool images' bytes for the provider
@@ -243,13 +246,20 @@ class Agent:
         self._retry_clock = retry_clock
         self._retry_sleep = retry_sleep
         self._retry_random = retry_random
+        self.max_tool_calls = max_tool_calls
+        self.max_tool_seconds = max_tool_seconds
+        self.publish_hook = publish_hook
+        self._tool_calls = 0
+        self._tool_deadline: float | None = None
+        self._budget_notified = False
+        self._nested_events: list[HookFired] = []
 
     def request(self) -> Request:
         return Request(
             model=self.model,
             instructions=self.instructions,
             messages=tuple(self.render(m) for m in self.messages) if self.render else tuple(self.messages),
-            tools=tuple(tool.spec for tool in self.tools.values()),
+            tools=() if self._budget_error() else tuple(tool.spec for tool in self.tools.values()),
             reasoning_effort=self.reasoning_effort,
             conversation_id=self.conversation_id,
         )
@@ -278,6 +288,9 @@ class Agent:
         return notes
 
     async def turn(self, user_text: TurnInput) -> AsyncIterator[LoopEvent]:
+        self._tool_calls = 0
+        self._tool_deadline = time.monotonic() + self.max_tool_seconds if self.max_tool_seconds is not None else None
+        self._budget_notified = False
         if not self.messages:
             _, fired = await self._fire("SessionStart")
             for event in fired:
@@ -300,6 +313,8 @@ class Agent:
             if self.refresh is not None:
                 self.refresh(self)
             notices = [*(self.inbox() if self.inbox is not None else []), *self._flush_notes()]
+            if self._budget_error() and not self._budget_notified:
+                notices.append(self._budget_notice())
             if final:
                 notices.append(STEP_LIMIT_NOTICE)
             elif step == max(2, (self.max_steps * 4 + 4) // 5):
@@ -358,26 +373,14 @@ class Agent:
                     results.append(result)
                     yield ToolEnd(call, result)
                     continue
-                result = None
-                if args is not None and call.name in self.tools:
-                    outcomes, fired = await self._fire("PreToolUse", tool=call.name, args=args, call_id=call.id)
-                    for event in fired:
+                async for event in self.execute_tool(call, args):
+                    if isinstance(event, ToolResult):
+                        result = event
+                    else:
                         yield event
-                    for o in outcomes:
-                        if o.decision == "block":
-                            result = ToolResult(call.id, f"blocked by hook {o.hook}: {o.message or 'no reason given'}", is_error=True)
-                        elif o.decision == "modify" and o.tool_input is not None:
-                            args = o.tool_input
-                            self._hook_notes.append(
-                                f"[hook {o.hook}] changed the input of the {call.name} call {call.id} to "
-                                f"{json.dumps(args, ensure_ascii=False)}")
-                if result is None:
-                    result = await self._run(call, args)
-                if args is not None and call.name in self.tools:
-                    _, fired = await self._fire("PostToolUse", tool=call.name, args=args, call_id=call.id,
-                                                tool_result=result.output, is_error=result.is_error)
-                    for event in fired:
-                        yield event
+                for event in self._nested_events:
+                    yield event
+                self._nested_events.clear()
                 results.append(result)
                 yield ToolEnd(call, result)
             yield self._add(Message("tool", tuple(results)))
@@ -428,7 +431,95 @@ class Agent:
                     raise
                 yield RetryStarted(next_attempt, attempt_id)
 
-    async def _run(self, call: ToolCall, args: dict[str, Any] | None) -> ToolResult:
+    def _budget_error(self) -> str | None:
+        if self.max_tool_calls is not None and self._tool_calls >= self.max_tool_calls:
+            return f"the {self.max_tool_calls}-call tool budget is exhausted"
+        if self._tool_deadline is not None and time.monotonic() >= self._tool_deadline:
+            return "the tool time budget is exhausted"
+        return None
+
+    def _budget_notice(self) -> str:
+        self._budget_notified = True
+        return (f"[Nexus notice: tool budget] {self._budget_error()}. Tools are disabled for this turn. "
+                "Reply with an honest partial report: what you checked, what you found, and what remains unverified.")
+
+    async def execute_tool(self, call: ToolCall, args: dict[str, Any] | None,
+                           ctx: ToolContext | None = None) -> AsyncIterator[HookFired | ToolResult]:
+        error = self._budget_error()
+        if error:
+            yield ToolResult(call.id, f"refused: {error}; answer now without tools", is_error=True)
+            return
+        self._tool_calls += 1
+        async for event in self._execute_tool(call, args, ctx):
+            yield event
+
+    def _remaining_tool_seconds(self) -> float | None:
+        return max(0, self._tool_deadline - time.monotonic()) if self._tool_deadline is not None else None
+
+    async def _execute_tool(self, call: ToolCall, args: dict[str, Any] | None,
+                            ctx: ToolContext | None) -> AsyncIterator[HookFired | ToolResult]:
+        result = None
+        if args is not None and call.name in self.tools:
+            try:
+                async with asyncio.timeout(self._remaining_tool_seconds()):
+                    outcomes, fired = await self._fire("PreToolUse", tool=call.name, args=args, call_id=call.id)
+            except TimeoutError:
+                yield ToolResult(call.id, "the tool time budget expired before execution; this tool did not run", is_error=True)
+                return
+            for event in fired:
+                yield event
+            for outcome in outcomes:
+                if outcome.decision == "block":
+                    result = ToolResult(call.id, f"blocked by hook {outcome.hook}: {outcome.message or 'no reason given'}", is_error=True)
+                elif outcome.decision == "modify" and outcome.tool_input is not None:
+                    args = outcome.tool_input
+                    self._hook_notes.append(
+                        f"[hook {outcome.hook}] changed the input of the {call.name} call {call.id} to "
+                        f"{json.dumps(args, ensure_ascii=False)}")
+        if result is None:
+            try:
+                async with asyncio.timeout(self._remaining_tool_seconds()):
+                    result = await self._run(call, args, ctx)
+            except TimeoutError:
+                result = ToolResult(call.id, "the tool time budget expired; execution was cancelled but effects may already exist; "
+                                    "do not blindly retry; report partial findings", is_error=True)
+        yield result
+        if args is not None and call.name in self.tools:
+            try:
+                async with asyncio.timeout(self._remaining_tool_seconds()):
+                    _, fired = await self._fire("PostToolUse", tool=call.name, args=args, call_id=call.id,
+                                                tool_result=result.output, is_error=result.is_error)
+                for event in fired:
+                    yield event
+            except TimeoutError:
+                self._hook_notes.append(f"[Nexus notice: post-tool hook] The time budget expired after `{call.name}` "
+                                        f"({call.id}); its completed result is preserved. Post-processing is incomplete.")
+
+    async def run_nested_tool(self, call: ToolCall, args: dict[str, Any], ctx: ToolContext) -> str:
+        result = None
+        try:
+            async for event in self.execute_tool(call, args, ctx):
+                if isinstance(event, HookFired):
+                    if self.publish_hook is not None:
+                        self.publish_hook(event)
+                    else:
+                        self._nested_events.append(event)
+                else:
+                    result = event
+        except asyncio.CancelledError:
+            if result is None:
+                raise
+            # A cancelled post-hook cannot turn a completed external effect into an unknown result.
+            self._hook_notes.append(f"[Nexus notice: post-tool hook] Post-processing of {call.id} was interrupted; "
+                                    "its completed nested result is preserved.")
+        if result is None:
+            raise ToolError("nested tool returned no result")
+        if result.is_error:
+            raise ToolError(result.output)
+        return result.output
+
+    async def _run(self, call: ToolCall, args: dict[str, Any] | None,
+                   ctx: ToolContext | None = None) -> ToolResult:
         tool = self.tools.get(call.name)
         if tool is None:
             return ToolResult(call.id, f"unknown tool {call.name!r}", is_error=True)
@@ -441,9 +532,9 @@ class Agent:
             except ToolError as exc:  # refused by a permission rule
                 return ToolResult(call.id, str(exc), is_error=True)
         try:
-            output = await tool.run(args, ToolContext(
+            output = await tool.run(args, ctx or ToolContext(
                 self.workspace, call.id, file_lock=self.file_lock, cwd_changed=self.cwd_changed,
-                save_media=self.save_media))
+                save_media=self.save_media, execute=self.run_nested_tool))
             return ToolResult(call.id, str(output), media=getattr(output, "media", ()))
         except ToolError as exc:
             return ToolResult(call.id, str(exc), is_error=True)

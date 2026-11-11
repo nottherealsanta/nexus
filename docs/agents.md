@@ -202,9 +202,16 @@ then provider requests (`turn_request`), input/cached/output tokens and elapsed
 time (`turn` and `turn_request`). Count outer code calls separately from nested
 `code.call` events; more code calls alone is not success. Review
 whether printed evidence supports the answer. Account for human
-waits, tool failures and retries when comparing time. No before/after provider
-benchmark has been run yet. Direct tool batches execute sequentially; nested
-calls can run concurrently using `asyncio.gather`.
+waits, tool failures and retries when comparing time. Direct tool batches execute
+sequentially; nested calls can run concurrently using `asyncio.gather`.
+
+The 2026-11-10 audit scanned 482 previous sessions across all projects and 37,864
+top-level tool executions. An approved scratch-home Copilot GPT-6 Luna smoke compared
+direct/code/fork approaches on the same two-file fixture at low effort. All returned
+42; direct used 3 requests, code 2, and fork 7 including its child. The code run also
+verified a nested hook block, and the fork run verified unchanged parent variables.
+This is a small workflow smoke, not a general speed benchmark or a before/after
+model comparison. Details and offline checkpoint overhead: [harness report](../reports/harness-audit-2026-11-10.md).
 
 ## Commands
 
@@ -258,6 +265,22 @@ existing parent keeps its catalog. If an existing parent names a child agent
 that has since been deleted (or is no longer allowed as a child), the call
 fails with a clear error and never substitutes another agent.
 
+### `/btw`: a user-started read-only fork
+
+`/btw <question>` uses the fork prefix machinery without launching a reporting subagent. It is a hidden
+`kind: "btw"` session, with the original session in `fork.parent_id` but no relational parent, no parent tool
+call and no report delivery. The parent's messages and timeline are untouched. It copies the frozen system prompt,
+tool definitions, settled history, model, effort and effective cache key, including when the parent is busy.
+Its own marker asks for a brief answer after at most 10 tool calls. The daemon counts outer and nested calls,
+refuses the 11th, blocks every write/control/subagent/messaging call and unannotated or mutating MCP tool, restricts
+shell execution to exact foreground read commands, and disables ordinary command hooks. Tool schemas remain for
+prefix equality; they are not permission to execute. User extension tools are refused because they have no read-only
+contract. The normal fork's 20-model-step ceiling is an additional bound, not a replacement for the 10-call cap.
+
+Both clients expose the side run's inherited prefix and full ordered context through folds in its live modal;
+closing cancels it. Mobile gets the same modal. See [the API contract](api.md#handoff-titles-and-btw), including
+reconnect checkpoints and the conservative shell allowlist. Real-provider cache reuse on this path remains unverified.
+
 ### `fork`
 
 `fork {prompt, wait?, title?}` is its own control tool, granted by an agent
@@ -270,7 +293,8 @@ description says so (`runtime.Runtime._fork_definition`): use it for side checks
 and lookups that would clutter the caller's context; the fork is read-only and
 gets at most `FORK_MAX_STEPS` (20) steps; it cannot launch subagents or forks;
 edits stay with the caller; long or exploratory work, or an independent opinion
-(a fork inherits the caller's assumptions), goes to a named agent with `session`.
+(a fork inherits the caller's assumptions), goes to a named agent with `session`
+when available. Otherwise the caller works directly or explains the limitation.
 `session` called with `agent: "fork"` is refused with a pointer to the tool. A
 fork is a child whose request repeats the parent's prefix, so its first request
 can be a prompt-cache hit:
@@ -289,23 +313,28 @@ can be a prompt-cache hit:
   with the fixed marker `runtime.FORK_MARKER` (only the parent id varies, so
   forks from one point share the prefix up to their task). The `fork` tool
   description, which the fork has too, already says what a fork is, so the
-  marker only says that this session is one and that it is read-only:
-  `[Nexus fork] You are in a forked session of ‹id›. It is read-only: `edit`,
-  `write`, `patch`, MCP tools that may change state, and workspace changes are
-  refused, and you may run only shell commands that change no files. Do only the
-  task below, in at most 20 steps, then reply with your report.` followed by a
-  blank line and `Task: ‹prompt›`.
-- **Read-only:** the approval gate refuses a fork's `edit`, `write`, `patch`
-  and workspace control calls (`runtime.FORK_REFUSED`), inside `code` cells too,
+  marker identifies the fork, its read-only scope, private kernel and budgets,
+  followed by a blank line and `Task: ‹prompt›`. Cache reuse is opportunistic,
+  not guaranteed or free.
+- **Read-only:** the approval gate refuses a fork's `edit`, `write`, `patch`,
+  `bash_kill` and workspace control calls (`runtime.FORK_REFUSED`), inside `code` cells too,
   and every `mcp_call` whose target is not marked `readOnlyHint` ("refused: a
   fork is read-only …", with advice to report the change so the parent makes
   it). The definitions stay for the cache. `bash` stays available for reading
   commands and tests; like the permission rules this is a guard against
   mistakes, not a sandbox, and the marker asks for shell commands that change
-  no files. `code` cells have no filesystem.
+  no files. Starting background jobs is refused. User extension tools require an
+  explicit frozen `READ_ONLY = True` declaration. `code` cells have no filesystem.
+- **Private computation:** each session has its own default kernel. A fork cannot
+  borrow any other session's kernel, so its variables and cancellation cannot
+  overwrite or discard the parent's state. Named agents may share by explicit id.
 - **Step budget:** each fork turn runs at most `FORK_MAX_STEPS` (20) steps (or
   the agent's own `steps` when lower), with the loop's usual 80% notice and
-  final text-only step.
+  final text-only step. Ordinary forks also get **40 total tool attempts**
+  (including outer code calls and nested calls) and **180 seconds** per turn
+  before tools are disabled. An active tool is cancelled on expiry; the next
+  request asks for an honest partial report without tools. `/btw` retains its
+  separate 10-call cap. These are tool budgets, not a deadline for the final reply.
 - **No subagents at all:** the fork cannot launch any, and the daemon refuses its `session` and `fork` calls ("refused: a fork cannot
   launch subagents or forks …") and its `message_session` calls ("refused: a
   fork cannot message other sessions …"), with advice to do the task itself

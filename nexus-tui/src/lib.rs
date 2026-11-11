@@ -13,6 +13,7 @@ pub mod annotate;
 pub mod api;
 pub mod app;
 mod audio_output;
+pub mod btw;
 pub mod code_editor;
 pub mod completion;
 pub mod composer;

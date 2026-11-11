@@ -53,7 +53,7 @@ Durations come from event `time`; Core sends no duration fields.
 | L8 | Row: relative time of last activity | API ready | `Session.updated` (bumped on every saved message) | |
 | L9 | Row: number of child sessions; children not listed as rows | API ready | `Session.children`, `parent_id` (filter `parent_id == null` for rows) | |
 | L10 | Handoff chain ("continued from") | Core work | 12a Compaction as handoff | No `continued_from` field exists |
-| L11 | One-turn sessions hidden from the list | Dropped | K2/K3 | Titles and `/btw` are `oneshot` events on the session, not sessions, so nothing needs hiding |
+| L11 | Side runs hidden from the list | Built | `Session.kind`, `POST …/btw` | Titles remain `oneshot` events; btw runs are hidden `kind: btw` forks, excluded from default snapshots/lists and client creation/update rows |
 | L12 | Archived filter ("Archived" view) | API ready | `GET /api/session?archived=only\|include` | |
 | L13 | Search over titles and user messages (indexed) | Core work | 12a Archive, search (FTS5) | No search endpoint |
 | L14 | Row action: open | Client only | | |
@@ -131,7 +131,7 @@ Durations come from event `time`; Core sends no duration fields.
 | R10 | Child sessions: count, running, failed | API ready | `GET …/children`, `GET …/tree`, child `status` | "Failed" derives from child `session.error`/result |
 | R11 | Enabled and disabled tools | API ready | `Session.tools`, `Session.disabled_tools` | |
 | R12 | Kernels this tree uses | API ready | `GET /api/kernel` (creator, users) | Match by session/tree |
-| R13 | btw list in session info | Deferred | `oneshot` events (kind `btw`) | Answers are not stored as context; the list is only in the event log |
+| R13 | btw list in session info | Deferred | hidden `kind: btw` sessions; `fork.parent_id` links the source | A live modal is built; past-answer navigation remains deferred. Historical one-shot btw events stay readable |
 | R14 | Changes, Jobs, Logs, cross-session Cost | Deferred | INTERFACE_PLAN "Not in the right sidebar for now" | Background bash jobs are available (`GET /api/bash`) when revisited |
 
 ### Git status
@@ -303,7 +303,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | O2 | Link continuation to the interrupted attempt; label unknown outcomes | API ready | `continuation.predecessor`, `reconciled`; `[Nexus recovery: …]` notice | |
 | O3 | Do not repeat an ambiguous POST | API ready | api.md | Use an `Idempotency-Key`; inspect before retrying without one |
 | O4 | One-turn: title | API ready | see L21 | |
-| O5 | `/btw` overlay and list | API ready | `POST /api/session/{id}/btw` | The overlay is built in both clients; the list is R13 |
+| O5 | `/btw` modal and list | Built / list deferred | `POST /api/session/{id}/btw`, child SSE and `GET …/btw` checkpoints | Both clients and mobile: immediate live read-only fork modal, folded inherited/full context, streamed Markdown, at most 10 outer/nested calls, no forks/subagents/messaging; close cancels only the side run. Parent context unchanged; the list is R13 |
 | O6 | Handoff at threshold (default 80%) or on request | Core work | 12a Compaction as handoff | No context limit exists (Known gaps) |
 | O7 | New root session starts from the summary; "continued from" item; chain in sidebar | Core work | 12a Compaction as handoff | |
 | O8 | Directory change: old/new paths and branch, `AGENTS.md` loaded as forward context, Files/git/header update, group move | API ready | `POST …/directory`; E: `session.directory_changed` (`from`, `to`, `branch`, `instructions`); `Session.directory` | Files/git refresh depends on F1/G1 |
@@ -428,7 +428,7 @@ increment. The client must show the reason and must not fake the state.
 | Git status and diffs (G1, G2, F3) | Status and diff endpoints exist; diff UI and changed-file navigation remain | A7 / 12.4 |
 | Sign in on first run, manage providers, set defaults (Y4, ST3-ST5, ST9, ST12, ST13, Q8) | Sign-in only local; defaults read-only | 12a Settings over the API |
 | Context window management (A5, O6, O7, L10, T15, ST16) | No handoff, no context limit | 12a Compaction as handoff |
-| Meaningful titles, `/btw` (L21, O4, O5, R13, L11) | No one-turn sessions | 12a One-turn sessions |
+| Meaningful titles, `/btw` (L21, O4, O5, R13, L11) | Built; past btw list remains deferred | Titles are one-shots; btw is a hidden read-only fork (PLAN 23) |
 | Search (L13, Q4) | No index | 12a Archive, search |
 | Attach files and images (K10, U2, U4) | No attachments | 12a Attachments and images |
 | "Show all" for clipped tool output (X19) | Full output not retained | 12a artifacts |

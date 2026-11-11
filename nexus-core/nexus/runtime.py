@@ -132,13 +132,32 @@ TITLE_CHARS = 60
 # share their request prefix up to the task itself. The `fork` tool description, which the fork also has, says what a
 # fork is; the marker only says that this session is one, and that it is read-only.
 FORK_MAX_STEPS = 20  # a fork is a minor task: each turn of it gets at most this many steps
+FORK_MAX_CALLS = 40
+FORK_MAX_SECONDS = 180
+BTW_MAX_CALLS = 10
+BTW_BASH = {
+    "pwd": "pwd",
+    "git status": "git -c core.fsmonitor=false --no-optional-locks status",
+    "git status --short": "git -c core.fsmonitor=false --no-optional-locks status --short",
+    "git diff": "git -c core.fsmonitor=false --no-optional-locks diff --no-ext-diff --no-textconv",
+    "git diff --stat": "git -c core.fsmonitor=false --no-optional-locks diff --no-ext-diff --no-textconv --stat",
+    "git log -5 --oneline": "git --no-optional-locks log -5 --oneline",
+}
+BTW_MARKER = (
+    "[Nexus side question] You are answering a side question about the inherited session. "
+    "This is read-only. You may make at most 10 tool calls, including nested code calls. "
+    "Do not fork, launch subagents, message sessions or change files or state. "
+    "After the budget is used, answer briefly with what you know. Nothing returns to the parent.\n\nQuestion: "
+)
 FORK_MARKER = (
     "[Nexus fork] You are in a forked session of {parent}. It is read-only: `edit`, `write`, `patch`, MCP tools "
     "that may change state, and workspace changes are refused, and you may run only shell commands that change "
-    f"no files. Do only the task below, in at most {FORK_MAX_STEPS} steps, then reply with your report.\n\nTask: "
+    f"no files. Your Python kernel is private; do not borrow other kernels. Do only the task below, in at most "
+    f"{FORK_MAX_STEPS} steps, {FORK_MAX_CALLS} total tool calls (including nested calls), and {FORK_MAX_SECONDS} seconds "
+    "before tools are disabled. Then report your findings and anything unverified.\n\nTask: "
 )
 # Refused inside a fork, whatever the parent may do: the fork is read-only, and the definitions stay for the cache.
-FORK_REFUSED = frozenset({"edit", "write", "patch", *workspace_control.CONTROL_NAMES})
+FORK_REFUSED = frozenset({"edit", "write", "patch", "bash_kill", *workspace_control.CONTROL_NAMES})
 FORK_MIN_FREE = 0.10  # a fork needs this share of the model's context window left for its task
 TITLE_TIMEOUT_S = 20
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
@@ -451,7 +470,7 @@ class Runtime:
         view) and `project.deleted` with `removed: true`.
         """
         self.project(project_id)
-        sessions = self.store.sessions(project_id, kind="user")
+        sessions = self.store.sessions(project_id, kind=None)
         ids = {s.id for s in sessions}
         busy = set(self.turns) | {sid for sid, _, _ in self.approvals.values()}
         busy |= {r.session_id for r in self.questions.values()}
@@ -470,7 +489,7 @@ class Runtime:
         return detached
 
     async def delete_project(self, project_id: str) -> None:
-        sessions = self.store.sessions(project_id)
+        sessions = self.store.sessions(project_id, kind=None)
         if any(self.inputs.list(session.id) for session in sessions):
             raise Conflict("project has pending inputs; remove them before deleting it")
         closing_ids = {session.id for session in sessions}
@@ -483,7 +502,7 @@ class Runtime:
             for sid in ids:
                 self.pending_directories.pop(sid, None)
             await self.jobs.cancel_for(ids)
-            sessions = self.store.sessions(project_id)  # anything created while awaiting is deleted too
+            sessions = self.store.sessions(project_id, kind=None)  # anything created while awaiting is deleted too
             if any(self.inputs.list(session.id) for session in sessions):
                 raise Conflict("project has pending inputs; remove them before deleting it")
             if not self.store.delete_project(project_id):
@@ -497,6 +516,29 @@ class Runtime:
             self.closing_sessions.difference_update(closing_ids)
 
     # -- sessions ------------------------------------------------------------
+
+    def _worker_ref(self, session: Session) -> str | None:
+        if session.kind == "manager":
+            return None
+        ref = self.resolve_model(session, self.snapshot_for(session)["agent"])[0]
+        return ref if ref.partition("/")[0] in ("claude-code", "agy") else None
+
+    @staticmethod
+    def _guard_worker_model(ref: str, *, child: bool) -> None:
+        if ref.partition("/")[0] not in ("claude-code", "agy"):
+            return
+        if not child:
+            raise ValueError("ZMX models are subagent-only; root sessions and the Manager keep the normal provider backend")
+        from .workers.registry import require
+        require(ref.partition("/")[0])
+
+    def _save_worker(self, session_id: str, worker: dict[str, Any]) -> None:
+        session = self.session(session_id)
+        snapshot = self.snapshot_for(session)
+        snapshot["worker"] = worker
+        self.store.set_snapshot(session_id, snapshot)
+        self.bus.publish("session.worker", worker, session_id=session_id)
+        self.bus.publish("session.updated", self.session_json(session), session_id=session_id)
 
     def session_json(self, s: Session) -> dict[str, Any]:
         """`model`/`effort` are what the next turn uses; `*_source` says where they came from."""
@@ -523,10 +565,15 @@ class Runtime:
             model, model_source = s.model, "session" if s.model else "none"
             effort, effort_source = s.effort, "session" if s.effort else "provider"
         pending = self.pending_directories.get(s.id)
+        worker = (snapshot.get("worker") if snapshot_info and "snapshot" in locals() else None)
+        if worker:
+            tools, skills, servers = [], [], []
         return {
             "id": s.id, "project_id": s.project_id, "directory": s.directory, "title": s.title, "agent": s.agent,
+            "kind": s.kind,
             "parent_id": s.parent_id, "parent_call_id": s.parent_call_id, "launched_by": s.launched_by,
             "fork": s.fork_info(),
+            "worker": worker,
             "children": [c.id for c in self.store.children(s.id)],
             "model": model, "model_source": model_source, "effort": effort, "effort_source": effort_source,
             "tools": tools, "disabled_tools": sorted(s.disabled()), "snapshot": snapshot_info,
@@ -541,7 +588,7 @@ class Runtime:
             "continued_to": self.store.continuation_of(s.id),
             "created": s.created, "updated": s.updated,
             # A child's spend, for its card in the parent; no ledger query for root sessions.
-            **({"tokens": self._spent_tokens(s.id)} if s.parent_id else {}),
+            **({"tokens": None if worker and worker.get("usage") is None else self._spent_tokens(s.id)} if s.parent_id else {}),
         }
 
     def _session_busy(self, session: Session) -> bool:
@@ -646,6 +693,7 @@ class Runtime:
 
     def remember_model(self, project_id: str, agent: str, ref: str) -> None:
         """Record an explicit selection: the last model anywhere and the last for this agent in this project."""
+        self._guard_worker_model(ref, child=False)
         provider_for(ref)  # validates the provider name
         self.store.set_preference(self.LAST_MODEL, ref)
         self.store.set_preference(self._agent_model_key(project_id, agent), ref)
@@ -804,12 +852,14 @@ class Runtime:
             "description": (
                 "Fork yourself for a minor task: a copy of you with your full context so far answers one question or does "
                 "one small read-only job, then reports back, like a tool call that can take a few steps. It reuses "
-                "your prompt cache, so it needs no briefing beyond the task and costs little. Use it for side checks "
+                "your prompt cache when available, so brief only the task; cached input still costs tokens. Use it for side checks "
                 "and lookups that would clutter your own context. A fork is read-only (no file edits or workspace "
                 "changes) and gets at most "
-                f"{FORK_MAX_STEPS} steps; it cannot launch subagents or forks. Do edits yourself; for long or "
-                "exploratory work, or an independent opinion (a fork inherits your assumptions), use `session` with "
-                "a named agent. wait=true (default) returns its report; "
+                f"{FORK_MAX_STEPS} steps, {FORK_MAX_CALLS} total tool calls and {FORK_MAX_SECONDS} seconds per turn. "
+                "Its kernel is private; it cannot launch subagents or forks. Do edits yourself. For long or "
+                "exploratory work, or a separately briefed opinion (a fork inherits your assumptions), use `session` "
+                "with a named agent if available; otherwise continue directly or explain the limitation. "
+                "wait=true (default) returns its report; "
                 "wait=false returns at once and the report arrives as a message when it finishes; you may end your "
                 "turn then, and you are called again when it does, so never sleep or poll to wait. The first "
                 "successful call also exposes the `message_session` tool, which sends a further message to a child you "
@@ -1127,6 +1177,8 @@ class Runtime:
                 raise ValueError(f"no agent can run as {where}" + (f" ({detail})" if detail else ""))
             agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else fitting[0]
         spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
+        if parent is None or model:
+            self._guard_worker_model(model or spec.model or "", child=parent is not None)
         if parent is None and not model and not spec.model:
             # A root session stores its model now, so a later agent switch keeps it. An agent's own model stays the agent's
             # until the session switches away from it (see `update_session`).
@@ -1185,6 +1237,23 @@ class Runtime:
             frozen = {ref: effort for ref, effort in efforts.items() if ref in used}
             if frozen:
                 snapshot["model_efforts"] = frozen
+        ref = model or snapshot["agent"].get("model") or (self.resolve_model(parent, self.snapshot_for(parent)["agent"])[0] if parent else "")
+        if parent is not None and ref.startswith("claude/"):
+            from .workers.registry import child_ref
+            selected = child_ref(ref)
+            if selected != ref:
+                model = ref = selected
+        self._guard_worker_model(ref, child=parent is not None)
+        if ref.partition("/")[0] in ("claude-code", "agy"):
+            from .workers.registry import facts
+            model = ref  # freeze the backend even when its user setting changes later
+            snapshot["worker"] = facts(ref.partition("/")[0])
+            snapshot.pop("model_fallbacks", None)
+        elif snapshot.get("model_fallbacks"):
+            fallbacks = snapshot["model_fallbacks"]
+            external = [r for r in fallbacks["models"] if r.partition("/")[0] in ("claude-code", "agy")]
+            fallbacks["models"] = [r for r in fallbacks["models"] if r not in external]
+            fallbacks["skipped"].extend(external)
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "allow", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
@@ -1276,6 +1345,14 @@ class Runtime:
 
     def update_session(self, session_id: str, **fields: Any) -> Session:
         current = self.session(session_id)
+        worker_ref = self._worker_ref(current)
+        if worker_ref:
+            locked = {"model": worker_ref, "agent": current.agent, "directory": current.directory,
+                      "permission": current.permission, "effort": current.effort, "disabled_tools": sorted(current.disabled())}
+            if any(k in fields and fields[k] != value for k, value in locked.items()):
+                raise Conflict("ZMX keeps its backend, model, agent, cwd and permission policy for resume; start a new child to change them")
+        elif (fields.get("model") or "").partition("/")[0] in ("claude-code", "agy"):
+            raise Conflict("Cannot switch between Nexus and ZMX context; start a new ZMX child instead")
         expected_revision = fields.pop("expected_revision", None)
         if fields.get("permission") not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
@@ -1297,6 +1374,9 @@ class Runtime:
         if fields.get("agent"):
             found = self.agents(self.project(current.project_id).path)
             candidate = found.get(fields["agent"], child=current.parent_id is not None)
+            self._guard_worker_model(fields.get("model") or current.model or candidate.model or "", child=current.parent_id is not None)
+            if candidate.model and candidate.model.partition("/")[0] in ("claude-code", "agy") and not current.model:
+                raise Conflict("Cannot switch a Nexus session to a ZMX agent model; start a new child")
             if candidate.name != current.agent:
                 new_agent = candidate
         if fields.get("model") == "":
@@ -1504,6 +1584,8 @@ class Runtime:
         if source not in ("tool", "api"):
             raise ValueError("source must be 'tool' or 'api'")
         session = self.session(session_id)
+        if self._worker_ref(session):
+            raise Conflict("ZMX cannot change directory; start a new child in the target directory")
         change = await self._describe_directory_change(session, directory, source)
         if change is None:
             return {"status": "unchanged", "directory": session.directory,
@@ -1719,6 +1801,9 @@ class Runtime:
             raise Conflict("session tree has pending inputs; remove them or set drop_inputs")
         self.closing_sessions.update(ids)
         try:
+            for side in self.store.sessions(kind="btw"):
+                if side.fork_info()["parent_id"] in ids:
+                    await self.delete_session(side.id, drop_inputs=True)
             await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
             descendants = self.store.descendants(session_id)
             ids = {session_id, *(child.id for child in descendants)}
@@ -1792,9 +1877,14 @@ class Runtime:
             self.bus.publish("input.removed", removed, session_id=item["session_id"])
         ids, changed = self.store.set_tree_archived(session_id, archived)
         if changed:
+            # The transition bumps every tree member's revision; clients take the new
+            # revisions from the event so their next If-Match write is not stale.
+            marks = ", ".join("?" * len(ids))
+            revisions = {row["id"]: row["revision"] for row in self.store.db.execute(
+                f"select id, revision from session where id in ({marks})", ids)}
             self.bus.publish(
                 "session.archived" if archived else "session.unarchived",
-                {"root": session_id, "sessions": ids, "archived": archived},
+                {"root": session_id, "sessions": ids, "archived": archived, "revisions": revisions},
                 session_id=session_id,
             )
         if archived:
@@ -1854,6 +1944,8 @@ class Runtime:
     async def image_input(self, ref: str) -> bool:
         """Whether the catalog says this model takes images. Unknown models count as yes: a provider that refuses
         says so, and silently hiding an image from a model that could read it is worse."""
+        if ref.partition("/")[0] in ("claude-code", "agy"):
+            return False
         try:
             provider, model_id = split_ref(ref)
             data, _ = await catalog.load()
@@ -1933,6 +2025,8 @@ class Runtime:
     async def context_usage(self, session_id: str) -> dict[str, Any]:
         """`context()` plus `used`, `window` and `exact` (PLAN A3)."""
         body = self.context(session_id)
+        if body.get("backend") == "external-cli":
+            return body | {"used": None, "window": None, "exact": False, "context_complete": False}
         model = self.session_json(self.session(session_id))["model"]
         window = await self.window_for(model)
         return body | budget(body, window, self.measured_input(session_id, model))
@@ -1975,6 +2069,8 @@ class Runtime:
 
     def _oneshot_request(self, session: Session, instruction: str, *, messages: list[Message] | None = None,
                          system: str | None = None) -> tuple[Any, Any]:
+        if self._worker_ref(session):
+            raise Conflict("ZMX does not support one-shots; send a follow-up to the child")
         agent = self._agent(session, refresh=False)
         base = agent.request()
         history = oneshot.settled(messages if messages is not None else base.messages)
@@ -1989,16 +2085,40 @@ class Runtime:
                                      "usage": result["usage"],
                                      **({"model": result["model"]} if "model" in result else {})}, session_id=session_id)
 
-    async def btw(self, session_id: str, question: str) -> dict[str, Any]:
-        """Answer a side question from the session's context so far; nothing is stored."""
+    async def btw(self, session_id: str, question: str, *, request_id: str | None = None) -> dict[str, Any]:
+        """A hidden read-only fork; only its own context changes, never the parent's."""
         session = self.session(session_id)
+        if self._worker_ref(session):
+            raise Conflict("/btw is unavailable on ZMX: the CLI's full context cannot be forked")
         question = question.strip()
         if not question:
             raise ValueError("question must not be empty")
-        provider, request = self._oneshot_request(session, oneshot.BTW_INSTRUCTION + question)
-        result = await oneshot.ask(provider, request)
-        self._record_oneshot(session_id, "btw", result)
-        return {"answer": result["text"], "usage": result["usage"]}
+        if request_id is not None and (not isinstance(request_id, str) or not 1 <= len(request_id) <= 128):
+            raise ValueError("request_id must be a string of 1 to 128 characters")
+        request_id = request_id or new_id("btw")
+        child = await self._fork(session, question, title=question, call_id=None, btw=True)
+        agent = self._agent(child, refresh=False)
+        inherited_context = json.dumps(agent.provider.body(agent.request()), ensure_ascii=False, indent=2)
+        self.bus.publish("btw.started", {"session": child.id, "question": question,
+                                       "request_id": request_id,
+                                       "inherited": child.fork_info()["inherited"]}, session_id=session_id)
+        self.prompt(child.id, BTW_MARKER + question)
+        return {"session": child.id, "request_id": request_id, "inherited": child.fork_info()["inherited"],
+                "inherited_context": inherited_context}
+
+    def btw_state(self, session_id: str) -> dict[str, Any]:
+        session = self.session(session_id)
+        if session.kind != "btw":
+            raise ValueError("not a side-question session")
+        info = session.fork_info()
+        partial = self.live_partials.get(session_id)
+        turns = self.store.turn_summaries(session_id, limit=1)["turns"]
+        error = self.errors.get(session_id) or ((turns[-1].get("error") or {}).get("message") if turns else None)
+        return {"session": session_id, "head": self.store.log_head(), "calls": info["calls"], "inherited": info["inherited"],
+                "running": session_id in self.turns, "error": error,
+                "messages": [message_json(m) for m in self.store.messages(session_id)[info["inherited"]:]],
+                "partial": partial.json() if partial else None,
+                "events": self.store.events(session_id, types=["tool_start", "tool_end", "code.call"])}
 
     def _titled(self, session: Session) -> bool:
         return not self.resolve_model(session, self.snapshot_for(session)["agent"])[0].startswith("mock/")
@@ -2046,6 +2166,8 @@ class Runtime:
     async def handoff(self, session_id: str, *, reason: str = "user") -> dict[str, Any]:
         """Write the summary, then start a new root session of the same agent that begins with it."""
         session = self.session(session_id)
+        if self._worker_ref(session):
+            raise Conflict("ZMX cannot hand off CLI-owned context; start a new child instead")
         if session.parent_id is not None:
             raise ValueError("only a root session can be handed off")
         self._check_turn_start(session)
@@ -2165,6 +2287,13 @@ class Runtime:
         ref = self.resolve_model(session, spec)[0]
         if not ref:
             raise ValueError("no model selected; choose one first")
+        if ref.partition("/")[0] in ("claude-code", "agy"):
+            from .workers.agent import ExternalAgent
+            if session.parent_id is None or session.fork:
+                raise ValueError("ZMX is only available to ordinary child sessions, never roots or read-only forks")
+            return ExternalAgent(ref=ref, workspace=Path(session.directory), messages=[m.message for m in self.store.messages(session.id)],
+                                 instructions=spec["prompt"], permission=session.permission,
+                                 effort=self.resolve_effort(session, snapshot, ref)[0], worker=snapshot.get("worker"))
         provider, model = provider_for(ref)
         fallback_config = snapshot.get("model_fallbacks") or {}
         sequence = [fallback_config.get("primary"), *(fallback_config.get("models") or [])]
@@ -2193,6 +2322,11 @@ class Runtime:
         root = self._root(session)
 
         async def run_bash(args: dict[str, Any], ctx: ToolContext) -> str:
+            if session.kind == "btw":
+                command = BTW_BASH.get(args.get("command"))
+                if not command or args.get("background"):
+                    raise ToolError("refused: side questions allow only these foreground commands: " + ", ".join(BTW_BASH))
+                args = {**args, "command": command}
             background = args.get("background", False)
             if not isinstance(background, bool):
                 raise ToolError("background must be a boolean")
@@ -2287,9 +2421,10 @@ class Runtime:
 
             async def run_code(args: dict[str, Any], ctx: ToolContext) -> str:
                 return await self.kernels.run(
-                    args, root=root.id, caller=session.id, ctx=ctx, tools=task_tools,
+                    args, root=session.id, caller=session.id, ctx=ctx, tools=task_tools,
                     approve=lambda call, a: self._approve(session.id, call, a),
                     publish=lambda kind, data: self.bus.publish(kind, data, session_id=session.id),
+                    isolated=bool(session.fork),
                 )
 
             tools.insert(names.index("code"), Tool(
@@ -2301,10 +2436,14 @@ class Runtime:
             instructions=snapshot["system_prompt"],
             reasoning_effort=self.resolve_effort(session, snapshot, ref)[0],
             max_steps=min(spec["steps"] or MAX_STEPS, FORK_MAX_STEPS) if session.fork else spec["steps"] or MAX_STEPS,
+            max_tool_calls=FORK_MAX_CALLS if session.fork and session.kind != "btw" else None,
+            max_tool_seconds=FORK_MAX_SECONDS if session.fork else None,
+            publish_hook=lambda event: self.bus.publish(to_json(event)["type"], to_json(event), session_id=session.id),
             model_efforts={item: self.resolve_effort(session, snapshot, item)[0] for item, *_ in fallback_models},
             messages=[m.message for m in self.store.messages(session.id)],
             # A fork keys its prompt cache like its parent, whose prefix it repeats.
-            conversation_id=(session.parent_id if session.fork else session.id),
+            conversation_id=((session.fork_info().get("cache_key") or session.fork_info()["parent_id"])
+                             if session.fork else session.id),
             approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
             steering=lambda: [(item["id"], self.inputs.message(item)) for item in self.inputs.list(session.id, "steer")],
@@ -2319,6 +2458,8 @@ class Runtime:
         )
 
     def _hook_runner(self, session: Session, workspace: Path) -> HookRunner | None:
+        if session.kind == "btw":
+            return None
         hooks, _ = config_hooks()
         return HookRunner(hooks, workspace, session_id=session.id) if hooks else None
 
@@ -2532,7 +2673,8 @@ class Runtime:
             raise
         return self._child_report(child.id) + exposed
 
-    async def _fork(self, parent: Session, prompt: str, *, title: str | None, call_id: str | None) -> Session:
+    async def _fork(self, parent: Session, prompt: str, *, title: str | None, call_id: str | None,
+                    btw: bool = False) -> Session:
         """A child that repeats the parent's request prefix: a copy of its snapshot (prompt, tool definitions with
         `fork` itself, skills, MCP), its resolved model and effort, permission, switches, and its settled history.
 
@@ -2541,6 +2683,10 @@ class Runtime:
         parent's context leaves less than `FORK_MIN_FREE` of the window.
         """
         parent = self.session(parent.id)
+        if self._worker_ref(parent):
+            raise Conflict("ZMX cannot be forked: CLI context and tools cannot be made into a Nexus read-only fork")
+        if parent.id in self.closing_sessions:
+            raise Conflict("session is being deleted")
         if parent.archived:
             raise Conflict(f"session {parent.id} is archived; unarchive it before creating a sub agent")
         snapshot = copy.deepcopy(self.snapshot_for(parent))
@@ -2560,11 +2706,19 @@ class Runtime:
         inherited = stored[:len(oneshot.settled([m.message for m in stored]))]
         snapshot["origin"] = "fork"
         snapshot["created"] = time.time()
+        self.session(parent.id)
+        if parent.id in self.closing_sessions:
+            raise Conflict("session is being deleted")
         child = self.store.create_session(
             self.project(parent.project_id), title=title or " ".join(prompt.split())[:TITLE_CHARS],
-            agent=parent.agent, model=model, permission=parent.permission, effort=effort, parent=parent,
+            agent=parent.agent, model=model, permission=parent.permission, effort=effort,
+            parent=None if btw else parent,
+            directory=parent.directory,
             parent_call_id=call_id, launched_by="agent", disabled_tools=sorted(parent.disabled()), snapshot=snapshot,
-            fork={"parent_id": parent.id, "inherited": len(inherited)}, inherit=inherited)
+            kind="btw" if btw else "user",
+            fork={"parent_id": parent.id, "inherited": len(inherited),
+                  **({"btw": True, "calls": 0, "cache_key": self._agent(parent, refresh=False).conversation_id}
+                     if btw else {})}, inherit=inherited)
         self.bus.publish("session.created", self.session_json(child), session_id=child.id)
         for item in self.store.messages(child.id)[:len(inherited)]:
             self._publish_message(child.id, item)
@@ -2612,6 +2766,9 @@ class Runtime:
         # The answer comes back as a notification, as for `wait: false`.
         if child_id in self.turns:
             self.notify[child_id] = parent_id
+            if self._worker_ref(child):
+                self.prompt(child_id, message, mode="queue")
+                return f"Message queued for ZMX sub agent {child_id}; it will run in a follow-up turn, not steer the CLI mid-turn."
             self.inboxes.setdefault(child_id, []).append(message)
             return (f"Message queued for sub agent {child_id} ({self._child_label(child)}), which is working; it sees it "
                     "before its next model call. Its answer will arrive as a message when it finishes.")
@@ -2697,6 +2854,8 @@ class Runtime:
         self._notify(parent_id, notice)
 
     def _check_turn_start(self, session: Session) -> None:
+        if ref := self._worker_ref(session):
+            self._guard_worker_model(ref, child=session.parent_id is not None and not session.fork)
         if session.id in self.closing_sessions:
             raise Conflict("session is being deleted")
         if session.archived:
@@ -2751,6 +2910,12 @@ class Runtime:
         if session_id in self.closing_sessions:
             raise Conflict("session is being deleted")
         busy = session_id in self.turns
+        if ref := self._worker_ref(session):
+            self._guard_worker_model(ref, child=session.parent_id is not None)
+            if images:
+                raise ValueError("ZMX accepts text-only assignments; images cannot be sent to this CLI transport")
+            if mode == "steer":
+                mode = "queue"
         if mode == "send" or not busy:
             self._check_turn_start(session)
         elif session.archived:
@@ -2811,6 +2976,8 @@ class Runtime:
         never calls startup recovery for other sessions.
         """
         session = self.session(session_id)
+        if self._worker_ref(session):
+            raise Conflict("ZMX cannot continue without a user message; send a follow-up instead")
         self._check_turn_start(session)
         unfinished = next((turn for turn in self.store.turns_for_session(session_id)
                            if turn["status"] == "running" or turn["recovery"] == "pending"), None)
@@ -2905,6 +3072,12 @@ class Runtime:
                         via = None
                     self._publish_message(session_id, stored)
                 else:
+                    if type(event).__name__ == "WorkerState":
+                        self._save_worker(session_id, event.worker)
+                        if event.worker.get("status") == "needs_attention":
+                            self._escalate(self.session(session_id), {"needed": event.worker.get("error") or "CLI attention required",
+                                                                    "why": "ZMX cannot answer CLI prompts; Nexus approved nothing"})
+                        continue
                     if isinstance(event, StepStart):
                         step = event.step
                         # `refresh` has re-bound the agent: record what this step runs with.
@@ -3247,9 +3420,34 @@ class Runtime:
                 raise
             return True
         name, quiet = call.name, call.name in AUTO_APPROVED
+        if session.kind == "btw":
+            info = session.fork_info()
+            if info["calls"] >= BTW_MAX_CALLS:
+                raise ToolError("refused: the 10-call side-question budget is exhausted. Answer now without tools.")
+            info["calls"] += 1
+            with self.store.db:
+                self.store.db.execute("update session set fork = ? where id = ?", (json.dumps(info), session_id))
+            self.bus.publish("btw.budget", {"calls": info["calls"]}, session_id=session_id)
+            if info["calls"] == BTW_MAX_CALLS:
+                self.inboxes.setdefault(session_id, []).append(
+                    "[Nexus notice: side-question tool budget] All 10 tool calls have been used. Answer now without tools.")
+            allowed = {"read", "grep", "glob", "ls", "code", "web_search", "web_fetch", "skill",
+                       "bash", mcp_files.MCP_SEARCH, mcp_files.MCP_CALL}
+            if call.name not in allowed:
+                raise ToolError(f"refused: `{call.name}` is not a read-only side-question tool. Answer with read tools.")
+            if call.name == "bash" and (args.get("command") not in BTW_BASH or args.get("background")):
+                raise ToolError("refused: side questions allow only these foreground commands: " + ", ".join(BTW_BASH))
+            if call.name == "bash":
+                quiet = True
         if session.fork and call.name in FORK_REFUSED:
             raise ToolError(f"refused: a fork is read-only, so `{call.name}` is unavailable. Report the change you "
                             "would make, and the session that forked you makes it.")
+        if session.fork and call.name == "bash" and args.get("background"):
+            raise ToolError("refused: a fork cannot start background jobs; use bounded foreground read-only commands")
+        if session.fork:
+            extension = self.snapshot_for(session).get("extensions", {}).get(call.name)
+            if extension and extension.get("extension", {}).get("read_only") is not True:
+                raise ToolError(f"refused: a fork is read-only and `{call.name}` is not declared READ_ONLY=True")
         if call.name == mcp_files.MCP_CALL:
             # Rules and the read-only hint apply to the target (`mcp__server__tool`), not to the proxy.
             target = args.get("tool")

@@ -1,7 +1,7 @@
 """`bash`, plus the companion tools for background jobs.
 
-A foreground command runs in the workspace with no default time limit: pass
-`timeout` to bound it. Cancelling the call (an interrupted turn, or a code cell's
+A foreground command runs in the workspace with a 120-second default and
+600-second maximum timeout. Cancelling the call (an interrupted turn, or a code cell's
 timeout) kills the command's process group.
 
 `background: true` is bound by the runtime to its job registry: it starts the
@@ -20,6 +20,8 @@ from ..llmhub.types import ToolSpec
 from .base import Tool, ToolContext, ToolError, clip
 
 JOB_ID_HINT = "Use bash_output(job_id=…) to read it; a notice arrives when it finishes."
+DEFAULT_FOREGROUND_TIMEOUT = 120.0
+MAX_FOREGROUND_TIMEOUT = 600.0
 
 
 def _kill(proc: asyncio.subprocess.Process) -> None:
@@ -29,12 +31,14 @@ def _kill(proc: asyncio.subprocess.Process) -> None:
         pass  # it exited between the timeout/cancel and the signal
 
 
-def timeout_value(value: Any) -> float | None:
-    """An optional explicit timeout; omitted means run until exit or cancellation."""
+def timeout_value(value: Any, *, foreground: bool = False) -> float | None:
+    """Foreground work is bounded; background jobs may run until stopped."""
     if value is None:
-        return None
+        return DEFAULT_FOREGROUND_TIMEOUT if foreground else None
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
         raise ToolError("timeout must be a number of seconds greater than 0")
+    if foreground and value > MAX_FOREGROUND_TIMEOUT:
+        raise ToolError(f"foreground timeout must be at most {MAX_FOREGROUND_TIMEOUT:g}s; use background=true for longer work")
     return float(value)
 
 
@@ -47,7 +51,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         raise ToolError("background must be a boolean")
     if background:
         raise ToolError("background bash requires the daemon's job registry")
-    timeout = timeout_value(args.get("timeout"))
+    timeout = timeout_value(args.get("timeout"), foreground=True)
     proc = await asyncio.create_subprocess_exec(
         "/bin/bash", "-c", command,
         cwd=ctx.workspace, stdin=asyncio.subprocess.DEVNULL,
@@ -137,14 +141,15 @@ TOOL = Tool(
             "stderr are combined; foreground commands have no stdin. Users can control background PTYs. "
             "Use it for git, tests, linters and builds, and for "
             "anything the other tools cannot do; use `read`, `grep`, `glob`, `ls`, `edit` and `patch` rather than "
-            "cat, sed, rg, find or redirects. There is no default time limit; pass timeout (seconds) to bound it. "
-            "background=true returns a job id immediately; read it with bash_output and stop it with bash_kill."
+            "cat, sed, rg, find or redirects. Foreground timeout defaults to 120 seconds, maximum 600. "
+            "Use background=true for servers or longer work; it returns a job id immediately. "
+            "Read it with bash_output and stop it with bash_kill. Do not wait with long sleep commands."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                "timeout": {"type": "number", "description": "Optional seconds; omitted means no time limit."},
+                "timeout": {"type": "number", "description": "Seconds; foreground default 120, maximum 600. Background jobs have no default timeout."},
                 "background": {"type": "boolean", "description": "Return a job id at once instead of waiting."},
             },
             "required": ["command"],

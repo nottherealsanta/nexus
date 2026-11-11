@@ -919,7 +919,7 @@ fn reasoning_does_not_show_a_duration() {
 }
 
 #[test]
-fn a_retry_sequence_is_one_tight_stack_with_rounded_delays() {
+fn a_retry_sequence_leaves_only_the_latest_outcome_and_a_count() {
     let mut a = app();
     let mk = |id: u64, kind: &str, data: serde_json::Value| {
         serde_json::json!({"id": id, "type": kind, "session_id": SESSION,
@@ -946,13 +946,13 @@ fn a_retry_sequence_is_one_tight_stack_with_rounded_delays() {
             a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
         }
     }
-    let drawn = rows(&mut a);
+    let drawn = draw(&mut a, 160, 40).1;
     let text = drawn.join("\n");
-    assert!(text.contains("provider retry 1/3 in 0.8s"), "{text}");
-    // One line each, detail inline, no gap between them.
-    let first = drawn.iter().position(|r| r.contains("retry 1/3")).unwrap();
-    assert!(drawn[first].contains("codex: HTTP 429"), "{text}");
-    assert!(drawn[first + 1].contains("retry started"), "no gap: {text}");
+    assert!(
+        !text.contains("provider retry") && !text.contains("retry started"),
+        "{text}"
+    );
+    assert!(text.contains("(+2)"), "{text}");
     let err = drawn
         .iter()
         .position(|r| r.contains("provider: codex: HTTP 429"))
@@ -1567,7 +1567,7 @@ fn the_footer_is_right_aligned_and_wraps_from_the_left_at_every_width() {
 }
 
 #[test]
-fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_above_the_footer() {
+fn interrupted_and_failed_turns_have_no_status_rows_in_the_timeline() {
     use nexus_tui::api::Event;
     let mut a = app();
     let first = a.messages()[0].created;
@@ -1588,7 +1588,7 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
         !footer.contains("interrupted") && !footer.contains('◼'),
         "{footer:?}"
     );
-    // Failed: the first error line sits on the row above the footer.
+    // Live failures belong to session status, not the footer or timeline.
     a.state.model.selected.as_mut().unwrap().scratch.push(Event {
         id: 950,
         cursor: None,
@@ -1601,11 +1601,9 @@ fn an_interrupted_turn_has_no_continue_hint_and_a_failed_turn_puts_its_error_abo
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
     let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
     let at = text.iter().position(|r| r.contains("0 tools")).unwrap();
-    assert!(
-        text[at - 1].trim() == "\u{2715} rate limited",
-        "error row above: {:?}",
-        text[at - 1]
-    );
+    assert!(!text
+        .iter()
+        .any(|r| r.contains("rate limited") || r.contains("retry after")));
     assert!(
         !text[at].contains("error") && !text[at].contains("retry"),
         "{:?}",
@@ -1636,23 +1634,20 @@ fn a_user_interruption_is_not_drawn_in_the_error_colour() {
                 "message": "interrupted by the user"
             }),
         });
-    let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
-    let line = t
-        .lines
+    let (buf, rows) = draw(&mut a, 160, 40);
+    let y = rows
         .iter()
-        .find(|line| line_text(line).contains("interrupted by the user"))
-        .expect("the interruption row");
-    let body = line
-        .spans
-        .iter()
-        .find(|span| span.content.contains("interrupted by the user"))
-        .unwrap();
-    assert_eq!(body.style.fg, a.theme.fg("text.secondary").fg);
-    assert_ne!(body.style.fg, a.theme.fg("status.error").fg);
+        .position(|line| line.contains("Interrupted by the user"))
+        .expect("the status strip");
+    let at = rows[y].find("Interrupted by the user").unwrap();
+    let x = rows[y][..at].chars().count();
     assert_eq!(
-        line.spans[0].style.fg,
-        a.theme.fg("status.warning").fg,
-        "the interrupted glyph uses the warning colour"
+        Some(buf[(x as u16, y as u16)].fg),
+        a.theme.fg("status.warning").fg
+    );
+    assert_ne!(
+        Some(buf[(x as u16, y as u16)].fg),
+        a.theme.fg("status.error").fg
     );
 }
 
@@ -2511,7 +2506,7 @@ fn unknown_usage_is_said_and_never_shown_as_zero() {
 }
 
 #[test]
-fn stored_attempts_and_errors_become_retry_and_error_rows() {
+fn stored_attempts_and_errors_move_to_the_status_strip() {
     let mut a = app();
     two_turns(&mut a);
     let attempts = serde_json::json!([
@@ -2555,28 +2550,22 @@ fn stored_attempts_and_errors_become_retry_and_error_rows() {
     a.state.model.selected.as_mut().unwrap().turns[1].start_seq = 4;
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 200);
     let text: Vec<String> = t.lines.iter().map(|l| line_text(l)).collect();
-    let find = |needle: &str| {
-        text.iter()
-            .position(|r| r.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} in {text:#?}"))
-    };
-    // The retry stack sits before the answer it led to.
-    let retry = find("provider retry 1 in 0.8s");
-    assert!(text[retry].contains("codex: HTTP 429"), "{}", text[retry]);
-    assert!(text[retry + 1].contains("retry started (attempt 2)"));
-    assert!(retry < find("second answer"));
-    // The failed request ran out of retries; the turn's error follows.
-    let exhausted = find("provider retries exhausted after 2");
-    let error = find("provider: codex: HTTP 500");
-    assert!(find("third question") < exhausted && exhausted < error);
-    // The footer of the failed turn has its error above it, and no continue hint
-    // is needed for a failure that is not an interruption.
-    let footer = text.iter().rposition(|r| r.contains("0 tools")).unwrap();
-    assert!(
-        text[footer - 1].contains("codex: HTTP 500"),
-        "{:?}",
-        text[footer - 1]
-    );
+    assert!(!text
+        .iter()
+        .any(|r| r.contains("HTTP 500") || r.contains("provider retry")));
+    let (outcome, tone) =
+        nexus_tui::timeline::session_outcome(a.state.model.selected.as_ref().unwrap()).unwrap();
+    assert_eq!(outcome, "provider: codex: HTTP 500 (+2)");
+    assert_eq!(tone, "error");
+    let shown = draw(&mut a, 160, 40).1.join("\n");
+    assert!(shown.contains("HTTP 500"), "{shown}");
+    a.state
+        .model
+        .running
+        .insert(SESSION.into(), "trn_new".into());
+    assert!(!draw(&mut a, 160, 40).1.join("\n").contains("HTTP 500"));
+    a.state.model.running.remove(SESSION);
+    assert!(draw(&mut a, 160, 40).1.join("\n").contains("HTTP 500"));
 }
 
 #[test]

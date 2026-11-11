@@ -1,4 +1,5 @@
 import { fileWatchStatus } from "./file-watch";
+import { receiveBtw } from "./btw";
 import { mobileClient } from "./mobile";
 // Reactive app state: the model (a mutable cache, versioned by `rev`), connection, banners,
 // alerts (toasts + banner history), and view state (layout, tabs, centre view, overlays).
@@ -639,7 +640,7 @@ const host: SyncHost = {
   addBanner(b) { banners.update((l) => [...l.filter((x) => x.kind !== b.kind), b]); },
   changed() { finishFirstPrompt(); bump(); reconcileSelection(); autoLoadOlder(); },
   streamed() { bumpStream(); },
-  inspectorEvent(e) { inspectorHooks.event?.(e); },
+  inspectorEvent(e) { inspectorHooks.event?.(e); receiveBtw(e); },
   snapshotApplied() { inspectorHooks.invalidate?.(); splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
   configChanged() { void loadConfig().catch(() => {}); },
   resourcesChanged() { void loadResources(); },

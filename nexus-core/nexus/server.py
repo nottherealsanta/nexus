@@ -97,6 +97,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +126,7 @@ from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
+from .workers.registry import visible as zmx_visible
 from .llmhub.types import ProviderError
 from .manager.consent import NOTICE_VERSION
 from .manager.redact import redact
@@ -143,7 +145,7 @@ from .voice.manager import VoiceManager
 from .voice.model import VoiceError
 from .voice.speech import SpeechError, SpeechService, final_answer
 
-VERSION = "0.10.0.dev0"
+VERSION = version("nexus10")
 MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room for a coalesced line
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
@@ -713,7 +715,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             {"id": i.id, "label": i.label, "dialect": i.dialect, "base_url": i.base_url, "catalog": i.catalog_id,
              "connected": i.id in live, "verified": i.verified} | sign_in(i.id)
             for i in PROVIDERS.values()
-        ])
+        ] + [{"id": i.id, "label": i.label, "dialect": i.dialect, "base_url": i.base_url, "catalog": i.catalog_id,
+              "connected": i.id in live, "verified": False, "methods": [], "zmx": True}
+             for i in zmx_visible().values()])
 
     async def provider_limits(request: Request) -> Response:
         if request.method == "POST":
@@ -727,7 +731,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def models(request: Request) -> Response:
         data, source = await catalog.load()
         wanted = request.query_params.get("provider")
-        out = [to_json(m) | {"ref": m.ref} for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
+        # ZMX models carry `zmx: true`; clients list them in subagent pools only, never in a root picker.
+        out = [to_json(m) | {"ref": m.ref} | ({"zmx": True} if pid in ("claude-code", "agy") else {})
+               for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
         out.sort(key=lambda m: (_version(m["name"]), m.get("released") or ""), reverse=True)
         return JSONResponse({"source": source, "models": out})
 
@@ -1584,11 +1590,13 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             disabled_tools=body.get("disabled_tools")))
 
     async def btw(request: Request) -> Response:
+        if request.method == "GET":
+            return JSONResponse(runtime.btw_state(p(request, "id")))
         body = await _body(request)
         question = body.get("question", "")
         if not isinstance(question, str):
             raise TypeError("question must be a string")
-        return JSONResponse(await runtime.btw(p(request, "id"), question))
+        return JSONResponse(await runtime.btw(p(request, "id"), question, request_id=body.get("request_id")))
 
     async def handoff(request: Request) -> Response:
         return JSONResponse(await runtime.handoff(p(request, "id")), status_code=201)
@@ -1945,7 +1953,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),
-        Route("/api/session/{id}/btw", route(btw), methods=["POST"]),
+        Route("/api/session/{id}/btw", route(btw), methods=["GET", "POST"]),
         Route("/api/session/{id}/handoff", route(handoff), methods=["POST"]),
         Route("/api/session/{id}/snapshot", route(session_snapshot_json)),
         Route("/api/session/{id}/export", route(session_export)),

@@ -1202,8 +1202,8 @@ class Store:
         now = time.time()
         directory = parent.directory if parent else (directory or project.path)
         disabled = json.dumps(sorted(set(disabled_tools or [])))
-        if kind not in ("user", "manager"):
-            raise ValueError("kind must be 'user' or 'manager'")
+        if kind not in ("user", "manager", "btw"):
+            raise ValueError("kind must be 'user', 'manager' or 'btw'")
         session = Session(new_id("ses"), project.id, directory, title, model, permission, now, now, effort, agent,
                           parent.id if parent else None, parent_call_id, launched_by, disabled, 0, 1, continued_from,
                           kind, fork=json.dumps(fork) if fork is not None else None)
@@ -1259,8 +1259,8 @@ class Store:
         """
         clause = _archive_clause(archived)
         if kind is not None:
-            if kind not in ("user", "manager", "detached"):
-                raise ValueError("kind must be 'user', 'manager', 'detached' or None")
+            if kind not in ("user", "manager", "detached", "btw"):
+                raise ValueError("kind must be 'user', 'manager', 'detached', 'btw' or None")
             clause += f" and kind = '{kind}'"
         if project_id:
             rows = self.db.execute(

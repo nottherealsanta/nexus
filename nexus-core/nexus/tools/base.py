@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
-from ..llmhub.types import Media, ToolSpec
+from ..llmhub.types import Media, ToolCall, ToolSpec
 
 MAX_OUTPUT_CHARS = 30_000
 
@@ -43,6 +43,7 @@ class ToolContext:
     model_visible: bool = True  # False for calls retained inside a code kernel
     cwd_changed: bool = False  # the session moved; report absolute paths and bash's cwd
     save_media: Callable[[bytes, str, str], str] | None = None  # (bytes, mime, name) -> artifact id; None outside a session
+    execute: Callable[[ToolCall, dict[str, Any], ToolContext], Awaitable[str]] | None = None
 
 
 @dataclass(frozen=True, slots=True)

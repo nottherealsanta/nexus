@@ -6,6 +6,8 @@ import { Composer, WaitingCard } from "./composer";
 import { NewSessionView } from "./newsession";
 import { ProviderDetailModal, SettingsView } from "./settings";
 import { Timeline } from "./timeline";
+import { SessionStatus } from "./session-status";
+import { BtwModal } from "./btw";
 import { centre, pendingFirstPrompt, phone, previousCentre, viewed } from "../store";
 
 export function Centre() {
@@ -22,9 +24,11 @@ export function Centre() {
       <If when={base() === "new_session" || (base() === "session" && (!viewed() || !!pendingFirstPrompt()))}><NewSessionView /></If>
       <If when={true}>
         <WaitingCard />
+        <SessionStatus />
         <Composer />
       </If>
       <Toasts />
+      <BtwModal />
     </View>
   );
 }

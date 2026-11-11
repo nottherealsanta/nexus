@@ -40,7 +40,9 @@ cache age (warns past 7 days), config errors (fails), the `[web] search_url`
 container, MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
 Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon,
 loads a model or downloads. `nexus update` compares `/api/info`'s version with
-the latest GitHub release and never installs.
+the latest GitHub release and never installs. The daemon's version (also sent
+in the SSE `connected` event) comes from the installed `nexus10` distribution
+metadata, so release and development versions follow the package version.
 
 - **Discovery.** While it runs, the daemon writes `~/.nexus/daemon.json` (0600)
   with `{url, pid, token, started}` and removes it on exit. It binds the port
@@ -724,7 +726,10 @@ unarchive command.
 ## Kernels
 
 `nexus/kernels.py` owns a lazy Monty pool and up to eight persistent kernels,
-shared by session tree or explicit id. Workers start through a launcher that clears their environment and working directory. They outlive sessions. Deleting a kernel
+private to each session by default, shared deliberately by explicit id. Forks cannot
+borrow another session's kernel. Idle heaps are snapshotted in memory and restored
+in fresh checkouts between cells; tool calls are never replayed. Workers start through
+a launcher that clears their environment and working directory. Kernels outlive sessions. Deleting a kernel
 stops it; daemon shutdown stops any running cell and closes every worker and the
 pool. Kernels do not survive a daemon restart; startup recovery reports the loss
 when it reconciles a turn that used code, and never invents kernel state. See

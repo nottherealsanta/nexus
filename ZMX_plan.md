@@ -1,7 +1,15 @@
 # ZMX: Claude Code and Antigravity inside Nexus
 
-Status: **plan, nothing built on `main`** (written 2026-11-04). Tick items and move their record to
+Status: **isolated transport groundwork in the working tree (2026-11-10); no runtime integration yet**.
+Written 2026-11-04. Tick items and move their record to
 [PLAN.md](PLAN.md#landed) as they land. Keep "not verified" honest, as PLAN.md asks.
+
+The user resumed implementation on 11-10, requiring separation from non-ZMX behavior and reference to `nexus01`.
+`nexus/workers/base.py` and `antigravity.py` now implement the transport foundation, with fake-CLI tests;
+there are no production callers and no providers, settings or UI changes. M0 and the complete M1 remain open.
+See [docs/external-workers.md](docs/external-workers.md) for the implemented contract and remaining limits.
+PLAN.md section 6's later per-vendor Settings direction supersedes section 4.8's proposed single switch;
+no switch is implemented in this slice.
 
 The goal: a Nexus **subagent** can run on the real Claude Code or Antigravity (`agy`) CLI. This is **ZMX mode**. The
 vendor's own CLI runs its own agent loop, tools, permissions and sign-in, and Nexus shows all of it as a child session in
@@ -407,7 +415,10 @@ Done when: every box has an answer and a fixture, and section 4 is corrected whe
 
 Start with agy: it has a structured stream and no PTY, so it tests the mapping without PTY risk.
 
-- [ ] `workers/base.py`, `workers/antigravity.py`, `auth/agy.py`, provider row, dynamic catalog, config keys.
+- [x] **Transport foundation only (11-10):** isolated `workers/base.py` and `workers/antigravity.py`, raw-first parser,
+  process supervision and fake-CLI safety/regression tests. No `external.*` durable protocol, runtime imports or UI.
+  `--print-timeout 0s` is provisional from the 11-04 help probe, not a verified live turn. Live fixtures remain M0 work.
+- [ ] Complete workers' runtime contract; `auth/agy.py`, provider row, dynamic catalog, config keys.
 - [ ] `ExternalAgent` with the section 4.2 mapping; `_agent()` selects it.
 - [ ] Guards from section 4.6 for everything external sessions refuse.
 - [ ] `session.worker` event; `files_changed`; fake `agy`; every agy lesson from section 2 has a test.
@@ -466,7 +477,9 @@ Done when: TUI and NSH web screenshots of each scenario agree, and `check_manife
 | Clients | Mock scenarios, TUI tests, NSH tests, screenshots | No |
 | Real | `tests/` marked and skipped by default; run by hand with approval, results recorded here | Yes |
 
-PLAN.md section 0 reports the local suite as red today. Record a baseline before M1, so new failures are distinguishable.
+Baseline before transport work (2026-11-10): `cd nexus-core && uv run pytest -q` — **1310 passed, 1 skipped**.
+Final full Core suite: **1387 passed, 1 skipped**; focused workers: **77 passed**; full Core Ruff and
+`git diff --check` pass. No real model/CLI turn or personal-home migration was run.
 
 ## 8. Risks
 

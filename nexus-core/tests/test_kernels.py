@@ -212,3 +212,66 @@ def test_launcher_clears_environment_and_directory(tmp_path, monkeypatch):
     out = subprocess.run([write_launcher(tmp_path, str(fake))], capture_output=True, text=True, check=True).stdout
     assert "NEXUS_TEST_SECRET" not in out
     assert out.strip().splitlines()[-1].endswith("/cwd")
+
+
+async def test_suspension_allowance_resets_without_replaying_calls(kernels, tmp_path, monkeypatch):
+    from nexus.kernels import LIMITS
+
+    monkeypatch.setitem(LIMITS, "max_suspensions", 8)
+    calls = []
+
+    async def ping(args, ctx):
+        calls.append(ctx.call_id)
+        return "1"
+
+    tool = Tool(ToolSpec("ping", "no-op", {"type": "object"}), ping)
+    await run(kernels, tmp_path, "x = 0\nsaved = ping", tools=[tool])
+    for _ in range(20):
+        result = await run(kernels, tmp_path, "x += int(await saved())\nx", tools=[tool])
+    assert "Out [21]: 20" in result
+    assert len(calls) == 20 and len(set(calls)) == 20
+
+
+async def test_call_cap_is_per_cell_and_parallel_results_survive_rotation(kernels, tmp_path):
+    async def ping(args, ctx):
+        return "pong"
+
+    tool = Tool(ToolSpec("ping", "no-op", {"type": "object"}), ping)
+    source = "import asyncio\nvalues = await asyncio.gather(*(ping() for _ in range(64)))\nlen(values)"
+    for _ in range(5):
+        assert "64 calls" in await run(kernels, tmp_path, source, tools=[tool])
+    with pytest.raises(ToolError, match="nested call limit"):
+        await run(kernels, tmp_path, "for _ in range(65):\n await ping()", tools=[tool])
+    assert "pong" in await run(kernels, tmp_path, "await ping()", tools=[tool])
+
+
+async def test_private_kernel_cannot_borrow_parent_state(kernels, tmp_path):
+    await run(kernels, tmp_path, "x = 41")
+    parent = kernels.main["root"]
+    with pytest.raises(ToolError, match="cannot borrow"):
+        await kernels.run({"code": "x = 99", "kernel_id": parent}, root="fork", caller="fork",
+                          ctx=ToolContext(tmp_path, "outer"), tools=[], approve=allow,
+                          publish=lambda *_: None, isolated=True)
+    assert "41" in await run(kernels, tmp_path, "x")
+
+
+@pytest.mark.parametrize("stage", ["_checkpoint", "_restore"])
+async def test_failed_state_transfer_discards_kernel_without_replay(kernels, tmp_path, monkeypatch, stage):
+    calls, events = [], []
+
+    async def effect(args, ctx):
+        calls.append(True)
+        return "effect complete"
+
+    tool = Tool(ToolSpec("effect", "fake effect", {"type": "object"}), effect)
+
+    async def broken(kernel):
+        raise RuntimeError("state transfer failed")
+
+    if stage == "_restore":
+        await run(kernels, tmp_path, "await effect()", tools=[tool])
+    monkeypatch.setattr(kernels, stage, broken)
+    with pytest.raises(ToolError, match="do not replay"):
+        await run(kernels, tmp_path, "await effect()", tools=[tool], events=events)
+    assert calls == [True] and not kernels.items
+    assert any(kind == "kernel.deleted" for kind, data in events)
