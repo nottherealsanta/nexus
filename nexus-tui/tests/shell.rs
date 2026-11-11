@@ -3406,17 +3406,20 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
 }
 
 #[test]
-fn every_manifest_sidebar_tab_is_clickable_when_the_sidebar_is_wide() {
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
-    app.ui.left_width = 40;
-    for entry in &Manifest::load().navigation.left_sidebar.tab {
-        draw(&mut app, 160, 40);
-        let tab = nexus_tui::ui::Tab::from_id(&entry.id).unwrap();
-        let rect = app.hits.rect_of(&Target::Tab(tab)).expect("manifest tab");
-        assert_eq!(rect.y, 0);
-        assert!(rect.right() <= app.regions.left.unwrap().right());
-        click(&mut app, rect.x, rect.y);
-        assert_eq!(app.ui.tab, tab, "{} tab activates on click", entry.id);
+fn every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar() {
+    // 28 is the default width: Git must fit there (it used to be omitted below 33).
+    for width in [28u16, 40] {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+        app.ui.left_width = width;
+        for entry in &Manifest::load().navigation.left_sidebar.tab {
+            draw(&mut app, 160, 40);
+            let tab = nexus_tui::ui::Tab::from_id(&entry.id).unwrap();
+            let rect = app.hits.rect_of(&Target::Tab(tab)).expect("manifest tab");
+            assert_eq!(rect.y, 0);
+            assert!(rect.right() <= app.regions.left.unwrap().right(), "{width}: {}", entry.id);
+            click(&mut app, rect.x, rect.y);
+            assert_eq!(app.ui.tab, tab, "{width}: {} tab activates on click", entry.id);
+        }
     }
 }
 
