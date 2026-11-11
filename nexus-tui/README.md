@@ -903,7 +903,7 @@ TUI can be driven by hand in a browser.
   groups do not (so there is no "Thought for Ns", although turn summaries carry
   `reasoning_seconds`).
 - Old Nexus shortcuts: Ctrl+N (new session), Ctrl+G (agent), Ctrl+O/Ctrl+S
-  (sessions), Ctrl+L (right sidebar), Ctrl+T (cycle effort), Ctrl+R (reconnect);
+  (sessions), Ctrl+L (right sidebar), Ctrl+T (cycle effort), Ctrl+R (prompt history search);
   Ctrl+X then M, N, O/B, G, S, L, T, R or ? opens model, new session, sessions,
   agent, settings, sidebar, effort, reconnect or shortcuts, and Ctrl+X Shift+N
   notifications. Shortcuts for capabilities Core lacks are omitted.
