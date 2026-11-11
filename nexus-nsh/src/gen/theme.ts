@@ -304,6 +304,10 @@ export const controlGlyphs = {
     "unicode": "\u2442",
     "ascii": "Y"
   },
+  "worktree": {
+    "unicode": "\u2442",
+    "ascii": "*"
+  },
   "info": {
     "unicode": "i",
     "ascii": "i"

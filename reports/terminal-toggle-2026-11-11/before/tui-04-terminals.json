@@ -1,0 +1,35 @@
+{
+  "status": 200,
+  "terminals": [
+    {
+      "id": "ZQ-Vl2jLdefmF1cNHWE-oS-J",
+      "name": "Terminal",
+      "status": "closed",
+      "creator": "probe-loopback",
+      "workspace": "/private/tmp/nexus-terminal-toggle-2026-11-11/ws",
+      "session_id": null,
+      "rows": 24,
+      "cols": 80
+    },
+    {
+      "id": "Om3ipemzFV91KO3j7s2h2SmP",
+      "name": "Terminal",
+      "status": "running",
+      "creator": "nsh-mwbzylep-0-5jcj7p",
+      "workspace": "/private/tmp/nexus-terminal-toggle-2026-11-11/ws",
+      "session_id": "ses_1a1ca334f90bdfb2e23",
+      "rows": 13,
+      "cols": 158
+    },
+    {
+      "id": "3ZH8znKaYIqfI-WAu1Gd7EId",
+      "name": "Terminal",
+      "status": "running",
+      "creator": "0975a20e52b544c3a0fb471c7656b853",
+      "workspace": "/private/tmp/nexus-terminal-toggle-2026-11-11/ws",
+      "session_id": null,
+      "rows": 13,
+      "cols": 158
+    }
+  ]
+}

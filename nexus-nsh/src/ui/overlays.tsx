@@ -4,8 +4,8 @@ import { Button, Input } from "nsh/base";
 import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
-import { availability, closeLearnChecklist, commands, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, notifications, paletteOpen, picker, selectProject, toast, unread, renaming, viewed } from "../store";
+import { availability, closeLearnChecklist, commands, copyText, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
+import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -380,6 +380,53 @@ function NotificationList() {
   );
 }
 void compat; void currentProject; void unread;
+
+// --- worktree details (`session.worktree_info`) ------------------------------------------------
+/** A small read-only card: the linked checkout's path, branch and the main checkout's path, each copyable. */
+export function WorktreeInfo() {
+  return <If when={worktreeInfoOpen()}>{() => <WorktreeInfoBody />}</If>;
+}
+function WorktreeInfoBody() {
+  const close = () => worktreeInfoOpen.set(false);
+  const session = () => { m(); return viewed(); };
+  const listing = () => { m(); return worktreeListingForSession(); };
+  const tree = () => { m(); return currentWorktree(); };
+  const path = () => (tree()?.path as string | undefined) ?? session()?.directory ?? "";
+  const branch = () => (tree()?.branch as string | undefined) ?? "";
+  const mainPath = () => {
+    const l = listing();
+    return (typeof l?.main === "string" && l.main) || (l?.worktrees as any[] | undefined)?.find((w) => w?.main)?.path || "";
+  };
+  const copy = (value: string) => { if (value) copyText(value, "Copied"); };
+  // Long paths have no spaces: a zero-width break after separators (and every 32 cells) lets the
+  // row wrap without truncating; copies and accessible names keep the exact value.
+  const softWrap = (value: string) => value ? value.replace(/([/_.-])/g, "$1\u200b").replace(/([^\u200b]{32})(?=[^\u200b])/g, "$1\u200b") : value;
+  const Row = (p: { label: string; value: () => string; testID: string }) => (
+    <View class="gap-1" testID={`${p.testID}-row`}>
+      <View class="flex-row items-center gap-2">
+        <Text class={`flex-1 ${T.meta}`}>{p.label}</Text>
+        <IconButton icon="copy" label={`Copy ${p.label.toLowerCase()}`} testID={`${p.testID}-copy`} disabled={!p.value()} onPress={() => copy(p.value())} class="size-6" />
+      </View>
+      <Text testID={p.testID} accessibilityLabel={p.value()} style={{ userSelect: "text" }} class={`${T.mono} text-foreground`}>{softWrap(p.value()) || "unavailable"}</Text>
+    </View>
+  );
+  return (
+    <Modal size="small" label="Worktree" testID="worktree-info-dialog" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}>
+      <View class="gap-4">
+        <ModalTitle title="Worktree" />
+        <Scroll style={{ maxHeight: modalBodyHeight() }} testID="worktree-info-scroll">
+          <View class="gap-3">
+            <Text class={T.sec}>This session is in a worktree.</Text>
+            <Row label="Worktree path" value={path} testID="worktree-path" />
+            <Row label="Branch" value={branch} testID="worktree-branch" />
+            <Row label="Main checkout" value={mainPath} testID="worktree-main-path" />
+          </View>
+        </Scroll>
+        <ModalFooter hints="esc close" />
+      </View>
+    </Modal>
+  );
+}
 
 export function RenameSession() {
   return <If when={renaming()}><RenameSessionBody /></If>;

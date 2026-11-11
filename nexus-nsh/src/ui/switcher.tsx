@@ -7,7 +7,7 @@ import { Button, Input } from "nsh/base";
 import { ApiError, request } from "../core/transport";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { escape } from "../commands";
-import { currentProject, m, model, scopeAll, selectSession, switcherOpen, tick } from "../store";
+import { currentProject, m, model, scopeAll, selectSession, switcherOpen, switcherQuery, tick } from "../store";
 import { FOCUS, Spinner, T, TONE, relTime } from "./kit";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { attention } from "./sidebar";
@@ -52,7 +52,7 @@ export function SessionSwitcher() {
 }
 
 function SessionSwitcherBody() {
-  const query = signal("");
+  const query = signal(switcherQuery());
   const idx = signal(0);
   const hits = signal<{ q: string; rows: Hit[] } | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -87,6 +87,8 @@ function SessionSwitcherBody() {
     scopeAll.update((v) => !v);
     setQuery(query());
   };
+  // `/search <text>` prefills the field; ask Core for message matches too, not just title matches.
+  if (switcherQuery().trim()) setTimeout(() => setQuery(switcherQuery()), 0);
 
   const sessions = () => {
     m();

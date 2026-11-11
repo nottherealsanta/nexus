@@ -20,6 +20,7 @@ export const manifest = {
    "session.archived",
    "session.child",
    "session.in_worktree",
+   "session.linked_worktree",
    "session.continued",
    "has_waiting",
    "waiting.approval",
@@ -1109,6 +1110,19 @@ export const manifest = {
    "id": "terminal.open",
    "title": "Terminal",
    "category": "navigation",
+   "keys": {
+    "tui": "ctrl+`",
+    "nsh": "ctrl+`"
+   },
+   "key_aliases": {
+    "tui": [
+     "ctrl+shift+`"
+    ],
+    "nsh": [
+     "ctrl+shift+`"
+    ]
+   },
+   "key_context": "global",
    "when": [
     "has_project"
    ],
@@ -1116,7 +1130,8 @@ export const manifest = {
    "placement": [
     "palette",
     "menu"
-   ]
+   ],
+   "note": "Toggles the dock, including while the terminal screen has focus; the key is never sent to the shell. Closing the dock detaches, never terminates."
   },
   {
    "id": "terminal.new",
@@ -1382,6 +1397,25 @@ export const manifest = {
    "note": "Backspace also goes back when no text field has focus. Returns to the parent at the child card's position."
   },
   {
+   "id": "nav.root",
+   "title": "Back to root session",
+   "category": "navigation",
+   "keys": {
+    "tui": "left",
+    "nsh": "left"
+   },
+   "key_context": "timeline",
+   "when": [
+    "session.child"
+   ],
+   "unavailable_reason": "Not viewing a child session.",
+   "placement": [
+    "header",
+    "palette"
+   ],
+   "note": "The heading's back control and Left (outside text inputs, the composer, editors and overlays) jump straight to the root. Esc keeps its parent step."
+  },
+  {
    "id": "nav.drawer.close",
    "title": "Close drawer",
    "category": "navigation",
@@ -1532,7 +1566,7 @@ export const manifest = {
     "palette",
     "sidebar"
    ],
-   "note": "Matches titles and user messages only (Core index)."
+   "note": "Opens the sessions switcher with search focused (the Sessions list on mobile). /search <text> prefills the query. Matches titles and user messages only (Core index)."
   },
   {
    "id": "session.tab_close",
@@ -1610,6 +1644,7 @@ export const manifest = {
    "id": "session.archive",
    "title": "Archive session",
    "category": "session",
+   "slash": "archive",
    "when": [
     "has_session",
     "!session.archived",
@@ -1619,7 +1654,8 @@ export const manifest = {
    "placement": [
     "palette",
     "row_menu"
-   ]
+   ],
+   "note": "Archiving closes this session's tab and any archived descendant tabs in every connected client."
   },
   {
    "id": "session.unarchive",
@@ -1725,6 +1761,20 @@ export const manifest = {
    "placement": [
     "palette"
    ]
+  },
+  {
+   "id": "session.worktree_info",
+   "title": "Worktree",
+   "category": "session",
+   "when": [
+    "has_session",
+    "session.linked_worktree"
+   ],
+   "unavailable_reason": "This session is not in a linked worktree.",
+   "placement": [
+    "composer"
+   ],
+   "note": "Worktree session: show the full copyable worktree path, branch and main-checkout path in a small modal."
   },
   {
    "id": "session.resources",
@@ -2105,6 +2155,24 @@ export const manifest = {
     "composer"
    ],
    "note": "Warns: the system prompt changes."
+  },
+  {
+   "id": "agent.cycle",
+   "title": "Cycle agent",
+   "category": "agent",
+   "keys": {
+    "tui": "shift+tab",
+    "nsh": "shift+tab"
+   },
+   "key_context": "composer",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project first.",
+   "placement": [
+    "composer"
+   ],
+   "note": "Shift+Tab chooses the next eligible agent, wrapping at the end: a draft's next session takes it; a running session switches from the next model call, with the picker's cache warning."
   },
   {
    "id": "tools.configure",

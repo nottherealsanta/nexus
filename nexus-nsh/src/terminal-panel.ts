@@ -62,6 +62,7 @@ export function closeTerminalPanel() {
   if (inputInFlight) toast("warning", "Terminal input outcome may be indeterminate after detaching");
   terminalOpen.set(false); terminalFocused.set(false); terminalRename.set(false); terminalNotice.set(""); detach(); terminalSelected.set(null);
   void Storage.setItem("nexus.terminal.open", "false").catch(() => {});
+  closeFocus?.();
 }
 export function disconnectTerminal() { detach(); }
 function detach() {
@@ -231,3 +232,6 @@ let focusListAction: (() => void) | null = null;
 export function setTerminalActions(copy: (() => void) | null, focusList: (() => void) | null) { copyAction = copy; focusListAction = focusList; }
 export function requestTerminalCopy() { copyAction?.(); }
 export function focusTerminalList() { focusListAction?.(); }
+let closeFocus: (() => void) | null = null;
+/** NSH gives focus back to the composer when the dock closes; the panel it replaced owned the keys. */
+export function setTerminalCloseFocus(fn: (() => void) | null) { closeFocus = fn; }

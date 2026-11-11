@@ -151,7 +151,7 @@ otherwise the first loaded agent allowed as a root is used (normally
 | `orchestrate` | primary | every `build` tool + `session` | Breaks a task down, delegates the long-running pieces to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says to do quick, well-understood work itself (writing up a plan whose content it has, a small edit, a single command, finishing after a child fails on a provider error) and delegate long-running work, to continue an existing child with `message_session` when new work belongs to its task (including after an interruption), and to start a new child only for unrelated work. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
-| `scout` | subagent | read, grep, glob, ls, code | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
+| `scout` | subagent | read, grep, glob, ls, code (50 tool calls per turn) | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
 | `plan` | subagent | all | Designs a change. Its prompt allows writing Markdown plan files only, never code. This is advice in the prompt, not enforced by the harness. |
 
 So a root session runs `orchestrate` or `build`, and a sub agent runs
@@ -159,6 +159,11 @@ So a root session runs `orchestrate` or `build`, and a sub agent runs
 so "read-only" (`scout`) and "Markdown only" (`plan`) rest on the prompt.
 Granting `bash` also grants the `bash_output` and `bash_kill` companions for
 background jobs (the table lists only the frontmatter tools).
+
+The scout tool budget counts both outer calls and calls nested inside `code`.
+Once exhausted, tools are disabled for the rest of the turn and the scout is asked
+for a partial report. The budget resets on the next turn and applies to sessions
+named `scout`, including overrides and existing sessions. Forks retain their own budgets.
 
 The session JSON reports the result and where it came from: `model` and
 `model_source` (`session`, `agent`, `parent` or `none`), and `effort` and

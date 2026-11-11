@@ -56,9 +56,17 @@ including cursors whose rows remain in another interleaved session.
 ## Terminal resource API
 
 The terminal-specific HTTP and streaming contract is in [terminals.md](terminals.md).
-Terminal routes require the daemon bearer token and reject the existing tokenless
-non-loopback mode. The terminal stream is separate from session events and model
-context. Replay after discarded output is explicitly lossy; see the contract.
+Terminal routes require the daemon bearer token when Core has one. In the tokenless
+non-loopback bind they accept only requests whose actual TCP peer is loopback, whose
+`Host` (and `Origin`, when present) names a loopback host on the published port, and
+that carry no `Forwarded`, `X-Forwarded-*`, `X-Real-IP` or `X-Client-IP` header.
+Anything else is refused before body parsing or idempotency replay, so a remote client
+can neither reach the shell nor replay a local terminal mutation by guessing its
+idempotency key. The configured URL, `Host` and forwarding headers are never treated
+as proof of a local peer. A local reverse proxy that strips those headers is outside
+this isolation: authenticate the daemon when terminals must pass through one. The
+terminal stream is separate from session events and model context. Replay after
+discarded output is explicitly lossy; see the contract.
 `PATCH /api/terminal/{id}` with `{"name": "…"}` renames a resource and returns
 its updated metadata. Names default to `Terminal` and have the validation and
 persistence rules documented in the terminal contract. Metadata may include
@@ -365,6 +373,11 @@ to the named root and every descendant in one transaction and are idempotent.
 A child-only request gets 400 naming its root; the operation must start from
 the root. The response is the root `Session` with `archived` set. Repeating an
 operation that changes nothing returns 200 with no transition event. Archive returns 409 if a background job in the tree is still running.
+
+Clients expose this as `/archive`. They close the tabs named in the single
+`session.archived` event's `sessions` list, using normal tab-close neighbour
+selection, regardless of which client or Core initiated it. An open archived
+session on mobile returns to Sessions. Unarchive does not reopen closed tabs.
 
 `GET /api/session` filters by `archived`:
 

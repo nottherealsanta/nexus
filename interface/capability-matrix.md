@@ -55,7 +55,7 @@ Durations come from event `time`; Core sends no duration fields.
 | L10 | Handoff chain ("continued from") | Core work | 12a Compaction as handoff | No `continued_from` field exists |
 | L11 | Side runs hidden from the list | Built | `Session.kind`, `POST …/btw` | Titles remain `oneshot` events; btw runs are hidden `kind: btw` forks, excluded from default snapshots/lists and client creation/update rows |
 | L12 | Archived filter ("Archived" view) | API ready | `GET /api/session?archived=only\|include` | |
-| L13 | Search over titles and user messages (indexed) | Core work | 12a Archive, search (FTS5) | No search endpoint |
+| L13 | Search sessions (indexed) | API ready | `GET /api/search?q=…`; [Search](../docs/api.md#search-k5) | `/search [text]` opens the focused sessions switcher in both clients; focused Sessions search on mobile |
 | L14 | Row action: open | Client only | | |
 | L15 | Row action: rename | API ready | `PATCH /api/session/{id}` `{title, expected_revision?}` | |
 | L16 | Row action: archive / unarchive | API ready | `POST …/archive`, `…/unarchive` | Root only (child gives 400); busy or waiting tree gives 409 |
@@ -70,12 +70,13 @@ Durations come from event `time`; Core sends no duration fields.
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
 | A1 | Rename | API ready | see L15 | Header click to rename is client only |
-| A2 | Archive / unarchive | API ready | see L16 | |
+| A2 | Archive / unarchive | API ready | see L16; `/archive` | Archive events close affected tabs in both clients, including descendants; mobile returns to Sessions |
 | A3 | Delete | API ready | see L17 | |
 | A4 | Export (Markdown transcript or JSON) | API ready | `GET /api/session/{id}/export?format=markdown\|json&scope=session\|tree` | Download via the API; headers carry boundary and filename. Markdown omits wire events; JSON includes them |
 | A5 | Handoff / `/compact` | API ready | `POST /api/session/{id}/handoff`; automatic at `[context] handoff_percent`; `session.handoff` | Both clients open the new session and show the summary as a 3-line card that opens whole |
 | A6 | Change session directory | API ready | `POST …/directory {directory}` (200 applied/unchanged, 202 pending while busy); E: `session.directory_changed` | A pending move shows in `Session.directory_change` |
 | A7 | Worktrees: list, create, delete | API ready | `GET/POST …/worktrees {action,path?,branch?,base?}`; E: `worktree.listed/created/deleted` | Create does not move the session. An ambiguous crash outcome must be inspected, not repeated |
+| A7a | Linked-worktree indicator and details | Client only | `session.worktree_info`; existing A7 listing | Desktop/web strip icon, “Worktree session” hint; small modal with full copyable path, branch and main-checkout path; no new API |
 | A8 | Activate workspace controls (prerequisite for the model to use them) | API ready | `POST …/workspace-tools` | UI commands A6/A7 do not need activation |
 | A9 | Integrate / merge a worktree | Deferred | INTERFACE_PLAN "TBD"; PLAN Known gaps | Core has no merge/integrate or branch cleanup |
 | A10 | Interrupt (Esc) | API ready | `POST …/interrupt` | Cancels descendants too. A pending approval vanishes without `permission.replied` on a normal interrupt (Known gap); treat disappearance as cancelled |
@@ -266,7 +267,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | W6 | Choice: allow for this session | Core work | 12a? | Only `allow`/`deny`. `PATCH permission: "allow"` turns off every ask for the session, which is broader than "this call" |
 | W7 | Choice: deny with a note to the agent | Core work | 12a? | Reply has no `reason` field |
 | W8 | Disabled choice with reason | Client only | | Depends on W6/W7 capability data; Core would need to report which choices exist |
-| W9 | Question: options (single/multi), free text, optional preview, answer all then submit | API ready | `question.asked.questions[]` (`options[].preview`, `multiple`, `allow_free_text`); `POST …/question/{qid} {answers}` | 400 leaves it pending; 409 once resolved |
+| W9 | Question: options (single/multi), free text, optional preview | API ready | `question.asked.questions[]` (`options[].preview`, `multiple`, `allow_free_text`); `POST …/question/{qid} {answers}` | Single-question choice/text submits immediately; multi-select submits once without review; multiple questions retain review. Free text autofocuses; composer locks and preserves its draft. Approvals unchanged. 400 leaves it pending; 409 once resolved |
 | W10 | No timeout | API ready | tools.md ask | |
 | W11 | Cancelled: card closes, timeline keeps it as "cancelled: interrupted" | API ready | E: `question.replied` (`outcome: cancelled`, `reason`), `permission.replied`; tool result | Gap: a normal-interrupt approval cancel has no event (Known gap) |
 | W12 | Draft answers kept for this view | Client only | | |
@@ -279,7 +280,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | K1 | Multi-line Markdown input, Enter sends, Shift+Enter newline | Client only | | |
 | K2 | Send a prompt | API ready | `POST …/prompt {text}` with `Idempotency-Key` | 202 `{turn_id, origin}` |
 | K3 | Steer while busy | API ready | `POST …/prompt {mode: "steer"}` | Default `send` while busy remains 409 |
-| K4 | Queue for next turn; list, edit, remove queued | API ready | `POST …/prompt {mode: "queue"}`, `/input` CRUD/move/next | Interrupt holds dispatch |
+| K4 | Queue for next turn; list, edit, reorder, remove queued | API ready | `POST …/prompt {mode: "queue"}`, `/input` CRUD/move/next | Interrupt holds dispatch. Queued-row hover/focus (touch: tap) shows edit/up/down/remove icons; steer rows have no icons; existing keyboard actions remain |
 | K5 | Agent selector, mid-turn | API ready | `POST …/agent {agent}`; E: `session.updated`; notice message | Applies to the next model call. Rebuilds the snapshot; confirm first (cache) |
 | K6 | Model selector, mid-turn | API ready | `POST …/model {model}` | Confirm first (cache). Applies to subsequent calls |
 | K7 | Effort selector, mid-turn | API ready | `PATCH /api/session/{id} {effort}` | |
@@ -319,7 +320,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | Q1 | Palette (Cmd/Ctrl+P), commands with keybinding, availability | Client only | 12.1 item 3 | One shared manifest. Availability rules read Core state |
 | Q2 | Slash commands from the same list, with completion | Client only | 12.1 item 3 | |
 | Q3 | New session, switch session/project | API ready | `POST /api/session`, `GET /api/session`, `GET /api/project` | |
-| Q4 | Search sessions | Core work | 12a Archive, search | See L13 |
+| Q4 | Search sessions | API ready | `session.search`, `/search [text]`; L13 | Switcher opens with search focused, empty or prefilled from the slash argument |
 | Q5 | Archive, delete | API ready | L16, L17 | |
 | Q5b | Fold all, go to turn, toggle sidebars | Client only | T3, T1, S1 | |
 | Q6 | Change model / effort / agent / tools | API ready | K5-K9 | |
@@ -429,7 +430,7 @@ increment. The client must show the reason and must not fake the state.
 | Sign in on first run, manage providers, set defaults (Y4, ST3-ST5, ST9, ST12, ST13, Q8) | Sign-in only local; defaults read-only | 12a Settings over the API |
 | Context window management (A5, O6, O7, L10, T15, ST16) | No handoff, no context limit | 12a Compaction as handoff |
 | Meaningful titles, `/btw` (L21, O4, O5, R13, L11) | Built; past btw list remains deferred | Titles are one-shots; btw is a hidden read-only fork (PLAN 23) |
-| Search (L13, Q4) | No index | 12a Archive, search |
+| Search (L13, Q4) | API ready: indexed `/api/search` | Shared focused switcher; mobile Sessions search |
 | Attach files and images (K10, U2, U4) | No attachments | 12a Attachments and images |
 | "Show all" for clipped tool output (X19) | Full output not retained | 12a artifacts |
 | Skills, MCP, web tools (N9, X14-X16, ST14, ST15) | Not implemented | 11a |

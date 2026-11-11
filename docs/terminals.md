@@ -1,6 +1,6 @@
 # Terminal resources: Core contract
 
-This is the Core terminal slice of [PLAN.md section 2](../PLAN.md#2-terminal-inside-nexus).
+This is the Core terminal slice of [plans/02-terminal.md](../plans/02-terminal.md).
 The browser resource is separate work. Both desktop clients expose the shared
 terminal dock, resource list, creation, attachment, screen, control, input and
 resize operations described below; see their READMEs for current limitations.
@@ -10,7 +10,13 @@ resize operations described below; see their READMEs for current limitations.
 The desktop workspace has a bottom terminal dock below the composer and activity bar;
 mobile never exposes it. The terminal-shell activity indicator shows the terminal
 count, including linked background jobs once; clicking it opens or closes the dock,
-remembering its state. Legacy pipe-only jobs keep their separate resource indicator. The distinct
+remembering its state. **``Ctrl+` ``** toggles the dock from anywhere, including while the
+terminal screen owns the keys; **`Ctrl+~`** and the Shift spellings (**``Ctrl+Shift+` ``**,
+**`Ctrl+Shift+~`**) are the same physical key and do the same. The shortcut is never
+forwarded to the shell. Legacy terminals that collapse ``Ctrl+` `` and `Ctrl+~` into NUL
+look like Ctrl+Space, which Nexus deliberately leaves to the shell instead of
+hijacking. Closing with the shortcut or Hide detaches and never terminates.
+Legacy pipe-only jobs keep their separate resource indicator. The distinct
 **kernel** indicator has no number (there is exactly one kernel). The dock header
 reads **Terminals (N)**.
 Each terminal has a tab showing a running/exited status dot, its name, and a close
@@ -39,9 +45,10 @@ The screen uses the retained replay and subsequent live output; this is not a
 lossless screen checkpoint. Scrollback is bounded.
 
 When the screen has focus, keyboard input, including Esc and Ctrl+C, belongs to
-the terminal rather than global Nexus shortcuts. **Ctrl+]** returns focus to the
-resource list without sending that key to the shell; from the list, Esc closes
-the panel. Paste goes only to the focused terminal, using bracketed paste when
+the terminal rather than global Nexus shortcuts, except the dock toggle above.
+**Ctrl+]** returns focus to the resource list without sending that key to the
+shell; from the list, Esc closes the panel. Closing the panel returns focus to
+the composer. Paste goes only to the focused terminal, using bracketed paste when
 requested by the application. Mouse interaction is owned by the terminal screen
 when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selection and an explicit **Copy** action
 are required before emitting OSC 52. Escape sequences in terminal output never
@@ -158,7 +165,7 @@ not reveal resource existence. Responses containing terminal state or output use
 | `POST /api/terminal/{id}/resize` | `attachment_id`, `rows`, `cols` | updated dimensions; controller only |
 | `POST /api/terminal/{id}/signal` | `attachment_id`, allowlisted `signal` | accepted signal; controller only |
 | `POST /api/terminal/{id}/detach` | `attachment_id` | detach and release its control, without killing the process |
-| `DELETE /api/terminal/{id}` | | explicitly terminate; idempotently return ended metadata |
+| `DELETE /api/terminal/{id}` | | explicitly terminate a running resource; an exited or ended one is marked `closed`, which clients omit from their lists. Idempotent: returns the `closed` metadata |
 
 An attachment is revoked on stream disconnect, explicit detach, or server
 shutdown. It cannot be reused for a later connection. On reconnect create a new

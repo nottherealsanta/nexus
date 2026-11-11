@@ -11,8 +11,9 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::Frame;
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::app::{now_secs, App, GitGroup, WaitKind};
+use crate::app::{now_secs, App, GitGroup, WaitKind, QUESTION_LOCK};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
 use crate::paint;
 use crate::state::ConnectionState;
@@ -152,6 +153,8 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         left_width: app.ui.left_width,
         panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
         terminal_open: app.terminal_open,
+        session_child: app.viewed().is_some_and(|s| s.parent_id.is_some())
+            && app.ui.view == View::Session,
     };
     let regions = {
         let a: &App = app;
@@ -169,7 +172,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
     let mut metrics = (0usize, 0usize, None::<usize>);
     let timeline = {
         let a: &App = app;
-        Some(a.timeline_for(regions.timeline.width.saturating_sub(4) as usize))
+        Some(a.timeline_for(regions.timeline.width.saturating_sub(2) as usize))
     };
     if let Some(t) = &timeline {
         app.note_live_groups(t);
@@ -182,7 +185,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         };
         let buf = frame.buffer_mut();
         clear(buf, area, cx.st(PRIMARY, CANVAS));
-        draw_header(&cx, buf, &regions, &mut hits);
+        let tab_tip = draw_header(&cx, buf, &regions, &mut hits);
         if let Some(l) = regions.left {
             draw_left(
                 &cx,
@@ -238,8 +241,10 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
             );
             draw_sidebar_edge(&cx, buf, r.x, r);
         }
+        if let Some(back) = regions.back {
+            draw_session_back(&cx, buf, back, &mut hits);
+        }
         draw_heading(&cx, buf, regions.heading);
-        draw_subagents(&cx, buf, regions.strip, &mut hits);
         draw_banner(&cx, buf, regions.banner, &mut hits);
         // The session stays drawn under the settings modal and under a narrow panel.
         if let Some(t) = &timeline {
@@ -366,6 +371,9 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 context.top,
                 &mut hits,
             );
+        }
+        if let Some((anchor, label)) = &tab_tip {
+            draw_tooltip(&cx, buf, *anchor, label, &mut hits);
         }
     }
     // The splash wipes into the first live frame: cells right of the curtain
@@ -892,10 +900,6 @@ fn heights(app: &App, w: u16) -> Heights {
         banner,
         waiting,
         composer,
-        strip: u16::from(
-            app.viewed_id()
-                .is_some_and(|id| app.viewed_root().is_some_and(|r| r != id)),
-        ),
     }
 }
 
@@ -933,7 +937,12 @@ fn toggle_glyph(cx: &Cx, side: Side) -> String {
     .to_owned()
 }
 
-fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
+fn draw_header(
+    cx: &Cx,
+    buf: &mut Buffer,
+    g: &Regions,
+    hits: &mut HitMap,
+) -> Option<(Rect, String)> {
     let base = cx.st(SECONDARY, SIDEBAR);
     clear(buf, g.header, base);
     let focus_bar = cx.t.structure("focus_bar");
@@ -1054,12 +1063,13 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         g.title.height,
     );
     if tr.width < 3 {
-        return;
+        return None;
     }
     if cx.app.narrow() {
         draw_crumb(cx, buf, tr);
+        None
     } else {
-        draw_tabs(cx, buf, tr, hits);
+        draw_tabs(cx, buf, tr, hits)
     }
 }
 
@@ -1114,8 +1124,10 @@ fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
 /// session. The viewed tab is bold primary on the page surface so it reads as
 /// joined to the page below; the others are muted on the chrome band. `+` ends
 /// the strip. A viewed sub agent shows `root › child`. The run status sits
-/// at the centre column's right edge.
-fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
+/// at the centre column's right edge. A hovered title too long for its tab
+/// scrolls until its end is visible; reduced motion instead shows the full
+/// title in a tooltip.
+fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) -> Option<(Rect, String)> {
     let a = cx.app;
     let status = header_status(cx);
     let status_w = status.as_ref().map_or(0, |(s, _)| width(s) + 2);
@@ -1224,6 +1236,7 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, SIDEBAR), 1) + 1;
     }
     let w = tab_width(&tabs, max_title) as u16;
+    let mut tip = None;
     for t in &tabs {
         if x + w > tr.right() {
             break;
@@ -1240,8 +1253,29 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         let title_max = max_title
             .min(w.saturating_sub(5 + u16::from(t.id.is_some()) * 2) as usize)
             .max(6);
+        // The title owns this region only: status, padding and the close slot are outside it.
+        let title_start = cx_x;
+        let title_end = title_start.saturating_add(title_max as u16);
         let parts = shown(t, title_max);
         let last = parts.len() - 1;
+        let hovered = t.index.is_some() && cx.hovered(rect);
+        let overflow = parts.len() == 1 && width(&t.parts[0]) > title_max;
+        let scroll = if overflow && hovered && !cx.t.opts.reduced_motion {
+            t.index
+                .zip(cx.app.ui.tab_hover)
+                .filter(|(i, (hover, _))| i == hover)
+                .map_or(0, |(_, (_, started))| {
+                    marquee_cells(
+                        cx.app.frame.saturating_sub(started),
+                        width(&t.parts[0]) - title_max,
+                    )
+                })
+        } else {
+            0
+        };
+        if overflow && hovered && cx.t.opts.reduced_motion {
+            tip = Some((rect, t.parts[0].clone()));
+        }
         if let (Some(i), Some(_)) = (t.index, &t.id) {
             hits.add(rect, Target::SessionTab(i));
         }
@@ -1251,13 +1285,22 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
             } else {
                 base
             };
+            let text = if pi == last && scroll > 0 {
+                truncate(
+                    &scroll_cells(&t.parts[0], scroll),
+                    title_end.saturating_sub(cx_x) as usize,
+                    cx.ell(),
+                )
+            } else {
+                part.clone()
+            };
             cx_x = put(
                 buf,
                 cx_x,
                 tr.y,
-                part,
+                &text,
                 style,
-                rect.right().saturating_sub(cx_x),
+                title_end.saturating_sub(cx_x),
             );
             if pi < last {
                 cx_x = put(
@@ -1266,7 +1309,7 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
                     tr.y,
                     &sep,
                     base.patch(cx.t.fg(MUTED)),
-                    rect.right().saturating_sub(cx_x),
+                    title_end.saturating_sub(cx_x),
                 );
             }
         }
@@ -1301,6 +1344,46 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         put(buf, x + 1, tr.y, "+", style, 1);
         hits.add(rect, Target::NewSession);
     }
+    tip
+}
+
+/// Cells a hovered tab title has scrolled after `elapsed` frames: a short hold
+/// at each end, then one cell per frame until the whole title has shown.
+fn marquee_cells(elapsed: usize, overflow: usize) -> usize {
+    const HOLD: usize = 8;
+    let cycle = overflow + HOLD * 2;
+    let at = elapsed % cycle.max(1);
+    if at < HOLD {
+        0
+    } else if at < HOLD + overflow {
+        at - HOLD
+    } else {
+        overflow
+    }
+}
+
+/// The tail of `s` from cell `offset` on, with a blank cell where a wide glyph
+/// would be cut in half.
+fn scroll_cells(s: &str, offset: usize) -> String {
+    if offset == 0 {
+        return s.to_owned();
+    }
+    let mut used = 0;
+    let mut out = String::new();
+    for grapheme in s.graphemes(true) {
+        let cell = width(grapheme);
+        if used + cell <= offset {
+            used += cell;
+            continue;
+        }
+        if used < offset {
+            out.push_str(&" ".repeat(offset - used));
+            used = offset;
+        }
+        out.push_str(grapheme);
+        used += cell;
+    }
+    out
 }
 
 /// The status mark in front of a session tab, also used by the session
@@ -1371,157 +1454,144 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
 // banner and toasts
 // ============================================================================
 
-/// The first row of an open session's page: the full title of its tab on the
-/// black page surface, ellipsised only when the page is too narrow for it.
+/// A viewed subagent's four-cell root-back strip: a grey full-height gutter at
+/// the page's left edge, with the arrow centred in it. The whole strip is the
+/// hit area and returns to the root.
+fn draw_session_back(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    if r.height == 0 || r.width == 0 {
+        return;
+    }
+    let hot = cx.hovered(r);
+    let fill = if hot { ACTIVE } else { RAISED };
+    clear(buf, r, cx.st(MUTED, fill));
+    let arrow_x = r.x + r.width.saturating_sub(1) / 2;
+    let arrow_y = r.y + r.height.saturating_sub(1) / 2;
+    put(
+        buf,
+        arrow_x,
+        arrow_y,
+        cx.t.control("back"),
+        cx.st(if hot { PRIMARY } else { MUTED }, fill),
+        1,
+    );
+    hits.add(r, Target::SessionRootBack);
+}
+
+/// The first row of an open session's page, on the black page surface. A root
+/// session keeps it blank: its full title is already the active tab. A viewed
+/// subagent is named here, shifted right of the full-height root-back strip.
 fn draw_heading(cx: &Cx, buf: &mut Buffer, r: Rect) {
     if r.height == 0 {
         return;
     }
-    let Some(root) = cx.app.viewed_root() else {
+    let a = cx.app;
+    let Some(viewed) = a.viewed() else {
         return;
     };
-    let title = cx
-        .app
-        .state
-        .model
-        .sessions
-        .get(&root)
-        .map_or("", |s| s.title.as_str());
-    let title = if title.is_empty() { "Untitled" } else { title };
     let style = cx.st(SECONDARY, CANVAS);
     clear(buf, r, style);
-    let room = r.width.saturating_sub(2) as usize;
+    if viewed.parent_id.is_none() {
+        return;
+    }
+    let title = if viewed.title.is_empty() {
+        "Untitled"
+    } else {
+        viewed.title.as_str()
+    };
+    let edge = r.right().saturating_sub(1);
+    // Keep the title readable: at least two fifths of the row (and never
+    // less than 12 cells when there is room), then compact the metadata.
+    let min_title = (r.width.saturating_mul(2) / 5)
+        .max(12)
+        .min(r.width.saturating_sub(3).max(1));
+    let max_meta = edge.saturating_sub(r.x + 1 + min_title + 2);
+    let meta = heading_metadata(
+        &session_meta_parts(a, viewed),
+        max_meta as usize,
+        &cx.sep(),
+        cx.t.structure("separator"),
+        cx.ell(),
+    );
+    let meta_w = width(&meta) as u16;
+    let meta_x = edge.saturating_sub(meta_w);
+    let room = meta_x.saturating_sub(r.x + 1 + 2);
     put(
         buf,
         r.x + 1,
         r.y,
-        &truncate(title, room, cx.ell()),
+        &truncate(title, room as usize, cx.ell()),
         style,
-        r.width.saturating_sub(1),
+        room,
     );
+    if meta_w > 0 {
+        put(buf, meta_x, r.y, &meta, cx.st(MUTED, CANVAS), meta_w);
+    }
 }
 
-/// The subagent strip under the tabs (shown only while a child is viewed): the
-/// path above it as equal parent tabs, a rail, then the root's other sessions
-/// as equal tabs with their state glyph and agent. The viewed child is the one
-/// selected tab, so its title appears there and not again beside the strip.
-fn draw_subagents(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
-    if r.height == 0 {
-        return;
-    }
-    let a = cx.app;
-    let Some(viewed) = a.viewed_id() else {
-        return;
-    };
-    let chain = a.ancestors_of(viewed);
-    if chain.len() < 2 {
-        return;
-    }
-    let root = chain[0];
-    let mut ancestors: Vec<&crate::api::Session> = chain[..chain.len() - 1].to_vec();
-    let mut children: Vec<&crate::api::Session> = a.subagents_of(&root.id);
-    let above: Vec<&str> = ancestors.iter().map(|s| s.id.as_str()).collect();
-    children.retain(|s| !above.contains(&s.id.as_str()));
-    if children.is_empty() {
-        children.push(chain[chain.len() - 1]);
-    }
-    let title_w = |s: &&crate::api::Session| width(&s.title).min(28);
-    let natural = |s: &&crate::api::Session, child: bool| {
-        if child {
-            4 + width(&crate::text::capitalize(s.agent_label())) + title_w(s)
-        } else {
-            title_w(s)
-        }
-    };
-    let widest = ancestors
-        .iter()
-        .map(|s| natural(s, false))
-        .chain(children.iter().map(|s| natural(s, true)))
-        .max()
-        .unwrap_or(10);
-    let mut cell = (widest + 2).clamp(10, 30) as u16;
-    let total = |cell: u16, count: usize| count as u16 * (cell + 1) + 2;
-    let room = r.width.saturating_sub(3);
-    let mut dropped_left = false;
-    while total(cell, ancestors.len() + children.len()) + if dropped_left { 2 } else { 0 } > room {
-        if ancestors.len() > 1 {
-            ancestors.remove(0);
-            dropped_left = true;
-        } else if children.len() > 1 {
-            // Drop the tab farthest from the viewed child so it keeps its selected tab.
-            let at = children
-                .iter()
-                .position(|s| s.id.as_str() == viewed)
-                .unwrap_or(0);
-            if at + 1 < children.len() {
-                children.remove(children.len() - 1);
+/// The heading's four metadata values in stable order: agent, model, provider,
+/// effort. Missing model values read `default`, matching the composer.
+fn session_meta_parts(app: &App, s: &crate::api::Session) -> [String; 4] {
+    let agent = crate::text::capitalize(s.agent_label());
+    let reference = app.effective_model(Some(s));
+    let (provider, model) = if reference.is_empty() {
+        ("default".to_owned(), "default".to_owned())
+    } else {
+        let (provider, name, _) = model_parts(app, &reference);
+        (
+            if provider.is_empty() {
+                "default".to_owned()
             } else {
-                children.remove(0);
-            }
-        } else if cell > 8 {
-            cell -= 1;
-        } else {
-            break;
+                provider
+            },
+            if name.is_empty() {
+                "default".to_owned()
+            } else {
+                name
+            },
+        )
+    };
+    let effort = s
+        .extra
+        .get("effort")
+        .and_then(Value::as_str)
+        .filter(|e| !e.is_empty())
+        .unwrap_or("default")
+        .to_owned();
+    [agent, model, provider, effort]
+}
+
+/// Join metadata in stable order, first with the spaced separator, then with
+/// the compact one, then with each field shortened to an equal share. A row too
+/// narrow for four fields falls back to one ellipsised line.
+fn heading_metadata(parts: &[String], room: usize, sep: &str, compact: &str, ell: &str) -> String {
+    if room == 0 || parts.is_empty() {
+        return String::new();
+    }
+    let full = parts.join(sep);
+    if width(&full) <= room {
+        return full;
+    }
+    let tight = parts.join(compact);
+    if width(&tight) <= room {
+        return tight;
+    }
+    let separators = width(compact) * parts.len().saturating_sub(1);
+    let Some(budget) = room.checked_sub(separators) else {
+        return truncate(&tight, room, ell);
+    };
+    if budget < parts.len() {
+        return truncate(&tight, room, ell);
+    }
+    let base = budget / parts.len();
+    let extra = budget % parts.len();
+    let mut out = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push_str(compact);
         }
+        out.push_str(&truncate(part, base + usize::from(i < extra), ell));
     }
-    let row = Rect::new(r.x, r.y, r.width, 1);
-    clear(buf, row, cx.st(MUTED, CANVAS));
-    let mut x = r.x + 1;
-    if dropped_left {
-        x = put(buf, x, r.y, cx.ell(), cx.st(MUTED, CANVAS), 1) + 1;
-    }
-    for s in &ancestors {
-        if x + cell > row.right() {
-            return;
-        }
-        let rect = Rect::new(x, r.y, cell, 1);
-        let hot = cx.hovered(rect);
-        let bg = if hot { RAISED } else { CANVAS };
-        clear(buf, rect, cx.st(SECONDARY, bg));
-        put(
-            buf,
-            x + 1,
-            r.y,
-            &truncate(&s.title, cell.saturating_sub(2) as usize, cx.ell()),
-            cx.st(if hot { PRIMARY } else { SECONDARY }, bg),
-            cell.saturating_sub(1),
-        );
-        hits.add(rect, Target::Subagent(s.id.clone()));
-        x += cell + 1;
-    }
-    x = put(buf, x, r.y, cx.t.structure("rail"), cx.st(MUTED, CANVAS), 1) + 1;
-    for s in &children {
-        if x + cell > row.right() {
-            break;
-        }
-        let open = s.id.as_str() == viewed;
-        let rect = Rect::new(x, r.y, cell, 1);
-        let bg = if open { RAISED } else { CANVAS };
-        let base = cx.st(if open { PRIMARY } else { SECONDARY }, bg);
-        clear(buf, rect, base);
-        let (glyph, style) = session_glyph(cx, &s.id, bg);
-        let mut tx = put(buf, x + 1, r.y, &glyph, style, 1) + 1;
-        // A fork reads `Fork`, coloured as that name (as in NSH).
-        let agent = crate::text::capitalize(s.agent_label());
-        tx = put(
-            buf,
-            tx,
-            r.y,
-            &agent,
-            cx.st(PRIMARY, bg).patch(cx.t.agent_style(s.agent_label())),
-            rect.right().saturating_sub(tx),
-        ) + 1;
-        put(
-            buf,
-            tx,
-            r.y,
-            &truncate(&s.title, rect.right().saturating_sub(tx) as usize, cx.ell()),
-            base,
-            rect.right().saturating_sub(tx),
-        );
-        hits.add(rect, Target::Subagent(s.id.clone()));
-        x += cell + 1;
-    }
+    out
 }
 
 fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
@@ -1761,45 +1831,6 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     hits.add(r, Target::Swallow);
     let focused = a.ui.focus == Focus::Sidebar;
 
-    // fixed bottom: settings entry
-    let settings_y = r.bottom() - 1;
-    let sr = Rect::new(r.x, settings_y, r.width, 1);
-    let mut s_style = cx.st(SECONDARY, SIDEBAR);
-    if a.ui.view == View::Settings {
-        s_style = cx.st(PRIMARY, SIDEBAR);
-        clear(buf, sr, s_style);
-    }
-    let label = a
-        .manifest
-        .command(&a.manifest.navigation.left_sidebar.settings_entry)
-        .map_or("Settings", |c| c.title.as_str());
-    let label = label.strip_prefix("Open ").map_or(label.to_owned(), |l| {
-        let mut c = l.chars();
-        c.next()
-            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-            .unwrap_or_default()
-    });
-    put(
-        buf,
-        r.x + 2,
-        settings_y,
-        &label,
-        s_style,
-        r.width.saturating_sub(2),
-    );
-    if let Some(k) = a.manifest.command("app.settings").and_then(|c| c.tui_key()) {
-        let kx = r.right().saturating_sub(width(k) as u16 + 1);
-        put(
-            buf,
-            kx,
-            settings_y,
-            k,
-            s_style.patch(cx.st(MUTED, SIDEBAR)),
-            r.right() - kx,
-        );
-    }
-    hits.add(sr, Target::SettingsEntry);
-
     // Docked: the icons are in the header band and the body starts on the
     // first row. A drawer keeps its own icon row.
     let top = if cx.app.narrow() {
@@ -1808,7 +1839,7 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     } else {
         1
     };
-    let body = Rect::new(r.x, r.y + top, r.width, r.height.saturating_sub(top + 2));
+    let body = Rect::new(r.x, r.y + top, r.width, r.height.saturating_sub(top + 1));
     match a.ui.tab {
         Tab::Sessions => draw_sessions(cx, buf, body, focused, hits),
         Tab::Files => draw_files(cx, buf, body, focused, hits),
@@ -1915,8 +1946,7 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 }
 
-/// One rail entry: a project, the add-project control, or Settings while the
-/// sidebar with its own Settings row is closed.
+/// One rail entry: a project, the pinned add-project control, or Settings.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RailItem {
     Project(usize),
@@ -1929,8 +1959,7 @@ const RAIL_ITEM: u16 = 4;
 
 pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
     let entries = a.rail_project_ids();
-    let settings = !a.ui.left_open;
-    let room = r.height.saturating_sub(4 + if settings { 4 } else { 0 });
+    let room = r.height.saturating_sub(12);
     let shown = (room / RAIL_ITEM) as usize;
     // The current project stays in view when the rail overflows.
     let current = a
@@ -1944,10 +1973,10 @@ pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
         out.push((RailItem::Project(i), Rect::new(r.x, y, r.width, RAIL_ITEM)));
         y += RAIL_ITEM;
     }
-    if y + 3 <= r.bottom() {
-        out.push((RailItem::Add, Rect::new(r.x, y, r.width, 3)));
+    if r.height >= 8 {
+        out.push((RailItem::Add, Rect::new(r.x, r.bottom() - 8, r.width, 3)));
     }
-    if settings && r.height >= 4 {
+    if r.height >= 4 {
         out.push((
             RailItem::Settings,
             Rect::new(r.x, r.bottom() - 4, r.width, 3),
@@ -3477,7 +3506,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     if r.height < 3 {
         return;
     }
-    let new_session = Rect::new(r.x, r.y, r.width, 1);
+    let new_session = Rect::new(r.x, r.bottom().saturating_sub(3), r.width, 1);
     let mut new_style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(new_session) {
         new_style = new_style.patch(cx.st(PRIMARY, SIDEBAR));
@@ -3493,7 +3522,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         r.width.saturating_sub(3),
     );
     hits.add(new_session, Target::NewSession);
-    let search = Rect::new(r.x, r.y + 1, r.width, 1);
+    let search = Rect::new(r.x, r.bottom().saturating_sub(2), r.width, 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
@@ -3547,12 +3576,12 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         buf,
         r.x + 3,
         archive.y,
-        "Show archive",
+        "Show archived",
         archive_style,
         r.width.saturating_sub(3),
     );
     hits.add(archive, Target::ArchivedFilter);
-    let list = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(3));
+    let list = Rect::new(r.x, r.y, r.width, r.height.saturating_sub(3));
     if list.height == 0 {
         return;
     }
@@ -4927,7 +4956,7 @@ fn draw_timeline(
     }
     let a = cx.app;
     hits.add(r, Target::Timeline);
-    let inner = Rect::new(r.x + 2, r.y, r.width - 4, r.height);
+    let inner = Rect::new(r.x + 1, r.y, r.width - 2, r.height);
     let lines = &timeline.lines;
     if a.pending_first_prompt().is_some()
         || a.viewed().is_none()
@@ -6105,13 +6134,14 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 let active = ask
                     .as_ref()
                     .is_some_and(|c| !c.sent && !c.review() && c.field());
-                clear(buf, Rect::new(x, y, inner_w, 1), cx.st(MUTED, RAISED));
+                // The answer line, not a selected row: no filled background.
+                clear(buf, Rect::new(x, y, inner_w, 1), cx.st(MUTED, PANEL));
                 put(
                     buf,
                     x,
                     y,
                     marker,
-                    cx.st(if active { mark } else { MUTED }, RAISED),
+                    cx.st(if active { mark } else { MUTED }, PANEL),
                     1,
                 );
                 let tx = x + 2;
@@ -6127,7 +6157,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         tx,
                         y,
                         &truncate(&placeholder, tw as usize, cx.ell()),
-                        cx.st(MUTED, RAISED),
+                        cx.st(MUTED, PANEL),
                         tw,
                     );
                 } else {
@@ -6136,7 +6166,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         tx,
                         y,
                         text,
-                        cx.st(if active { PRIMARY } else { SECONDARY }, RAISED),
+                        cx.st(if active { PRIMARY } else { SECONDARY }, PANEL),
                         tw,
                     );
                 }
@@ -6276,7 +6306,9 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         }
                         hints.push((
                             "enter".into(),
-                            if c.page + 1 < c.total {
+                            if c.total == 1 {
+                                "send"
+                            } else if c.page + 1 < c.total {
                                 "next"
                             } else {
                                 "review"
@@ -6743,6 +6775,18 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .x;
         let mark_x = input_x.saturating_sub(2);
         let end = card.right().saturating_sub(2);
+        let queued: Vec<usize> = inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item["mode"] == "queue")
+            .map(|(i, _)| i)
+            .collect();
+        let edit_glyph = if cx.t.opts.ascii { "e" } else { "✎" };
+        let up_glyph = cx.t.control("up");
+        let down_glyph = if cx.t.opts.ascii { "v" } else { "↓" };
+        let remove_glyph = cx.t.structure("close");
+        let icons_w =
+            width(edit_glyph) + width(up_glyph) + width(down_glyph) + width(remove_glyph) + 3;
         for (line, (idx, item)) in inputs
             .iter()
             .enumerate()
@@ -6762,30 +6806,30 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 })
                 .unwrap_or_else(|| "[image]".to_owned());
             let text = text.lines().next().unwrap_or("");
-            let mode = if item["mode"] == "steer" { "S" } else { "Q" };
+            let queued_row = item["mode"] == "queue";
+            let mode = if queued_row { "Q" } else { "S" };
             let selected = cx.app.ui.pending_selected == Some(idx);
             let y = r.y + 1 + line as u16;
-            put(
-                buf,
-                mark_x,
-                y,
-                mode,
-                cx.st(ACCENT, PANEL).add_modifier(Modifier::BOLD),
-                1,
-            );
+            let row_rect = Rect::new(mark_x, y, end.saturating_sub(mark_x), 1);
+            let hot = cx.hovered(row_rect);
+            let show_actions = queued_row && (selected || hot);
+            put(buf, mark_x, y, mode, cx.st(PRIMARY, PANEL), 1);
             let held_suffix = if held { " held" } else { "" };
-            let hint = if selected {
+            let hint = if !selected {
+                ""
+            } else if queued_row {
                 "  enter edit · backspace remove · s steer · shift+↑/↓ move"
             } else {
-                ""
+                "  enter edit · backspace remove · shift+↑/↓ move"
             };
-            let text_end = end.saturating_sub(width(held_suffix) as u16).max(input_x);
+            let reserved = width(held_suffix) + if show_actions { icons_w + 2 } else { 0 };
+            let text_end = end.saturating_sub(reserved as u16).max(input_x);
             let mut x = put(
                 buf,
                 input_x,
                 y,
                 text,
-                cx.st(if selected { PRIMARY } else { MUTED }, PANEL),
+                cx.st(if selected || hot { PRIMARY } else { MUTED }, PANEL),
                 text_end.saturating_sub(input_x),
             );
             x = put(
@@ -6794,9 +6838,50 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 y,
                 held_suffix,
                 cx.st(MUTED, PANEL),
-                end.saturating_sub(x),
+                text_end.saturating_sub(x),
             );
-            put(buf, x, y, hint, cx.st(MUTED, PANEL), end.saturating_sub(x));
+            let hint_end = if show_actions {
+                end.saturating_sub(icons_w as u16 + 1)
+            } else {
+                end
+            };
+            put(
+                buf,
+                x,
+                y,
+                hint,
+                cx.st(MUTED, PANEL),
+                hint_end.saturating_sub(x),
+            );
+            if show_actions {
+                let Some(position) = queued.iter().position(|i| *i == idx) else {
+                    continue;
+                };
+                let actions = [
+                    (edit_glyph, PendingAction::Edit, true),
+                    (up_glyph, PendingAction::Up, position > 0),
+                    (down_glyph, PendingAction::Down, position + 1 < queued.len()),
+                    (remove_glyph, PendingAction::Remove, true),
+                ];
+                let mut ax = end.saturating_sub(icons_w as u16);
+                for (glyph, action, enabled) in actions {
+                    let gw = width(glyph).max(1) as u16;
+                    let rect = Rect::new(ax, y, gw, 1);
+                    let icon_hot = enabled && cx.hovered(rect);
+                    let style = if !enabled {
+                        cx.st(MUTED, PANEL).add_modifier(Modifier::DIM)
+                    } else if icon_hot {
+                        cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD)
+                    } else {
+                        cx.st(SECONDARY, PANEL)
+                    };
+                    put(buf, ax, y, glyph, style, gw);
+                    if enabled {
+                        hits.add(rect, Target::PendingAction(idx, action));
+                    }
+                    ax += gw + 1;
+                }
+            }
         }
     }
     let r = composer;
@@ -6928,6 +7013,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 }
                 _ => format!("Disconnected {} read-only", cx.t.structure("separator")),
             }
+        } else if a.question_pending() {
+            QUESTION_LOCK.to_owned()
         } else if a.viewed().is_none() {
             "Message to start a new session".to_owned()
         } else {
@@ -7406,9 +7493,6 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             listing["session_directory"]
                 .as_str()
                 .is_none_or(|root| root == directory)
-                && listing["project_directory"]
-                    .as_str()
-                    .is_none_or(|root| std::path::Path::new(directory).starts_with(root))
         })
         .and_then(|listing| listing["worktrees"].as_array())
         .and_then(|trees| {
@@ -7429,7 +7513,7 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let y = r.bottom() - 1;
     let start = r.x + 2;
     let end = r.right().saturating_sub(2);
-    let icon = if cx.t.opts.ascii { "*" } else { "⑂" };
+    let icon = cx.t.control("worktree");
     // Each indicator is absent when its corresponding resource count is zero.
     let (kernels, jobs) = a.resource_counts();
     let shells = a.terminal_shell_count();
@@ -7496,14 +7580,21 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
     if linked {
+        let icon_x = x + 2;
+        let icon_rect = Rect::new(icon_x, y, width(icon).max(1) as u16, 1);
+        let hot = cx.hovered(icon_rect);
         put(
             buf,
             x,
             y,
             &format!("  {icon}"),
-            cx.st(MUTED, CANVAS),
+            cx.st(if hot { PRIMARY } else { MUTED }, CANVAS),
             left_end.saturating_sub(x),
         );
+        hits.add(icon_rect, Target::ComposerWorktreeInfo);
+        if hot && a.ui.overlay.is_none() && a.ui.dialog.is_none() && a.ui.edit.is_none() {
+            draw_tooltip(cx, buf, icon_rect, "Worktree session", hits);
+        }
     }
     if show_chip {
         put(buf, chip_x, y, &chip, cx.st(SECONDARY, PANEL), chip_w);
@@ -8778,7 +8869,115 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
         OverlayKind::Usage { rows, top } => draw_usage(cx, buf, area, rows, *top, hits),
         OverlayKind::Resources { top, kind } => draw_resources(cx, buf, area, *top, *kind, hits),
         OverlayKind::Projects(o) => draw_projects_overview(cx, buf, area, o, hits),
+        OverlayKind::WorktreeInfo(info) => draw_worktree_info(cx, buf, area, info, hits),
     }
+}
+
+/// One body row of the worktree modal, in scroll order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorktreeRow {
+    Body(String),
+    Blank,
+    Label(WorktreeCopy, String),
+    Value(WorktreeCopy, String),
+}
+
+fn worktree_content_width(area: Rect) -> u16 {
+    MODAL_SMALL
+        .min(area.width.saturating_sub(4))
+        .max(1)
+        .saturating_sub(4)
+        .max(1)
+}
+
+/// Every row the worktree modal needs. The values wrap at the modal's content
+/// width and are never truncated; the body scrolls when they do not fit.
+fn worktree_rows(info: &WorktreeInfo, width: u16) -> Vec<WorktreeRow> {
+    let mut rows: Vec<WorktreeRow> =
+        text::wrap("This session is in a worktree.", width.max(1) as usize)
+            .into_iter()
+            .map(WorktreeRow::Body)
+            .collect();
+    rows.push(WorktreeRow::Blank);
+    let sections = [
+        (WorktreeCopy::Path, "Worktree path", &info.path),
+        (WorktreeCopy::Branch, "Branch", &info.branch),
+        (WorktreeCopy::Main, "Main checkout", &info.main),
+    ];
+    for (which, label, value) in sections {
+        rows.push(WorktreeRow::Label(which, label.to_owned()));
+        let value = if value.is_empty() { "—" } else { value };
+        rows.extend(
+            text::wrap(value, width.max(1) as usize)
+                .into_iter()
+                .map(|line| WorktreeRow::Value(which, line)),
+        );
+    }
+    rows
+}
+
+/// Rows the worktree modal can scroll past.
+pub(crate) fn worktree_scroll_max(area: Rect, info: &WorktreeInfo) -> usize {
+    let rows = worktree_rows(info, worktree_content_width(area));
+    let body = modal_box(area, MODAL_SMALL, rows.len() as u16 + 6)
+        .height
+        .saturating_sub(6) as usize;
+    rows.len().saturating_sub(body)
+}
+
+/// The compact worktree modal: the body sentence, then the full worktree path,
+/// branch and main checkout. Each value wraps in full and copies on a click;
+/// Up/Down and Page Up/Down scroll when the body is taller than the modal.
+fn draw_worktree_info(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    info: &WorktreeInfo,
+    hits: &mut HitMap,
+) {
+    let rows = worktree_rows(info, worktree_content_width(area));
+    let b = modal_box(area, MODAL_SMALL, rows.len() as u16 + 6);
+    let m = modal(cx, buf, area, b, "Worktree", hits);
+    let height = m.body.height as usize;
+    let max = rows.len().saturating_sub(height);
+    let top = info.top.min(max);
+    for (offset, row) in rows.iter().skip(top).take(height).enumerate() {
+        let y = m.body.y + offset as u16;
+        let line = Rect::new(m.x, y, m.w, 1);
+        match row {
+            WorktreeRow::Body(text) => {
+                put(buf, m.x, y, text, cx.st(PRIMARY, RAISED), m.w);
+            }
+            WorktreeRow::Blank => {}
+            WorktreeRow::Label(which, label) => {
+                // The row target includes the copy glyph one cell past the body.
+                let line = Rect::new(m.x, y, m.w.saturating_add(1), 1);
+                let hot = cx.hovered(line);
+                put(buf, m.x, y, label, cx.st(MUTED, RAISED), m.w);
+                let copy = cx.t.control("copy");
+                put(
+                    buf,
+                    m.r.right().saturating_sub(2),
+                    y,
+                    copy,
+                    cx.st(if hot { PRIMARY } else { MUTED }, RAISED),
+                    1,
+                );
+                hits.add(line, Target::WorktreeCopy(*which));
+            }
+            WorktreeRow::Value(which, text) => {
+                put(buf, m.x, y, text, cx.st(PRIMARY, RAISED), m.w);
+                hits.add(line, Target::WorktreeCopy(*which));
+            }
+        }
+    }
+    let mut hints: Vec<(&str, &str)> = Vec::new();
+    if max > 0 {
+        hints.push((updown(cx), "scroll"));
+    }
+    hints.push(("enter", "copy path"));
+    hints.push(("esc", "close"));
+    hint_row(cx, buf, &m, &hints);
 }
 
 /// The projects overview: every project in its saved order, with its active
@@ -10798,5 +10997,44 @@ mod tests {
             cursor_position(&app, &app.regions).is_none(),
             "the file modal hides the page's caret"
         );
+    }
+
+    #[test]
+    fn a_tab_title_marquee_only_moves_what_overflows() {
+        assert_eq!(marquee_cells(0, 0), 0);
+        assert_eq!(marquee_cells(700, 0), 0);
+        assert_eq!(marquee_cells(8, 10), 0, "a short hold at the start");
+        assert_eq!(marquee_cells(9, 10), 1, "then one cell per frame");
+        assert_eq!(marquee_cells(18, 10), 10, "the end holds the last part");
+        assert_eq!(marquee_cells(25, 10), 10);
+        assert_eq!(marquee_cells(26, 10), 0, "then starts over");
+    }
+
+    #[test]
+    fn heading_metadata_keeps_order_and_falls_back_compactly() {
+        let parts = [
+            "Scout".to_owned(),
+            "GPT-6".to_owned(),
+            "codex".to_owned(),
+            "high".to_owned(),
+        ];
+        assert_eq!(
+            heading_metadata(&parts, 80, " · ", "·", "…"),
+            "Scout · GPT-6 · codex · high"
+        );
+        assert_eq!(
+            heading_metadata(&parts, 22, " · ", "·", "…"),
+            "Scout·GPT-6·codex·high"
+        );
+        let tight = heading_metadata(&parts, 12, " · ", "·", "…");
+        assert!(tight.contains('…'), "{tight:?}");
+        assert_eq!(heading_metadata(&parts, 0, " · ", "·", "…"), "");
+    }
+
+    #[test]
+    fn scrolled_titles_never_split_a_wide_glyph() {
+        assert_eq!(scroll_cells("abcdef", 0), "abcdef");
+        assert_eq!(scroll_cells("abcdef", 2), "cdef");
+        assert_eq!(scroll_cells("a界b", 2), " 界b");
     }
 }

@@ -112,6 +112,7 @@ pub const WIRED: &[&str] = &[
     "overlay.close",
     "nav.drawer.close",
     "nav.back",
+    "nav.root",
     "sidebar.step_back",
     "sidebar.left.toggle",
     "sidebar.right.toggle",
@@ -149,6 +150,7 @@ pub const WIRED: &[&str] = &[
     "session.new",
     "session.open",
     "session.switch",
+    "session.search",
     "project.switch",
     "project.open",
     "project.add",
@@ -200,10 +202,12 @@ pub const WIRED: &[&str] = &[
     "session.export",
     "session.change_directory",
     "session.resources",
+    "session.worktree_info",
     "turn.go_to",
     "model.change",
     "model.effort",
     "agent.change",
+    "agent.cycle",
     "skills.learn",
     "composer.newline",
     "session.jump_latest",
@@ -282,6 +286,7 @@ const MUTATING: &[&str] = &[
     "model.change",
     "model.effort",
     "agent.change",
+    "agent.cycle",
     "skills.learn",
     "waiting.allow_once",
     "waiting.allow_session",
@@ -292,6 +297,8 @@ const MUTATING: &[&str] = &[
 
 const NOT_WIRED: &str = "Not available yet.";
 pub(crate) const READ_ONLY: &str = "Read-only until Core is connected again.";
+/// Why the composer cannot take text while a question waits in this session.
+pub(crate) const QUESTION_LOCK: &str = "Answer the question above";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 /// The timeline scroll bar stays at full strength this long after a scroll…
@@ -936,6 +943,8 @@ pub struct Ui {
     /// The launch splash: logo, milestone bar and the wipe into the first
     /// live frame. It is over for the rest of the run once it finishes.
     pub splash: crate::splash::Splash,
+    /// The session tab under the pointer and the frame its title marquee began.
+    pub tab_hover: Option<(usize, usize)>,
 }
 
 pub struct App {
@@ -1213,9 +1222,11 @@ impl App {
         let manifest = Arc::new(Manifest::load());
         let mut bindings = HashMap::new();
         for c in manifest.command.iter().filter(|c| c.for_tui()) {
-            if let (Some(k), Some(ctx)) = (c.tui_key(), c.key_context.as_deref()) {
+            if let Some(ctx) = c.key_context.as_deref() {
                 if ctx != "escape_chain" {
-                    bindings.insert((ctx.to_owned(), k.to_owned()), c.id.clone());
+                    for k in c.tui_keys() {
+                        bindings.insert((ctx.to_owned(), k.to_owned()), c.id.clone());
+                    }
                 }
             }
         }
@@ -1348,6 +1359,7 @@ impl App {
                 monochrome_before: None,
                 prefs: None,
                 splash,
+                tab_hover: None,
             },
             hits: HitMap::default(),
             regions,
@@ -2280,6 +2292,76 @@ impl App {
             .count()
     }
 
+    /// Copy one value from the open worktree modal through OSC 52.
+    fn copy_worktree_value(&mut self, which: WorktreeCopy) {
+        let Some(Overlay {
+            kind: OverlayKind::WorktreeInfo(info),
+            ..
+        }) = &self.ui.overlay
+        else {
+            return;
+        };
+        let value = match which {
+            WorktreeCopy::Path => &info.path,
+            WorktreeCopy::Branch => &info.branch,
+            WorktreeCopy::Main => &info.main,
+        };
+        if value.is_empty() {
+            return;
+        }
+        self.effects.push(Effect::Copy(value.clone()));
+        self.toast(Level::Success, "Copied");
+    }
+
+    /// The viewed session's worktree, from the session listing or the
+    /// project-wide one. ``None`` outside Git (or before a listing arrives).
+    pub fn worktree_info(&self) -> Option<WorktreeInfo> {
+        let session = self.viewed()?;
+        let directory = session.directory.as_str();
+        let listing = self
+            .state
+            .worktrees
+            .get(&session.id)
+            .or_else(|| self.state.project_worktrees.get(&session.project_id))?;
+        // A per-session listing can be stale after the session moved; the
+        // project fallback has no session_directory. Matching the most specific
+        // worktree path is enough, and it keeps a linked sibling checkout
+        // outside the project directory visible.
+        if listing["session_directory"]
+            .as_str()
+            .is_some_and(|root| root != directory)
+        {
+            return None;
+        }
+        let trees = listing["worktrees"].as_array()?;
+        let tree = trees
+            .iter()
+            .filter(|tree| {
+                tree["path"]
+                    .as_str()
+                    .is_some_and(|root| std::path::Path::new(directory).starts_with(root))
+            })
+            .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len))?;
+        let path = tree["path"].as_str()?.to_owned();
+        let main = listing["main"]
+            .as_str()
+            .or_else(|| {
+                trees
+                    .iter()
+                    .find(|tree| tree["main"].as_bool() == Some(true))
+                    .and_then(|tree| tree["path"].as_str())
+            })
+            .unwrap_or("")
+            .to_owned();
+        Some(WorktreeInfo {
+            path,
+            branch: tree["branch"].as_str().unwrap_or("").to_owned(),
+            main,
+            linked: tree["main"].as_bool() == Some(false),
+            top: 0,
+        })
+    }
+
     /// Approvals and questions waiting in the viewed session or its children.
     pub fn wait_items(&self) -> Vec<WaitItem> {
         let Some(vid) = self.viewed_id() else {
@@ -2329,6 +2411,14 @@ impl App {
             .cloned()
     }
 
+    /// The waiting card in view is a question. Its keys own the composer, which
+    /// is disabled until the question is answered or cancelled. An approval
+    /// stays approval-only even when a question waits behind it.
+    pub fn question_pending(&self) -> bool {
+        self.wait_focused()
+            .is_some_and(|w| w.kind == WaitKind::Question)
+    }
+
     /// The focused wait's current page, when it is a question.
     pub fn ask_current(&self) -> Option<AskCurrent> {
         let wait = self
@@ -2347,6 +2437,70 @@ impl App {
             picks,
             sent,
         })
+    }
+
+    /// Start the draft for a question the first time it is shown, focusing the
+    /// answer field when the question asks for a string (a free-text option or
+    /// a question with no options).
+    fn start_question(&mut self, id: &str) {
+        let Some(question) = self.state.model.questions.get(id) else {
+            return;
+        };
+        let total = question.questions.len();
+        let questions = question.questions.clone();
+        let draft = self.ui.asks.entry(id.to_owned()).or_default();
+        let fresh = draft.picks.is_empty();
+        if draft.picks.len() != total {
+            draft.picks.resize(total, AskPick::default());
+        }
+        if fresh {
+            if let Some(pick) = draft.picks.first_mut() {
+                if questions.first().is_some_and(|q| {
+                    q["options"].as_array().is_none_or(Vec::is_empty)
+                        || q["allow_free_text"].as_bool() == Some(true)
+                }) {
+                    pick.field = true;
+                }
+            }
+        }
+    }
+
+    /// Prepare the drafts of every pending question in the viewed session's tree.
+    fn prepare_questions(&mut self) {
+        let ids: Vec<String> = self
+            .wait_items()
+            .into_iter()
+            .filter(|w| w.kind == WaitKind::Question)
+            .map(|w| w.id)
+            .collect();
+        for id in ids {
+            self.start_question(&id);
+        }
+    }
+
+    /// A question arrived and is the card in view: give it the keys so text
+    /// goes straight into its answer field.
+    fn focus_question_card(&mut self) {
+        if self.ui.overlay.is_some() || self.ui.dialog.is_some() || self.ui.edit.is_some() {
+            return;
+        }
+        if self.ask_current().is_some() {
+            self.ui.focus = Focus::Waiting;
+        }
+    }
+
+    /// A question was answered or cancelled: forget its draft and give the
+    /// composer back when nothing else is waiting.
+    fn question_closed(&mut self, id: &str) {
+        self.ui.asks.remove(id);
+        if self.ui.focus == Focus::Waiting
+            && self.wait_focused().is_none()
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+        {
+            self.ui.focus = Focus::Composer;
+        }
     }
 
     /// The draft of request `id`, started blank on first use.
@@ -2456,28 +2610,6 @@ impl App {
         }
     }
 
-    /// Text typed in the composer while a question waits still answers it.
-    fn ask_adopt_composer(&mut self) {
-        let Some(cur) = self.ask_current() else {
-            return;
-        };
-        if cur.sent || cur.review() {
-            return;
-        }
-        let text = self.composer_ref().expanded_text();
-        if text.trim().is_empty() {
-            return;
-        }
-        let d = self.ask_picks(&cur.wait.id, cur.total);
-        if let Some(pick) = d.picks.get_mut(cur.page) {
-            if pick.input.expanded_text().trim().is_empty() {
-                pick.input.set_text(&text);
-                pick.field = true;
-                self.composer().clear();
-            }
-        }
-    }
-
     /// Move to the previous or next page: a question, or the review at the end.
     fn ask_page(&mut self, forward: bool) {
         let Some(cur) = self.ask_current() else {
@@ -2530,10 +2662,16 @@ impl App {
         if let Some(slot) = d.picks.get_mut(cur.page) {
             *slot = pick;
         }
+        if cur.total == 1 {
+            // One question answers in one step: no review page.
+            return self.ask_submit();
+        }
         d.page = cur.page + 1;
         d.scroll = 0;
         if let Some(next) = cur.questions.get(d.page) {
-            if next["options"].as_array().is_none_or(Vec::is_empty) {
+            if next["options"].as_array().is_none_or(Vec::is_empty)
+                || next["allow_free_text"].as_bool() == Some(true)
+            {
                 if let Some(pick) = d.picks.get_mut(d.page) {
                     pick.field = true;
                 }
@@ -2569,7 +2707,9 @@ impl App {
         let answers = ask_answers(&cur.questions, &picks);
         let d = self.ask_picks(&cur.wait.id, cur.total);
         d.picks = picks;
-        d.page = cur.total;
+        // A single question stays on its page while the reply is in flight;
+        // it never shows a review.
+        d.page = if cur.total == 1 { cur.page } else { cur.total };
         d.sent = true;
         self.api(ApiCall::Answer {
             session: cur.wait.session_id.clone(),
@@ -3109,7 +3249,8 @@ impl App {
             "session.archived" => self.viewed().is_some_and(|s| s.archived),
             "session.child" => self.viewed().is_some_and(|s| s.parent_id.is_some()),
             "session.continued" => self.viewed().is_some_and(|s| s.continued_from.is_some()),
-            "session.in_worktree" => false,
+            "session.in_worktree" => self.worktree_info().is_some(),
+            "session.linked_worktree" => self.worktree_info().is_some_and(|w| w.linked),
             "has_waiting" => {
                 !self.state.model.approvals.is_empty() || !self.state.model.questions.is_empty()
             }
@@ -3554,6 +3695,23 @@ impl App {
             top: 0,
             model_info: false,
         }));
+    }
+
+    /// The sessions switcher with its search field focused, optionally
+    /// prefilled by `/search <text>`. Typing filters without another key.
+    fn open_sessions_search(&mut self, query: &str) {
+        let mut q = Composer::new();
+        if !query.trim().is_empty() {
+            q.set_text(query);
+        }
+        self.open_overlay(OverlayKind::Palette(Palette {
+            mode: PaletteMode::Sessions,
+            query: q,
+            selected: 0,
+            top: 0,
+            model_info: false,
+        }));
+        self.ask_search();
     }
 
     fn close_overlay(&mut self) {
@@ -4227,15 +4385,8 @@ impl App {
             }
             PaletteMode::Agents => {
                 let current = self.current_agent();
-                let mode = if self.viewed().is_some_and(|s| s.parent_id.is_some()) {
-                    "subagent"
-                } else {
-                    "primary"
-                };
                 for (i, a) in self.state.agents.iter().enumerate() {
-                    if !matches!(a["mode"].as_str(), Some("all"))
-                        && a["mode"].as_str() != Some(mode)
-                    {
+                    if !self.agent_eligible(a) {
                         continue;
                     }
                     let name = a["name"].as_str().unwrap_or("");
@@ -4580,44 +4731,10 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 } else {
-                    let shown = if model.is_empty() {
-                        "default".to_owned()
-                    } else {
-                        model.clone()
-                    };
                     self.ui.draft.model = Some(model);
-                    self.toast(
-                        Level::Info,
-                        format!("The new session will use model {shown}"),
-                    );
                 }
             }
-            PaletteKind::Agent(agent) => {
-                if let Some(s) = self.viewed() {
-                    let (session, revision) = (s.id.clone(), s.revision);
-                    if self.writable() {
-                        self.api(ApiCall::SwitchCost {
-                            session,
-                            model: None,
-                            agent: Some(agent),
-                            revision,
-                        });
-                    } else {
-                        self.toast(Level::Warning, READ_ONLY);
-                    }
-                } else {
-                    let shown = if agent.is_empty() {
-                        "default".to_owned()
-                    } else {
-                        agent.clone()
-                    };
-                    self.ui.draft.agent = Some(agent);
-                    self.toast(
-                        Level::Info,
-                        format!("The new session will use agent {shown}"),
-                    );
-                }
-            }
+            PaletteKind::Agent(agent) => self.apply_agent(agent),
             PaletteKind::Block(i) => self.select_block(i),
             PaletteKind::Learn(scope) => {
                 if let (Some(source), Some(project)) =
@@ -4658,16 +4775,7 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 } else {
-                    let shown = if effort.is_empty() {
-                        "default".to_owned()
-                    } else {
-                        effort.clone()
-                    };
                     self.ui.draft.effort = Some(effort);
-                    self.toast(
-                        Level::Info,
-                        format!("The new session will use effort {shown}"),
-                    );
                 }
             }
         }
@@ -4709,6 +4817,68 @@ impl App {
             },
             |s| s.agent.clone(),
         )
+    }
+
+    /// Whether the agent can own the composer's context: a child session chooses subagents,
+    /// every other session and a draft choose primary agents.
+    fn agent_eligible(&self, agent: &Value) -> bool {
+        let mode = if self.viewed().is_some_and(|s| s.parent_id.is_some()) {
+            "subagent"
+        } else {
+            "primary"
+        };
+        matches!(agent["mode"].as_str(), Some("all")) || agent["mode"].as_str() == Some(mode)
+    }
+
+    /// Shift+Tab: the next eligible agent in catalog order, wrapping at the end.
+    fn cycle_agent(&mut self) {
+        // The composer's shortcut never reaches behind a picker, modal, inline edit or the
+        // completion list; those own the keys while they are up.
+        if self.ui.overlay.is_some()
+            || self.ui.dialog.is_some()
+            || self.ui.edit.is_some()
+            || self.completion_rows().is_some()
+        {
+            return;
+        }
+        let names: Vec<String> = self
+            .state
+            .agents
+            .iter()
+            .filter(|agent| self.agent_eligible(agent))
+            .filter_map(|agent| agent["name"].as_str().map(str::to_owned))
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let current = self.current_agent();
+        let next = names
+            .iter()
+            .position(|name| *name == current)
+            .map_or(0, |at| (at + 1) % names.len());
+        if names[next] != current {
+            self.apply_agent(names[next].clone());
+        }
+    }
+
+    /// Choose an agent exactly as the picker does: a session switches from the next model
+    /// call (asking first when the cache would go cold); a draft's next session uses it.
+    fn apply_agent(&mut self, agent: String) {
+        if let Some(s) = self.viewed() {
+            let (session, revision) = (s.id.clone(), s.revision);
+            if self.writable() {
+                self.api(ApiCall::SwitchCost {
+                    session,
+                    model: None,
+                    agent: Some(agent),
+                    revision,
+                });
+            } else {
+                self.toast(Level::Warning, READ_ONLY);
+            }
+        } else {
+            self.ui.draft.agent = Some(agent);
+        }
     }
 
     /// The effort of the viewed session, else the one chosen for the next;
@@ -5429,6 +5599,64 @@ impl App {
         }
     }
 
+    /// Close the tab of every archived session in the tree, including a root
+    /// archived together with its descendants. Driven by the model after an
+    /// archive event or a snapshot, so every source of archiving closes tabs
+    /// (this client, another client, the Manager and Core's auto-archive).
+    fn session_tree_archived(&self, id: &str) -> bool {
+        self.state
+            .model
+            .sessions
+            .get(id)
+            .is_some_and(|s| self.ancestors_of(&s.id).iter().any(|a| a.archived))
+    }
+
+    /// Archived tabs among every stored project, limited to the tabs `include`
+    /// accepts. The visible check covers a viewed root reached without a tab.
+    fn archived_tabs_where(&self, include: impl Fn(&str) -> bool) -> Vec<String> {
+        let visible = self.tab_ids();
+        self.ui
+            .tabs
+            .iter()
+            .chain(visible.iter())
+            .filter(|id| self.session_tree_archived(id) && include(id))
+            .cloned()
+            .collect()
+    }
+
+    /// Close `doomed` tabs everywhere, then move off the viewed one to the first
+    /// live visible neighbour (following, then preceding), or the empty state.
+    fn close_tabs(&mut self, doomed: &[String]) {
+        if doomed.is_empty() {
+            return;
+        }
+        let visible = self.tab_ids();
+        let viewed = self.viewed_root();
+        let next = viewed.as_ref().and_then(|id| {
+            if !doomed.contains(id) {
+                return None;
+            }
+            let at = visible.iter().position(|tab| tab == id)?;
+            // A snapshot can close several roots at once: take the first live tab.
+            visible
+                .iter()
+                .skip(at + 1)
+                .chain(visible.iter().take(at).rev())
+                .find(|tab| !doomed.contains(tab))
+                .cloned()
+                .map(Some)
+                .or(Some(None))
+        });
+        self.ui.tabs.retain(|id| !doomed.contains(id));
+        let Some(next) = next else {
+            return;
+        };
+        match next {
+            Some(next) => self.open_session(&next),
+            None => self.show_new_session(),
+        }
+    }
+
     /// Show the new-session screen: no session is created until a message is sent.
     fn show_new_session(&mut self) {
         if let Some(project) = &self.ui.project {
@@ -5502,6 +5730,7 @@ impl App {
             self.terminal_focused = false;
             self.terminal_selected = false;
             self.terminal_controlled = false;
+            self.ui.focus = Focus::Composer;
             self.terminal_panel.input_queue.clear();
             self.terminal_panel.control_busy = false;
             self.terminal_controlled = false;
@@ -5599,7 +5828,13 @@ impl App {
 
     fn after_open(&mut self) {
         self.ui.drawer = None;
-        self.ui.focus = Focus::Composer;
+        self.prepare_questions();
+        self.ui.focus = if self.ask_current().is_some() {
+            // A question owns the composer's keys until it is answered.
+            Focus::Waiting
+        } else {
+            Focus::Composer
+        };
     }
 
     /// Keep the one timeline scroll with the session it belongs to. `open_session`
@@ -6305,6 +6540,14 @@ impl App {
                     self.open_session(&p);
                 }
             }
+            "nav.root" => {
+                if let Some(root) = self
+                    .viewed_root()
+                    .filter(|_| self.viewed().is_some_and(|s| s.parent_id.is_some()))
+                {
+                    self.open_session(&root);
+                }
+            }
             "sidebar.left.toggle" => self.toggle_side(Side::Left),
             "sidebar.right.toggle" => self.toggle_side(Side::Right),
             "sidebar.tab.sessions" => self.set_tab(Tab::Sessions),
@@ -6498,6 +6741,7 @@ impl App {
                 self.open_palette(PaletteMode::RowMenu);
             }
             "session.switch" => self.open_palette(PaletteMode::Sessions),
+            "session.search" => self.open_sessions_search(""),
             "project.switch" => self.open_palette(PaletteMode::Projects),
             "app.sign_in" | "app.sign_out" => {
                 if self.ui.view != View::Settings {
@@ -6511,6 +6755,7 @@ impl App {
             "model.change" => self.open_picker(PaletteMode::Models),
             "model.effort" => self.open_picker(PaletteMode::Efforts),
             "agent.change" => self.open_picker(PaletteMode::Agents),
+            "agent.cycle" => self.cycle_agent(),
             "session.rename" => {
                 if let Some(s) = self.viewed() {
                     let (id, revision, title) = (s.id.clone(), s.revision, s.title.clone());
@@ -6545,6 +6790,11 @@ impl App {
                     top: 0,
                     kind: crate::ui::ResourceKind::All,
                 });
+            }
+            "session.worktree_info" => {
+                if let Some(info) = self.worktree_info() {
+                    self.open_overlay(OverlayKind::WorktreeInfo(info));
+                }
             }
             "session.archive" | "session.unarchive" => {
                 if let Some(sid) = self.viewed_id().map(str::to_owned) {
@@ -7288,6 +7538,11 @@ impl App {
     }
 
     fn send_mode_confirmed(&mut self, requested: Option<&str>, resume: bool) {
+        if self.question_pending() {
+            // The draft is kept; the question card's answer is the only send.
+            self.toast(Level::Info, QUESTION_LOCK);
+            return;
+        }
         if self.ui.image_pasting.contains(&self.draft_key()) {
             self.toast(Level::Info, "Preparing clipboard image…");
             return;
@@ -7329,6 +7584,10 @@ impl App {
                     let arg = arg.trim();
                     if c.id == "manager.start" {
                         self.manager_slash(arg);
+                        return;
+                    }
+                    if c.id == "session.search" {
+                        self.open_sessions_search(arg);
                         return;
                     }
                     if c.id == "session.rename" && !arg.is_empty() {
@@ -7388,10 +7647,6 @@ impl App {
                     return;
                 }
             }
-        }
-        if self.ask_current().is_some() {
-            self.ask_adopt_composer();
-            return self.ask_confirm();
         }
         if !self.writable() {
             self.toast(Level::Warning, READ_ONLY);
@@ -7885,6 +8140,40 @@ impl App {
             .flatten();
         let applied_before = self.state.events_applied;
         let snapshot = matches!(&msg, SyncMsg::Snapshot { .. });
+        let question_asked = global_event
+            .as_ref()
+            .is_some_and(|(kind, _)| kind == "question.asked");
+        let question_replied = global_event
+            .as_ref()
+            .filter(|(kind, _)| kind == "question.replied")
+            .and_then(|(_, data)| data["id"].as_str().map(str::to_owned));
+        let archive_event = global_event
+            .as_ref()
+            .is_some_and(|(kind, _)| kind == "session.archived");
+        let before_archived: HashMap<String, bool> = if snapshot {
+            self.state
+                .model
+                .sessions
+                .iter()
+                .map(|(id, session)| (id.clone(), session.archived))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let archive_ids: HashSet<String> = if archive_event {
+            let mut ids = HashSet::new();
+            if let Some((_, data)) = &global_event {
+                if let Some(id) = data["root"].as_str() {
+                    ids.insert(id.to_owned());
+                }
+                if let Some(list) = data["sessions"].as_array() {
+                    ids.extend(list.iter().filter_map(|v| v.as_str()).map(str::to_owned));
+                }
+            }
+            ids
+        } else {
+            HashSet::new()
+        };
         let refresh = match &msg {
             SyncMsg::Event(event)
                 if event.kind == "session.directory_changed"
@@ -7907,6 +8196,39 @@ impl App {
             .and_then(|id| self.root_session(id));
         let was_busy = notice_root.as_deref().is_some_and(|id| self.tree_busy(id));
         self.state.apply(msg);
+        if archive_event && self.state.events_applied > applied_before {
+            // The event names every session it archived (root and descendants);
+            // unrelated archived tabs the user reopened stay readable.
+            let doomed = self.archived_tabs_where(|id| archive_ids.contains(id));
+            self.close_tabs(&doomed);
+        }
+        if snapshot {
+            // Close only tabs that became archived while this client was away
+            // (or the initial snapshot's stale restored tabs). An archived
+            // session the user opened on purpose stays open on later snapshots.
+            let doomed =
+                self.archived_tabs_where(|id| !before_archived.get(id).copied().unwrap_or(false));
+            self.close_tabs(&doomed);
+        }
+        if self.state.events_applied > applied_before {
+            if question_asked {
+                if let Some((_, data)) = global_event
+                    .as_ref()
+                    .filter(|(kind, _)| kind == "question.asked")
+                {
+                    if let Some(id) = data["id"].as_str() {
+                        self.start_question(id);
+                    }
+                }
+                self.focus_question_card();
+            }
+            if let Some(id) = question_replied {
+                self.question_closed(&id);
+            }
+        }
+        if snapshot {
+            self.prepare_questions();
+        }
         self.adopt_view_scroll();
         // Launched from a directory: open it as a project (Core reuses one at the same path).
         if snapshot {
@@ -9550,6 +9872,14 @@ impl App {
             self.ui.dictation.phase,
             crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
         );
+        let hovered_tab = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
+            Some(Target::SessionTab(i)) => Some(*i),
+            _ => None,
+        });
+        if hovered_tab != self.ui.tab_hover.map(|(i, _)| i) {
+            self.ui.tab_hover = hovered_tab.map(|i| (i, self.frame));
+            changed = true;
+        }
         let animated = !self.theme.opts.reduced_motion
             && (recording
                 || !self.state.model.running.is_empty()
@@ -9559,6 +9889,7 @@ impl App {
                     .sessions
                     .values()
                     .any(|s| s.status.as_deref() == Some("busy"))
+                || self.ui.tab_hover.is_some()
                 || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
@@ -10171,6 +10502,20 @@ impl App {
     }
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
+        // The dock toggle works even while the terminal screen owns the keys,
+        // and is never handed to the shell. Other shortcuts still belong to
+        // the terminal while its screen has focus.
+        let terminal_toggle = keys::name(&ev)
+            .is_some_and(|name| self.lookup("global", &name).as_deref() == Some("terminal.open"));
+        if self.terminal_open
+            && terminal_toggle
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+        {
+            self.execute("terminal.open");
+            return;
+        }
         if self.terminal_open
             && self.terminal_focused
             && self.ui.overlay.is_none()
@@ -10442,6 +10787,24 @@ impl App {
         if self.ui.overlay.is_some() && self.overlay_key(&ev, &name) {
             return;
         }
+        // A viewed subagent's page uses Left as a back gesture, but never while a
+        // text input, the composer, an editor or an overlay owns the key.
+        if name == "left"
+            && self.ui.view == View::Session
+            && self.ui.focus != Focus::Composer
+            && self.ui.focus != Focus::Waiting
+            && self.ui.focus != Focus::Alert
+            && !self.ui.file_open
+            && self.ui.diff_open.is_none()
+            && self.ui.file_edit.is_none()
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && self.viewed().is_some_and(|s| s.parent_id.is_some())
+        {
+            self.run_command("nav.root");
+            return;
+        }
         // Typing never reaches the page behind the file or diff modal.
         if (self.ui.file_open || self.ui.diff_open.is_some())
             && self.ui.overlay.is_none()
@@ -10501,7 +10864,10 @@ impl App {
                 _ => {}
             }
         }
-        if self.ui.focus == Focus::Composer && matches!(name.as_str(), "alt+b" | "alt+f") {
+        if self.ui.focus == Focus::Composer
+            && !self.question_pending()
+            && matches!(name.as_str(), "alt+b" | "alt+f")
+        {
             edit_buffer(self.composer(), &ev, &name, false);
             return;
         }
@@ -10523,15 +10889,20 @@ impl App {
             }
             _ => {}
         }
-        if self.ui.focus == Focus::Composer
-            && self.composer_ref().expanded_text().is_empty()
-            && self.ask_current().is_some_and(|c| !c.sent)
-            && (matches!(name.as_str(), "left" | "right")
-                || (matches!(name.as_str(), "up" | "down")
-                    && self.ask_current().is_some_and(|c| !c.options().is_empty())))
-        {
-            self.ui.focus = Focus::Waiting;
-            return self.ask_key(&ev, &name);
+        if self.question_pending() && self.ui.focus == Focus::Composer {
+            if self.ask_current().is_some() {
+                // The card owns the composer's keys; the draft is untouched.
+                self.ui.focus = Focus::Waiting;
+                return self.waiting_key(&ev, &name);
+            }
+            // A question is pending behind another wait: the composer stays
+            // locked, but approval keys are not borrowed.
+            if keys::printable(&ev).is_some()
+                || edit_key(&name)
+                || matches!(name.as_str(), "enter" | "space" | "backspace" | "delete")
+            {
+                return;
+            }
         }
         match self.ui.focus {
             Focus::Composer => self.composer_key(&ev, &name),
@@ -10984,8 +11355,22 @@ impl App {
                     let sel = *selected;
                     self.notice_activate(sel);
                 }
+                Some(Overlay {
+                    kind: OverlayKind::WorktreeInfo(_),
+                    ..
+                }) => self.copy_worktree_value(WorktreeCopy::Path),
                 _ => {}
             },
+            "c" if matches!(
+                self.ui.overlay,
+                Some(Overlay {
+                    kind: OverlayKind::WorktreeInfo(_),
+                    ..
+                })
+            ) =>
+            {
+                self.copy_worktree_value(WorktreeCopy::Path);
+            }
             _ if is_palette => {
                 if self.lookup("global", name).is_some() && !keys::printable(ev).is_some() {
                     return false; // global shortcuts still work
@@ -11082,6 +11467,10 @@ impl App {
                 let max = crate::render::usage_scroll_max(area, rows);
                 *top = (*top as isize + delta).clamp(0, max as isize) as usize;
             }
+            Some(OverlayKind::WorktreeInfo(info)) => {
+                let max = crate::render::worktree_scroll_max(area, info);
+                info.top = ((info.top as isize + delta).clamp(0, max as isize)) as usize;
+            }
             Some(OverlayKind::ImagePreview { .. })
             | Some(OverlayKind::Projects(_))
             | Some(OverlayKind::Annotate(_))
@@ -11142,6 +11531,10 @@ impl App {
     }
 
     fn pending_key(&mut self, name: &str) -> bool {
+        // A question owns the keys; queued-row selection does not take them.
+        if self.question_pending() && self.ui.focus == Focus::Composer {
+            return false;
+        }
         let inputs = self.pending_inputs();
         if inputs.is_empty() {
             self.ui.pending_selected = None;
@@ -11260,6 +11653,125 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Run one right-aligned action on queued input `index`. Steer rows have no
+    /// actions; queued rows move only within the queued group.
+    fn pending_action(&mut self, index: usize, action: PendingAction) {
+        let inputs = self.pending_inputs();
+        let Some(item) = inputs.get(index) else {
+            return;
+        };
+        if item["mode"] != "queue" {
+            return;
+        }
+        match action {
+            PendingAction::Edit => {
+                if self.question_pending() {
+                    // Restoring a queued message would change the locked draft.
+                    self.toast(Level::Info, QUESTION_LOCK);
+                    return;
+                }
+                if !self.writable() {
+                    self.toast(Level::Warning, READ_ONLY);
+                    return;
+                }
+                if self.composer_ref().text().is_empty() && self.composer_ref().images.is_empty() {
+                    let Some(session) = self.viewed_id().map(str::to_owned) else {
+                        return;
+                    };
+                    let parts = item["parts"].as_array().cloned().unwrap_or_default();
+                    self.api(ApiCall::Input {
+                        session,
+                        id: item["id"].as_str().unwrap_or("").to_owned(),
+                        action: "remove".into(),
+                        before: None,
+                        parts,
+                    });
+                    self.ui.pending_selected = None;
+                } else {
+                    self.toast(
+                        Level::Warning,
+                        "Clear the draft before restoring a pending input",
+                    );
+                }
+            }
+            PendingAction::Remove => {
+                let text = item["parts"]
+                    .as_array()
+                    .and_then(|parts| parts.iter().find(|p| p["type"] == "text"))
+                    .and_then(|p| p["text"].as_str())
+                    .unwrap_or("[image]")
+                    .lines()
+                    .next()
+                    .unwrap_or("");
+                let Some(session) = self.viewed_id().map(str::to_owned) else {
+                    return;
+                };
+                let restore = self.restore_point();
+                self.ui.dialog = Some(Dialog {
+                    title: "Remove pending input".into(),
+                    body: vec![
+                        format!("Remove the queued message \"{text}\"?"),
+                        "This cannot be undone.".into(),
+                    ],
+                    cancel: "Cancel".into(),
+                    confirm: "Remove".into(),
+                    danger: true,
+                    action: Confirmed::RemoveInput {
+                        session,
+                        id: item["id"].as_str().unwrap_or("").to_owned(),
+                    },
+                    button: 0,
+                    restore,
+                });
+                self.ui.pending_selected = None;
+            }
+            PendingAction::Up | PendingAction::Down => {
+                let queued: Vec<usize> = inputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item["mode"] == "queue")
+                    .map(|(i, _)| i)
+                    .collect();
+                let Some(position) = queued.iter().position(|i| *i == index) else {
+                    return;
+                };
+                let (id, before, parts) = if action == PendingAction::Up {
+                    let Some(previous) = position.checked_sub(1).and_then(|at| queued.get(at))
+                    else {
+                        return;
+                    };
+                    (
+                        item["id"].as_str().unwrap_or("").to_owned(),
+                        inputs[*previous]["id"].as_str().unwrap_or("").to_owned(),
+                        item["parts"].as_array().cloned().unwrap_or_default(),
+                    )
+                } else {
+                    let Some(next) = queued.get(position + 1) else {
+                        return;
+                    };
+                    (
+                        inputs[*next]["id"].as_str().unwrap_or("").to_owned(),
+                        item["id"].as_str().unwrap_or("").to_owned(),
+                        inputs[*next]["parts"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                };
+                let Some(session) = self.viewed_id().map(str::to_owned) else {
+                    return;
+                };
+                self.api(ApiCall::Input {
+                    session,
+                    id,
+                    action: "move".into(),
+                    before: Some(before),
+                    parts,
+                });
+            }
+        }
     }
 
     fn composer_key(&mut self, ev: &KeyEvent, name: &str) {
@@ -12024,7 +12536,11 @@ impl App {
             return;
         }
         if let Some(cmd) = self.lookup("timeline", name) {
-            if WIRED.contains(&cmd.as_str()) {
+            // Left is the manifest's root-back command only while a child is viewed;
+            // on a root session it keeps collapsing the selected block.
+            let inactive_root_back =
+                cmd == "nav.root" && !self.viewed().is_some_and(|s| s.parent_id.is_some());
+            if WIRED.contains(&cmd.as_str()) && !inactive_root_back {
                 return self.run_command(&cmd);
             }
         }
@@ -14910,7 +15426,7 @@ impl App {
                     self.open_session(&id);
                 }
             }
-            Target::Subagent(id) => self.open_session(&id),
+            Target::SessionRootBack => self.run_command("nav.root"),
             Target::SessionTabClose(i) => {
                 if let Some(id) = self.tab_ids().get(i).cloned() {
                     self.close_tab(&id);
@@ -15076,6 +15592,8 @@ impl App {
             Target::ComposerContext => self.ui.focus = Focus::Composer,
             Target::ComposerDirectory => self.run_command("session.change_directory"),
             Target::ComposerWorktree => self.run_command("session.worktrees"),
+            Target::ComposerWorktreeInfo => self.run_command("session.worktree_info"),
+            Target::WorktreeCopy(which) => self.copy_worktree_value(which),
             Target::ComposerResources => {
                 self.effects.push(Effect::Sync(SyncCommand::Resources));
                 self.open_overlay(OverlayKind::Resources {
@@ -15151,6 +15669,13 @@ impl App {
                 self.ui.focus = Focus::Waiting;
                 if self.writable() {
                     self.ask_pick(i);
+                    // A single single-choice question answers on the click.
+                    if self
+                        .ask_current()
+                        .is_some_and(|c| c.total == 1 && !c.multiple() && !c.sent)
+                    {
+                        self.ask_submit();
+                    }
                 } else {
                     self.toast(Level::Warning, READ_ONLY);
                 }
@@ -15163,6 +15688,7 @@ impl App {
                     self.toast(Level::Warning, READ_ONLY);
                 }
             }
+            Target::PendingAction(index, action) => self.pending_action(index, action),
             Target::Continue => self.run_command("session.continue"),
             Target::BannerAction(i) => {
                 if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {
@@ -15234,6 +15760,10 @@ impl App {
         result: Result<Option<crate::images::Image>, String>,
     ) {
         self.ui.image_pasting.remove(&key);
+        if self.question_pending() && key == self.draft_key() {
+            self.toast(Level::Info, QUESTION_LOCK);
+            return;
+        }
         match result {
             Ok(Some(mut image)) => {
                 let draft = self.ui.drafts.entry(key).or_default();
@@ -15293,6 +15823,13 @@ impl App {
             return;
         }
         if self.ui.dialog.is_some() || self.ui.view == View::Settings {
+            return;
+        }
+        if self.question_pending() {
+            // The draft is locked; a paste is an answer to the card in view.
+            if self.ask_current().is_some_and(|c| !c.sent && !c.review()) {
+                self.ask_input_paste(text);
+            }
             return;
         }
         if self.ui.focus == Focus::Waiting
@@ -15519,6 +16056,8 @@ impl App {
             "down" => self.ui.completion.index = (index + 1).min(last),
             "esc" => self.ui.completion.hidden = self.completion_token(),
             "tab" => self.completion_accept(),
+            // The popup owns Shift+Tab too: it must not cycle the agent behind the list.
+            "shift+tab" => {}
             "enter" => {
                 let text = self.composer_ref().text();
                 if text.starts_with('/') && !text.contains(char::is_whitespace) {

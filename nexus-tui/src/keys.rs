@@ -14,6 +14,16 @@ pub fn name(ev: &KeyEvent) -> Option<String> {
     let key = match ev.code {
         KeyCode::Char(' ') => "space".to_owned(),
         KeyCode::Char(c) => {
+            // The tilde key is Shift+`; terminals may report the shifted
+            // character instead of the key, so shortcuts see one spelling.
+            let c = if c == '~'
+                && m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            {
+                m.insert(KeyModifiers::SHIFT);
+                '`'
+            } else {
+                c
+            };
             if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
                 m.remove(KeyModifiers::SHIFT);
             }
@@ -175,8 +185,43 @@ mod tests {
             name(&ev(KeyCode::Char('1'), KeyModifiers::ALT)).unwrap(),
             "alt+1"
         );
+        assert_eq!(
+            name(&ev(KeyCode::Char('`'), KeyModifiers::CONTROL)).unwrap(),
+            "ctrl+`"
+        );
+        assert_eq!(
+            name(&ev(
+                KeyCode::Char('`'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ))
+            .unwrap(),
+            "ctrl+shift+`"
+        );
         assert_eq!(name(&ev(KeyCode::F(1), KeyModifiers::NONE)).unwrap(), "f1");
         assert_eq!(name(&ev(KeyCode::Esc, KeyModifiers::NONE)).unwrap(), "esc");
+    }
+
+    #[test]
+    fn the_tilde_key_is_shift_backtick_in_shortcuts() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyModifiers::ALT,
+        ] {
+            assert_eq!(
+                name(&ev(KeyCode::Char('~'), modifiers)).as_deref(),
+                Some(if modifiers.contains(KeyModifiers::ALT) {
+                    "alt+shift+`"
+                } else {
+                    "ctrl+shift+`"
+                })
+            );
+        }
+        // A plain tilde is still the character the user typed.
+        assert_eq!(
+            name(&ev(KeyCode::Char('~'), KeyModifiers::SHIFT)).as_deref(),
+            Some("~")
+        );
     }
 
     #[test]

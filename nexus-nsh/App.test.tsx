@@ -164,14 +164,15 @@ describe("agent colours", () => {
 });
 
 describe("shell", () => {
-  test("header anchors, sidebar tabs in the header, fixed Settings entry", async () => {
+  test("header anchors, sidebar tabs in the header, Settings stays on the project rail", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:rail-project-prj_1");
     expect(app.shows("id:header")).toBe(true);
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:toggle-right")).toBe(true);
     expect(app.shows("id:open-manager-context")).toBe(true);
-    expect(app.shows("id:open-settings")).toBe(true);
+    expect(app.shows("id:open-settings")).toBe(false);
+    expect(app.shows("id:rail-settings")).toBe(true);
     // tabs: Sessions and Files, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
     expect(labels).toEqual(["sessions", "files", "git"]);
@@ -260,7 +261,8 @@ describe("shell", () => {
     await app.waitFor("id:picker");
     expect(app.shows("text:plan")).toBe(false);
     await app.press("id:pick-1");
-    await app.waitFor("text:The new session will use agent review");
+    await app.waitFor("text:Review");
+    expect(app.texts().some((text) => text.startsWith("The new session will use"))).toBe(false);
     await slash("/model");
     await app.waitFor("id:picker");
     await app.press("id:pick-0");
@@ -629,7 +631,8 @@ describe("context, composer and footer parity", () => {
     await app.press("id:send");
     await app.waitFor("id:picker");
     await app.press("id:pick-1");
-    await app.waitFor("text:The new session will use effort medium");
+    await app.waitFor("text:medium");
+    expect(app.texts().some((text) => text.startsWith("The new session will use"))).toBe(false);
     // The re-plan is in flight: effort is not context, so the counts stay put.
     expect(app.texts().join("\n").includes("~4,200 tok")).toBe(true);
     expect(app.texts().join("\n").includes("~4.2K · 2.1%")).toBe(true);
@@ -1167,7 +1170,7 @@ describe("Core-backed settings values", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
-    await app.press("id:open-settings");
+    await app.press("id:rail-settings");
     expect(app.shows("id:section-models")).toBe(false);
     await app.press("id:section-providers");
     await app.waitFor("id:settings-page-providers");
@@ -1193,7 +1196,7 @@ describe("Core-backed settings values", () => {
     expect(app.texts().includes("esc close")).toBe(true);
     await app.keyboard.press("escape");
     await app.waitUntil(() => !app.shows("id:settings"));
-    await app.press("id:open-settings");
+    await app.press("id:rail-settings");
     await app.waitFor("id:settings");
     await app.press("id:section-agents");
     await app.waitFor("id:agent-row-plan");

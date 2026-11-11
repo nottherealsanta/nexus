@@ -1,0 +1,45 @@
+  ◧      [Sessions] [Files]    [Git]         · Fix Terminal Toggle Shortcu… ×    +                                                                            □
+     │                                      Here is what I found                                                            Scout · default · default · default
+▏1   │ ◆ Waiting for approval      2h       i 2 other sessions waiting for input                                                                            go
+▏ N  │
+▏    │                                        AGENTS.md  not found · /private/tmp/nsh-visual.eFIBIZ/ws/nexus-demo/AGENTS.md
+     │
+ 1   │                                        Tools [7] ~1.3K
+ NT  │                                          ● read                      ● ls                        ● escalate
+     │                                          ● grep                      ● code
+     │                                          ● glob                      ● expose_workspace_tools
+     │
+ NM  │                                        Skills [0]  none
+ ─── │
+     │                                        MCP [0]  none
+     │
+ NV  │                                        total  ~1,956 tok
+ ─── │
+     │
+     │                                      │
+  S  │                                      │  List the files touched by the timeline fix and return one line.                                   #1 · 4:16 PM
+ ─── │                                      │
+     │
+     │                                  ←      ▸ Thought · Check the loader module, then summarise.
+     │
+     │                                         Here is what I found.
+     │
+     │                                         • The loader reads  config.toml  once
+     │                                         • Retries are bounded (3 attempts)
+     │
+     │                                           ╭─ python
+     │                                           │ def load(path):
+     │                                           │     return tomllib.loads(path.read_text())
+     │                                           ╰─
+     │
+     │                                         Let me know if you want the same change in  cli.py .
+     │
+     │                                                                                                    m · 0 tools · 80i · 60o · 0r · 0%c · 0.0s · 4:16 PM
+     │
+  +  │
+     │                                          Type a message…
+     │
+     │ + New session                            Scout · … · default                                                                                      80
+  ⚙  │ ⌕ Search sessions       ctrl+k        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                       /private/tmp/nsh-visual.eFIBIZ/ws/nexus-demo
+     │                                       ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────

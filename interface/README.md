@@ -3,7 +3,7 @@
 `manifest.toml` is the single machine-readable source for the screen map,
 commands and settings that the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`) both
 build from. The visual rules are in [design-language.md](design-language.md); the work
-order is [PLAN.md](../PLAN.md). The former prose spec is archived
+order is [plans/](../plans/README.md). The former prose spec is archived
 (`git show fdb1860:INTERFACE_PLAN.md`). If the manifest and the design language
 disagree, fix both together.
 
@@ -19,6 +19,9 @@ placements, categories and statuses, the exact settings section order, unique
 settings row ids, the navigation anchors and every cross reference to a command.
 
 `/close` closes the current session tab without archiving or deleting the session.
+`/archive` archives an idle session tree and archive events close all affected open tabs,
+including when another client or Core initiated the archive. `/search [text]` opens the
+sessions switcher with its search field focused (the Sessions list on mobile).
 
 ## Schema
 
@@ -34,6 +37,7 @@ settings row ids, the navigation anchors and every cross reference to a command.
 | `category` | Palette grouping. |
 | `slash` / `slash_aliases` | Composer `/name` (lower-case letters, optionally separated by hyphens). Same command, same behavior. |
 | `keys` | `{ tui = "ctrl+p", nsh = "cmd+p" }`. Either may be absent (unbound by default). |
+| `key_aliases` | Other spellings of the same key, per client: ``{ tui = ["ctrl+shift+`"], nsh = ["ctrl+shift+`"] }``. Use when a medium reports one physical key two ways; aliases resolve to the same command and take part in conflict checks. |
 | `key_context` | Scope for key conflict checks (see `[keymap] contexts`). |
 | `when` | Availability: a list of terms, all must hold. `"!term"` negates. |
 | `unavailable_reason` | Shown beside the disabled command; required when `when` is not `["always"]`. Unavailable commands are disabled with this text, never hidden. |
@@ -46,7 +50,9 @@ Key syntax: lower case, `+`-joined, modifiers in the order `cmd ctrl alt shift`,
 then the key (`cmd+shift+n`, `alt+enter`, `esc`). `cmd` is only valid in
 `keys.nsh` and maps to `ctrl` where NSH runs on a non-Mac platform. Users can
 rebind keys in Settings > Keybindings (view setting, per client); the manifest
-holds defaults only.
+holds defaults only. For the tilde key, write the physical key as
+``ctrl+` `` and its Shift spelling as ``ctrl+shift+` ``; `key_aliases` carries
+the other form a terminal or browser reports.
 
 ### `[[settings.section]]` and `[[settings.section.row]]`
 
@@ -82,6 +88,7 @@ Terms are evaluated by each client from Core state plus view state.
 | `session.busy` | Viewed session has a running turn. |
 | `session.interrupted` | The last turn was interrupted or failed, and Core has reconciled incomplete calls (`/continue` is offered). |
 | `session.archived`, `session.child`, `session.in_worktree` | Viewed session is archived, is a child session, lives in a worktree. |
+| `session.linked_worktree` | Viewed session's directory matches a linked (non-main) worktree in the existing worktree listing. |
 | `has_waiting` | Any approval or question waits anywhere (this session, its children, other sessions). |
 | `waiting.approval`, `waiting.question`, `waiting.multiple` | The focused waiting item is an approval / a question; more than one item waits. |
 | `composer.has_text`, `composer.empty`, `has_queued` | Composer content; queued messages exist. |

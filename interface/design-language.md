@@ -120,8 +120,14 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
   12 rows and the choices as key chips on `surface.raised` (the selected row on the
   selection band; a choice Core does not offer is muted with its reason). A multi-select
-  question's card uses the violet `interactive.multi` rail and ticks; the review page (the
-  last page, listing every question and answer) uses the `text.primary` rail. Toasts are
+  question's card uses the violet `interactive.multi` rail and ticks. A single-question ask
+  submits a single choice or free-text answer immediately; multi-select keeps one submit
+  action, without a review page. Multi-question asks retain their step-through and review
+  page (listing every question and answer), using the `text.primary` rail. A free-text
+  answer line takes focus immediately, without a selected-row background; its arrow keys
+  move the caret. While a question card is on screen in the viewed session the composer
+  preserves its draft but is locked with “Answer the question above”; Esc still interrupts.
+  Approval prompts keep their existing deny/redirect behavior. Toasts are
   raised blocks top-right under the header (level `▌`, glyph, bold title, `×`, no
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
   the modal. The banner is one row at the top of the page and pushes the timeline down;
@@ -136,7 +142,18 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 - The location strip under the composer shows the path and branch in muted text.
   A linked worktree alone gets a muted, normal-weight worktree icon; there is no
   project-name prefix, checkout/worktree text, command hint or accent underline.
+  The shared `control.worktree` glyph (NSH: theme-tinted bundled SVG) becomes primary
+  on hover and hints “Worktree session”. Clicking opens the small **Worktree** modal:
+  “This session is in a worktree.”, full wrapped worktree path with **Copy**, branch,
+  main-checkout path and `esc close`. Copy confirms with “Copied”; no management link.
+  Mobile has no location strip or worktree-details surface.
   Counts abbreviate as `1.2K` and `3.4M`.
+- Pending input rows use primary, normal-weight `S` / `Q` marks, two cells before
+  the text, in one card. Hovered/keyboard-selected text becomes primary. **Queued**
+  rows alone reveal right-aligned edit, up, down, remove actions (`✎ ↑ ↓ ×`, ASCII
+  `e ^ v x`; NSH `pencil`, `arrow-up`, `arrow-down`, `x`). Up/down are disabled at
+  that queue group's bounds. Touch uses tap-to-reveal. There is no Steer row button;
+  pending steer rows retain their existing keyboard actions without action icons.
 - Collapsed sidebar content starts at the same vertical origin as the expanded
   sidebar. Context omits a separate Child agents section. Each section heading
   opens a scrollable modal with stored content and metadata. The top Context label

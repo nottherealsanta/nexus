@@ -13,7 +13,7 @@ use ratatui::style::Color;
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
 
 #[test]
-fn session_sidebar_places_new_session_before_search_and_archive_after_list() {
+fn session_sidebar_pins_new_search_and_archive_after_the_list() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let (_, rows) = draw(&mut app, 120, 36);
     let new_session = app
@@ -29,13 +29,32 @@ fn session_sidebar_places_new_session_before_search_and_archive_after_list() {
         .hits
         .rect_of(&Target::ArchivedFilter)
         .expect("archive hit");
+    assert!(session.y < new_session.y);
     assert_eq!(new_session.y + 1, search.y);
-    assert!(search.y < session.y);
-    assert!(session.y < archive.y);
+    assert_eq!(search.y + 1, archive.y);
     let text = rows.join("\n");
     assert!(text.contains("New session"), "{text}");
     assert!(text.contains("Search sessions"), "{text}");
-    assert!(text.contains("Show archive"), "{text}");
+    assert!(text.contains("Show archived"), "{text}");
+}
+
+#[test]
+fn project_rail_pins_add_above_settings_with_sidebar_open_or_closed() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for open in [true, false] {
+        app.ui.left_open = open;
+        draw(&mut app, 120, 36);
+        let rail = app.regions.rail.expect("project rail");
+        let add = app.hits.rect_of(&Target::AddProject).expect("add project");
+        let settings = app
+            .hits
+            .rect_of(&Target::SettingsEntry)
+            .expect("rail settings");
+        assert_eq!(add.x, rail.x);
+        assert_eq!(settings.x, rail.x);
+        assert_eq!(add.y + 4, settings.y);
+        assert_eq!(settings.bottom() + 1, rail.bottom());
+    }
 }
 
 #[test]
@@ -393,6 +412,63 @@ fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
 }
 
 #[test]
+fn terminal_toggle_key_closes_without_sending_and_leaves_ctrl_space_to_the_shell() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use nexus_tui::terminal_panel::TerminalFocus;
+    use nexus_tui::ui::Focus;
+
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let focus_terminal = |app: &mut nexus_tui::app::App| {
+        app.terminal_panel.selected = Some("t1".into());
+        app.terminal_panel.attachment = Some("a1".into());
+        app.terminal_controlled = true;
+        app.terminal_focused = true;
+        app.terminal_panel.focus = TerminalFocus::Screen;
+        app.effects.clear();
+    };
+    app.execute("terminal.open");
+    focus_terminal(&mut app);
+
+    // Ctrl+Space is the shell's NUL, not a Nexus shortcut, even though a
+    // legacy terminal may report Ctrl+` that way.
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    assert!(app.terminal_open);
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalInput { bytes, .. }) if bytes == &[0])));
+
+    for key in ["ctrl+`", "ctrl+shift+`", "ctrl+~"] {
+        app.effects.clear();
+        press(&mut app, &[key]);
+        assert!(!app.terminal_open, "{key} closes the dock");
+        assert!(!app.terminal_focused, "{key} leaves the terminal screen");
+        assert_eq!(app.ui.focus, Focus::Composer, "{key} returns focus");
+        assert!(
+            app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::TerminalStop)),
+            "{key} detaches"
+        );
+        assert!(
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::Api(ApiCall::TerminalInput { .. }))),
+            "{key} never reaches the shell"
+        );
+        assert!(
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { .. }))),
+            "{key} does not terminate the terminal"
+        );
+        press(&mut app, &[key]);
+        assert!(app.terminal_open, "{key} opens the dock again");
+        focus_terminal(&mut app);
+    }
+}
+
+#[test]
 fn terminal_list_r_releases_control() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("terminal.open");
@@ -470,8 +546,8 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
             assert!(all.contains("Type a message"), "{all}");
             assert!(!rows.last().unwrap().contains("✓ live"));
             if w >= 100 {
-                // tab icons in manifest order in the header band over the
-                // sidebar, settings pinned at the bottom
+                // Tab icons in manifest order over the sidebar; Settings stays
+                // pinned to the project rail, not a text row in the sidebar.
                 let tabs: Vec<u16> = m
                     .navigation
                     .left_sidebar
@@ -487,11 +563,12 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     })
                     .collect();
                 assert!(tabs.windows(2).all(|p| p[0] < p[1]), "{tabs:?}");
-                assert!(
-                    rows[h as usize - 1].contains("Settings"),
-                    "{:?}",
-                    rows[h as usize - 1]
-                );
+                let settings = app
+                    .hits
+                    .rect_of(&Target::SettingsEntry)
+                    .expect("rail Settings");
+                assert_eq!(settings.x, app.regions.rail.unwrap().x);
+                assert!(settings.y > h.saturating_sub(6));
                 // right sidebar: session info and the Git status reason from the manifest
                 assert!(all.contains("SESSION") && all.contains("GIT"));
                 assert!(all.contains("Loading Git status") || all.contains("Open a session"));
@@ -790,7 +867,7 @@ fn waiting_card_sits_above_the_composer_and_offers_all_four_choices() {
         .expect("waiting card");
     let composer_row = rows
         .iter()
-        .position(|r| r.contains("Type a message"))
+        .position(|r| r.contains("Type a message") || r.contains("Answer the question above"))
         .unwrap();
     assert!(wait_row < composer_row);
     let all = joined(&rows);
@@ -1006,7 +1083,7 @@ fn composer_shows_a_pending_model_and_truncates_in_priority_order() {
 }
 
 #[test]
-fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_highlighted() {
+fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_primary() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.state.inputs.insert(
         SESSION.into(),
@@ -1017,7 +1094,7 @@ fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_highlighted() {
     );
     let (buf, rows) = draw(&mut app, 120, 36);
     let input_x = (app.regions.composer.x + 5) as usize;
-    let accent = app.theme.color("interactive.accent").unwrap();
+    let primary = app.theme.color("text.primary").unwrap();
     for (text, mark) in [("queued one", "Q"), ("steer one", "S")] {
         let y = rows
             .iter()
@@ -1026,7 +1103,12 @@ fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_highlighted() {
         let row = &rows[y];
         assert_eq!(col_of(row, text), input_x, "{row:?}");
         assert_eq!(col_of(row, mark), input_x - 2, "{row:?}");
-        assert_eq!(buf[(input_x as u16 - 2, y as u16)].fg, accent, "{row:?}");
+        let cell = &buf[(input_x as u16 - 2, y as u16)];
+        assert_eq!(cell.fg, primary, "{row:?}");
+        assert!(
+            !cell.modifier.contains(ratatui::style::Modifier::BOLD),
+            "the S/Q mark is not bold: {row:?}"
+        );
     }
 }
 
@@ -2201,36 +2283,30 @@ const DB: &str = r#"{"id":"db","question":"Which database?","options":[{"id":"pg
 #[test]
 fn question_card_shows_options_and_a_number_key_answers() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    // unfocused, the card says how to answer; focused, it lists its keys
-    assert!(joined(&draw(&mut app, 120, 36).1).contains("alt+w answer"));
-    press(&mut app, &["alt+w"]);
+    // The card takes the keys on arrival, so typing goes straight to its answer.
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(
         all.contains("Which database?")
             && all.contains("1 PostgreSQL")
             && all.contains("2 SQLite")
-            && all.contains("enter review"),
+            && all.contains("enter send"),
         "{all}"
     );
     assert!(!all.contains("arrives with"), "{all}");
-    // a number only picks; Enter locks the answer and shows the review
+    // a number picks; Enter sends the single question at once (no review)
     press(&mut app, &["2"]);
     assert!(answers_sent(&app).is_empty());
-    press(&mut app, &["enter"]);
-    assert!(answers_sent(&app).is_empty());
-    let all = joined(&draw(&mut app, 120, 36).1);
-    assert!(
-        all.contains("review")
-            && all.contains("1. Which database?")
-            && all.contains("SQLite")
-            && all.contains("enter submit"),
-        "{all}"
-    );
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        !all.contains("enter submit") && !all.contains("review"),
+        "{all}"
     );
     // a second press while the reply is in flight sends nothing more
     press(&mut app, &["enter"]);
@@ -2313,26 +2389,23 @@ fn question_card_can_scroll_on_a_short_terminal() {
 }
 
 #[test]
-fn enter_in_an_empty_composer_locks_the_focused_question() {
-    // Enter from the composer locks the answer (then the review submits): an
-    // empty composer is not a reason to swallow the key while a question waits.
+fn enter_on_a_single_question_sends_it_at_once() {
+    // Enter on the card (or from the composer) answers a single question in one
+    // step; there is no review page to confirm.
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
-    press(&mut app, &["enter"]);
-    assert!(answers_sent(&app).is_empty(), "Enter locks before it sends");
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": null}])]
     );
+    press(&mut app, &["enter"]);
+    assert_eq!(answers_sent(&app).len(), 1);
 }
 
 #[test]
 fn arrows_and_enter_pick_and_clicks_hit_options() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    press(&mut app, &["alt+w", "down", "down", "enter"]);
-    assert!(answers_sent(&app).is_empty(), "Enter locks the answer");
-    press(&mut app, &["enter"]);
+    press(&mut app, &["down", "down", "enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
@@ -2351,8 +2424,6 @@ fn arrows_and_enter_pick_and_clicks_hit_options() {
         "option row is a hit target"
     );
     click(&mut app, x, row as u16);
-    assert!(answers_sent(&app).is_empty(), "a click only picks");
-    press(&mut app, &["enter", "enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": null}])]
@@ -2468,25 +2539,24 @@ fn rail_colors(buf: &ratatui::buffer::Buffer) -> Vec<Color> {
 fn arrows_space_and_enter_work_for_a_multi_select_question() {
     let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
     let mut app = asking(&format!("[{multi}]"), (120, 36));
-    // Down moves the cursor, Space ticks, Enter locks and opens the review.
-    press(&mut app, &["alt+w", "down", "space", "enter"]);
-    assert!(answers_sent(&app).is_empty());
-    let all = joined(&draw(&mut app, 120, 36).1);
-    assert!(
-        all.contains("1. Which tags?") && all.contains("beta") && all.contains("enter submit"),
-        "{all}"
-    );
-    press(&mut app, &["enter"]);
+    // Down moves the cursor, Space ticks, Enter sends the single question once.
+    press(&mut app, &["down", "space", "enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "tags", "selected": ["b"], "text": null}])]
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        !all.contains("enter submit") && !all.contains("1. Which tags?"),
+        "{all}"
     );
 }
 
 #[test]
 fn multi_select_is_violet_and_the_review_rail_is_white() {
     let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
-    let mut app = asking(&format!("[{multi}]"), (120, 36));
+    let notes = r#"{"id":"notes","question":"Anything else?"}"#;
+    let mut app = asking(&format!("[{multi},{notes}]"), (120, 36));
     let (buf, _) = draw(&mut app, 120, 36);
     let violet = app.theme.color("interactive.multi").unwrap();
     let rails = rail_colors(&buf);
@@ -2495,7 +2565,9 @@ fn multi_select_is_violet_and_the_review_rail_is_white() {
         "{rails:?}"
     );
 
-    press(&mut app, &["alt+w", "1", "enter"]);
+    press(&mut app, &["1", "enter"]);
+    typing(&mut app, "a note");
+    press(&mut app, &["enter"]);
     let (buf, _) = draw(&mut app, 120, 36);
     let white = app.theme.color("text.primary").unwrap();
     let rails = rail_colors(&buf);
@@ -2508,14 +2580,11 @@ fn multi_select_is_violet_and_the_review_rail_is_white() {
 #[test]
 fn typed_text_for_an_option_question_is_its_custom_answer() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    press(&mut app, &["alt+w"]);
     typing(&mut app, "postgres please");
     assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
     let all = joined(&draw(&mut app, 120, 36).1);
     assert!(all.contains("postgres please"), "{all}");
     assert!(app.composer_ref().expanded_text().is_empty());
-    press(&mut app, &["enter"]);
-    assert!(answers_sent(&app).is_empty());
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
@@ -2526,10 +2595,10 @@ fn typed_text_for_an_option_question_is_its_custom_answer() {
 #[test]
 fn a_selected_option_and_custom_context_are_sent_together() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    press(&mut app, &["alt+w", "1", "alt+a"]);
+    press(&mut app, &["1", "alt+a"]);
     // The leading digit is text in the field, not another option pick.
     typing(&mut app, "2nd choice");
-    press(&mut app, &["enter", "enter"]);
+    press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": "2nd choice"}])]
@@ -2537,29 +2606,47 @@ fn a_selected_option_and_custom_context_are_sent_together() {
 }
 
 #[test]
-fn composer_text_is_adopted_as_the_custom_answer() {
+fn a_question_locks_the_composer_and_keeps_its_draft() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    app.ui.focus = nexus_tui::ui::Focus::Composer;
+    app.composer().set_text("Keep this unsent draft");
+    app.effects.clear();
     typing(&mut app, "postgres please");
-    press(&mut app, &["enter"]);
-    assert!(answers_sent(&app).is_empty());
-    assert!(app.composer_ref().expanded_text().is_empty());
+    // Typing goes to the answer, never to the composer.
+    assert_eq!(app.composer_ref().expanded_text(), "Keep this unsent draft");
+    assert_eq!(
+        app.ask_current()
+            .unwrap()
+            .pick()
+            .unwrap()
+            .input
+            .expanded_text(),
+        "postgres please"
+    );
+    // Steer and queue are disabled as well.
+    app.run_command("composer.queue");
+    app.run_command("session.send");
+    assert!(!app.effects.iter().any(|e| matches!(
+        e,
+        nexus_tui::app::Effect::Api(nexus_tui::actions::ApiCall::Prompt { .. })
+    )));
+    assert_eq!(app.composer_ref().expanded_text(), "Keep this unsent draft");
+    // Enter sends the answer; the draft is still there.
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": [], "text": "postgres please"}])]
     );
+    assert_eq!(app.composer_ref().expanded_text(), "Keep this unsent draft");
 }
 
 #[test]
 fn pasting_while_the_card_is_focused_goes_into_its_answer_field() {
     let notes = r#"{"id":"notes","question":"Anything else?"}"#;
     let mut app = asking(&format!("[{notes}]"), (120, 36));
-    press(&mut app, &["alt+w"]);
     app.handle_paste("pasted answer");
     assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Waiting);
     assert!(app.composer_ref().expanded_text().is_empty());
-    press(&mut app, &["enter", "enter"]);
+    press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![
@@ -3344,6 +3431,46 @@ fn sidebar_search_shortcut_tracks_the_right_edge_when_resized() {
 
 #[test]
 fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
+    let mut app = subagent_fixture();
+    let (_, rows) = draw(&mut app, 160, 40);
+    // the tab row names the root only; the child has no tab
+    assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
+    assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
+    assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
+    // The one heading row names the viewed child on the left and its four metadata
+    // values on the right; there is no second subagent-tab row.
+    let rail = app.regions.back.expect("root-back rail");
+    assert_eq!(rail.width, 4);
+    assert_eq!(rail.height, app.regions.centre.height);
+    assert_eq!(rail.right(), app.regions.centre.x);
+    assert_eq!(rail.y, app.regions.heading.y);
+    let heading = centre_row(&app, &rows, app.regions.heading.y);
+    assert!(heading.contains("Child task"), "{heading:?}");
+    assert!(!heading.contains("Root task"), "{heading:?}");
+    let mut at = heading.find("Child task").expect("title");
+    for field in ["Scout", "gpt-6", "codex", "high"] {
+        let next = heading
+            .find(field)
+            .unwrap_or_else(|| panic!("{field}: {heading:?}"));
+        assert!(next > at, "{field} after the previous field: {heading:?}");
+        at = next;
+    }
+    assert!(
+        !rows[2].contains("Scout Child task"),
+        "no subagent strip: {:?}",
+        rows[2]
+    );
+    // A root session keeps the blank heading row and has no rail or metadata.
+    app.open_session("ses_parent");
+    let (_, rows) = draw(&mut app, 160, 40);
+    assert!(app.regions.back.is_none());
+    let heading = centre_row(&app, &rows, app.regions.heading.y);
+    assert_eq!(heading.trim(), "", "{heading:?}");
+    assert!(!rows[2].contains("Scout"), "{:?}", rows[2]);
+}
+
+/// A root session `ses_parent` with the fixture session as its viewed child.
+fn subagent_fixture() -> nexus_tui::app::App {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut parent = app.state.model.sessions[SESSION].clone();
     parent.id = "ses_parent".into();
@@ -3355,24 +3482,119 @@ fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
         child.parent_id = Some("ses_parent".into());
         child.agent = "scout".into();
         child.title = "Child task".into();
+        child.model = Some("codex/gpt-6".into());
+        child
+            .extra
+            .insert("effort".into(), serde_json::Value::String("high".into()));
     }
-    let (_, rows) = draw(&mut app, 160, 40);
-    // the tab row names the root only; the child has no tab
-    assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
-    assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
-    assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
-    // the page opens with the root tab's full title, then the subagent row: agent, then title; no tabs
-    assert!(rows[1].contains("Root task"), "{:?}", rows[1]);
-    assert!(rows[2].contains("Scout Child task"), "{:?}", rows[2]);
-    // a root session has no subagent row
-    app.open_session("ses_parent");
-    let (_, rows) = draw(&mut app, 160, 40);
-    assert!(!rows[2].contains("Scout"), "{:?}", rows[2]);
-    assert_eq!(app.regions.strip.height, 0);
+    app
+}
+
+/// One centre-column row, without the sidebars.
+fn centre_row(app: &nexus_tui::app::App, rows: &[String], y: u16) -> String {
+    let centre = app.regions.centre;
+    rows[y as usize]
+        .chars()
+        .skip(centre.x as usize)
+        .take(centre.width as usize)
+        .collect()
 }
 
 #[test]
-fn a_viewed_fork_is_named_fork_in_the_subagent_row() {
+fn the_root_back_rail_and_left_jump_straight_to_the_root() {
+    let mut app = subagent_fixture();
+    let mut grandchild = app.state.model.sessions[SESSION].clone();
+    grandchild.id = "ses_grandchild".into();
+    grandchild.title = "Grandchild task".into();
+    grandchild.parent_id = Some(SESSION.into());
+    app.state
+        .model
+        .sessions
+        .insert(grandchild.id.clone(), grandchild);
+    app.open_session("ses_grandchild");
+    draw(&mut app, 160, 40);
+    assert_eq!(app.viewed_id().as_deref(), Some("ses_grandchild"));
+    let back = app
+        .hits
+        .rect_of(&Target::SessionRootBack)
+        .expect("back rail");
+    assert_eq!(back, app.regions.back.expect("rail region"));
+    // The whole rail is the hit area, not only the arrow on the heading row.
+    click(&mut app, back.x, back.bottom() - 1);
+    assert_eq!(app.viewed_id().as_deref(), Some("ses_parent"));
+
+    // Left is the same gesture from the timeline, and skips the intermediate parent.
+    app.open_session("ses_grandchild");
+    app.ui.focus = nexus_tui::ui::Focus::Timeline;
+    press(&mut app, &["left"]);
+    assert_eq!(app.viewed_id().as_deref(), Some("ses_parent"));
+}
+
+#[test]
+fn the_root_back_rail_reserves_the_full_session_height_without_overlapping_content() {
+    let mut app = subagent_fixture();
+    let (buf, _) = draw(&mut app, 160, 40);
+    let rail = app.regions.back.expect("rail");
+    // The arrow sits in the middle of the four-cell strip, not on the heading row.
+    let arrow_y = rail.y + (rail.height - 1) / 2;
+    assert_eq!(buf[(rail.x + 1, arrow_y)].symbol(), "←");
+    let centre = app.regions.centre;
+    assert_eq!(rail.x, app.regions.left.unwrap().right());
+    assert_eq!(rail.height, centre.height);
+    assert_eq!(rail.bottom(), app.regions.composer.bottom());
+    for region in [
+        app.regions.heading,
+        app.regions.timeline,
+        app.regions.composer,
+    ] {
+        assert_eq!(region.x, centre.x, "content starts right of the rail");
+        assert!(region.x >= rail.right(), "content never overlaps the rail");
+    }
+
+    // The composer remains the page's bottom edge and the rail stops above the dock.
+    app.terminal_open = true;
+    draw(&mut app, 160, 40);
+    let rail = app.regions.back.expect("rail with the dock");
+    let dock = app.regions.terminal.expect("terminal dock");
+    assert_eq!(rail.bottom(), dock.y, "the rail ends where the dock starts");
+    assert_eq!(app.regions.composer.bottom(), dock.y);
+    assert!(app.regions.timeline.bottom() <= dock.y);
+}
+
+#[test]
+fn long_heading_metadata_leaves_a_readable_child_title() {
+    let mut app = subagent_fixture();
+    {
+        let child = app.state.model.sessions.get_mut(SESSION).unwrap();
+        child.title = "Readable child title that metadata must not crush".into();
+        child.model =
+            Some("vendor/a-very-long-model-name-that-keeps-going-and-going-past-the-tab".into());
+    }
+    let (_, rows) = draw(&mut app, 120, 36);
+    let heading = centre_row(&app, &rows, app.regions.heading.y);
+    assert!(
+        heading.trim_start().starts_with("Readable child title"),
+        "{heading:?}"
+    );
+    assert!(
+        heading.contains('…'),
+        "metadata still compacts: {heading:?}"
+    );
+}
+
+#[test]
+fn left_still_edits_the_composer_while_a_subagent_is_viewed() {
+    let mut app = subagent_fixture();
+    app.composer().set_text("ab");
+    app.ui.focus = nexus_tui::ui::Focus::Composer;
+    press(&mut app, &["left"]);
+    assert_eq!(app.viewed_id().as_deref(), Some(SESSION));
+    assert_eq!(app.composer_ref().text(), "ab");
+    assert_eq!(app.composer_ref().cursor(), (0, 1));
+}
+
+#[test]
+fn a_viewed_fork_reads_fork_in_the_heading_metadata() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut parent = app.state.model.sessions[SESSION].clone();
     parent.id = "ses_parent".into();
@@ -3391,8 +3613,48 @@ fn a_viewed_fork_is_named_fork_in_the_subagent_row() {
         });
     }
     let (_, rows) = draw(&mut app, 160, 40);
-    assert!(rows[2].contains("Fork Child task"), "{:?}", rows[2]);
-    assert!(!rows[2].contains("Build"), "{:?}", rows[2]);
+    let heading = centre_row(&app, &rows, app.regions.heading.y);
+    assert!(heading.contains("Child task"), "{heading:?}");
+    assert!(heading.contains("Fork"), "{heading:?}");
+    assert!(!heading.contains("Build"), "{heading:?}");
+}
+
+#[test]
+fn a_scrolling_tab_title_never_paints_over_the_close_or_status_slot() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    app.state.model.sessions.get_mut(SESSION).unwrap().title =
+        "A deliberately long session title that keeps scrolling past its tab".into();
+    app.theme.opts.reduced_motion = false;
+    draw(&mut app, 160, 40);
+    let tab = app
+        .hits
+        .rect_of(&Target::SessionTab(0))
+        .expect("active tab");
+    let close = app
+        .hits
+        .rect_of(&Target::SessionTabClose(0))
+        .expect("close slot");
+    app.mouse = Some((tab.x + 2, tab.y));
+    app.ui.tab_hover = Some((0, 0));
+    for frame in [20usize, 100] {
+        app.frame = frame;
+        let (buf, _) = draw(&mut app, 160, 40);
+        assert_eq!(buf[(close.x, close.y)].symbol(), "×");
+        for x in close.x..tab.right() {
+            let symbol = buf[(x, close.y)].symbol();
+            assert!(
+                symbol == "×" || symbol.trim().is_empty(),
+                "frame {frame}: {symbol:?} in the close slot"
+            );
+        }
+        // The status glyph before the title is still its own cell.
+        assert!(buf[(tab.x + 1, tab.y)].symbol().trim().len() <= 4);
+    }
+    // Reduced motion leaves the title still and still keeps the close slot intact.
+    app.theme.opts.reduced_motion = true;
+    app.frame = 500;
+    let (buf, _) = draw(&mut app, 160, 40);
+    assert_eq!(buf[(close.x, close.y)].symbol(), "×");
 }
 
 // ---- the composer card (DESIGN_PLAN.md D11) ---------------------------------
@@ -3637,7 +3899,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             .iter()
             .position(|l| l.contains("⌕"))
             .expect("search row");
-        // search row, blank, title line, detail line, spacer, new
+        // The list is above the pinned New / Search / Show archived footer.
         let key = col_of(&text[first], "ctrl+k");
         assert_eq!(
             text[first].find('⌕').map(|_| col_of(&text[first], "⌕")),
@@ -3648,11 +3910,16 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             "{w}: key hint inside: {:?}",
             text[first]
         );
-        assert!(text[first + 1].trim().is_empty(), "{w}");
-        let title = &text[first + 2];
-        let detail = &text[first + 3];
-        assert!(text[first + 4].trim().is_empty(), "spacer {w}");
-        assert!(text[first + 5].contains("+ New session"), "{w}");
+        let title_y = text
+            .iter()
+            .position(|line| line.contains("Refactor"))
+            .expect("session title row");
+        let title = &text[title_y];
+        let detail = &text[title_y + 1];
+        assert!(text[title_y + 2].trim().is_empty(), "spacer {w}");
+        assert!(title_y + 2 < first, "list precedes footer {w}");
+        assert!(text[first - 1].contains("+ New session"), "{w}");
+        assert!(text[first + 1].contains("Show archived"), "{w}");
         // The open session's active bar at x=0, the mark slot at x=1, title at x=3, time
         // right-aligned with a margin of 1.
         assert!(title.starts_with("▏●"), "{w}: unread mark: {title:?}");
@@ -3677,23 +3944,16 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             assert!(detail.contains("⌥ main"), "{w}: {detail:?}");
         }
         // The open session carries the active block on both lines, not on the spacer (PLAN 15.5).
-        let band = buf[(w / 2, (first + 3) as u16)].bg;
-        assert_eq!(
-            band,
-            buf[(w / 2, (first + 2) as u16)].bg,
-            "{w}: band vs header"
-        );
+        let band = buf[(w / 2, (title_y + 1) as u16)].bg;
+        assert_eq!(band, buf[(w / 2, title_y as u16)].bg, "{w}: band vs header");
         assert_eq!(band, Color::Rgb(0x24, 0x24, 0x24), "{w}: active block");
         assert_eq!(
-            buf[(w / 2, (first + 4) as u16)].bg,
+            buf[(w / 2, (title_y + 2) as u16)].bg,
             Color::Rgb(0x14, 0x14, 0x14),
             "{w}: the spacer stays on the sidebar"
         );
-        // Settings is pinned to the bottom row.
-        assert!(
-            text.last().unwrap().trim_start().starts_with("Settings"),
-            "{w}"
-        );
+        // Settings is an icon on the separate project rail, not a sidebar row.
+        assert!(!text.iter().any(|row| row.contains("Settings")), "{w}");
     }
 }
 

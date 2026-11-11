@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        New session      +                                                                 □
+     │
+     │  No project yet. Add
+     │  one with the + on the
+     │  project rail.
+     │
+     │
+     │
+     │
+     │                                                                   _/      _/
+     │                                                                  _/_/    _/
+     │                                                                 _/  _/  _/
+     │                                                                _/    _/_/
+     │                                                               _/      _/
+     │
+     │                                                               No projects yet
+     │
+     │                                                    alt+3 add a project · ctrl+p commands
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+  +  │
+     │                                Message to start a new session
+     │
+     │ + New session                  Build · … · default                                                         0
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived
+     │                             ───────────────────────────────────────────────────────────────────────────────────

@@ -93,7 +93,9 @@ describe("modal recipe (I7)", () => {
     await app.type("id:picker-input", "gpt5");                        // fuzzy, as in the TUI
     await app.waitFor("id:pick-0");
     await app.keyboard.press("enter");
-    await app.waitFor("text:The new session will use model codex/gpt-5");
+    await app.waitUntil(() => !app.shows("id:picker"));
+    await app.waitFor("text:GPT-5");
+    expect(app.texts().some((text) => text.startsWith("The new session will use"))).toBe(false);
   });
 
   test("a destructive confirm has Cancel as its default: Enter cancels, nothing is deleted", async () => {

@@ -7,6 +7,9 @@ archiving, pending directory moves and startup recovery, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files. Core also owns
 interactive terminal PTYs, with a separate bounded stream and lifecycle described
 in [terminals.md](terminals.md); they never enter model context automatically.
+Terminal routes are the exception to tokenless network access: a tokenless daemon
+accepts them only from a loopback TCP peer with a loopback `Host`/`Origin` and no
+forwarding headers. A remote client needs the bearer token.
 Terminal viewer overflow, disconnect and restart revoke attachment authority;
 no controller identity survives restart, including on already-exited resources.
 Linked background jobs retain their ordinary tool-output path. Their terminal

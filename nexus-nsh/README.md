@@ -46,7 +46,7 @@ commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessi
 See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
-Argon for interface text and prose and a full-width reading column with a fixed 24 px
+Argon for interface text and prose and a full-width reading column with a fixed 12 px
 outer gutter, with a 16 px left inset for user messages and activity groups. Desktop and web controls use bundled,
 theme-tinted SVGs, including icon-only desktop sidebar tabs in a compact segmented
 control whose names and shortcuts appear on hover, and the Settings row alongside its label. The narrow drawer retains
@@ -56,17 +56,24 @@ hover, focus and pressed states are screen-specific presentation, not different
 placement or behavior. Manager consent uses a translucent solid surface without
 backdrop blur so that GPUI can render it too. Icon-only buttons retain accessible
 names and tooltips.
-The desktop session-search button opens the session switcher with its search field
-focused; phone search remains inline. Phone segmented controls and tool toggles use 44 px touch targets; mobile navigation remains unchanged.
+The desktop session-search button, `/search` and `/search <text>` open the session switcher with its
+search field focused and the argument prefilled; on a phone `/search` opens the Sessions list with its
+inline field focused and filled, and `/search` without text clears it. Phone segmented controls and tool
+toggles use 44 px touch targets; mobile navigation remains unchanged.
 Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
 
-Question cards scroll to reveal all questions, choices and option previews. Free-text
-drafts stay with their question when the card is reopened. Accessible names on each
-choice and text field include the question, so controls remain distinguishable when
-navigating a multi-question card. Narrow connection banners show up to three lines of
-their recovery explanation; the complete message remains in the banner's accessible name.
+Question cards scroll to reveal all questions, choices and option previews. A one-question ask answers in
+one step: choosing a single-choice option submits it at once and Enter in the free-text line submits that;
+a multi-select still has one `Submit answers` button, and a two-or-more-question card keeps the current
+flow. The free-text line takes focus when a question asks for one and carries no selected-row background.
+Free-text drafts stay with their question across session switches and are dropped when the question is
+replied to or cancelled. While a question card is current, the composer is read-only with `Answer the
+question above`, so the draft stays untouched and no send, steer or queue leaves it; approvals keep their
+normal deny-with-a-note composer. Accessible names on each choice and text field include the question, so
+controls remain distinguishable when navigating a multi-question card. Narrow connection banners show up
+to three lines of their recovery explanation; the complete message remains in the banner's accessible name.
 
 Image previews include a visible Close button for touch and pointer users; long image
 names are truncated in the title while the image retains its accessible name.
@@ -90,9 +97,9 @@ Closed resources are hidden and opening the dock prefers a running terminal.
 Exit immediately disables input and updates the tab; a late control acknowledgment
 cannot make an ended terminal writable again.
 
-Desktop and web expose Core-owned terminals in a bottom dock toggled by the terminal shell indicator in the activity strip; the separate **kernel** indicator has no count. Tabs show each terminal's name and status, with **×** to close it. The compact toolbar offers new, rename, close, take/release control, copy output and hide, in that order; hover an icon for its label. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Hiding the dock detaches; closing a terminal terminates it, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
+Desktop and web expose Core-owned terminals in a bottom dock toggled by the terminal shell indicator in the activity strip or by ``Ctrl+` `` (``Ctrl+Shift+` `` / `Ctrl+~` are the same physical key); the separate **kernel** indicator has no count. The toggle works while the terminal screen has focus, is never sent to the shell, and hiding returns focus to the composer. Tabs show each terminal's name and status, with **×** to close it. The compact toolbar offers new, rename, close, take/release control, copy output and hide, in that order; hover an icon for its label. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Hiding the dock detaches; closing a terminal terminates it, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
 
-Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs. Browser and OS reserved shortcuts remain platform-owned. Native focus and input routing require a real macOS verification.
+Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs; the WebView's key guard also intercepts the dock toggle spellings above and reports them to NSH instead of xterm, so they cannot reach the shell. Browser and OS reserved shortcuts remain platform-owned. A legacy terminal that collapses ``Ctrl+` `` into NUL looks like Ctrl+Space; NSH leaves that key to the shell rather than hijacking it. Native focus and input routing require a real macOS verification.
 
 ## Native hosts
 
@@ -236,8 +243,9 @@ edge whose border stops before the card's corners curve (purple for a multi-sele
 when the client first saw the request, the parameter table (at most six rows), for edit,
 write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
 choice list: allow once, allow for session (`scope: "session"`), deny, and deny with a note
-(the note is the composer's text; empty, it says so). Questions show radios or checkboxes and a free-text field;
-`⌘↵` submits. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
+(the note is the composer's text; empty, it says so). Questions show radios or checkboxes and a free-text field,
+focused at once when the ask is a single question; a single choice submits immediately and a multi-select uses
+the one `Submit answers` button (`⌘↵`). Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
 full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
 notifications drawer opens it in the modal dialog (`c` copies, Esc closes). The banner is a
@@ -258,20 +266,30 @@ and meters keep their shape. A box rule runs a hairline along a box's straight
 sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column fills the available centre width. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions and Files icons (they follow the sidebar's open state; narrow, they
-are in the drawer with labels). The session tabs and the subagent strip use one
-fixed tab box (208 × 28 px, 176 × 40 narrow), so a root, a child, a parent and
-New session all keep the same width and a long title ellipsises inside its tab.
+are in the drawer with labels). The session tabs use one fixed tab box
+(208 × 28 px, 176 × 40 narrow), so a root and New session keep the same width
+and a long title ellipsises inside its tab.
+Hovering a title too wide for its tab scrolls it to its end inside a fixed title
+region and resets when the pointer leaves, so the status mark and the separate
+`×` slot never move or get overwritten; reduced motion leaves it still, with the
+full title in a tooltip and its accessible name. Below the tabs the page keeps exactly one heading row: a root
+session leaves it blank (the full title is already its tab), while a viewed
+subagent shows its title on the left and right-aligned `agent · model · provider
+· effort` metadata, shifted right by a full-height muted-grey back strip at the
+centre's far left, beside the sidebar. The strip is four text cells wide, runs
+from the heading through the composer, centres its arrow both vertically and
+horizontally, and the whole strip is clickable; it and Left outside text fields,
+the composer, the editor and overlays return straight to the root. Esc still
+returns to the immediate parent, and a root session has no strip.
 New session's label starts on the same text edge as the session titles.
 The viewed tab has the square selection fill with primary text, the others are muted
 with a hover fill. Their × shows on hover (and on the viewed tab). Tabs are root
-sessions only: opening a subagent keeps its root's tab in view. Under the header
-a subagent strip shows the path above the viewed child as parent tabs (the last
-is the back control), a divider rail, then the root's other sessions as equal
-tabs with their state glyph and agent (no state word), with the viewed child selected. As in the TUI, every strip tab has one width of 10 to 30 terminal columns (`src/strip-layout.ts`, mapped to points by the text cell size); when the row is too full, the oldest ancestors drop from the left with a `…` marker, then the children farthest from the viewed one, and last the cells narrow. The strip never scrolls. The run status sits at the
+sessions only: opening a subagent keeps its root's tab in view, and there is no
+second subagent-tab row; child cards remain the navigation path to a subagent. The run status sits at the
 centre's right edge; the bell and right toggle are at the far right. The context timeline
-uses the full available centre width with fixed 8 px horizontal padding at every
-viewport. Every card shares the column's left edge, and assistant prose plus
-activity and thought rows start at the cards' 8 px text inset.
+uses the full available centre width with a fixed 12 px compact outer gutter at
+every viewport. Every card shares the column's left edge, and assistant prose
+plus activity and thought rows start at the cards' 8 px text inset.
 The waiting card sits in the timeline's reading column, and the docked composer's content
 uses the same 16 px inset, so a draft's first character lines up with the first character of
 the user message above it.
@@ -288,8 +306,10 @@ beside it on the input's bottom edge, with the dock padded tighter; an enabled s
 ends with context usage. The location strip is its own row under the controls at every width: the
 muted home-shortened path and branch on the left, centered gray indicators for a live
 kernel, running background shells and terminal shells when present. The kernel and
-background-shell indicators open separate detail lists; terminal shells open the dock. A linked worktree
-adding `⑂`, and the context reading (`82k · 41%`) on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a
+background-shell indicators open separate detail lists; terminal shells open the dock. A linked
+worktree adds a bundled fork icon (muted, primary on hover) with the tooltip `Worktree session`; clicking it
+opens the small **Worktree** modal with the copyable worktree path, branch and main-checkout path, and a
+`Copied` toast. The context reading (`82k · 41%`) stays on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a
 soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
 hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
 While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
@@ -304,6 +324,13 @@ agent, model and effort pickers carry the TUI's search field (fuzzy filtering),
 ↑↓ navigation and Enter to choose. The model picker names each model, puts its
 provider and `current` at the row's end, and shows the highlighted model's ref,
 context and efforts beneath the list.
+Pending steer and queued messages sit above the input. Queued rows reveal `pencil`, `arrow-up`,
+`arrow-down` and `x` at their right edge on hover or keyboard focus (a tap reveals them on touch, and
+narrow windows keep them below the line); the order is edit, move up, move down, remove. Up is disabled on
+the first queued row and down on the last, counting only queued rows, and each icon runs the same move as
+the keyboard. Steer rows keep their keyboard behaviour and carry no row-action icons or Steer text button.
+Removing asks first; edit restores the message into an empty draft.
+
 The starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Its text uses a consistent
 16 px size, compact section counts, gray status dots and a three-column list of
@@ -343,7 +370,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and Settings sits at the rail's foot while the sidebar is closed. The sidebar lists the current project's sessions only, with `New session` above search and `Show archive` below the list. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archive includes archived sessions alongside active sessions when enabled.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects. The sidebar lists the current project's sessions only, with a pinned three-action footer (`New session`, `Search sessions`, `Show archived`) that stays at the bottom even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archive includes archived sessions alongside active sessions when enabled.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -379,10 +406,10 @@ session-info item not reported by Core.
 session sidebar and gives it the keys (the composer is blurred; Up/Down move a session cursor, Enter opens the session); Left again focuses the project list (Up/Down move a
 cursor bar among the projects, Enter opens one, restoring an inactive project first); Left again opens the **projects
 overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order, whenever the Projects tab holds the keys (also when opened by its command). With text in the
-composer Left moves the cursor as usual. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
+composer Left moves the cursor as usual. On a viewed subagent's page, Left outside text fields, the composer, the editor and overlays returns to the root; the full-height back strip at the centre's left does the same. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
 the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state (`running`, `needs input`, `failed`, `finished`, `idle`), a per-project
 `N archived` toggle (`a` or Enter; collapsed), passive projects dimmed, and inactive projects last under `Inactive`,
-restored with `r` (`1`/`2`/`3` set current, passive, inactive). The project picker (`project.switch`, `cmd+shift+k`) lists
+restored with `r` (`1`/`2`/`3` set current, passive, inactive). `Shift+Tab` cycles the composer's eligible agents (primary agents, or subagents in a child) and wraps; an existing session uses the same next-call switch and cache warning as the agent picker. New-session draft selections of agent, model and effort update silently, without a toast. The project picker (`project.switch`, `cmd+shift+k`) lists
 every project, inactive ones marked, and choosing an inactive one restores it, as in the TUI. Tests: `keyboard-flow.test.tsx`.
 
 The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
@@ -488,7 +515,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/core/view.ts` | Client view reporting: the current project, session and panel ids (`files` or `file`; NSH has no Git diff panel), keyed by the event stream that issued them, re-sent after every reconnect and retried on a capped backoff. |
 | `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs, the Files tree's directory listings and expanded set, and the view sent to Core. |
 | `src/file-tree.ts` | Pure flattening of the Files tree (depth-first through expanded folders, `.git` skipped), shared with tests. |
-| `src/strip-layout.ts` | Pure subagent strip layout, the TUI's: one 10..30 column cell, thinned and shrunk to fit. |
+| `src/strip-layout.ts` | Legacy pure subagent-strip layout helper; no longer rendered (child navigation uses cards and the heading rail). |
 | `src/scroll-follow.ts` | Pure timeline follow decision (and the first-send pin's spacer and release): an upward scroll leaves follow, returning near the end resumes it. |
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
@@ -740,9 +767,14 @@ estimate.
 
 ## K5-K11 client parts (2026-10-29)
 
-- **Search (K5).** Desktop search opens the session switcher; phone search filters the sessions
-  list inline. Both ask `GET /api/search` after 150 ms (two characters or more) and show matching
+- **Search (K5).** Desktop search, `/search` and `/search <text>` open the session switcher with focus in
+  its field (prefilled by the argument); phone search and `/search` filter the sessions list inline with
+  the field focused. Both ask `GET /api/search` after 150 ms (two characters or more) and show matching
   user-message snippets alongside title matches. The phone list retains its query when reopened.
+- **Archive (29).** `/archive` posts the same archive command as the row menu. Any `session.archived`
+  event — this client, another client, the Manager or Core auto-archive — closes the archived session's
+  tab and any archived descendant tabs, focusing the neighbour as Close tab does; on a phone the Sessions
+  tab replaces an open archived conversation.
 - **Older messages (K6).** A session opens with its newest 200 messages (`message?limit=200`);
   when more exist the timeline starts with `Older messages are not loaded` and a Load older
   messages button (`turn.load_older`, also in the palette) that reads the page before the oldest

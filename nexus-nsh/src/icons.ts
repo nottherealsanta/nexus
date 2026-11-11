@@ -14,11 +14,13 @@ import chevron_right from "./icons/chevron-right.svg";
 import chevron_down from "./icons/chevron-down.svg";
 import chevron_up from "./icons/chevron-up.svg";
 import arrow_up from "./icons/arrow-up.svg";
+import arrow_down from "./icons/arrow-down.svg";
 import arrow_left from "./icons/arrow-left.svg";
 import stop from "./icons/stop.svg";
 import play from "./icons/play.svg";
 import bell from "./icons/bell.svg";
 import branch from "./icons/branch.svg";
+import worktree from "./icons/worktree.svg";
 import info from "./icons/info.svg";
 import archive from "./icons/archive.svg";
 import trash from "./icons/trash.svg";
@@ -53,11 +55,13 @@ export const icons = {
   "chevron-down": chevron_down,
   "chevron-up": chevron_up,
   "arrow-up": arrow_up,
+  "arrow-down": arrow_down,
   "arrow-left": arrow_left,
   "stop": stop,
   "play": play,
   "bell": bell,
   "branch": branch,
+  "worktree": worktree,
   "info": info,
   "archive": archive,
   "trash": trash,

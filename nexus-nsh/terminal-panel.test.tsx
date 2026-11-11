@@ -24,5 +24,19 @@ describe("terminal panel", () => {
     expect(app.texts().join("\n")).toContain("[Close terminal]");
     expect(app.texts().join("\n")).toContain("[Cancel]");
   });
+
+  test("the shared dock shortcut closes and opens the dock", async () => {
+    const app = await open("./TerminalShortcutFixture.tsx", {width:1200,height:800,platform:"web",colorScheme:"dark"});
+    await app.waitFor("id:terminal-open");
+    const state = () => app.texts().slice(0, 1)[0];
+    expect(state()).toBe("true");
+    await app.keyboard.press("ctrl+k");
+    expect(app.texts()).toContain("1");
+    await app.keyboard.press("ctrl+`");
+    await app.waitFor("id:terminal-open");
+    expect(state()).toBe("false");
+    await app.keyboard.press("ctrl+shift+`");
+    expect(state()).toBe("true");
+  });
 });
 void terminalItems;

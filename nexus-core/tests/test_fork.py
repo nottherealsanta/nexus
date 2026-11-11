@@ -299,6 +299,31 @@ async def test_fork_total_call_budget_counts_nested_calls(env, monkeypatch):
         await rt.kernels.shutdown()
 
 
+async def test_scout_call_budget_counts_nested_calls_and_resets(env, monkeypatch):
+    rt, client, provider, workspace, _ = env
+    monkeypatch.setattr(runtime_module, "SCOUT_MAX_CALLS", 3)
+    parent = await _parent(client, workspace)
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "scout"})).json()
+    provider.replies = [
+        [_call("batch", "code", code="for _ in range(3):\n print(await read(path='README.md'))")],
+        [Text("partial report")],
+        [_call("again", "read", path="README.md")], [Text("done")],
+    ]
+    try:
+        await client.post(f"/api/session/{child['id']}/prompt", json={"text": "inspect"})
+        await _idle(rt)
+        assert "3-call tool budget" in _outputs(rt, child["id"])[0]
+        assert not provider.requests[1].tools
+        assert any("honest partial report" in p.text for m in provider.requests[1].messages
+                   for p in m.parts if isinstance(p, Text))
+        await client.post(f"/api/session/{child['id']}/prompt", json={"text": "continue"})
+        await _idle(rt)
+        assert "hello" in _outputs(rt, child["id"])[-1]
+        assert rt._agent(rt.store.session(parent["id"])).max_tool_calls is None
+    finally:
+        await rt.kernels.shutdown()
+
+
 async def test_fork_refuses_job_control_and_unknown_extension_effects(env):
     rt, client, provider, workspace, _ = env
     provider.replies = [[_call("fork", prompt="inspect")], [Text("report")], [Text("done")]]

@@ -1,17 +1,16 @@
-import { Scroll, Text, View, platform, safeArea, signal } from "nsh";
+import { Scroll, Text, View, effect, platform, safeArea, signal } from "nsh";
 import { titleBar } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { Icon, IconButton, Spinner, Status, FOCUS, TONE, TS } from "./kit";
 import { RAIL_PX, SidebarTabs, attention, leftSidebarWidth } from "./sidebar";
 import { byId, closeTab, keyLabel, run, rightIsOpen, rightWidthHint, tabIds, waitItems } from "../commands";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
-import { centre, config, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, native, railShown, touch, unread, viewed, rootOf, selectSession, subagentsOf, ancestorsOf, width } from "../store";
-import { agentColor, agentLabel } from "../agent-color";
+import { agentCatalog, centre, config, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, modelCatalog, native, railShown, touch, unread, viewed, rootOf, selectSession, width } from "../store";
+import { agentLabel } from "../agent-color";
 import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager/stage";
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
-import { stripLayout } from "../strip-layout";
 import { rightSidebarWidth, textCellPoints, workspaceTabCells } from "./geometry";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
@@ -31,15 +30,52 @@ const tabWidth = () => {
 };
 const tabHeight = () => isNarrow() ? "h-10" : "h-7";
 const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
+/** The title's dedicated cells, after status, padding and the fixed close slot. */
+export const tabTitleRoomCells = (widthPx: number) => Math.max(1, Math.round(widthPx / textCellPoints()) - 7);
+
+/** Hover marquee timing: a short hold, then the title's overflow at a readable speed. */
+const MARQUEE_HOLD_MS = 600;
+const MARQUEE_SPEED = 60;
+
+/** How far a hovered title has scrolled after `elapsed` ms, never past its overflow. */
+export function marqueeShift(elapsed: number, overflow: number): number {
+  if (overflow <= 0) return 0;
+  const travel = overflow / MARQUEE_SPEED * 1000;
+  const cycle = travel + MARQUEE_HOLD_MS * 2;
+  const at = elapsed % cycle;
+  if (at < MARQUEE_HOLD_MS) return 0;
+  if (at < MARQUEE_HOLD_MS + travel) return (at - MARQUEE_HOLD_MS) / 1000 * MARQUEE_SPEED;
+  return overflow;
+}
 
 /**
  * One session tab (D02): the header's fixed tab box (208 × 28 px, 176 × 40 narrow) with square
  * corners. The viewed tab sits on the canvas surface with primary text; the others are muted on
- * the chrome band with a hover fill and reveal their × on hover.
+ * the chrome band with a hover fill and reveal their × on hover. A title wider than its tab
+ * scrolls on hover until its end is visible; reduced motion leaves it still and puts the full
+ * title in a tooltip and its accessible name.
  */
 function SessionTab(p: { id: string }) {
   const session = () => { m(); return model.sessions.get(p.id); };
   const title = () => session()?.title || "Untitled";
+  const hovered = signal(false);
+  const shift = signal(0);
+  const reduced = () => !!config()?.values?.ui?.reduced_motion;
+  // The shared tab width leaves seven cells for the status mark, close button and padding.
+  const titleRoom = () => tabTitleRoomCells(tabWidth());
+  const titleOverflow = () => Math.max(0, (Array.from(title()).length - titleRoom()) * textCellPoints());
+  effect(() => {
+    const overflow = titleOverflow();
+    // Touch has no hover to leave behind, and the reduced-motion setting is the
+    // shared Nexus animation preference; both keep the title still.
+    if (!hovered() || touch || reduced() || overflow <= 0) {
+      shift.set(0);
+      return;
+    }
+    const start = Date.now();
+    const timer = setInterval(() => shift.set(marqueeShift(Date.now() - start, overflow)), 33);
+    return () => clearInterval(timer);
+  });
   const active = () => centre() !== "settings" && centre() !== "new_session" && rootOf(viewed()?.id) === p.id;
   const onViewedSession = () => active() && viewed()?.id === p.id;
   const status = () => {
@@ -57,6 +93,8 @@ function SessionTab(p: { id: string }) {
   };
   return (
     <View
+      onMouseEnter={() => { if (!touch) hovered.set(true); }} onMouseLeave={() => { hovered.set(false); shift.set(0); }}
+      tooltip={reduced() && !touch && titleOverflow() > 0 ? <Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{title()}</Text> : undefined}
       style={{ width: tabWidth() }} class={`group/tab flex-row min-w-0 overflow-hidden ${tabBox()} ${active() ? "bg-background" : "hover:bg-accent"}`}
     >
       <Button
@@ -68,9 +106,13 @@ function SessionTab(p: { id: string }) {
             <Spinner class={`shrink-0 ${TS.base} ${status().tone}`} label={status().label} />
           </If>
         </If>
-        <Text testID={`tab-title-${p.id}`} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
+        <View testID={`tab-title-clip-${p.id}`} class="shrink-0 overflow-hidden" style={{ width: titleRoom() * textCellPoints() }}>
+          <Text testID={`tab-title-${p.id}`} accessibilityLabel={title()}
+            style={{ numberOfLines: 1, width: titleOverflow() > 0 ? Array.from(title()).length * textCellPoints() : undefined, transform: shift() ? `translateX(${-shift()}px)` : undefined }}
+            class={`${TS.base} ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
+        </View>
       </Button>
-      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10 px-2.5" : "h-7 px-1.5"} text-muted-foreground hover:text-foreground ${FOCUS}`}>
+      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`w-6 shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10" : "h-7"} text-muted-foreground hover:text-foreground ${FOCUS}`}>
         <Icon name="x" size={14} class="tint-muted-foreground" />
       </Button>
     </View>
@@ -102,118 +144,115 @@ function WorkspaceTabs() {
   );
 }
 
-/** The first row of an open session's page: the full title of its tab on the black page surface. */
+/** The root-back strip is thicker than a tab: four text cells, full height. */
+export const SESSION_BACK_CELLS = 4;
+export const sessionBackRailPx = () => textCellPoints() * SESSION_BACK_CELLS;
+
+/**
+ * A viewed subagent's full-height root-back strip: four text cells of muted surface at the
+ * centre's far left, beside the sidebar, with the arrow centred in it. The whole strip jumps
+ * straight to the root (Esc still goes to the parent).
+ */
+export function SessionBackRail() {
+  const rootTitle = () => { m(); return model.sessions.get(rootOf(viewed()?.id) ?? "")?.title || "Untitled"; };
+  return (
+    <View class="absolute left-0 top-0 bottom-0 bg-raised" style={{ width: sessionBackRailPx() }} testID="session-back-rail">
+      <Button
+        onPress={() => void run("nav.root")} testID="session-back"
+        accessibilityLabel={`Back to root session ${rootTitle()}`}
+        tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{`Back to ${rootTitle()}`}</Text>}
+        class={`w-full h-full items-center ${FOCUS}`}
+      >
+        <View class="w-full h-full items-center justify-center" testID="session-back-arrow">
+          <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
+        </View>
+      </Button>
+    </View>
+  );
+}
+
+/**
+ * The first row of an open session's page. A root session keeps it blank: the full title is
+ * already the active tab. A viewed subagent is named here, shifted right by the full-height
+ * root-back strip.
+ */
+const capitalize = (text: string) => text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
+const headingCells = (text: string) => Array.from(text).length;
+
+/** Shorten to `room` cells, with an ellipsis when it does not fit. */
+function headingEllipsis(text: string, room: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= room) return text;
+  if (room <= 0) return "";
+  if (room === 1) return "…";
+  return `${chars.slice(0, room - 1).join("")}…`;
+}
+
+/**
+ * Join the heading metadata in stable order: spaced separators, then compact ones, then each
+ * field shortened to an equal share. A row too narrow for four fields falls back to one
+ * ellipsised line.
+ */
+/** Metadata room after reserving a readable title share (40%, at least 14 cells). */
+export function headingMetaRoom(cells: number): number {
+  return Math.max(0, cells - Math.max(14, Math.floor(cells * 0.4)) - 1);
+}
+
+export function headingMeta(parts: string[], room: number): string {
+  if (room <= 0 || !parts.length) return "";
+  const full = parts.join(" · ");
+  if (headingCells(full) <= room) return full;
+  const tight = parts.join("·");
+  if (headingCells(tight) <= room) return tight;
+  const budget = room - (parts.length - 1);
+  if (budget < parts.length) return headingEllipsis(tight, room);
+  const base = Math.floor(budget / parts.length);
+  const extra = budget % parts.length;
+  return parts.map((p, i) => headingEllipsis(p, base + (i < extra ? 1 : 0))).join("·");
+}
+
+/** The viewed child's four metadata values, using the composer's catalog/ref fallbacks. */
+function headingMetaFields(): string[] {
+  m();
+  const s = viewed();
+  if (!s) return [];
+  const agent = capitalize(agentLabel(s));
+  const ref = s.model
+    ? String(s.model)
+    : agentCatalog().agents.find((a) => a.name === s.agent)?.model || "";
+  let name = "default";
+  let provider = "default";
+  if (ref) {
+    const entry = modelCatalog().find((item) => item.ref === ref);
+    name = entry?.name || ref.split("/").at(-1) || ref || "default";
+    provider = entry?.provider || (ref.includes("/") ? ref.split("/")[0] : "") || "default";
+  }
+  const effort = (s as any).effort || (s as any).extra?.effort || "default";
+  return [agent, name, provider, effort];
+}
+
 export function SessionHeading() {
-  const title = () => { m(); return model.sessions.get(rootOf(viewed()?.id) ?? "")?.title || "Untitled"; };
-  const shown = () => !isNarrow() && centre() === "session" && !!viewed();
+  const current = () => { m(); return viewed(); };
+  const room = signal(0);
+  const shown = () => !isNarrow() && centre() === "session" && !!current();
+  const meta = () => headingMeta(headingMetaFields(), headingMetaRoom(Math.floor(room() / textCellPoints())));
   return (
     <If when={shown()}>
-      <View class="w-full h-7 shrink-0 justify-center bg-background px-3" testID="session-heading">
-        <Text style={{ numberOfLines: 1 }} class={`${TS.base} text-foreground-secondary`}>{title()}</Text>
+      <View class="w-full h-7 shrink-0 flex-row items-center bg-background pr-3" testID="session-heading"
+        onLayout={(b: any) => room.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
+        <If when={!!current()?.parent_id}>
+          <Text testID="session-heading-title" style={{ numberOfLines: 1, textOverflow: "ellipsis" }} class={`min-w-0 flex-1 ${TS.base} text-foreground-secondary`}>
+            {current()?.title || "Untitled"}
+          </Text>
+          <If when={!!meta()}>
+            <Text testID="session-heading-meta" style={{ numberOfLines: 1, textOverflow: "ellipsis" }} class={`ml-2 shrink min-w-0 ${TS.base} text-muted-foreground`}>{meta()}</Text>
+          </If>
+        </If>
       </View>
     </If>
   );
 }
 
-type ChildState = { glyph: string; tone: string; label: "waiting" | "running" | "failed" | "completed"; spin: boolean };
-
-/** A subagent's own state: waits in its tree first, then its run, failure or finished turn. */
-function childState(id: string): ChildState {
-  m();
-  const session = model.sessions.get(id);
-  if (attention(id) === "waiting") return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting", spin: false };
-  if (session?.status === "busy" || model.running.has(id)) return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
-  if (model.failedSessions.has(id) || session?.status === "failed") return { glyph: statusGlyphs.error.unicode, tone: TONE[statusGlyphs.error.token], label: "failed", spin: false };
-  return { glyph: statusGlyphs.done.unicode, tone: TONE[statusGlyphs.done.token], label: "completed", spin: false };
-}
-
-const capitalize = (text: string) => text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
-
-/**
- * The subagent strip (TUI parity): shown under the header while a child is viewed. The root and
- * the path down to the parent come first as parent tabs, then the sessions below the root, with
- * the viewed child selected. Every tab uses the header's one fixed size, so the strip reads as a
- * single tab row instead of a breadcrumb beside a loose title. The parent tab is the back
- * control; Esc still goes back to the parent.
- */
-export function SubagentStrip() {
-  const session = () => { m(); return viewed(); };
-  const chain = () => { m(); const current = session(); return current ? ancestorsOf(current.id) : []; };
-  const parent = () => { const c = chain(); return c.length > 1 ? c[c.length - 2] : null; };
-  const root = () => chain()[0] ?? null;
-  const ancestors = () => chain().slice(0, -1);
-  const children = () => {
-    const r = root();
-    if (!r) return [];
-    // The path above the viewed child already has its own tabs.
-    const above = new Set(ancestors().map((s) => s.id));
-    return subagentsOf(r.id).filter((s) => !above.has(s.id));
-  };
-  // Terminal-column layout, as the TUI: one cell width, shrunk and thinned to the strip's room.
-  const layout = () => {
-    m();
-    const unit = textCellPoints();
-    const room = Math.floor((Math.min(width(), 760) - 16) / unit);
-    return stripLayout({ ancestors: ancestors(), children: children(), viewed: session()?.id ?? "", room });
-  };
-  const stripTab = () => layout().cell * textCellPoints();
-  return (
-    <If when={!!parent()}>
-      <View class="w-full bg-background" testID="subagent-strip" role="toolbar" accessibilityLabel="Subagent navigation">
-        <View class={`w-full max-w-[760px] mx-auto flex-row items-center gap-1.5 px-2 ${isNarrow() ? "min-h-12" : "min-h-8"} min-w-0`}>
-          <View class="flex-1 min-w-0 overflow-hidden">
-            <View class="flex-row items-center gap-1">
-            <If when={layout().droppedLeft}><Text class={`shrink-0 ${TS.base} text-muted-foreground`} accessibilityLabel="Earlier sessions">…</Text></If>
-            <Each of={layout().ancestors} key={(ancestor) => ancestor.id}>
-              {(ancestor) => {
-                const isParent = () => ancestor().id === parent()?.id;
-                const isRoot = () => ancestor().id === root()?.id;
-                return (
-                  <Button
-                    onPress={() => void selectSession(ancestor().id)}
-                    testID={isParent() ? "subagent-back" : isRoot() ? "subagent-root" : `subagent-crumb-${ancestor().id}`}
-                    accessibilityLabel={isParent() ? `Back to ${ancestor().title || "parent session"}` : `Open ${isRoot() ? "root" : "ancestor"} session ${ancestor().title || "Untitled"}`}
-                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 text-muted-foreground hover:bg-accent hover:text-foreground ${FOCUS}`}
-                  >
-                    <Text testID={isRoot() ? "subagent-root-title" : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base}`}>{ancestor().title || "Untitled"}</Text>
-                  </Button>
-                );
-              }}
-            </Each>
-            <View class="mx-0.5 h-4 w-px shrink-0 bg-border" accessible={false} />
-            <Each of={layout().children} key={(child) => child.id}>
-              {(child) => {
-                const state = () => childState(child().id);
-                const open = () => session()?.id === child().id;
-                return (
-                  <Button
-                    onPress={() => void selectSession(child().id)} selected={open()}
-                    testID={`subagent-${child().id}`}
-                    accessibilityLabel={`${capitalize(agentLabel(child()))} ${child().title || "Untitled"}, ${state().label}${open() ? ", open" : ""}`}
-                    style={{ width: stripTab() }} class={`${tabBox()} gap-1.5 px-2.5 ${open() ? "bg-background" : "hover:bg-accent"} ${FOCUS}`}
-                  >
-                    <If when={state().spin} else={<Text class={`shrink-0 ${TS.base} ${state().tone}`} accessibilityLabel={state().label}>{state().glyph}</Text>}>
-                      <Spinner class={`shrink-0 ${TS.base} ${state().tone}`} label={state().label} />
-                    </If>
-                    <Text class={`shrink-0 ${TS.base} ${agentColor(agentLabel(child()))}`}>{capitalize(agentLabel(child()))}</Text>
-                    <Text testID={open() ? `subagent-current-${child().id}` : undefined} style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} ${open() ? "font-semibold text-foreground" : "text-foreground-secondary"}`}>{child().title || "Untitled"}</Text>
-                  </Button>
-                );
-              }}
-            </Each>
-            </View>
-          </View>
-        </View>
-      </View>
-    </If>
-  );
-}
-
-/**
- * The 44 px chrome band (56 px narrow). Three slots match the sidebars: 264 px over the left
- * sidebar, the centre column (tabs and run status), and 300 px over
- * the right sidebar when it is docked. Narrow, the sidebars are drawers and the band is 56 px.
- */
 export function Header() {
   const conn = () => connection();
   const leftDocked = () => !isNarrow() && leftOpen();

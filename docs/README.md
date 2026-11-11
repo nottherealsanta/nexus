@@ -1,6 +1,6 @@
 # Nexus 0.10 docs
 
-These pages describe the code as it is. [PLAN.md](../PLAN.md) lists what has landed and all remaining work and [porting-ledger.md](porting-ledger.md) records decisions; [AGENTS.md](../AGENTS.md) holds the working rules. Where a
+These pages describe the code as it is. [plans/](../plans/README.md) lists what has landed and all remaining work and [porting-ledger.md](porting-ledger.md) records decisions; [AGENTS.md](../AGENTS.md) holds the working rules. Where a
 doc and the code disagree, the code wins: fix the doc.
 
 ## Index

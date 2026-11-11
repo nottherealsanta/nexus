@@ -72,7 +72,10 @@ const inputSeq = new Map<string, number>();
 export async function loadInputs(id: string) {
   const seq = (inputSeq.get(id) ?? 0) + 1; inputSeq.set(id, seq);
   const data = await request<{inputs: PendingInput[]; held: boolean}>("GET", `/api/session/${id}/input`);
-  if (inputSeq.get(id) === seq) pendingInputs.update((all) => ({ ...all, [id]: data }));
+  if (inputSeq.get(id) === seq) {
+    pendingInputs.update((all) => ({ ...all, [id]: data }));
+    bump();
+  }
 }
 // Prompt history: this project's sent prompts from Core, newest first (Up in the composer).
 export const promptHistory = signal<{ project: string; entries: string[] }>({ project: "", entries: [] });
@@ -191,6 +194,10 @@ export const drawer = signal<"left" | "right" | "notifications" | null>(null);
 export const paletteOpen = signal(false);
 /** The session switcher (ctrl/cmd+k): every root session, or the current project's when `scopeAll` is off. */
 export const switcherOpen = signal(false);
+/** The query `/search <text>` asks the switcher to open with; the switcher takes it when it mounts. */
+export const switcherQuery = signal("");
+/** The worktree details modal (`session.worktree_info`). */
+export const worktreeInfoOpen = signal(false);
 /** A simple list picker for catalog-backed choices (model, effort, agent). */
 export type PickerItem = { id: string; label: string; hint?: string; detail?: string[]; run: () => void | Promise<void> };
 /** The projects overview (PLAN 15.4): the selected row and the projects whose archived sessions are shown. */
@@ -543,14 +550,31 @@ export function worktreeForDirectory(directory: string, listing: any | null | un
     .sort((a: any, b: any) => String(b.path).length - String(a.path).length)[0] ?? null;
 }
 
+/**
+ * The listing the viewed session's directory is in: its own session listing when that contains
+ * the directory, else the project's listing (a relocation can leave the session read behind).
+ * One lookup feeds the strip, the linked-worktree predicate and the details modal.
+ */
+export function worktreeListingForSession(): any | null {
+  m();
+  const s = viewed();
+  const p = currentProject();
+  const directory = s?.directory ?? (p ? model.projects.get(p)?.path : undefined);
+  const cached = s ? sessionWorktrees()[s.id] ?? null : null;
+  const mine = cached && (!cached.session_directory || cached.session_directory === directory) ? cached : null;
+  const project = p ? projectWorktrees()[p] ?? null : null;
+  if (directory && worktreeForDirectory(directory, mine)) return mine;
+  if (directory && worktreeForDirectory(directory, project)) return project;
+  return null;
+}
+
 export function currentWorktree() {
   m();
   const s = viewed();
   const p = currentProject();
   const directory = s?.directory ?? (p ? model.projects.get(p)?.path : undefined);
   if (!directory) return null;
-  const listing = s ? sessionWorktrees()[s.id] : p ? projectWorktrees()[p] : null;
-  return worktreeForDirectory(directory, listing);
+  return worktreeForDirectory(directory, worktreeListingForSession());
 }
 
 // --- alerts -----------------------------------------------------------------------------
@@ -706,6 +730,7 @@ export function syncView() {
 }
 
 function reconcileSelection() {
+  closeArchivedTabs();
   if (model.selectedDeleted) {
     toast("info", "That session was deleted.");
     model.selectedDeleted = null;
@@ -1023,6 +1048,64 @@ export function subagentsOf(root: string): Session[] {
 
 const lastProjectSession = new Map<string, string>();
 
+/** Archived sessions the user explicitly reopened after a snapshot; a reconnect must not close them again. */
+const reopenedArchived = new Set<string>();
+
+/** The header's tab ids: root sessions of the current project, plus the viewed root. */
+export function visibleTabIds(): string[] {
+  m();
+  const ids = openedTabs().filter((id) => {
+    const s = model.sessions.get(id);
+    return s && !s.parent_id && s.project_id === currentProject();
+  });
+  const root = rootOf(model.selected?.sessionId);
+  return root && model.sessions.get(root)?.project_id === currentProject() && !ids.includes(root) ? [...ids, root] : ids;
+}
+
+/**
+ * An archive event closes its sessions' tabs, from every source. Desktop focus moves to the
+ * neighbour as `session.tab_close` does; a phone goes back to its Sessions tab.
+ */
+function closeArchivedTabs() {
+  const event = model.archivedTabs;
+  const snapshot = model.archivedTabsSnapshot;
+  if (!event.size && !snapshot.size) return;
+  const archived = new Set(event);
+  for (const id of snapshot) {
+    if (reopenedArchived.has(id)) continue;
+    archived.add(id);
+  }
+  for (const id of event) reopenedArchived.delete(id);
+  for (const id of [...reopenedArchived]) {
+    const s = model.sessions.get(id);
+    if (!s || !s.archived) reopenedArchived.delete(id);
+  }
+  model.archivedTabs = new Set();
+  model.archivedTabsSnapshot = new Set();
+  if (!archived.size) return;
+  const before = visibleTabIds();
+  // Remove every archived stored tab, including background projects; focus only
+  // moves when the viewed tab was one of them.
+  openedTabs.update((tabs) => tabs.filter((tab) => !archived.has(tab)));
+  const selected = rootOf(model.selected?.sessionId);
+  if (!selected || !archived.has(selected)) return;
+  const at = before.indexOf(selected);
+  const next = before.slice(at + 1).find((id) => !archived.has(id)) ?? before.slice(0, Math.max(0, at)).reverse().find((id) => !archived.has(id));
+  if (phone) {
+    phonePage.set("sessions");
+    if (next) { model.select(next); centre.set("session"); }
+    else { rememberNewSession(currentProject()); model.select(null); centre.set("new_session"); }
+    return;
+  }
+  if (next) void selectSession(next);
+  else {
+    rememberNewSession(currentProject());
+    model.select(null);
+    centre.set("new_session");
+    bump();
+  }
+}
+
 export function rememberNewSession(project: string | null | undefined) {
   if (project) lastProjectSession.set(project, "");
 }
@@ -1033,6 +1116,8 @@ export async function selectSession(id: string) {
   // Subagents have no tab: opening one keeps its root's tab (TUI parity).
   const tab = rootOf(id) ?? id;
   openedTabs.update((tabs) => tabs.includes(tab) ? tabs : [...tabs, tab]);
+  if (ses?.archived) reopenedArchived.add(tab);
+  if (id !== tab && model.sessions.get(id)?.archived) reopenedArchived.add(id);
   model.unreadSessions.delete(id);
   if (ses) {
     lastProjectSession.set(ses.project_id, id);

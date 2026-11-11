@@ -56,7 +56,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:session-ses_1")).toBe(false);
   });
 
-  test("the row shows its branch and child count, with New session above the list", async () => {
+  test("the row shows its branch and child count, with New session in the footer", async () => {
     const parent = session("ses_1", "Refactor loader", { agent: "orchestrate" });
     const child = session("ses_2", "Child task", { parent_id: "ses_1" });
     const app = await open("./App.tsx", { network: network([parent, child]), width: 1440, height: 900, platform: "web" });

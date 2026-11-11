@@ -4,14 +4,14 @@ import { View } from "nsh";
 import type { JSX } from "nsh";
 import { width } from "../store";
 
-/** A fixed gutter, like the Rust TUI, leaves the available width to the conversation. */
+/** A fixed compact gutter, like the Rust TUI, leaves the available width to the conversation. */
 export function timelineColumnClass(_w: number): string {
-  return "px-6";
+  return "px-3";
 }
 
 /** The inset in pixels, for tests and the docs; the class above is what lays it out. */
 export function timelineColumnPx(_w: number): number {
-  return 24;
+  return 12;
 }
 
 /** The same inset the timeline uses, for the new-session starting context. */

@@ -47,6 +47,8 @@ pub struct Flags {
     /// A file or diff is open, in a modal over the whole window.
     pub panel_open: bool,
     pub terminal_open: bool,
+    /// A subagent is viewed: reserve a four-cell root-back strip at the centre's left.
+    pub session_child: bool,
 }
 
 /// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
@@ -70,10 +72,8 @@ pub fn left_width(total: u16, flags: Flags) -> u16 {
 /// Heights the centre column needs, given its width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Heights {
-    /// The viewed session's full-title row, first in the page: 0 or 1.
+    /// The viewed session's title row, first in the page: 0 or 1.
     pub heading: u16,
-    /// The subagent strip under the tabs: 0 or 1.
-    pub strip: u16,
     pub banner: u16,
     pub waiting: u16,
     pub composer: u16,
@@ -93,9 +93,11 @@ pub struct Regions {
     pub panel: Option<Rect>,
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
+    /// The centre content, right of the root-back strip when one is reserved.
     pub centre: Rect,
+    /// The four-cell full-height root-back strip, subagent views only.
+    pub back: Option<Rect>,
     pub heading: Rect,
-    pub strip: Rect,
     pub banner: Rect,
     pub timeline: Rect,
     pub waiting: Rect,
@@ -239,6 +241,18 @@ impl Regions {
         };
         let centre = r(x, body_y, w, body_h - dock_height);
         let terminal = (dock_height > 0).then(|| r(x, centre.bottom(), w, dock_height));
+        let back = flags
+            .session_child
+            .then(|| r(centre.x, centre.y, 4.min(centre.width), centre.height));
+        let centre = match back {
+            Some(strip) => r(
+                strip.right(),
+                centre.y,
+                centre.width.saturating_sub(strip.width),
+                centre.height,
+            ),
+            None => centre,
+        };
         let panel = flags.panel_open.then(|| panel_rect(area));
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
@@ -256,7 +270,6 @@ impl Regions {
         for v in [
             &mut h.composer,
             &mut h.heading,
-            &mut h.strip,
             &mut h.banner,
             &mut h.waiting,
         ] {
@@ -264,8 +277,7 @@ impl Regions {
             left_rows -= *v;
         }
         let heading = r(centre.x, centre.y, centre.width, h.heading);
-        let strip = r(centre.x, centre.y + h.heading, centre.width, h.strip);
-        let banner = r(centre.x, strip.y + h.strip, centre.width, h.banner);
+        let banner = r(centre.x, centre.y + h.heading, centre.width, h.banner);
         let composer = r(
             centre.x,
             centre.y + centre.height - h.composer,
@@ -328,8 +340,8 @@ impl Regions {
             panel,
             drawer,
             centre,
+            back,
             heading,
-            strip,
             banner,
             timeline,
             waiting,

@@ -87,24 +87,36 @@ describe("waiting card (D14)", () => {
     expect(app.texts().some((t) => t.trim() === "new 9")).toBe(false);
   });
 
-  test("a question shows radios, checkboxes and free text", async () => {
+  test("a two-question card steps through radios, checkboxes and free text to the review", async () => {
     const app = await view(snapshot({ questions: [question] }));
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
-    await app.waitFor("id:submit-answers");
+    await app.waitFor("id:question-page");
     expect(app.texts().includes("Nexus asks")).toBe(true);
     expect(app.texts().includes("Which cache?")).toBe(true);
+    expect(app.texts().includes("Question 1 of 2")).toBe(true);
     expect(app.shows("id:choice-mark-a")).toBe(true);
     expect(app.shows("id:choice-mark-b")).toBe(true);
-    expect(app.shows("id:choice-mark-x")).toBe(true);
-    expect(app.shows("id:choice-mark-y")).toBe(true);
     expect(app.shows("label:Which cache? mtime")).toBe(true);
-    expect(app.shows("label:Extras? tests")).toBe(true);
     expect(app.shows("label:Which cache? Free-text answer")).toBe(true);
-    expect(app.shows("label:Extras? Free-text answer")).toBe(true);
+    expect(app.texts().includes("Extras?")).toBe(false);
     expect(app.texts().includes("( )")).toBe(false);
     expect(app.texts().includes("[ ]")).toBe(false);
-    expect(app.texts().some((t) => t.includes("submit · tab next question"))).toBe(true);
+
+    await app.press("label:Which cache? mtime");
+    await app.press("id:question-next");
+    await app.waitFor("text:Extras?");
+    expect(app.texts().includes("Question 2 of 2")).toBe(true);
+    expect(app.shows("id:choice-mark-x")).toBe(true);
+    expect(app.shows("id:choice-mark-y")).toBe(true);
+    expect(app.shows("label:Extras? tests")).toBe(true);
+    expect(app.shows("label:Extras? Free-text answer")).toBe(true);
+    await app.press("label:Extras? tests");
+    await app.press("id:question-next");
+    await app.waitFor("id:submit-answers");
+    expect(app.texts().includes("Review answers")).toBe(true);
+    expect(app.texts().includes("mtime")).toBe(true);
+    expect(app.texts().some((t) => t.includes("submit"))).toBe(true);
   });
 
   test("long questions, option labels and previews remain in the scrollable card", async () => {
@@ -113,12 +125,19 @@ describe("waiting card (D14)", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:waiting-scroll");
     expect(app.shows("id:waiting-reading-hint")).toBe(true);
-    for (const item of readability.questions) {
-      expect(app.texts().includes(item.question)).toBe(true);
-      for (const option of item.options) {
-        expect(app.texts().includes(option.label)).toBe(true);
-        expect(app.texts().includes(option.preview)).toBe(true);
-      }
+    const first = readability.questions[0];
+    expect(app.texts().includes(first.question)).toBe(true);
+    for (const option of first.options) {
+      expect(app.texts().includes(option.label)).toBe(true);
+      expect(app.texts().includes(option.preview)).toBe(true);
+    }
+    await app.press(`text:${first.options[0].label}`);
+    await app.press("id:question-next");
+    await app.waitFor(`text:${readability.questions[1].question}`);
+    const second = readability.questions[1];
+    for (const option of second.options) {
+      expect(app.texts().includes(option.label)).toBe(true);
+      expect(app.texts().includes(option.preview)).toBe(true);
     }
     expect(app.texts().includes("Scroll or Page Up/Down to read questions and choices")).toBe(true);
   });

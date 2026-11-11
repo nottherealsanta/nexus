@@ -1940,8 +1940,9 @@ fn the_sticky_header_pins_the_band_and_the_next_band_pushes_it_up() {
             .hits
             .rect_of(&Target::StickyUser(long_idx))
             .expect("pinned band");
-        // wide layouts have the session heading row under the header; narrow ones do not
-        let want = if w < 100 { 1 } else { 2 };
+        // the session title lives in its tab; the timeline starts under the header and
+        // the blank root heading row
+        let want = a.regions.header.height + a.regions.heading.height;
         assert_eq!(pin.y, want, "{w}x{h}: under the header");
         let rows = &drawn[pin.y as usize..(pin.y + pin.height) as usize];
         assert_eq!(rows.len(), 4, "3 text rows and the shade row: {rows:?}");
@@ -2851,9 +2852,10 @@ fn the_fork_block_toggles_like_a_group_and_counts_one_message() {
     a.ui.timeline_sel = Some(at);
     press(&mut a, &["enter"]);
     assert!(rows(&mut a).join("\n").contains("parent prompt"));
-    press(&mut a, &["left"]);
+    // Left on a subagent page is the root-back gesture now; h/l fold its blocks.
+    press(&mut a, &["h"]);
     assert!(!rows(&mut a).join("\n").contains("parent prompt"));
-    press(&mut a, &["right"]);
+    press(&mut a, &["l"]);
     assert!(rows(&mut a).join("\n").contains("parent prompt"));
 }
 

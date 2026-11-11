@@ -12,10 +12,14 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
-**Terminal** in the command palette opens the Core terminal panel. Use Up/Down
-and Enter to create a terminal or attach to a listed one. On an attached
-terminal, `c` takes control and `r` releases it; Enter on the selected row
-focuses its screen. Ctrl+] returns to the list and Esc from the list detaches.
+**Terminal** in the command palette opens the Core terminal panel, and
+``Ctrl+` `` toggles it from anywhere, including while the terminal screen owns
+the keys. ``Ctrl+Shift+` `` / `Ctrl+~` spell the same physical key. The toggle
+is never sent to the shell; hiding the dock detaches and returns focus to the
+composer. Use Up/Down and Enter to create a terminal or attach to a listed one.
+On an attached terminal, `c` takes control and `r` releases it; Enter on the
+selected row focuses its screen. Ctrl+] returns to the list and Esc from the
+list detaches.
 Input is sent only while this attachment has control. Terminal applications receive
 mouse events when they request them; hold Shift to select text instead.
 The compact dock toolbar offers new, rename, close, take/release control, copy and
@@ -77,7 +81,11 @@ explicit focus model, the manifest's Esc chain, mouse and keyboard parity, and
 terminal hygiene. The status footer has been removed; key hints are available
 in the palette and F1, and stop appears in the composer. Existing sessions
 show their branch and linked-worktree marker from Core below the composer; a
-project with no session shows its own branch. The composer is a soft card
+project with no session shows its own branch. The linked-worktree `⑂` (ASCII `*`)
+icon is a button: hovering it says `Worktree session`, and clicking it opens the
+compact **Worktree** modal with the full wrapped worktree path, branch and main
+checkout path. Each value is copyable (OSC 52) with a `Copied` toast; Enter copies
+the path, Esc closes. The composer is a soft card
 (half-row `▄`/`▀` edges in the panel colour; `─` rules in mono and ASCII) whose
 control row shows the agent in its colour, the catalog model name (or a pending
 model change), provider, effort, and on the right the `╱` meter with
@@ -98,21 +106,26 @@ attention (purple) and unread (blue) on top, running (green) and idle (white) be
 counting root sessions, with archived sessions left out and subagents counted under
 their root. Counts above nine display `*`, and a project with no counts shows a
 three-cell muted rule. Hovering shows the full project name and `N attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
-ends the list and adds a project; Settings sits at the rail's foot while the sidebar
-is closed. A right-click opens the project's actions. Activating a project restores
+Add project control and Settings are pinned together at the rail's foot, below the projects
+(a right-click opens a project's actions). Activating a project restores
 its open tabs and last selected session or new-session view in this client; pressing
 the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
-the switcher). The sidebar places `+ New session` above search and `Show archive` below the session list; the archive control includes archived sessions alongside active sessions when enabled.
+the switcher). Its three-action footer is pinned below the session list (`+ New session`, then `Search sessions`,
+then `Show archived`, also when the list is empty); the archive control includes archived sessions alongside active sessions when enabled.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
 sending. Explicit Unarchive shows the same warning without sending a message.
-The sidebar places `+ New session` above search and `Show archive` below the session list. The list has `⌥ branch  ~/…/dir`
+Archiving closes the session's tab and any archived descendant's tab in every
+connected client, whoever archived it (this client, another client, the Manager
+or Core's idle auto-archive); focus moves to the neighbouring tab, or the
+new-session screen when none is left. `/archive` performs the same archive.
+The pinned footer stays put as the list scrolls; the list has `⌥ branch  ~/…/dir`
 sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
-`⌥ branch`, `2 ↳`); `Settings` is pinned at the bottom.
+`⌥ branch`, `2 ↳`); `Settings` stays at the rail's foot.
 Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
 Settings → Sidebar switches full / rail. The project
 strip under the card shows the project name (bold), its path (muted),
@@ -124,10 +137,15 @@ control row, the bottom edge and the strip. The control row sheds effort, then
 the provider, then the meter as the column narrows; while busy its right side
 reads `esc stop` instead of the meter. The focus bar at the card's left edge is
 drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
-composer; their text starts where the input starts, with a highlighted `Q` for a
-queued message or `S` for a steer one cell to its left. A held queue says `held`
-after the message.
-The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`) in one fixed-width cell for every tab, root or New session, so the strip keeps its rhythm and a long title ellipsises; the viewed tab is bold on the page surface, the others muted on the band. A viewed child's strip under the header shows its path as equal parent tabs, a rail, then the root's other sessions as equal tabs with state glyph and agent, the viewed child selected. `alt+d`
+composer; their text starts where the input starts, with a primary-colour,
+normal-weight `Q` for a queued message or `S` for a steer one cell to its left. A held queue says `held`
+after the message. Hovering or selecting a **queued** row right-aligns `✎ ↑ ↓ ×`
+(ASCII `e ^ v x`): edit restores it to the composer, up and down move it within
+the queued group only (disabled on the first and last queued row), and remove asks
+before deleting it. Steer rows keep the keyboard selection and the existing keys
+but have no action icons. The keyboard path is unchanged: Enter edits, Backspace
+removes, Shift+↑/↓ moves.
+The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`) in one fixed-width cell for every tab, root or New session, so the strip keeps its rhythm and a long title ellipsises; hovering a title too wide for its tab scrolls it to its end inside its dedicated title region, so the status mark and the fixed `×` never move or get overwritten; reduced motion instead shows the full title in a tooltip. Below the tabs the page keeps exactly one heading row: a root session leaves it blank (the full title is already its tab), while a viewed subagent shows its title on the left and right-aligned `agent · model · provider · effort` metadata, shifted right by a full-height four-cell muted-grey back strip at the page's far left. The strip runs from the heading through the composer, centres its `←` both vertically and horizontally, and the whole strip is clickable; it and Left outside the composer, text fields, the editor and overlays return straight to the root. Esc still returns to the immediate parent, and a root session has no strip. There is no second subagent-tab row; child cards remain the navigation path to a subagent. The viewed tab is bold on the page surface, the others muted on the band. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
@@ -352,7 +370,8 @@ is unsaved. See [development.md](../docs/development.md#vendored-crates) for the
 **K5-K11 client parts.** The session switcher (`ctrl+k`) leads each session with the same status
 glyph as its tab (running spinner, attention/error dot or idle dot), then the title and age, and also
 lists sessions whose user messages match (Core's `/api/search`) after the title matches, with
-the snippet in the hint column. A
+the snippet in the hint column. `/search` opens the same switcher with the search field focused and
+empty, or prefilled by `/search <text>`; typing filters immediately. A
 session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
 palette's Load older turns) reads the page before the oldest. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
@@ -370,7 +389,7 @@ and 36 cells; at 120-159 they are 28 and 30; at 100-119 the left stays docked an
 closed until opened (the toggle docks it; a saved preference wins); below 100 both are drawers
 of 34 and 36 cells over the page, which `paint::scrim` dims (a click on the scrim closes the
 drawer). Under 100 the header keeps the two toggles, the run status and the bell, and the tab
-strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`). The subagent strip under the tabs draws every tab at one width of 10 to 30 columns (the widest title, plus a child's agent, +2); when the row is too full it first thins tabs (the oldest ancestors from the left, with a `…` marker, then the children farthest from the viewed one) and finally narrows the cells.
+strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`). The old subagent-tab row is gone: a viewed child keeps the root tab at the top and uses the heading rail and its timeline child cards for navigation.
 
 States (D18): launch shows the splash (`nexus-tui/src/splash.rs`): the `_/` logo in
 `text.primary` (white in the dark theme), a 30-segment milestone bar, its percentage and the
@@ -438,7 +457,7 @@ then the report the parent received, and an `╰ open fork ↗` row (its own
 `Child` block, so Enter or a click opens the fork's session) once the fork's
 session is known. As in NSH.
 A fork (whose session JSON carries `fork: {parent_id, inherited}`) is labelled
-`Fork` in the subagent strip, coloured as that name. Its timeline folds the first `inherited`
+`Fork` in the heading metadata. Its timeline folds the first `inherited`
 messages, copied from the parent, into one group row at the top,
 `▸ Forked from ‹parent title› · N messages` (the parent id when the parent is
 unknown), folded by default and toggled like a group (Enter/Space, a click,
@@ -528,7 +547,7 @@ cards and waits from going stale. This is what keeps a 200-message draw near
 1 ms, a 1,000-message draw near 5 ms and chrome-only frames near 0.4–0.5 ms in
 the release build; `--bench ... --replay`
 measures it without a Core or PTY (results in
-`git show e438b61:TUI_PERFORMANCE_PLAN.md`; remaining work in [../PLAN.md](../PLAN.md)).
+`git show e438b61:TUI_PERFORMANCE_PLAN.md`; remaining work in [../plans/](../plans/README.md)).
 
 Session rows in the left sidebar (D03) have two lines. Line 1 has a mark slot
 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
@@ -706,28 +725,41 @@ Core does not offer show their reason). Toasts (D15) are top-right under the hea
 at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
-The card also answers `ask` questions: `Alt+W` focuses it; questions, option labels and
-previews wrap fully, and Page Up/Page Down scroll the card, including the review. Every page has a custom answer field in the card; typing in it answers in
-your own words or adds context to a selection, and each question keeps its own text. A
+The card also answers `ask` questions and takes the keys on arrival, so typing goes straight
+into its answer. Questions, option labels and previews wrap fully, and Page Up/Page Down
+scroll the card. Every page has a custom answer field in the card, shown as the answer
+line (no filled selection background); typing in it answers in your own words or adds
+context to a selection, and each question keeps its own text. A free-text question (or one
+that allows free text) focuses the field immediately with a visible caret. A
 number key (1-9, 0 for the tenth) or Up/Down picks an option, clicking an option picks
-it, and `Alt+A` moves between the option list and the answer field. Enter locks the
-answer and moves to the next question; the last question leads to a review page whose
-rail is `text.primary` (white in the dark theme) and which lists every question with its
-answer, where Enter sends the reply. `Alt+Left`/`Alt+Right` move between the questions
-and review, while Left/Right move the caret in the answer field (or page when the option
-list has focus and the field is empty). Space ticks options of a
-multi-select question, whose card uses the violet `interactive.multi` rail and ticks.
-The reply is sent once, as a keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any
-page). Tab and Shift+Tab switch between parallel asks, each of which keeps its own
-answers. Esc keeps following the manifest chain, so while the turn is busy it interrupts,
-which cancels the question. Settings opens in a centered
+it, and `Alt+A` moves between the option list and the answer field. **With exactly one
+question**, Enter on a single-choice option (or a click) sends the answer at once; a
+multi-select question still needs its Enter to say "done", but also sends without a
+review page. **Two or more questions** keep the step-through: Enter locks the answer and
+moves to the next question, the last leads to a review page whose rail is
+`text.primary` (white in the dark theme), and Enter there sends the reply.
+`Alt+Left`/`Alt+Right` move between the questions and review, while Left/Right move the
+caret in the answer field (or page when the option list has focus and the field is
+empty). Space ticks options of a multi-select question, whose card uses the violet
+`interactive.multi` rail and ticks. The reply is sent once, as a keyed
+`POST …/question/{id}` (`Ctrl+Enter` submits from any page). While a question is pending
+in the viewed session the composer is disabled and says `Answer the question above`: it
+takes no typing, paste, send, steer or queue, and the draft already there is kept and
+returns when the question is answered. Questions in other sessions do not lock it; Esc
+still follows the manifest chain (while busy it interrupts, which cancels the question).
+Tab and Shift+Tab switch between parallel asks, each of which keeps its own answers.
+Settings opens in a centered
 modal using old Nexus's panel geometry and a searchable root/drill list. Press
 `/` to filter settings; Enter opens a section, and Esc returns to the root
 before closing the panel. Existing Core-backed controls retain their own focus
 and keyboard handling.
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
-key). Beyond the manifest: `F6`/`Shift+F6` cycle focus, `Ctrl+J` inserts a
+key). `Shift+Tab` cycles the composer's eligible agents (primary agents, or subagents
+in a child) and wraps; an existing session uses the same next-call switch and cache
+warning as the agent picker. New-session draft selections of agent, model and effort
+update silently, without a toast.
+Beyond the manifest: `F6`/`Shift+F6` cycle focus, `Ctrl+J` inserts a
 newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer
 selection, or clears the draft and keeps the cleared text in Up history; twice
 within two seconds quits (`Ctrl+Z` undoes in the composer and suspends

@@ -256,6 +256,22 @@ pub enum OverlayKind {
     /// Every project in its saved order, with active sessions and an archived
     /// toggle per project. Inactive projects sit in their own group.
     Projects(ProjectsOverview),
+    /// The compact linked-worktree details: full path, branch and the main
+    /// checkout, each copyable.
+    WorktreeInfo(WorktreeInfo),
+}
+
+/// What the worktree modal shows. It is copied when the modal opens so the
+/// values cannot change under the pointer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: String,
+    pub main: String,
+    /// False when the session is in the repository's main checkout.
+    pub linked: bool,
+    /// First body row shown while the modal scrolls.
+    pub top: usize,
 }
 
 /// Selection and expansion of the projects overview.
@@ -609,6 +625,23 @@ pub enum WaitButton {
     Submit,
 }
 
+/// The four actions on a queued message row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PendingAction {
+    Edit,
+    Up,
+    Down,
+    Remove,
+}
+
+/// One copyable value in the worktree modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorktreeCopy {
+    Path,
+    Branch,
+    Main,
+}
+
 /// Everything the mouse can hit. Registered by the renderer as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -623,8 +656,8 @@ pub enum Target {
     ArchiveSession(String),
     /// The `×` on a hovered project row: remove it (after confirming).
     RemoveProject(String),
-    /// An entry of the subagent strip: the session to open.
-    Subagent(String),
+    /// The heading row's compact back control: return to the viewed session's root.
+    SessionRootBack,
     Notifications,
     /// The header's Manager button.
     ManagerSession,
@@ -690,6 +723,8 @@ pub enum Target {
     ComposerContext,
     ComposerDirectory,
     ComposerWorktree,
+    /// The location strip's linked-worktree icon: show the worktree modal.
+    ComposerWorktreeInfo,
     /// The kernel and running-shell counts on the location strip.
     ComposerResources,
     ComposerShells,
@@ -725,6 +760,10 @@ pub enum Target {
     WaitOption(usize),
     /// The question card's custom answer field.
     WaitInput,
+    /// One action on queued pending input `i`, right-aligned on its row.
+    PendingAction(usize, PendingAction),
+    /// Copy one value out of the open worktree modal.
+    WorktreeCopy(WorktreeCopy),
     Continue,
     BannerAction(usize),
     BannerHide(usize),

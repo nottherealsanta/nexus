@@ -68,16 +68,6 @@ export function LeftSidebar(p: { drawer?: boolean }) {
         <If when={leftTab() === "git"}><GitTab /></If>
         <If when={leftTab() === "projects"}><ProjectsTab /></If>
       </View>
-      <View class="border-t border-border p-2" style={{ paddingBottom: safeArea().bottom + 8 }}>
-        <Button
-          onPress={() => run("app.settings")} testID="open-settings" accessibilityLabel="Settings" selected={centre() === "settings"}
-          class={`flex-row items-center gap-2 rounded-(--radius) px-2 hover:bg-accent ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
-        >
-          <Icon name="settings" size={16} class="tint-muted-foreground" />
-          <Text class={`flex-1 ${TS.base} text-foreground`}>Settings</Text>
-          <Text class={T.meta}>{hint("app.settings") ?? ""}</Text>
-        </Button>
-      </View>
       <If when={!p.drawer}><View {...resize.panHandlers} class="absolute right-0 top-0 bottom-0 w-2" testID="left-sidebar-resize" accessibilityLabel="Resize left sidebar" /></If>
     </View>
   );
@@ -222,11 +212,11 @@ export function SessionRail() {
             );
           }}
         </Each>
-        <IconButton icon="plus" label="Add project" testID="rail-add-project" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
         </View>
       </Scroll>
       <View class="w-full items-center pt-2" style={{ paddingBottom: safeArea().bottom + 16 }}>
-        <If when={!leftOpen()}><IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={centre() === "settings" ? "bg-selection" : ""} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} /></If>
+        <IconButton icon="plus" label="Add project" testID="rail-add-project" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
+        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={centre() === "settings" ? "bg-selection" : ""} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
       </View>
     </View>
   );
@@ -237,6 +227,14 @@ function projectName(id: string) { return model.projects.get(id)?.name ?? "proje
 const sessionQuery = signal("");
 let sessionSearchInput: any;
 function dismissSessionSearch() { if (phone) { try { sessionSearchInput?.blur(); } catch {} } }
+/** `/search [text]` on a phone: the Sessions list, its search field filled and focused. */
+export function focusSessionSearch(query = "") {
+  setSessionQuery(query);
+  const focus = () => { try { sessionSearchInput?.focus(); } catch { /* the list is not mounted yet */ } };
+  focus();
+  setTimeout(focus, 0);
+  setTimeout(focus, 80);
+}
 /** Core's search (titles and user messages) for the query typed, when it has answered: the query and the best snippet per session. */
 const searchHits = signal<{ q: string; snippets: Map<string, string> } | null>(null);
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -334,13 +332,8 @@ export function SessionsTab() {
   useWorktreeRefresh();
   return (
     <View class="flex-1 min-h-0">
-      <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 py-2 pr-2"}>
-        <If when={!phone}><Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session" class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="plus" size={16} class="tint-muted-foreground" /><Text class={`${TS.base} text-muted-foreground`}>New session</Text></Button></If>
-        <If when={phone} else={<Button onPress={() => run("session.switch")} accessibilityLabel="Search sessions" testID="session-search" class={`w-full flex-row items-center gap-2 px-2 h-8 rounded-(--radius) bg-hover hover:bg-accent ${FOCUS}`}>
-          <Icon name="search" size={14} class="tint-muted-foreground" />
-          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{leftSidebarWidth() < 220 ? "Search" : "Search sessions"}</Text>
-          <If when={!!hint("session.switch")}><Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text></If>
-        </Button>}><View class="w-full flex-row items-center gap-2 px-2 h-11 bg-raised">
+      <View class={phone ? "gap-3 px-4 pt-4 pb-3" : "gap-2 pr-2"}>
+        <If when={phone}><View class="w-full flex-row items-center gap-2 px-2 h-11 bg-raised">
           <Icon name="search" size={14} class="tint-muted-foreground" />
           <Input ref={(n: any) => { sessionSearchInput = n; }} value={sessionQuery()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search" onChange={({ value }) => setSessionQuery(value)} class={`h-full flex-1 min-w-0 rounded-none px-0 ${TS.base} text-foreground placeholder:text-muted-foreground bg-raised`} />
         </View></If>
@@ -356,6 +349,7 @@ export function SessionsTab() {
           </View>
         </If>
       </View>
+      <View class="flex-1 min-h-0">
       <If when={rowItems().length > 0} else={
         <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
           <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
@@ -365,7 +359,15 @@ export function SessionsTab() {
           {(x) => <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class="px-2 pt-3 pb-1" testID="session-group"><Text style={{ numberOfLines: 1 }} class={`${TS.base} font-medium text-muted-foreground`}>{(x() as any).title}</Text></View></If>}
         </List>
       </If>
-      <If when={!phone}><View class="border-t border-border p-2"><Button onPress={() => run("sessions.archived_filter")} testID="chip-archived" accessibilityLabel="Show archive" selected={archivedFilter()} class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="archive" size={16} class={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} /><Text class={`${TS.base} text-foreground`}>Show archive</Text></Button></View></If>
+      </View>
+      <If when={!phone}><View class="border-t border-border p-2 shrink-0">
+        <Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session" class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="plus" size={16} class="tint-muted-foreground" /><Text class={`${TS.base} text-muted-foreground`}>New session</Text></Button>
+        <Button onPress={() => run("session.switch")} accessibilityLabel="Search sessions" testID="session-search" class={`w-full flex-row items-center gap-2 px-2 h-8 rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+          <Icon name="search" size={14} class="tint-muted-foreground" /><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{leftSidebarWidth() < 220 ? "Search" : "Search sessions"}</Text>
+          <If when={!!hint("session.switch")}><Text class={T.meta} testID="session-search-key">{hint("session.switch")!}</Text></If>
+        </Button>
+        <Button onPress={() => run("sessions.archived_filter")} testID="chip-archived" accessibilityLabel="Show archived" selected={archivedFilter()} class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="archive" size={16} class={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} /><Text class={`${TS.base} text-foreground`}>Show archived</Text></Button>
+      </View></If>
     </View>
   );
 }

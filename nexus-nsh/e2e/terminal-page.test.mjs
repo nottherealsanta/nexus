@@ -41,6 +41,13 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     assert(messages.some(m => m.type === 'input' && m.data === '\x03'));
     assert(messages.some(m => m.type === 'focus-list'));
     assert.equal(messages.filter(m => m.type === 'input').length, 1);
+    // Ctrl+` / Ctrl+Shift+` / Ctrl+~ toggle the dock and never reach xterm.
+    await page.keyboard.press('Control+`');
+    await page.keyboard.press('Control+Shift+`');
+    await page.keyboard.press('Control+~');
+    await page.waitForTimeout(100);
+    assert(messages.filter(m => m.type === 'toggle-dock').length >= 2);
+    assert.equal(messages.filter(m => m.type === 'input').length, 1);
     await page.evaluate(() => window.postMessage(JSON.stringify({type:'write', data:btoa('\x1b]52;c;SGk=\x07')}), '*'));
     await page.waitForTimeout(50);
     assert(!messages.some(m => m.type === 'selection'));

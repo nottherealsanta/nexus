@@ -1,0 +1,478 @@
+[
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/attach",
+    "body": "{\"client_id\":\"nsh-mwbzylep-0-5jcj7p\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/stream?attachment_id=UUsE0RA66NYSKNNvuvTbb1XP"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/control",
+    "body": "{\"attachment_id\":\"UUsE0RA66NYSKNNvuvTbb1XP\",\"action\":\"acquire\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"UUsE0RA66NYSKNNvuvTbb1XP\",\"rows\":10,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"UUsE0RA66NYSKNNvuvTbb1XP\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"UUsE0RA66NYSKNNvuvTbb1XP\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 201,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal",
+    "body": "{\"project_id\":\"prj_1a1ca334f8b63b8db40\",\"workspace\":\"/private/tmp/nexus-terminal-toggle-2026-11-11/ws\",\"session_id\":\"ses_1a1ca334f90bdfb2e23\",\"client_id\":\"nsh-mwbzylep-0-5jcj7p\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/detach",
+    "body": "{\"attachment_id\":\"UUsE0RA66NYSKNNvuvTbb1XP\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/attach",
+    "body": "{\"client_id\":\"nsh-mwbzylep-0-5jcj7p\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/control",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"action\":\"acquire\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/stream?attachment_id=88kJ1TnxzrFK7xyjfGEDTa8z"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/resize",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"rows\":10,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/resize",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":1,\"data\":\"Yw==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":2,\"data\":\"YQ==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":3,\"data\":\"dA==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":4,\"data\":\"IA==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":5,\"data\":\"LQ==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":6,\"data\":\"dg==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\",\"input_seq\":7,\"data\":\"DQ==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/detach",
+    "body": "{\"attachment_id\":\"88kJ1TnxzrFK7xyjfGEDTa8z\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/attach",
+    "body": "{\"client_id\":\"nsh-mwbzylep-0-5jcj7p\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/stream?attachment_id=QIO7Bny0MeoXD1dMkp-HFcCf"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/control",
+    "body": "{\"attachment_id\":\"QIO7Bny0MeoXD1dMkp-HFcCf\",\"action\":\"acquire\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"QIO7Bny0MeoXD1dMkp-HFcCf\",\"rows\":10,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"QIO7Bny0MeoXD1dMkp-HFcCf\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/detach",
+    "body": "{\"attachment_id\":\"QIO7Bny0MeoXD1dMkp-HFcCf\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/attach",
+    "body": "{\"client_id\":\"nsh-mwbzylep-0-5jcj7p\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/stream?attachment_id=0gEV61xNdcVmWCo01a6vytpN"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/control",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\",\"action\":\"acquire\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/resize",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\",\"rows\":10,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/resize",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\",\"input_seq\":1,\"data\":\"WA==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/input",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\",\"input_seq\":2,\"data\":\"DQ==\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/Om3ipemzFV91KO3j7s2h2SmP/detach",
+    "body": "{\"attachment_id\":\"0gEV61xNdcVmWCo01a6vytpN\"}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/attach",
+    "body": "{\"client_id\":\"nsh-mwbzylep-0-5jcj7p\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/stream?attachment_id=gusxxU-TD8IW1p4zVUrM8a5c"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/control",
+    "body": "{\"attachment_id\":\"gusxxU-TD8IW1p4zVUrM8a5c\",\"action\":\"acquire\"}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"gusxxU-TD8IW1p4zVUrM8a5c\",\"rows\":10,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"gusxxU-TD8IW1p4zVUrM8a5c\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "POST",
+    "url": "http://127.0.0.1:47972/api/terminal/3ZH8znKaYIqfI-WAu1Gd7EId/resize",
+    "body": "{\"attachment_id\":\"gusxxU-TD8IW1p4zVUrM8a5c\",\"rows\":13,\"cols\":158}"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  },
+  {
+    "status": 200,
+    "method": "GET",
+    "url": "http://127.0.0.1:47972/api/terminal?project_id=prj_1a1ca334f8b63b8db40"
+  }
+]

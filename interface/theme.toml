@@ -568,6 +568,7 @@ back = { unicode = "←", ascii = "<" }
 stop = { unicode = "■", ascii = "#" }
 play = { unicode = "▸", ascii = ">" }
 branch = { unicode = "⑂", ascii = "Y" }
+worktree = { unicode = "⑂", ascii = "*" }
 info = { unicode = "i", ascii = "i" }
 archive = { unicode = "▣", ascii = "A" }
 trash = { unicode = "×", ascii = "x" }

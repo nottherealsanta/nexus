@@ -87,6 +87,10 @@ export class Model {
   cached: SelectedView[] = [];
   /** Set when the selected session was deleted by an event. */
   selectedDeleted: string | null = null;
+  /** Sessions a `session.archived` event archived: the view closes their tabs (every source). */
+  archivedTabs = new Set<string>();
+  /** Archived sessions in the last snapshot: a reconnect closes tabs whose archive event was missed. */
+  archivedTabsSnapshot = new Set<string>();
 
   cursor(): string | null { return this.generation ? formatCursor(this.generation, this.lastId) : null; }
 
@@ -125,6 +129,9 @@ export class Model {
     this.questions = new Map(s.questions.map((q) => [q.id, q]));
     this.streaming = new Map();
     this.partials.clear();
+    // The snapshot is authoritative: replace stale pending closures with the archived rows it carries.
+    this.archivedTabs = new Set();
+    this.archivedTabsSnapshot = new Set([...this.sessions.values()].filter((ses) => ses.archived).map((ses) => ses.id));
     // Cached views may have missed events; selecting one reloads its history. Their live
     // scratch has gaps, so it goes, as the selected view's does.
     this.cached = this.cached.filter((v) => this.sessions.has(v.sessionId));
@@ -288,6 +295,19 @@ export class Model {
           // The transition bumps revisions; keep them current so the next If-Match write is not stale.
           const rev = d.revisions?.[id];
           if (typeof rev === "number" && rev > s.revision) s.revision = rev;
+        }
+        if (e.type === "session.archived") {
+          // One archive event names the whole tree. Descendants are added defensively so every
+          // source (this client, another client, the Manager, auto-archive) closes the same tabs.
+          for (const id of d.sessions ?? []) {
+            this.archivedTabs.add(id);
+            for (const child of this.tree(id)) this.archivedTabs.add(child);
+          }
+        } else {
+          for (const id of d.sessions ?? []) {
+            this.archivedTabs.delete(id);
+            this.archivedTabsSnapshot.delete(id);
+          }
         }
         break;
       case "session.status": {

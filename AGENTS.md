@@ -1,7 +1,7 @@
 # AGENTS.md
 
-This repository (`main`, Nexus 0.10) rebuilds Nexus from the provider wire up. **Read [PLAN.md](PLAN.md)
-first** for outstanding work; see [docs/porting-ledger.md](docs/porting-ledger.md)
+This repository (`main`, Nexus 0.10) rebuilds Nexus from the provider wire up. **Read [plans/README.md](plans/README.md)
+first** for outstanding work (one file per item); see [docs/porting-ledger.md](docs/porting-ledger.md)
 for deliberate changes from old Nexus.
 
 - Old Nexus is reference only: branch `nexus01` (also tag `v0.7.2`), checked out at `~/repos/nexus-old`
@@ -43,7 +43,7 @@ for deliberate changes from old Nexus.
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.
 - State lives in `~/.nexus` (`$NEXUS10_HOME`) once `nexus migrate` has marked it; until then `~/.nexus` is old Nexus's and `~/.nexus10` a pre-release home. Never run `nexus migrate` against the real home from an agent session, and use a scratch `$NEXUS10_HOME` for tests.
-- Update PLAN.md when a step lands or a decision changes.
+- Update the matching file in `plans/` (and `plans/landed.md`) when a step lands or a decision changes.
 
 The Python core is `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`,
 `.python-version`, package `nexus/`, `tests/`). Run uv from that folder:

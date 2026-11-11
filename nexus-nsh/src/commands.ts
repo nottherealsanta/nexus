@@ -10,8 +10,8 @@ import { manifest } from "./gen/manifest";
 import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, flowProject, flowSession, flowStage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex, resourcesOpen, resourcesKind, loadResources,
+  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  composerFocused, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -28,7 +28,7 @@ import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
 import { closeInspector, inspectSession, inspector, inspectorCommand } from "./inspector";
-import { rowSessions } from "./ui/sidebar";
+import { focusSessionSearch, rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
@@ -37,6 +37,8 @@ import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminal
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
+  /** Other spellings of the same key (the tilde key as Shift+`), from the manifest. */
+  key_aliases?: { tui?: string[]; nsh?: string[] };
   /** The TUI's Ctrl+X leader keys (`shift+n`, `shift+/`), bound as a short sequence by NSH. */
   leader?: string[];
   key_context?: string; when: string[]; unavailable_reason?: string; placement: string[]; status?: string; clients?: string; note?: string;
@@ -54,6 +56,12 @@ export function waitItems(): { kind: "approval" | "question"; id: string; sessio
   for (const a of model.approvals.values()) if (tree.includes(a.session_id)) out.push({ kind: "approval", id: a.id, session_id: a.session_id });
   for (const q of model.questions.values()) if (tree.includes(q.session_id)) out.push({ kind: "question", id: q.id, session_id: q.session_id });
   return out;
+}
+/** The waiting card currently shows a question (not an approval): the composer and prompt sends are locked. */
+export function questionLocked(): boolean {
+  const list = waitItems();
+  const current = list.length ? list[waitIndex() % list.length] : null;
+  return current?.kind === "question";
 }
 export const otherWaits = () => {
   const id = model.selected?.sessionId;
@@ -103,7 +111,8 @@ function evalTerm(t: string): boolean {
     case "session.archived": return inSession && !!ses!.archived;
     case "session.child": return inSession && !!ses!.parent_id;
     case "session.continued": return inSession && !!ses!.continued_from;
-    case "session.in_worktree": return currentWorktree()?.main === false;
+    case "session.in_worktree":
+    case "session.linked_worktree": return currentWorktree()?.main === false;
     case "has_waiting": return model.approvals.size + model.questions.size > 0;
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
     case "waiting.question": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question"; }
@@ -122,7 +131,7 @@ function evalTerm(t: string): boolean {
     case "panel.diff": return false;
     case "editor.dirty": return fileDirty();
     case "editor.markdown": return openFile() !== null && markdownFile();
-    case "overlay.open": return !!btw() || !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating();
+    case "overlay.open": return !!btw() || !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating() || worktreeInfoOpen();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -204,13 +213,7 @@ export function newSession() {
 
 /** Header tabs contain only root sessions; the viewed child keeps its root represented. */
 export function tabIds(): string[] {
-  m();
-  const ids = openedTabs().filter((id) => {
-    const s = model.sessions.get(id);
-    return s && !s.parent_id && s.project_id === currentProject();
-  });
-  const root = rootOf(model.selected?.sessionId);
-  return root && model.sessions.get(root)?.project_id === currentProject() && !ids.includes(root) ? [...ids, root] : ids;
+  return visibleTabIds();
 }
 
 export function closeTab(id: string) {
@@ -238,6 +241,7 @@ export function stepTab(step: number) {
 }
 
 export async function sendPrompt(rawText: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" = "send"): Promise<boolean> {
+  if (questionLocked()) { toast("info", "Answer the question above"); return false; }
   const source = draftKey();
   const raw = rawText.trim();
   // Core stores each paste as a collapsed text part: the model gets the full text,
@@ -313,6 +317,7 @@ export function runSlashCommand(text: string): boolean {
   else if (command.id === "skills.learn") learn(arg);
   else if (command.id === "manager.start") void managerSlash(arg);
   else if (command.id === "session.btw") { if (arg) void sideQuestion(arg); else toast("info", "Usage: /btw your question"); }
+  else if (command.id === "session.search") openSessionSearch(arg);
   else void run(command.id);
   return true;
 }
@@ -601,7 +606,7 @@ on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (btw()) { closeBtw(); return; } if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (btw()) { closeBtw(); return; } if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (worktreeInfoOpen()) { worktreeInfoOpen.set(false); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));
@@ -650,16 +655,37 @@ on("session.tab_close", () => { const id = rootOf(viewed()?.id); if (id) closeTa
 on("session.tab_next", () => stepTab(1));
 on("session.tab_prev", () => stepTab(-1));
 on("nav.back", () => { const parent = viewed()?.parent_id; if (parent) void selectSession(parent); });
+/** A viewed subagent's heading back control and Left gesture jump to its root; Esc stays on the parent. */
+export function backToRoot() {
+  const s = viewed();
+  if (!s?.parent_id || centre() !== "session") return;
+  if (flowStage() || projectsOverview() || terminalFocused() || term("overlay.open") || term("dialog.open") || textEdit.active() || openFile()) return;
+  const root = rootOf(s.id);
+  if (root && root !== s.id) void selectSession(root);
+}
+on("nav.root", backToRoot);
 on("timeline.detail_cycle", () => {
   const levels = ["low", "medium", "high"] as const;
   setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);
 });
 /** Open the session switcher over the current view (the rail's second click opens it project-scoped). */
-export function openSessionSwitcher() {
+export function openSessionSwitcher(query = "") {
   if (isNarrow()) drawer.set(null);
+  switcherQuery.set(query);
   switcherOpen.set(true);
 }
-on("session.switch", openSessionSwitcher);
+on("session.switch", () => openSessionSwitcher());
+/** `/search [text]`: the focused switcher on desktop and web, the focused Sessions search on a phone. */
+export function openSessionSearch(query = "") {
+  if (phone) {
+    phonePage.set("sessions");
+    focusSessionSearch(query);
+    return;
+  }
+  openSessionSwitcher(query);
+}
+on("session.search", () => openSessionSearch());
+on("session.worktree_info", () => { const s = viewed(); if (s) { loadSessionWorktrees(s.id); worktreeInfoOpen.set(true); } });
 on("editor.find", () => { if (openFile()) { if (markdownFile()) fileSource.set(true); fileFindOpen.set(true); } });
 on("editor.preview", () => { if (openFile() && markdownFile()) { fileSource.set(!fileSource()); fileFindOpen.set(false); } });
 on("editor.save", () => saveFile(), true);
@@ -851,7 +877,6 @@ function applyModel(model: string) {
     const s = viewed();
     if (!s) {
       sessionDraft.update((d) => ({ ...d, model }));
-      toast("info", `The new session will use model ${model || "default"}`);
       return;
     }
     await guardSwitch(s, "model", model, async () => {
@@ -889,29 +914,81 @@ on("model.change", () => void pickOne("Change model", async () => {
     };
   });
 }));
+/** The composer's agent: the viewed session's, else the draft's, else the default. */
+export function currentAgentName(): string {
+  return viewed()?.agent ?? sessionDraft().agent ?? "build";
+}
+
+/** Agents that can own the composer's conversation, in catalog order. */
+function eligibleAgents(agents: any[]): any[] {
+  const mode = viewed()?.parent_id ? "subagent" : "primary";
+  return agents.filter((a) => a.mode === "all" || a.mode === mode);
+}
+
+/** The agent catalog for the composer's project, asking Core when the cache is cold. */
+async function composerAgents(): Promise<any[]> {
+  const project = viewed()?.project_id ?? currentProject() ?? null;
+  const cached = agentCatalog();
+  if (cached.project === project && cached.agents.length) return cached.agents;
+  const res = await request<any>("GET", "/api/agent", { query: { project: project ?? undefined } });
+  const agents = (res.agents ?? []) as any[];
+  agentCatalog.set({ project, agents });
+  return agents;
+}
+
+/** Choose an agent exactly as the picker does, including Core's cache warning before a switch. */
+async function applyAgent(name: string) {
+  if (name === currentAgentName()) return;
+  const s = viewed();
+  if (!s) {
+    sessionDraft.update((d) => ({ ...d, agent: name }));
+    return;
+  }
+  await guardSwitch(s, "agent", name, async () => {
+    try {
+      const updated = await request<any>("POST", `/api/session/${s.id}/agent`, { body: { agent: name }, ifMatch: s.revision, key: newKey() });
+      // Apply the committed response as well as SSE, so another shortcut uses the new agent.
+      if (updated?.id === s.id && (updated.revision ?? 0) >= (model.sessions.get(s.id)?.revision ?? 0)) {
+        model.sessions.set(s.id, normalizeSession(updated));
+        bump();
+      }
+      toast("success", "Agent changed from the next call");
+    } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+  });
+}
+
+/** Shift+Tab: the next eligible agent, wrapping at the end. */
+let cyclingAgent = false;
+export async function cycleAgent() {
+  if (cyclingAgent) return;
+  cyclingAgent = true;
+  const sessionId = viewed()?.id;
+  const project = currentProject();
+  try {
+    const agents = await composerAgents();
+    // A cold catalog request must not change a different composer after navigation.
+    if (viewed()?.id !== sessionId || currentProject() !== project) return;
+    const names = eligibleAgents(agents).map((a) => String(a.name));
+    if (!names.length) return;
+    const at = names.indexOf(currentAgentName());
+    await applyAgent(names[(at + 1) % names.length]);
+  } catch (e) {
+    toast("error", e instanceof Error ? e.message : String(e));
+  } finally {
+    cyclingAgent = false;
+  }
+}
+
 on("agent.change", () => void pickOne("Change agent", async () => {
   const res = await request<any>("GET", "/api/agent", { query: { project: viewed()?.project_id ?? currentProject() ?? undefined } });
-  const mode = viewed()?.parent_id ? "subagent" : "primary";
-  return ((res.agents ?? []) as any[]).filter((a) => a.mode === "all" || a.mode === mode).map((a) => ({
+  return eligibleAgents((res.agents ?? []) as any[]).map((a) => ({
     id: a.name,
     label: a.name,
     hint: [a.source, a.mode].filter(Boolean).join(" · "),
-    run: choose(a.name, async () => {
-      const s = viewed();
-      if (!s) {
-        sessionDraft.update((d) => ({ ...d, agent: a.name }));
-        toast("info", `The new session will use agent ${a.name}`);
-        return;
-      }
-      await guardSwitch(s, "agent", a.name, async () => {
-        try {
-          await request("POST", `/api/session/${s.id}/agent`, { body: { agent: a.name }, ifMatch: s.revision, key: newKey() });
-          toast("success", "Agent changed from the next call");
-        } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
-      });
-    }),
+    run: choose(a.name, () => applyAgent(a.name)),
   }));
 }));
+on("agent.cycle", () => void cycleAgent(), true);
 on("model.effort", () => void pickOne("Reasoning effort", async () => {
   const s = viewed();
   const cat = await request<any>("GET", "/api/model");
@@ -924,7 +1001,6 @@ on("model.effort", () => void pickOne("Reasoning effort", async () => {
     const current = viewed();
     if (!current) {
       sessionDraft.update((d) => ({ ...d, effort }));
-      toast("info", `The new session will use effort ${effort || "default"}`);
       return;
     }
     try {
@@ -1022,6 +1098,7 @@ export function escape() {
   if (imagePreview()) { imagePreview.set(null); return "image_preview"; }
   if (contextDetail()) { contextDetail.set(null); return "context_detail"; }
   if (resourcesOpen()) { resourcesOpen.set(false); return "resources"; }
+  if (worktreeInfoOpen()) { worktreeInfoOpen.set(false); return "worktree_info"; }
   if (switcherOpen()) { switcherOpen.set(false); return "session_switcher"; }
   if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
   // Settings steps back one level at a time, as the TUI does: a provider/agent
@@ -1087,7 +1164,7 @@ export function bindKeys(): () => void {
   for (const c of commands) {
     if (c.id === "app.quit") continue; // platform-owned
     if (phone && desktopOnly(c.id)) continue; // a phone has no desktop surfaces to reach
-    const keys = [c.keys?.nsh];
+    const keys = [c.keys?.nsh, ...(c.key_aliases?.nsh ?? [])];
     for (const k of new Set(keys)) {
       if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
       try { offs.push(keymap.bind(toKeystroke(k), () => { if (!terminalFocused()) void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
@@ -1119,6 +1196,9 @@ export function bindKeys(): () => void {
   // Left in an empty, focused composer starts the keyboard flow; the key still reaches the input,
   // where it has nothing to move, and with text in the composer this binding does nothing.
   try { offs.push(keymap.bind("left", () => { if (!flowStage() && composerFocused() && term("composer.empty")) flowStart(); }, { when: "always", passThrough: true })); } catch {}
+  // Left outside a text field, the composer, the editor and overlays returns a viewed subagent
+  // to its root. It is bound after the composer flow so the empty-composer gesture still wins there.
+  try { offs.push(keymap.bind("left", backToRoot, { when: "notEditing" })); } catch {}
   offs.push(bindLeader());
   return () => offs.forEach((f) => f());
 }

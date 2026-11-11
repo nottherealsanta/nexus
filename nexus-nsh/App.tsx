@@ -27,7 +27,7 @@ import { projectTitle, sessionTitle, trayModel } from "./src/tray-logic";
 import trayIcon from "./src/icons/tray.svg";
 import trayAttentionIcon from "./src/icons/tray-attention.svg";
 import { ProjectsOverviewHost } from "./src/ui/projects-overview";
-import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist, FileOperationDialog } from "./src/ui/overlays";
+import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist, FileOperationDialog, WorktreeInfo } from "./src/ui/overlays";
 import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
 import { Splash } from "./src/ui/splash";
@@ -167,6 +167,7 @@ function App() {
         <ImagePreview />
         <Annotate />
         <RenameSession />
+        <WorktreeInfo />
         <FileOperationDialog />
         <Confirm />
         <AddProject />

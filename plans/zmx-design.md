@@ -1,15 +1,12 @@
 # ZMX: Claude Code and Antigravity inside Nexus
 
-Status: **isolated transport groundwork in the working tree (2026-11-10); no runtime integration yet**.
-Written 2026-11-04. Tick items and move their record to
-[PLAN.md](PLAN.md#landed) as they land. Keep "not verified" honest, as PLAN.md asks.
+Status (re-audited 2026-11-11): **M1 and most of M2 are implemented in Core and both clients, offline only.**
+Written 2026-11-04; moved from the repo root `ZMX_plan.md` to `plans/zmx-design.md` on 2026-11-11. The current
+status table and the remaining work are in [06-zmx.md](06-zmx.md); tick items here and add a line to
+[landed.md](landed.md) as they land. Keep "not verified" honest.
 
-The user resumed implementation on 11-10, requiring separation from non-ZMX behavior and reference to `nexus01`.
-`nexus/workers/base.py` and `antigravity.py` now implement the transport foundation, with fake-CLI tests;
-there are no production callers and no providers, settings or UI changes. M0 and the complete M1 remain open.
-See [docs/external-workers.md](docs/external-workers.md) for the implemented contract and remaining limits.
-PLAN.md section 6's later per-vendor Settings direction supersedes section 4.8's proposed single switch;
-no switch is implemented in this slice.
+No live CLI/model run has happened (M0 is open), so every parser still follows the `nexus01` documented shapes.
+The per-vendor Settings control from section 6 of the old plan supersedes section 4.8's single switch.
 
 The goal: a Nexus **subagent** can run on the real Claude Code or Antigravity (`agy`) CLI. This is **ZMX mode**. The
 vendor's own CLI runs its own agent loop, tools, permissions and sign-in, and Nexus shows all of it as a child session in
@@ -418,31 +415,32 @@ Start with agy: it has a structured stream and no PTY, so it tests the mapping w
 - [x] **Transport foundation only (11-10):** isolated `workers/base.py` and `workers/antigravity.py`, raw-first parser,
   process supervision and fake-CLI safety/regression tests. No `external.*` durable protocol, runtime imports or UI.
   `--print-timeout 0s` is provisional from the 11-04 help probe, not a verified live turn. Live fixtures remain M0 work.
-- [ ] Complete workers' runtime contract; `auth/agy.py`, provider row, dynamic catalog, config keys.
-- [ ] `ExternalAgent` with the section 4.2 mapping; `_agent()` selects it.
-- [ ] Guards from section 4.6 for everything external sessions refuse.
-- [ ] `session.worker` event; `files_changed`; fake `agy`; every agy lesson from section 2 has a test.
-- [ ] The off-by-default switch, and the refusal of ZMX models for roots, each with tests.
-- [ ] Routing: `POST /api/session {parent, model}` and the `session` tool via `[agents.models]` or an agent `model:`.
-- [ ] Docs: `llm-providers.md`, `auth.md`, `models.md`, `config.md`, `daemon.md`, `api.md`, `stream-events.md`, porting ledger.
+- [x] Workers' runtime contract, provider row, dynamic catalog (`agy_models`), config keys `[zmx]` (11-11 audit). `auth/agy.py` not added: sign-in stays the CLI's own.
+- [x] `ExternalAgent` with the section 4.2 mapping; `_agent()` selects it (`workers/agent.py`).
+- [x] Guards from section 4.6 (`test_guards_change_nothing`). Check each refusal against 4.6 once more when M0 lands.
+- [~] `session.worker` event and fake `agy` done; `files_changed` not confirmed; lesson-by-lesson test coverage not re-audited.
+- [x] The off-by-default switch, and the refusal of ZMX models for roots, each with tests (`test_off_by_default_and_roots_refused`).
+- [~] Routing: `claude/…` children map to `claude-code/…` when enabled (`registry.child_ref`); explicit `agy/…` refs. Real routing through `orchestrate` unverified.
+- [ ] Docs: `llm-providers.md`, `auth.md`, `models.md`, `config.md`, `daemon.md`, `api.md`, `stream-events.md`, porting ledger. **All still say nothing about ZMX; `external-workers.md` is stale.**
 
 Done when: an offline suite passes, and (real, approved) `orchestrate` launches an agy child that runs a tool in a scratch
 directory, its parent gets the answer, and the session reads correctly in `GET /message` and the inspector after a restart.
 
 ### M2. Claude Code as a child session
 
-- [ ] `workers/claude_code.py`, `claude_transcript.py`, hook script, PTY, preflight, provider row.
+- [x] `workers/claude_code.py`, `claude_transcript.py`, hook script, PTY, preflight, provider row (offline tests in `test_zmx_claude.py`).
 - [ ] Display mapping for tool names (Core); fake `claude`; every Claude lesson from section 2 has a test.
-- [ ] Follow-up through `message_session` → `--resume`, with the policy fingerprint check.
+- [x] Follow-up through `message_session` → `--resume`, with the policy fingerprint check (`test_resume_requires_exact_policy`).
 - [ ] Claude's own subagents: show them inside the calling tool's card, read-only. Trees stay one level deep in Nexus.
 
 Done when: the same real check passes on Haiku, and Sonnet and Opus ids are checked rather than assumed.
 
 ### M3. Both clients and the timeline rule
 
-- [ ] Section 4.9 in the TUI and NSH, in the same change; mock scenarios for a normal run, parallel tools, a denial,
+- [~] Section 4.9 in the TUI and NSH: Settings control, `ZMX · <vendor>` label, root-picker exclusion done; only the
+      normal-run scenario exists (`interface/scenarios/zmx-child.json`). Still needed: parallel tools, a denial,
       `needs_attention`, an interrupt and a recovered turn.
-- [ ] Section 4.3: starting context at level 2 for both, plus `/context`; level 1 for Claude only if M0 shows it is cheap.
+- [~] Section 4.3: disclosure starting context (`context incomplete`, `CLI inherited`, `Not applied`) in both clients; `/context` and level 1 open.
 - [ ] Inspector shows raw entries and rebuilt requests.
 - [ ] Ledger row for any client difference, and only with the user's approval.
 

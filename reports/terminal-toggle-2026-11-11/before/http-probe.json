@@ -1,0 +1,14 @@
+{
+  "loopback": {
+    "status": 201,
+    "terminal": "ZQ-Vl2jLdefmF1cNHWE-oS-J",
+    "error": null,
+    "delete_status": 200
+  },
+  "non_loopback": {
+    "status": 403,
+    "source_address": "192.168.50.138",
+    "terminal": null,
+    "error": "terminal access requires authentication or a local loopback client"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "Session controls (plans 29–32)",
+  "directory": "/work/demo-feature",
+  "worktrees": [
+    {"path": "/work/demo", "branch": "main", "main": true},
+    {"path": "/work/demo-feature", "branch": "feature/session-controls", "main": false}
+  ],
+  "worktree_info": {
+    "title": "Worktree",
+    "body": "This session is in a worktree.",
+    "tooltip": "Worktree session",
+    "path": "/work/demo-feature",
+    "branch": "feature/session-controls",
+    "main_path": "/work/demo"
+  },
+  "question": {
+    "id": "qst_controls",
+    "session_id": "ses_1",
+    "call_id": "call_controls",
+    "created": 1,
+    "questions": [
+      {
+        "id": "approach",
+        "question": "Which approach should we use?",
+        "options": [
+          {"id": "safe", "label": "Conservative migration"},
+          {"id": "fast", "label": "Direct migration"}
+        ],
+        "multiple": false,
+        "allow_free_text": true
+      }
+    ]
+  },
+  "composer_lock_reason": "Answer the question above",
+  "draft": "Keep this unsent draft",
+  "queue": ["First queued message", "Second queued message", "Third queued message"],
+  "steer": ["Pending steer message"],
+  "queue_actions": ["edit", "up", "down", "remove"],
+  "search": "migration"
+}

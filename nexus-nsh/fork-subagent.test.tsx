@@ -1,10 +1,9 @@
 // Fork subagents (PLAN.md section 10), as in the TUI: the parent's `fork` call is a tool row (a minor task run
-// like a tool call), not a child card; a fork child reads `fork` wherever its agent name shows (the subagent
-// strip), and its timeline folds the messages copied from the parent into one
+// like a tool call), not a child card; a fork child reads `fork` in its heading metadata, and its
+// timeline folds the messages copied from the parent into one
 // `Forked from ‹parent› · N messages` row, collapsed by default and opened like an activity group. The
 // `[Nexus fork]` task message after it is an ordinary user message.
 import { describe, expect, open, test } from "nsh/test";
-import { stripLayout } from "./src/strip-layout";
 import { buildRows, forkSummary } from "./src/ui/timeline";
 import { model, timelineOpen } from "./src/store";
 import { agentLabel } from "./src/agent-color";
@@ -39,6 +38,7 @@ function sessionRoutes(id: string, body: unknown, messages: unknown[]) {
     [`GET */api/session/${id}/message*`]: { body: messages },
     [`GET */api/session/${id}/snapshot`]: { body: null },
     [`GET */api/session/${id}/turn*`]: { body: quiet },
+    [`GET */api/session/${id}/input`]: { body: [] },
     [`GET */api/session/${id}/context`]: { body: { used: 0, window: null, exact: false } },
     [`GET */api/session/${id}/worktrees`]: { body: { worktrees: [] } },
     [`GET */api/session/${id}`]: { body },
@@ -98,11 +98,11 @@ describe("fork subagent", () => {
     await app.waitFor("id:tool-open-fork-call_1");
   });
 
-  test("the subagent strip labels a fork `fork`, not its inherited agent", async () => {
+  test("the heading metadata labels a fork `fork`, not its inherited agent", async () => {
     const app = await openFork();
-    await app.waitFor("id:subagent-strip");
-    const t = app.texts();
-    expect(t[t.lastIndexOf("Check tests") - 1]).toBe("Fork");
+    await app.waitFor("id:session-heading-title");
+    expect(app.texts()).toContain("Fork · m · scripted · default");
+    expect(app.shows("id:subagent-strip")).toBe(false);
   });
 
   test("a fork's inherited messages fold into one row, collapsed by default, opened and closed by its chevron row", async () => {
@@ -164,12 +164,9 @@ describe("fork subagent", () => {
     expect(forkSummary("ses_gone", 12)).toBe("Forked from ses_gone · 12 messages");
   });
 
-  test("the label and the strip's width use `fork`", () => {
+  test("the label uses `fork`", () => {
     expect(agentLabel(fork)).toBe("fork");
     expect(agentLabel(parent)).toBe("build");
     expect(agentLabel({ agent: "scout" })).toBe("scout");
-    const wide = stripLayout({ ancestors: [{ id: "r", title: "P" }], children: [{ id: "c", title: "T", agent: "averyverylongagentname", fork: { parent_id: "r", inherited: 1 } }], viewed: "c", room: 400 });
-    // `fork` (4) + 4 columns + the title: 12, not the long agent name's 30.
-    expect(wide.cell).toBe(12);
   });
 });

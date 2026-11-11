@@ -16,8 +16,10 @@ function resizeFromCore(cols, rows) { applyingSize = true; try { term.resize(col
 term.onData(data => { if (writable) send('input', {data}); });
 term.onResize(({cols,rows}) => { if (!applyingSize) send('resize', {cols,rows}); });
 term.attachCustomKeyEventHandler(e => {
-  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === ']') {
-    if (e.type === 'keydown') send('focus-list');
+  // Ctrl+] leaves the screen for the tabs. Ctrl+` / Ctrl+~ toggle the dock,
+  // including their Shift spellings, and never reach the shell.
+  if (e.ctrlKey && !e.altKey && !e.metaKey && [']', '`', '~'].includes(e.key)) {
+    if (e.type === 'keydown') send(e.key === ']' ? 'focus-list' : 'toggle-dock');
     return false;
   }
   return true;

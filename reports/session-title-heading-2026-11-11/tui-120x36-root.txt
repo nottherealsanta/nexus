@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]        · Fix Terminal Toggle Shortcu… ×    +                                              □
+     │
+▏1   │ ◆ Waiting for approv… 2h   i 2 other sessions waiting for input                                              go
+▏ N  │                            │  Run the full scenario review and finish with the timeline notes.    #1 · 4:16 PM
+▏    │                            │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 82 lines of this turn above
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+ 1   │
+ NT  │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+ NM  │                               ▸ context · Nexus notice: tool availability changed · show details
+ ─── │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+ NV  │                               ▸ context · Nexus notice: tool availability changed · show details
+ ─── │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+  S  │                               ▸ context · Nexus notice: tool availability changed · show details
+ ─── │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+     │                               ▸ context · Nexus notice: tool availability changed · show details
+     │
+     │                                                   m · 7 tools · 24.5Ki · 570o · 90r · 58%c · 55m 58s · 4:16 PM
+     │
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Scenario · m scripted · default                                            80
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nsh-visual.eFIBIZ/ws/nexus-demo
+     │                             ───────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,9 @@
+# Shared Rust build folder for every checkout and worktree of this repository.
+#
+# Intermediate artifacts (compiled dependencies, incremental caches) go to one folder under
+# $CARGO_HOME, so a new worktree reuses what the others already compiled. Final binaries stay in
+# each crate's own `target/`, so worktrees never overwrite each other's `nexus-tui`.
+# Concurrent builds in two worktrees wait on Cargo's lock for this folder.
+# See docs/development.md#shared-rust-build-folder.
+[build]
+build-dir = "{cargo-cache-home}/build/nexus"

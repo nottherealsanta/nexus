@@ -39,8 +39,9 @@ function network(sessions: unknown[], snapshot: unknown | null) {
     "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: snapshot },
     "GET */api/session/ses_1/turn*": { body: quietTurns },
+    "GET */api/session/ses_1/input": { body: [] },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
-    "GET */api/session/*": { body: session },
+    "GET */api/session/*": { body: sessions[0] ?? session },
   };
 }
 
@@ -61,8 +62,8 @@ describe("timeline reading column", () => {
 
   test("fixed compact gutters leave the available width to the conversation", () => {
     for (const width of [390, 640, 819, 820, 1024, 1200, 1599, 1600, 1920]) {
-      expect(timelineColumnClass(width)).toBe("px-6");
-      expect(timelineColumnPx(width)).toBe(24);
+      expect(timelineColumnClass(width)).toBe("px-3");
+      expect(timelineColumnPx(width)).toBe(12);
     }
   });
 
@@ -116,6 +117,25 @@ describe("timeline reading column", () => {
     expect(app.shows("id:context-sections")).toBe(true);
     expect(app.count("id:timeline-row")).toBe(1);
     expect(app.shows("id:new-session-column")).toBe(false);
+    // The root session keeps the blank heading row; it does not repeat the tab title.
+    expect(app.shows("id:session-heading")).toBe(true);
+    expect(app.shows("id:session-heading-title")).toBe(false);
+    expect(app.shows("id:session-heading-meta")).toBe(false);
+    expect(app.shows("id:session-back-rail")).toBe(false);
+    expect(app.shows("id:subagent-strip")).toBe(false);
+  });
+
+  test("a scrolling tab title stays in its own region and leaves the close slot fixed", async () => {
+    const long = { ...session, title: "A deliberately long session title that keeps scrolling past its tab and close" };
+    const app = await open("./App.tsx", { network: network([long], null), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor(`id:tab-title-clip-${session.id}`);
+    await app.hover(`id:session-tab-${session.id}`);
+    await app.wait(900);
+    expect(app.shows(`id:tab-title-clip-${session.id}`)).toBe(true);
+    expect(app.shows(`id:tab-close-${session.id}`)).toBe(true);
+    expect(app.texts().some((t) => t.includes(long.title))).toBe(true);
   });
 
   test("a narrow header keeps a title instead of squeezing fixed-width tabs", async () => {

@@ -56,6 +56,14 @@ def main() -> int:
         elif order != sorted(order):
             err(f"{cid}: key {key!r} modifiers must be in order cmd, ctrl, alt, shift")
 
+    def bind_key(cid: str, client: str, ctx: str, key: str) -> None:
+        if ctx == "escape_chain":
+            return  # resolved by keymap.escape, checked below
+        slot = (client, ctx, key)
+        if keys[slot]:
+            err(f"key conflict ({client}, {ctx}, {key}): {keys[slot]} and {cid}")
+        keys[slot] = cid
+
     for c in cmds:
         cid = c.get("id", "<missing id>")
         for req in ("id", "title", "category", "when", "placement"):
@@ -100,14 +108,28 @@ def main() -> int:
                     err(f"{cid}: keys.{client} unknown client")
                     continue
                 check_key(cid, client, key)
-                if ctx == "escape_chain":
-                    continue  # resolved by keymap.escape, checked below
-                slot = (client, ctx, key)
-                if keys[slot]:
-                    err(f"key conflict ({client}, {ctx}, {key}): {keys[slot]} and {cid}")
-                keys[slot] = cid
+                bind_key(cid, client, ctx, key)
         elif "key_context" in c:
             err(f"{cid}: key_context without keys")
+        aliases = c.get("key_aliases")
+        if aliases is not None:
+            if not k:
+                err(f"{cid}: key_aliases without keys")
+            if not isinstance(aliases, dict):
+                err(f"{cid}: key_aliases must be a table")
+                continue
+            ctx = c.get("key_context")
+            for client, extra in aliases.items():
+                if client not in ("tui", "nsh"):
+                    err(f"{cid}: key_aliases.{client} unknown client")
+                    continue
+                if not isinstance(extra, list) or not all(isinstance(key, str) for key in extra):
+                    err(f"{cid}: key_aliases.{client} must be a list of keys")
+                    continue
+                for key in extra:
+                    check_key(cid, client, key)
+                    if ctx:
+                        bind_key(cid, client, ctx, key)
 
     # keymap.escape
     esc = m.get("keymap", {}).get("escape", [])

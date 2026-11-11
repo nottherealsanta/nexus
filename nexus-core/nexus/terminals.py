@@ -542,6 +542,23 @@ class TerminalService:
         self.terminals[term.id] = term
         return term
 
+    async def dismiss(self, terminal_id: str) -> dict[str, Any]:
+        """Close a resource for good: terminate it if running, and mark an ended one `closed`, which hides it."""
+        if terminal_id in self.terminals:
+            term = self.terminals[terminal_id]
+            await term.close()
+            if term.status in ("exited", "ended"):
+                term.status = "closed"
+                term._persist()
+            return term.metadata()
+        metadata = dict(self.metadata(terminal_id))
+        if metadata["status"] != "closed":
+            metadata["status"] = "closed"
+            if terminal_id in self.retired:
+                self.retired[terminal_id] = metadata
+            self.save(metadata)
+        return metadata
+
     def get(self, terminal_id: str) -> Terminal:
         try:
             return self.terminals[terminal_id]

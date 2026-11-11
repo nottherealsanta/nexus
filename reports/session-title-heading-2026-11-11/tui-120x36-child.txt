@@ -1,0 +1,36 @@
+  ◧      [Sessions] [Files]            · Fix Terminal Toggle Shortcu… ×    +                                          □
+     │                                Here is what I found                          Scout · default · default · default
+▏1   │ ◆ Waiting for approv… 2h       i 2 other sessions waiting for input                                          go
+▏ N  │                                  MCP [0]  none
+▏    │
+     │                                  total  ~1,956 tok
+ 1   │
+ NT  │
+     │                                │
+     │                                │  List the files touched by the timeline fix and return one       #1 · 4:16 PM
+     │                                │  line.
+ NM  │                                │
+ ─── │
+     │                                   ▸ Thought · Check the loader module, then summarise.
+     │
+ NV  │                                   Here is what I found.
+ ─── │
+     │                                   • The loader reads  config.toml  once
+     │                            ←      • Retries are bounded (3 attempts)
+  S  │
+ ─── │                                     ╭─ python
+     │                                     │ def load(path):
+     │                                     │     return tomllib.loads(path.read_text())
+     │                                     ╰─
+     │
+     │                                   Let me know if you want the same change in  cli.py .
+     │
+     │                                                            m · 0 tools · 80i · 60o · 0r · 0%c · 0.0s · 4:16 PM
+     │
+  +  │
+     │                                    Type a message…
+     │
+     │ + New session                      Scout · … · default                                                    80
+  ⚙  │ ⌕ Search sessions ctrl+k        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                 /private/tmp/nsh-visual.eFIBIZ/ws/nexus-demo
+     │                                 ───────────────────────────────────────────────────────────────────────────────

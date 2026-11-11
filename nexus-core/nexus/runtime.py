@@ -133,6 +133,7 @@ TITLE_CHARS = 60
 # fork is; the marker only says that this session is one, and that it is read-only.
 FORK_MAX_STEPS = 20  # a fork is a minor task: each turn of it gets at most this many steps
 FORK_MAX_CALLS = 40
+SCOUT_MAX_CALLS = 50
 FORK_MAX_SECONDS = 180
 BTW_MAX_CALLS = 10
 BTW_BASH = {
@@ -2436,7 +2437,8 @@ class Runtime:
             instructions=snapshot["system_prompt"],
             reasoning_effort=self.resolve_effort(session, snapshot, ref)[0],
             max_steps=min(spec["steps"] or MAX_STEPS, FORK_MAX_STEPS) if session.fork else spec["steps"] or MAX_STEPS,
-            max_tool_calls=FORK_MAX_CALLS if session.fork and session.kind != "btw" else None,
+            max_tool_calls=(FORK_MAX_CALLS if session.fork and session.kind != "btw"
+                            else SCOUT_MAX_CALLS if not session.fork and spec["name"] == "scout" else None),
             max_tool_seconds=FORK_MAX_SECONDS if session.fork else None,
             publish_hook=lambda event: self.bus.publish(to_json(event)["type"], to_json(event), session_id=session.id),
             model_efforts={item: self.resolve_effort(session, snapshot, item)[0] for item, *_ in fallback_models},

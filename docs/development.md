@@ -26,7 +26,8 @@ shared file.
 
 NSH uses bundled theme-tinted SVG control icons on web and native targets. Its
 interface font is Monaspace Argon; text defaults to 14 px on web and macOS and
-16 px on iOS. The shared reading column keeps compact gutters.
+16 px on iOS. The shared reading column keeps compact 12 px outer gutters, with
+its card and text insets unchanged.
 
 The NSH terminal target is retired; `nexus tui` runs the maintained Rust client.
 The former target and its review captures are preserved in the Git tag
@@ -124,6 +125,25 @@ these prerequisites before installing anything. Monty starts through
 Release installs use the prebuilt TUI and need the ALSA runtime library on Linux,
 not its development headers. The full Linux x86_64/aarch64 platform matrix remains
 unverified on this macOS host.
+
+## Shared Rust build folder
+
+The repo-root `.cargo/config.toml` sets Cargo's `build.build-dir` to
+`{cargo-cache-home}/build/nexus` (`~/.cargo/build/nexus` by default). Every checkout and
+worktree of this repository, and every crate in it (TUI, Mermaid, annotation, GPUI host and
+the Rust that NSH builds), puts its intermediate artifacts there, so a new worktree reuses
+what the others already compiled instead of starting cold. Final binaries stay in each
+crate's own `target/`, so worktrees never overwrite each other's `nexus-tui`.
+
+- Builds in two worktrees at the same time wait for each other on Cargo's lock.
+- Nothing cleans the folder automatically; when it grows, `rm -rf ~/.cargo/build/nexus`
+  (the next build in each worktree recompiles).
+- Old `target/` folders from before this setting still hold their own intermediate files;
+  `cargo clean` in a crate frees them.
+- `CARGO_BUILD_BUILD_DIR` in the environment overrides the setting.
+
+Sharing for worktrees of *other* projects that Nexus sessions work in is planned in
+[plans/36-shared-rust-builds.md](../plans/36-shared-rust-builds.md).
 
 ## Vendored crates
 

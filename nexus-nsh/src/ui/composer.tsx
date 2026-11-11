@@ -2,17 +2,17 @@ import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked,
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import { compactApproval } from "../mobile";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
-  phone, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast, annotating,
-  bashJobs, loadResources, resourceCounts, viewResources, resourcesOpen, resourcesKind, composerFocused, flowStage, flowProject,
+  phone, projectWorktrees, sessionDraft, sessionWorktrees, currentWorktree, userHome, viewResources, viewed, waitIndex, toast, annotating,
+  bashJobs, loadResources, resourceCounts, resourcesOpen, resourcesKind, composerFocused, flowStage, flowProject,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
-import { Approval, Question } from "../core/api";
+import { Approval, Question, QuestionItem } from "../core/api";
 import { agentColor, agentSlot } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
 import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
@@ -21,7 +21,7 @@ import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
 import { activityOffsetPercent, activityPhase } from "./activity-motion";
 import { RetryNotices } from "./retry-notices";
-import { openTerminal, refreshTerminals, restoreTerminalDock, terminalAvailable, terminalItems, terminalOpen } from "../terminal-panel";
+import { openTerminal, refreshTerminals, restoreTerminalDock, terminalAvailable, terminalFocused, terminalItems, terminalOpen } from "../terminal-panel";
 
 import { imageDrafts, readImage } from "../images";
 import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePastes } from "../pastes";
@@ -154,17 +154,22 @@ function EditableComposer() {
   // While this session waits on the user, the waiting card owns the row: `Working · 2m 01s` above it
   // would run into `waiting on you`.
   const working = () => { m(); return busy() && waitItems().length === 0; };
+  /** A question (not an approval) is the card in view: the composer is locked. Shared with prompt sends. */
+  const questionPending = () => { m(); return questionLocked(); };
   const reason = (): string | null => {
     const c = connection();
     if (c.kind !== "live") return c.kind === "reconnecting" ? "Reconnecting to Core: read-only" : c.kind === "offline" ? "Core is offline: read-only" : c.kind === "auth_failed" ? "Authentication failed: read-only" : c.kind === "incompatible" ? "Incompatible API: blocked" : "Connecting to Core…";
+    // A question owns the answer: keep the draft, but no typing, send, steer or queue.
+    if (questionPending()) return "Answer the question above";
     if (!currentProject() && centre() === "new_session") return "Add or choose a project first";
     return null;
   };
   const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
-  const canDictate = () => live() && !ses()?.archived;
+  const canDictate = () => live() && !ses()?.archived && !questionPending();
   const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send", resumed = false) => {
     const t = text().trim();
-    if (t && !images().length && runSlashCommand(t)) {
+    // The question lock wins over a slash still in the draft; offline navigation stays available otherwise.
+    if (t && !images().length && !questionPending() && runSlashCommand(t)) {
       draft.update((d) => ({ ...d, [key()]: "" }));
       prunePastes(key(), "");
       return;
@@ -321,6 +326,13 @@ function EditableComposer() {
     if (!focused() || !busy() || !canSend() || open()) return;
     return bindOpenKeys({ tab: () => { void send("queue"); } });
   });
+  // Shift+Tab cycles the composer's eligible agents, wrapping. A picker, modal, inline edit,
+  // completion list or focused terminal owns the keys instead; an existing session still asks
+  // Core first, so a mid-turn switch keeps the picker's cache warning.
+  effect(() => {
+    if (!focused() || open() || terminalFocused() || term("overlay.open") || term("dialog.open") || term("text_edit.active")) return;
+    return bindOpenKeys({ "shift+tab": () => { void run("agent.cycle"); } });
+  });
   effect(() => {
     const c = completion();
     const project = currentProject();
@@ -437,13 +449,13 @@ function EditableComposer() {
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
             placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : "Type a message…")}
-            readonly={!live()}
+            readonly={!live() || questionPending()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
               if (dictationPhase() !== "idle") return;
               void send();
             }}
-            onChange={({ value: t }) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
+            onChange={({ value: t }) => { if (questionPending()) return; selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
             onFocus={() => { focused.set(true); composerFocused.set(true); flowStage.set(null); flowProject.set(null); }} onBlur={() => { focused.set(false); composerFocused.set(false); }}
             onSelectionChange={({ start, end }) => caret.set({ start, end })}
             onKeyPress={(e: { key: string }) => {
@@ -464,7 +476,7 @@ function EditableComposer() {
               </If>
               <If when={dictationPhase() === "idle"}>
                 <IconButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
-                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
+                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (questionPending() ? "Answer the question above" : ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
               </If>
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
@@ -662,70 +674,79 @@ function pendingLabel(item: any): string {
 
 function PendingStack() {
   const session = () => viewed();
-  const stack = () => pendingInputs()[session()?.id ?? ""];
-  const perform = async (id: string, action: "edit" | "remove" | "steer" | "up" | "down") => {
+  const stack = () => { m(); return pendingInputs()[viewed()?.id ?? ""] ?? { inputs: [], held: false }; };
+  /** Queued inputs in their own order: the icons' up/down bounds never leave this group. */
+  const queueIds = () => (stack()?.inputs ?? []).filter((i: any) => i.mode === "queue").map((i: any) => i.id);
+  const perform = async (id: string, action: "edit" | "remove" | "up" | "down") => {
     const s = session(); if (!s) return;
     try {
       if (action === "remove") {
         const item = (stack()?.inputs ?? []).find((i: any) => i.id === id);
         const text = pendingLabel(item);
-        const kind = item?.mode === "steer" ? "steer" : "queued message";
         const sid = s.id;
         confirmDialog.set({
           title: "Remove pending input",
-          body: `Remove the ${kind} "${text}"?\n\nThis cannot be undone.`,
+          body: `Remove the queued message "${text}"?\n\nThis cannot be undone.`,
           confirm: "Remove", destructive: true,
           run: async () => { await request("DELETE", `/api/session/${sid}/input/${id}`); await loadInputs(sid); },
         });
         return;
       }
       if (action === "edit") {
+        if (questionLocked()) { toast("info", "Answer the question above"); return; }
         const k = draftKey();
         if ((draft()[k] ?? "").trim() || (imageDrafts()[k] ?? []).length) { toast("warning", "Clear the draft before restoring a pending input"); return; }
         const result = await request<any>("DELETE", `/api/session/${s.id}/input/${id}`);
         restorePendingParts(k, result.parts ?? result.input?.parts ?? []);
         focusComposer.fn?.();
-      } else if (action === "steer") await request("PATCH", `/api/session/${s.id}/input/${id}`, { body: { mode: "steer" } });
-      else {
-        const inputs = stack()?.inputs ?? []; const at = inputs.findIndex((i) => i.id === id);
-        const before = action === "up" ? inputs[at - 1]?.id : id;
-        if (action === "up" && at <= 0 || action === "down" && at >= inputs.length - 1) return;
-        const moving = action === "down" ? inputs[at + 1].id : id;
-        await request("POST", `/api/session/${s.id}/input/${moving}/move`, { body: { before } });
+      } else {
+        const ids = queueIds(), at = ids.indexOf(id);
+        if (at < 0) return;
+        if (action === "up" && at > 0) await request("POST", `/api/session/${s.id}/input/${id}/move`, { body: { before: ids[at - 1] } });
+        else if (action === "down" && at < ids.length - 1) await request("POST", `/api/session/${s.id}/input/${ids[at + 1]}/move`, { body: { before: id } });
+        else return;
       }
       await loadInputs(s.id);
     } catch (e) { toast("error", e instanceof Error ? e.message : String(e)); }
   };
   // Quiet ghost actions: icons that appear on hover (and on focus) on a pointer, always shown below the
-  // text on touch and on a narrow window.
+  // text on touch and on a narrow window. Only queued rows carry actions.
   const always = () => touch || isNarrow();
-  const reveal = () => always() ? "" : "opacity-0 group-hover/pend:opacity-100 focus-visible:opacity-100";
+  const reveal = () => always() ? "" : "opacity-0 group-hover/pend:opacity-100 group-focus-within/pend:opacity-100 focus-visible:opacity-100";
   // Where there is no hover a tap on the row opens its actions, one row at a time.
   const opened = signal<string | null>(null);
-  const PendingActions = (q: { i: () => { id: string; mode: string } }) => <>
-    <IconButton icon="pencil" label="Edit" class={reveal()} testID={`pending-edit-${q.i().id}`} onPress={() => void perform(q.i().id, "edit")} />
-    <IconButton icon="x" label="Remove" class={reveal()} testID={`pending-remove-${q.i().id}`} onPress={() => void perform(q.i().id, "remove")} />
-    <If when={q.i().mode === "queue"}><Btn label="Steer" kind="ghost" class={reveal()} testID={`pending-steer-${q.i().id}`} onPress={() => void perform(q.i().id, "steer")} /></If>
-    <IconButton icon="arrow-up" label="Move up" class={reveal()} testID={`pending-up-${q.i().id}`} onPress={() => void perform(q.i().id, "up")} />
-    <IconButton icon="chevron-down" label="Move down" class={reveal()} testID={`pending-down-${q.i().id}`} onPress={() => void perform(q.i().id, "down")} />
-  </>;
-  return <If when={(stack()?.inputs.length ?? 0) > 0}><View class="mb-3" testID="pending-inputs">
+  const PendingActions = (q: { i: () => { id: string } }) => {
+    const ids = () => queueIds();
+    const at = () => ids().indexOf(q.i().id);
+    return <>
+      <IconButton icon="pencil" label="Edit" class={reveal()} testID={`pending-edit-${q.i().id}`} onPress={() => void perform(q.i().id, "edit")} />
+      <IconButton icon="arrow-up" label="Move up" class={reveal()} testID={`pending-up-${q.i().id}`} disabled={at() <= 0} onPress={() => void perform(q.i().id, "up")} />
+      <IconButton icon="arrow-down" label="Move down" class={reveal()} testID={`pending-down-${q.i().id}`} disabled={at() < 0 || at() >= ids().length - 1} onPress={() => void perform(q.i().id, "down")} />
+      <IconButton icon="x" label="Remove" class={reveal()} testID={`pending-remove-${q.i().id}`} onPress={() => void perform(q.i().id, "remove")} />
+    </>;
+  };
+  return <View><If when={stack().inputs.length > 0}><View class="mb-3 rounded-(--radius-card) border border-border bg-card px-2 py-1" testID="pending-inputs">
     <View class="flex-row items-center min-h-6">
       <Text class={`flex-1 min-w-0 ${T.meta}`} style={{ numberOfLines: 1 }}>{stack()?.held ? "Queue held · enter steer · tab queue" : "Pending · enter steer · tab queue"}</Text>
-      <If when={stack()?.held}><View class="-mr-3"><Btn label="Send next" kind="ghost" testID="pending-send-next" onPress={() => { const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></View></If>
+      <If when={stack()?.held}><View class="-mr-3"><Btn label="Send next" kind="ghost" testID="pending-send-next" disabled={questionLocked()} onPress={() => { if (questionLocked()) return; const s = session(); if (s) void request("POST", `/api/session/${s.id}/input/next`, { body: {} }).then(() => loadInputs(s.id)).catch((e) => toast("error", String(e))); }} /></View></If>
     </View>
-    <Each of={stack()?.inputs ?? []} key={(i) => i.id}>{(i) => <View class="group/pend relative" testID={`pending-${i().id}`}>
-      <Button disabled={!always()} onPress={() => opened.set(opened() === i().id ? null : i().id)} selected={opened() === i().id}
-        accessibilityLabel={`${i().mode === "steer" ? "Steer" : "Queued"}: ${pendingLabel(i())}`}
-        class={`flex-row items-center gap-3 min-h-8 rounded-(--radius) ${FOCUS}`}>
-        <Text class={`w-12 shrink-0 ${T.meta}`}>{i().mode === "steer" ? "steer" : "queued"}</Text>
-        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{pendingLabel(i())}</Text>
-      </Button>
-      <If when={always()} else={<View class="absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar"><PendingActions i={i} /></View>}>
-        <If when={opened() === i().id}><View class="flex-row items-center justify-end gap-0.5"><PendingActions i={i} /></View></If>
+    <Each of={stack().inputs} key={(i) => i.id}>{(i) => <View class="group/pend relative" testID={`pending-${i().id}`}>
+      <If when={i().mode === "queue"} else={<View class="flex-row items-center gap-2 min-h-8 rounded-(--radius) px-0">
+        <Text class={`w-5 shrink-0 ${TS.base} text-foreground`}>S</Text>
+        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec} group-hover/pend:text-foreground`}>{pendingLabel(i())}</Text>
+      </View>}>
+        <Button disabled={!always()} onPress={() => opened.set(opened() === i().id ? null : i().id)} selected={opened() === i().id}
+          accessibilityLabel={`Queued: ${pendingLabel(i())}`}
+          class={`flex-row items-center gap-2 min-h-8 rounded-(--radius) ${FOCUS}`}>
+          <Text class={`w-5 shrink-0 ${TS.base} text-foreground`}>Q</Text>
+          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec} group-hover/pend:text-foreground`}>{pendingLabel(i())}</Text>
+        </Button>
+        <If when={always()} else={<View class="absolute right-0 top-0 bottom-0 flex-row items-center gap-0.5 pl-2 group-hover/pend:bg-sidebar"><PendingActions i={i} /></View>}>
+          <If when={opened() === i().id}><View class="flex-row items-center justify-end gap-0.5"><PendingActions i={i} /></View></If>
+        </If>
       </If>
     </View>}</Each>
-  </View></If>;
+  </View></If></View>;
 }
 
 let resourcesTimer: ReturnType<typeof setInterval> | undefined;
@@ -735,6 +756,7 @@ function LocationStrip(p: { working: boolean }) {
   // The row's measured width decides how much path fits; a fixed character count overflows a
   // narrow column and truncates needlessly in a wide one.
   const stripWidth = signal(0);
+  const worktreeHover = signal(false);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   effect(() => { bashJobs(); if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
   const legacyShells = () => {
@@ -743,11 +765,7 @@ function LocationStrip(p: { working: boolean }) {
   };
   const session = () => { m(); return viewed(); };
   const directory = () => session()?.directory ?? project()?.path ?? "";
-  const selectedTree = () => {
-    const s = session(), p = currentProject();
-    const listing = s ? sessionWorktrees()[s.id] : p ? projectWorktrees()[p] : null;
-    return worktreeForDirectory(directory(), listing);
-  };
+  const selectedTree = () => { m(); return currentWorktree(); };
   const branch = () => selectedTree()?.branch as string | undefined;
   const linked = () => selectedTree()?.main === false;
   const path = () => {
@@ -815,7 +833,13 @@ function LocationStrip(p: { working: boolean }) {
               ><Text style={{ numberOfLines: 1 }} class={`${T.mono}`}>{`⌥ ${branch()!}`}</Text></Button>
             </If>
           </If>
-          <If when={linked()}><Text testID="location-worktree" accessibilityLabel="Linked worktree" class={T.mono}>⑂</Text></If>
+          <If when={linked()}>
+            <Button onPress={() => void run("session.worktree_info")} testID="location-worktree" accessibilityLabel="Worktree session, open details"
+              onMouseEnter={() => worktreeHover.set(true)} onMouseLeave={() => worktreeHover.set(false)}
+              tooltip={tooltip("Worktree session")} class={`rounded-(--radius) px-1 min-h-6 items-center justify-center hover:bg-secondary ${FOCUS}`}>
+              <Icon name="worktree" size={14} class={worktreeHover() ? "tint-primary" : "tint-muted-foreground"} />
+            </Button>
+          </If>
         </View>
         <View class="shrink-0 flex-row items-center gap-2" testID="location-indicators">
         <If when={resourceCounts().kernels > 0 && !phone}>
@@ -837,6 +861,14 @@ function LocationStrip(p: { working: boolean }) {
 const answers = signal<Record<string, { selected: string[]; text: string }>>({});
 const busyWait = signal(false);
 const waitError = signal<string | null>(null);
+/** Questions whose POST returned: a late stream event must not allow a duplicate submit. */
+const submitted = signal<Set<string>>(new Set());
+const submitting = new Set<string>();
+/** The page of one `ask` request: 0..questions.length-1, then the review page. */
+const askPages = signal<Record<string, number>>({});
+const askPageOf = (id: string) => askPages()[id] ?? 0;
+const setAskPage = (id: string, page: number) => askPages.update((all) => ({ ...all, [id]: page }));
+const blankAnswer = () => ({ selected: [] as string[], text: "" });
 
 /** `session` also grants the same call for the rest of the session (allow only); `note` goes to the model with a refusal (deny only). */
 async function reply(a: Approval, allow: boolean, extra: { session?: boolean; note?: string } = {}) {
@@ -856,19 +888,93 @@ function denyWithNote(a: Approval) {
   draft.update((d) => ({ ...d, [k]: "" }));
   void reply(a, false, { note });
 }
-async function submitQuestion(q: Question) {
+/** One choice: a multi-select toggles; a single choice is the answer, and a lone question submits it at once. */
+function chooseAnswer(q: Question, qq: QuestionItem, option: string) {
+  const id = `${q.id}:${qq.id}`;
+  if (qq.multiple) {
+    answers.update((all) => {
+      const a = all[id] ?? { selected: [], text: "" };
+      return { ...all, [id]: { ...a, selected: a.selected.includes(option) ? a.selected.filter((x) => x !== option) : [...a.selected, option] } };
+    });
+    return;
+  }
+  const answer = { selected: [option], text: answers()[id]?.text ?? "" };
+  answers.update((all) => ({ ...all, [id]: answer }));
+  if (q.questions.length === 1) void submitQuestion(q, { itemId: qq.id, answer });
+}
+
+/** How the review shows one answer: selected labels in order, then the quoted free text. */
+function answerLabel(qq: QuestionItem, a: { selected: string[]; text: string }): string {
+  const parts = (qq.options ?? []).filter((o) => a.selected.includes(o.id)).map((o) => o.label);
+  const text = (a.text ?? "").trim();
+  if (text) parts.push(parts.length ? `"${text}"` : text);
+  return parts.join(", ");
+}
+
+/** Why a page's answer is not ready to send, if it is not (the TUI's checks and wording). */
+function answerProblem(qq: QuestionItem, a: { selected: string[]; text: string }): string | null {
+  const selected = (qq.options ?? []).filter((o) => a.selected.includes(o.id)).length;
+  const text = (a.text ?? "").trim().length > 0;
+  if (!qq.options.length) return text ? null : "Type your answer in the question card";
+  if (qq.multiple) return selected || text ? null : "Pick at least one option, or type an answer";
+  if (selected > 1) return "This question takes one option";
+  return selected || text ? null : "Pick an option or type an answer";
+}
+
+/** Send every page, first showing the first one that is not ready. */
+function submitAllQuestions(q: Question) {
+  for (const [i, qq] of q.questions.entries()) {
+    const problem = answerProblem(qq, answers()[`${q.id}:${qq.id}`] ?? blankAnswer());
+    if (problem) {
+      if (q.questions.length > 1) setAskPage(q.id, i);
+      waitError.set(problem);
+      return;
+    }
+  }
+  void submitQuestion(q);
+}
+
+async function submitQuestion(q: Question, override?: { itemId: string; answer: { selected: string[]; text: string } }) {
+  if (submitting.has(q.id) || submitted().has(q.id)) return;
+  const items = q.questions.map((qq) => {
+    const a = override && override.itemId === qq.id ? override.answer : answers()[`${q.id}:${qq.id}`] ?? { selected: [], text: "" };
+    return { question_id: qq.id, selected: a.selected, text: a.text || null };
+  });
+  if (q.questions.length === 1 && !items[0].selected.length && !(items[0].text ?? "").trim()) {
+    waitError.set("Choose an answer or type one");
+    return;
+  }
+  submitting.add(q.id);
   busyWait.set(true); waitError.set(null);
   try {
-    const items = q.questions.map((qq) => { const a = answers()[`${q.id}:${qq.id}`] ?? { selected: [], text: "" }; return { question_id: qq.id, selected: a.selected, text: a.text || null }; });
     await request("POST", `/api/session/${q.session_id}/question/${q.id}`, { body: { answers: items }, key: newKey() });
-  } catch (e) { waitError.set(e instanceof ApiError ? e.message : String(e)); }
-  busyWait.set(false);
+    submitted.update((all) => new Set(all).add(q.id));
+  } catch (e) {
+    // A failed POST keeps the chosen answer and free text for a retry.
+    waitError.set(e instanceof ApiError ? e.message : String(e));
+  } finally {
+    submitting.delete(q.id);
+    busyWait.set(false);
+  }
 }
 
 export function WaitingCard() {
   focusWaiting.fn = () => {};
   const items = () => { m(); return waitItems(); };
   const cur = () => { const l = items(); return l.length ? l[waitIndex() % l.length] : null; };
+  // A replied or cancelled question drops its draft and submit guard; other sessions' questions keep theirs.
+  effect(() => {
+    m();
+    const live = new Set(model.questions.keys());
+    const all = answers();
+    const kept = Object.fromEntries(Object.entries(all).filter(([key]) => live.has(key.slice(0, key.indexOf(":")))));
+    if (Object.keys(kept).length !== Object.keys(all).length) answers.set(kept);
+    const done = new Set([...submitted()].filter((id) => live.has(id)));
+    if (done.size !== submitted().size) submitted.set(done);
+    const pages = askPages();
+    const keptPages = Object.fromEntries(Object.entries(pages).filter(([id]) => live.has(id)));
+    if (Object.keys(keptPages).length !== Object.keys(pages).length) askPages.set(keptPages);
+  });
   return (
     <TimelineColumn class="items-center mt-2" testID="waiting-slot">
       <If when={cur()}>{(w) => <WaitBody w={w} count={items().length} />}</If>
@@ -911,7 +1017,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     return () => clearInterval(id);
   });
   // The modified keys of the card, bound while it shows. Enter belongs to the focused choice, never a global binding.
-  effect(() => { p.w().id; choice.set(0); });
+  effect(() => { p.w().id; choice.set(0); waitError.set(null); });
   effect(() => {
     const k = (id: string) => { const key = byId.get(id)?.keys?.nsh; return key ? toKeystroke(key) : null; };
     const map: Record<string, () => void> = {};
@@ -930,12 +1036,14 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
       // Enter belongs to the composer while it holds text.
       map["enter"] = () => { if (!(draft()[draftKey()] ?? "").length) approvalChoices(a)[choice()]?.run?.(); };
     }
-    if (q && live()) bind("waiting.submit_answers", () => void submitQuestion(q));
+    if (q && live()) bind("waiting.submit_answers", () => submitAllQuestions(q));
     const offs: (() => void)[] = [];
     const letter = (key: string, fn: () => void) => { try { offs.push(keymap.bind(key, fn, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ } };
     if (a && live()) for (const row of approvalChoices(a)) { const key = byId.get(row.cmd)?.keys?.tui; if (key && row.run) letter(key, row.run); }
-    const one = q?.questions[0];
-    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => answers.update((all) => ({ ...all, [`${q.id}:${one.id}`]: { selected: [o.id], text: all[`${q.id}:${one.id}`]?.text ?? "" } }))));
+    // Number keys act on the page in view; the review page has no choices.
+    const page = q ? askPageOf(q.id) : 0;
+    const one = q?.questions[page];
+    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => chooseAnswer(q, one, o.id)));
     const off = bindOpenKeys(map);
     return () => { off(); offs.forEach((f) => f()); };
   });
@@ -1054,40 +1162,107 @@ function CheckMark(p: { on: boolean; testID?: string }) {
 
 function QuestionBody(p: { q: Question }) {
   const q = p.q;
-  const upd = (id: string, f: (a: { selected: string[]; text: string }) => { selected: string[]; text: string }) =>
-    answers.update((all) => ({ ...all, [id]: f(all[id] ?? { selected: [], text: "" }) }));
+  const total = q.questions.length;
+  const single = total === 1;
+  const page = () => Math.min(askPageOf(q.id), total);
+  const reviewing = () => !single && page() >= total;
+  const current = () => q.questions[Math.min(page(), total - 1)];
+  const answerOf = (qq: QuestionItem) => answers()[`${q.id}:${qq.id}`] ?? blankAnswer();
+  const done = () => submitted().has(q.id);
+  let freeRef: any;
+  // Each page's string question takes focus when it appears, including after Enter advances.
+  effect(() => {
+    const cur = current();
+    if (reviewing() || done() || !(cur.allow_free_text || cur.options.length === 0)) return;
+    const timer = setTimeout(() => {
+      if (askPageOf(q.id) !== page() || reviewing()) return;
+      try { freeRef?.focus(); } catch { /* the page changed meanwhile */ }
+    }, 0);
+    return () => clearTimeout(timer);
+  });
+  const go = (to: number) => { waitError.set(null); setAskPage(q.id, to); };
+  /** Enter on a question page locks its answer and moves on; the last page goes to the review. */
+  const advance = () => {
+    const cur = current();
+    const problem = answerProblem(cur, answerOf(cur));
+    if (problem) { waitError.set(problem); return; }
+    go(page() + 1);
+  };
+  const submitText = () => {
+    if (single) { submitAllQuestions(q); return; }
+    advance();
+  };
   return (
     <View class="gap-3">
-      <Each of={q.questions} key={(x) => x.id}>
-        {(qq) => {
-          const id = () => `${q.id}:${qq().id}`;
-          const sel = (o: string) => (answers()[id()]?.selected ?? []).includes(o);
-          return (
-            <View class="gap-1.5">
-              <Text class="text-[16px] leading-6 font-medium text-foreground">{qq().question}</Text>
-              <Each of={qq().options} key={(o) => o.id}>
-                {(o, n) => (
-                  <Button role={qq().multiple ? "checkbox" : "radio"} selected={sel(o().id)} accessibilityLabel={`${qq().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
-                    onPress={() => upd(id(), (a) => ({ ...a, selected: qq().multiple ? (a.selected.includes(o().id) ? a.selected.filter((x) => x !== o().id) : [...a.selected, o().id]) : [o().id] }))}
-                    class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel(o().id) ? "bg-selection" : ""} ${FOCUS}`}>
-                    <If when={qq().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel(o().id) ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel(o().id)} testID={`choice-mark-${o().id}`} /></If>
-                    <View class="flex-1 min-w-0 py-1">
-                      <Text class={`text-[16px] leading-6 ${sel(o().id) ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
-                      <If when={o().preview}><Text class={`${T.sec} text-muted-foreground`}>{o().preview}</Text></If>
-                    </View>
-                  </Button>
-                )}
-              </Each>
-              <Input value={answers()[id()]?.text ?? ""} placeholder={qq().options.length ? "Add context, or type your own answer" : "Type your answer"} onChange={({ value: t }) => upd(id(), (a) => ({ ...a, text: t }))} accessibilityLabel={`${qq().question} Free-text answer`} class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
+      <If when={done()}><View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>{reviewing() ? "sending answers…" : "sending answer…"}</Text></View></If>
+      <If when={!single}>
+        <View class="flex-row items-center gap-2" testID="question-page">
+          <Text class={`${T.meta} flex-1`}>{reviewing() ? "Review answers" : `Question ${page() + 1} of ${total}`}</Text>
+          <Text class={T.meta} testID="question-page-count">{`${reviewing() ? total : page() + 1} of ${total}`}</Text>
+        </View>
+      </If>
+      <If when={reviewing()} else={
+        <View class="gap-1.5">
+          <Text class="text-[16px] leading-6 font-medium text-foreground">{current().question}</Text>
+          <Each of={current().options} key={(o) => o.id}>
+            {(o, n) => {
+              const sel = () => (answerOf(current()).selected ?? []).includes(o().id);
+              return (
+                <Button role={current().multiple ? "checkbox" : "radio"} selected={sel()} disabled={done()}
+                  accessibilityLabel={`${current().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
+                  onPress={() => chooseAnswer(q, current(), o().id)}
+                  class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel() ? "bg-selection" : ""} ${FOCUS}`}>
+                  <If when={current().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel() ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel()} testID={`choice-mark-${o().id}`} /></If>
+                  <View class="flex-1 min-w-0 py-1">
+                    <Text class={`text-[16px] leading-6 ${sel() ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
+                    <If when={o().preview}><Text class={`${T.sec} text-muted-foreground`}>{o().preview}</Text></If>
+                  </View>
+                </Button>
+              );
+            }}
+          </Each>
+          <Input ref={(n: any) => (freeRef = n)} value={answerOf(current()).text} autoFocus={current().allow_free_text || current().options.length === 0} readonly={done()}
+            placeholder={current().options.length ? "Add context, or type your own answer" : "Type your answer"}
+            onChange={({ value: t }) => {
+              const cur = current();
+              answers.update((all) => ({ ...all, [`${q.id}:${cur.id}`]: { selected: all[`${q.id}:${cur.id}`]?.selected ?? [], text: t } }));
+            }}
+            onSubmit={submitText} submitBehavior="submit"
+            accessibilityLabel={`${current().question} Free-text answer`} testID={`question-free-${current().id}`}
+            class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
+          <If when={!single}>
+            <View class="flex-row items-center gap-2 pt-1">
+              <Btn label="Back" onPress={() => go(Math.max(0, page() - 1))} disabled={page() === 0 || done()} testID="question-back" />
+              <View class="flex-1" />
+              <Btn label={page() + 1 < total ? "Next" : "Review"} kind="primary" onPress={advance} disabled={done()} testID="question-next" />
             </View>
-          );
-        }}
-      </Each>
-      <View class="flex-row items-center gap-3">
-        <Btn label="Submit answers" kind="primary" busy={busyWait()} onPress={() => void submitQuestion(q)} testID="submit-answers" disabled={!live()} />
-        <If when={!phone}><Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit · tab next question`}</Text></If>
-        <AnswerHint />
-      </View>
+          </If>
+          <If when={single && current().multiple}>
+            <View class="flex-row items-center gap-3">
+              <Btn label="Submit answers" kind="primary" busy={busyWait() || done()} onPress={() => submitAllQuestions(q)} testID="submit-answers" disabled={!live() || done()} />
+              <If when={!phone}><Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit`}</Text></If>
+              <AnswerHint />
+            </View>
+          </If>
+        </View>
+      }>
+        <View class="gap-2" testID="question-review">
+          <Each of={q.questions} key={(x) => x.id}>
+            {(qq, i) => (
+              <View class="gap-0.5">
+                <Text class="text-[16px] leading-6 font-medium text-foreground">{`${i() + 1}. ${qq().question}`}</Text>
+                <Text testID={`question-review-${qq().id}`} class={`${T.sec} text-muted-foreground`}>{answerLabel(qq(), answerOf(qq())) || "not answered"}</Text>
+              </View>
+            )}
+          </Each>
+          <View class="flex-row items-center gap-3 pt-1">
+            <Btn label="Back" onPress={() => go(total - 1)} disabled={done()} testID="question-back" />
+            <Btn label="Submit answers" kind="primary" busy={busyWait() || done()} onPress={() => submitAllQuestions(q)} testID="submit-answers" disabled={!live() || done()} />
+            <If when={!phone}><Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit`}</Text></If>
+            <AnswerHint />
+          </View>
+        </View>
+      </If>
     </View>
   );
 }

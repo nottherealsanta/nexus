@@ -1,10 +1,10 @@
 import { Clipboard, PanResponder, Scroll, Text, View, WebView, colorScheme, effect, keymap, signal, type WebViewRef, type ViewRef } from "nsh";
 import theme from "../../gen/theme.json";
-import { commands, draftKey, term, toKeystroke } from "../commands";
+import { commands, draftKey, focusComposer, term, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
-import { terminalEvidenceContext, beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
+import { terminalEvidenceContext, beginRenameTerminal, closeTerminalPanel, controlTerminal, disconnectTerminal, inputTerminal, newTerminal, renameTerminal, requestTerminalClose, requestTerminalCopy, resizeTerminal, selectTerminal, setTerminalActions, setTerminalCloseFocus, setTerminalSender, terminalControlled, terminalError, terminalFocused, terminalItems, terminalName, terminalNotice, terminalOpen, terminalRename, terminalSelected } from "../terminal-panel";
 import { confirmDialog, connection, viewed } from "../store";
 import { terminalEvidence, terminalEvidenceAction, type TerminalEvidenceContext } from "../terminal-evidence";
 import { previewTerminalEvidence } from "../terminal-evidence-preview";
@@ -49,7 +49,7 @@ export function TerminalPanel() {
   effect(() => {
     if (!terminalFocused()) return;
     const modified = ["ctrl", "alt", "cmd"].flatMap(mod => [..."abcdefghijklmnopqrstuvwxyz0123456789[]"].flatMap(k => [`${mod}+${k}`, `${mod}+shift+${k}`]));
-    const keys = new Set([...PRINTABLE_KEYS, ...modified, "escape", "enter", "tab", "space", "up", "down", "left", "right", "pageup", "pagedown", ...commands.flatMap(c => [c.keys?.nsh, c.keys?.tui].filter((k): k is string => !!k).map(toKeystroke))]);
+    const keys = new Set([...PRINTABLE_KEYS, ...modified, "escape", "enter", "tab", "space", "up", "down", "left", "right", "pageup", "pagedown", ...commands.flatMap(c => [c.keys?.nsh, c.keys?.tui, ...(c.key_aliases?.nsh ?? []), ...(c.key_aliases?.tui ?? [])].filter((k): k is string => !!k).map(toKeystroke))]);
     const off: (() => void)[] = [];
     for (const key of keys) { try { off.push(keymap.bind(key, () => {}, {when:"always",passThrough:true})); } catch {} }
     return () => off.forEach(f => f());
@@ -83,8 +83,9 @@ export function TerminalPanel() {
   effect(() => { const colors = theme.cssVars[colorScheme() === "light" ? "light" : "dark"]; send({type:"theme",background:colors.background,foreground:colors.foreground}); });
   const focusList = () => { terminalFocused.set(false); web?.injectJavaScript("document.activeElement.blur()"); list?.focus(); };
   setTerminalActions(() => { copyPending = true; send({type:"copy"}); }, focusList);
+  setTerminalCloseFocus(() => focusComposer.fn?.());
   const create = async () => { await newTerminal(); const index = terminalItems().findIndex(t => t.id === terminalSelected()); if (index >= 0) cursor.set(index + 1); };
-  effect(() => () => { setTerminalSender(null); setTerminalActions(null, null); for (const write of writes.values()) { clearTimeout(write.timer); write.reject(new Error("Terminal panel closed.")); } writes.clear(); });
+  effect(() => () => { setTerminalSender(null); setTerminalActions(null, null); setTerminalCloseFocus(null); for (const write of writes.values()) { clearTimeout(write.timer); write.reject(new Error("Terminal panel closed.")); } writes.clear(); });
   effect(() => {
     if (terminalFocused() || terminalRename() || confirmDialog() || term("overlay.open")) return;
     const bindings: Record<string, () => void> = {
@@ -107,6 +108,7 @@ export function TerminalPanel() {
     if (m.type === "written" && typeof m.id === "number") { const write = writes.get(m.id); if (write) { clearTimeout(write.timer); writes.delete(m.id); write.resolve(); } }
     if (m.type === "focus") terminalFocused.set(!!m.focused);
     if (m.type === "focus-list") focusList();
+    if (m.type === "toggle-dock") closeTerminalPanel();
     if (m.type === "input" && typeof m.data === "string") inputTerminal(m.data);
     if (m.type === "resize") resizeTerminal(m.rows, m.cols);
     if (m.type === "capture" && evidencePending && m.request === evidencePending.request) {

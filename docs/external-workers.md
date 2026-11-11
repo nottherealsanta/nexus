@@ -1,12 +1,14 @@
 # ZMX external workers
 
+**Out of date (noted 2026-11-11):** the runtime, registry, settings and client integration described as missing below now exist; see [plans/06-zmx.md](../plans/06-zmx.md) for the current status. This page needs a rewrite.
+
 **Status (2026-11-10): transport groundwork only, not a usable session backend.**
 There is no ZMX provider, configuration switch, runtime routing, API or client UI yet.
 The existing `claude` Agent SDK provider and every non-ZMX session path are unchanged.
 Importing `nexus.workers` does not probe a CLI, read credentials or load a provider.
 
-The design and remaining milestones are in [ZMX_plan.md](../ZMX_plan.md) and
-[PLAN.md section 6](../PLAN.md#6-zmx-mode-for-claude-code-and-antigravity).
+The design and remaining milestones are in [plans/zmx-design.md](../plans/zmx-design.md) and
+[plans/06-zmx.md](../plans/06-zmx.md).
 The eventual feature is subagents only, off by default, and visibly labelled in both clients.
 Do not wire this transport into session creation before its guards and paired disclosures are ready.
 

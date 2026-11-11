@@ -281,7 +281,7 @@ impl Session {
     /// The agent name the UI shows: `fork` for a fork (whose `agent` is the
     /// parent's), else the session's agent.
     pub fn agent_label(&self) -> &str {
-        if let Some(label) = self.extra["worker"]["label"].as_str() {
+        if let Some(label) = self.extra.get("worker").and_then(|w| w["label"].as_str()) {
             label // a ZMX child is always labelled `ZMX · <vendor>`
         } else if self.fork.is_some() {
             "fork"

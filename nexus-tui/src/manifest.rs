@@ -50,6 +50,16 @@ pub struct Keys {
     pub nsh: Option<String>,
 }
 
+/// Other spellings of a command's key, for keys a medium reports differently
+/// (the tilde key as Shift+`). They resolve to the same command.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct KeyAliases {
+    #[serde(default)]
+    pub tui: Vec<String>,
+    #[serde(default)]
+    pub nsh: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Command {
     pub id: String,
@@ -59,6 +69,7 @@ pub struct Command {
     #[serde(default)]
     pub slash_aliases: Vec<String>,
     pub keys: Option<Keys>,
+    pub key_aliases: Option<KeyAliases>,
     pub key_context: Option<String>,
     #[serde(default)]
     pub when: Vec<String>,
@@ -80,6 +91,14 @@ fn both() -> String {
 impl Command {
     pub fn tui_key(&self) -> Option<&str> {
         self.keys.as_ref().and_then(|k| k.tui.as_deref())
+    }
+    /// The TUI's primary key and its aliases, all in the manifest's syntax.
+    pub fn tui_keys(&self) -> Vec<&str> {
+        let mut keys: Vec<&str> = self.tui_key().into_iter().collect();
+        if let Some(aliases) = &self.key_aliases {
+            keys.extend(aliases.tui.iter().map(String::as_str));
+        }
+        keys
     }
     pub fn for_tui(&self) -> bool {
         self.clients != "nsh"
@@ -230,10 +249,12 @@ impl Manifest {
     pub fn keys_by_context(&self) -> BTreeMap<String, Vec<(String, String)>> {
         let mut m: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         for c in self.command.iter().filter(|c| c.for_tui()) {
-            if let (Some(k), Some(ctx)) = (c.tui_key(), c.key_context.as_ref()) {
-                m.entry(ctx.clone())
-                    .or_default()
-                    .push((k.to_owned(), c.id.clone()));
+            if let Some(ctx) = c.key_context.as_ref() {
+                for k in c.tui_keys() {
+                    m.entry(ctx.clone())
+                        .or_default()
+                        .push((k.to_owned(), c.id.clone()));
+                }
             }
         }
         m

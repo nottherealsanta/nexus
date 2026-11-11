@@ -3603,7 +3603,7 @@ impl Builder<'_> {
             "fork".to_owned()
         } else if let Some(label) = child
             .as_ref()
-            .and_then(|c| c.extra["worker"]["label"].as_str())
+            .and_then(|c| c.extra.get("worker").and_then(|w| w["label"].as_str()))
         {
             label.to_owned() // a ZMX child is always labelled
         } else {

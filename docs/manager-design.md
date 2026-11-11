@@ -1,7 +1,7 @@
 # Manager: a voice agent above all sessions
 
 This is the Manager's design, moved here from `MANAGER_PLAN.md` on 2026-11-04 so that code comments citing its
-section numbers keep working. Milestone status and remaining work are in [PLAN.md](../PLAN.md#3-manager); what is
+section numbers keep working. Milestone status and remaining work are in [plans/03-manager.md](../plans/03-manager.md); what is
 built is in [manager.md](manager.md). Status notes in sections 11, 15 and 16 are a record as of 2026-11-03.
 
 **Naming.** "The Manager" is the model, its prompt, tools and context. A **voice** is a front end that turns

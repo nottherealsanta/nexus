@@ -316,8 +316,14 @@ fn the_jump_pill_sits_on_the_row_above_the_composer_card_at_80x24() {
     assert!(row.contains('\u{2193}'), "{row}");
     // the card follows directly: its top padding row (no `▄` edge since the
     // padding revision, nexus-tui README), then the input
-    assert!(rows[pill.y as usize + 1].trim().is_empty(), "{rows:?}");
-    assert!(!rows[pill.y as usize + 1].contains('\u{2584}'));
+    // Project-rail controls may share this screen row; only the composer must be blank.
+    let padding: String = rows[pill.y as usize + 1]
+        .chars()
+        .skip(composer.x as usize)
+        .take(composer.width as usize)
+        .collect();
+    assert!(padding.trim().is_empty(), "{rows:?}");
+    assert!(!padding.contains('\u{2584}'));
     assert!(
         rows[pill.y as usize + 2].contains("Type a message"),
         "{rows:?}"
@@ -341,10 +347,7 @@ fn a_banner_is_one_row_at_the_top_of_the_page_above_the_timeline() {
     let (_, rows) = draw(&mut app, 120, 36);
     let banner = app.regions.banner;
     assert_eq!(banner.height, 1);
-    assert_eq!(
-        banner.y,
-        app.regions.centre.y + app.regions.heading.height + app.regions.strip.height
-    );
+    assert_eq!(banner.y, app.regions.centre.y + app.regions.heading.height);
     assert_eq!(
         app.regions.timeline.y,
         before.y + 1,

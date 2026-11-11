@@ -121,6 +121,134 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
 }
 
 #[test]
+fn shift_tab_cycles_eligible_agents_from_the_catalog_and_wraps() {
+    let mut a = app();
+    a.state.agents = vec![
+        serde_json::json!({"name": "build", "source": "builtin", "mode": "all"}),
+        serde_json::json!({"name": "plan", "source": "builtin", "mode": "primary"}),
+        serde_json::json!({"name": "scout", "source": "builtin", "mode": "subagent"}),
+        serde_json::json!({"name": "custom", "source": "project", "mode": "primary"}),
+    ];
+    a.state.model.select(None);
+    a.ui.draft.agent = None;
+    a.effects.clear();
+    let initial_toasts = a.ui.alerts.toasts.len();
+
+    press(&mut a, &["shift+tab"]);
+    assert_eq!(
+        a.ui.draft.agent.as_deref(),
+        Some("plan"),
+        "a draft moves from build to plan and skips the subagent"
+    );
+    press(&mut a, &["shift+tab"]);
+    assert_eq!(a.ui.draft.agent.as_deref(), Some("custom"));
+    press(&mut a, &["shift+tab"]);
+    assert_eq!(
+        a.ui.draft.agent.as_deref(),
+        Some("build"),
+        "the cycle wraps to the first eligible agent"
+    );
+    assert_eq!(
+        a.ui.alerts.toasts.len(),
+        initial_toasts,
+        "draft selection is shown in the composer without notifications"
+    );
+}
+
+#[test]
+fn shift_tab_with_only_the_current_agent_is_a_noop() {
+    let mut a = app();
+    a.state.agents = vec![serde_json::json!({"name": "build", "mode": "all"})];
+    a.effects.clear();
+    press(&mut a, &["shift+tab"]);
+    assert!(!a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SwitchCost { .. }))));
+}
+
+#[test]
+fn shift_tab_switches_a_session_through_the_pickers_cost_check() {
+    let mut a = app();
+    a.state.agents = vec![
+        serde_json::json!({"name": "build", "source": "builtin", "mode": "all"}),
+        serde_json::json!({"name": "plan", "source": "builtin", "mode": "primary"}),
+        serde_json::json!({"name": "scout", "source": "builtin", "mode": "subagent"}),
+    ];
+    a.effects.clear();
+
+    press(&mut a, &["shift+tab"]);
+    assert!(
+        a.effects.iter().any(|e| matches!(
+            e,
+            Effect::Api(ApiCall::SwitchCost {
+                agent: Some(agent),
+                model: None,
+                ..
+            }) if agent == "plan"
+        )),
+        "the session asks Core for the switch cost first, as the picker does: {:?}",
+        a.effects
+    );
+
+    // A child chooses from subagents, so the same list walks build -> scout.
+    a.state.model.sessions.get_mut(SESSION).unwrap().parent_id = Some("parent".into());
+    a.effects.clear();
+    press(&mut a, &["shift+tab"]);
+    assert!(a.effects.iter().any(|e| matches!(
+        e,
+        Effect::Api(ApiCall::SwitchCost {
+            agent: Some(agent),
+            ..
+        }) if agent == "scout"
+    )));
+}
+
+#[test]
+fn shift_tab_does_not_reach_behind_the_completion_popup_or_the_agent_picker() {
+    let mut a = app();
+    a.state.agents = vec![
+        serde_json::json!({"name": "build", "source": "builtin", "mode": "all"}),
+        serde_json::json!({"name": "plan", "source": "builtin", "mode": "primary"}),
+    ];
+    typing(&mut a, "/");
+    assert!(a.completion_rows().is_some(), "the slash menu is open");
+    a.effects.clear();
+    press(&mut a, &["shift+tab"]);
+    assert!(
+        !a.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::SwitchCost { .. }))),
+        "the completion list owns Shift+Tab"
+    );
+
+    a.composer().clear();
+    press(&mut a, &["ctrl+g"]);
+    assert!(
+        matches!(
+            a.ui.overlay.as_ref().map(|overlay| &overlay.kind),
+            Some(OverlayKind::Palette(_))
+        ),
+        "the agent picker is open"
+    );
+    a.effects.clear();
+    press(&mut a, &["shift+tab"]);
+    assert!(
+        !a.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::SwitchCost { .. }))),
+        "the picker owns the keys while it is open"
+    );
+    assert!(
+        matches!(
+            a.ui.overlay.as_ref().map(|overlay| &overlay.kind),
+            Some(OverlayKind::Palette(_))
+        ),
+        "Shift+Tab leaves the picker open"
+    );
+}
+
+#[test]
 fn learn_checklist_defaults_and_all_selection_keys_drive_install() {
     let mut a = app();
     let call = begin_learn(&mut a, "owner/repo", "project");

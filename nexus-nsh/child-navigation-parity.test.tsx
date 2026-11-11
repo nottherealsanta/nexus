@@ -1,8 +1,10 @@
 // Child-session navigation parity with the TUI: subagents stay out of the root tab strip,
-// a viewed child keeps its root's tab, and the subagent strip goes back to the parent and
-// selects children with their own running, waiting or completed state.
+// a viewed child keeps its root's tab and has one heading row (title plus metadata), and the
+// full-height rail goes back to the root. Child cards remain the way to open subagents.
 import { describe, expect, open, test } from "nsh/test";
-import { stripLayout } from "./src/strip-layout";
+import { SESSION_BACK_CELLS, headingMeta, headingMetaRoom, sessionBackRailPx } from "./src/ui/header";
+import { centreContentPadding } from "./src/ui/centre";
+import { textCellPoints } from "./src/ui/geometry";
 
 const parent = {
   id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Parent", model: "scripted/m",
@@ -57,18 +59,21 @@ function network(options: {
     "GET */api/session/ses_1/message*": { body: messages },
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/turn*": { body: quiet },
+    "GET */api/session/ses_1/input": { body: [] },
     "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_1": { body: parent },
     "GET */api/session/ses_child/message*": { body: [] },
     "GET */api/session/ses_child/snapshot": { body: null },
     "GET */api/session/ses_child/turn*": { body: quiet },
+    "GET */api/session/ses_child/input": { body: [] },
     "GET */api/session/ses_child/context": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_child/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_child": { body: children[0] },
     "GET */api/session/ses_child2/message*": { body: [] },
     "GET */api/session/ses_child2/snapshot": { body: null },
     "GET */api/session/ses_child2/turn*": { body: quiet },
+    "GET */api/session/ses_child2/input": { body: [] },
     "GET */api/session/ses_child2/context": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_child2/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_child2": { body: children[1] },
@@ -81,80 +86,86 @@ async function openChild(options: Parameters<typeof network>[0] = {}) {
   await app.press("id:session-ses_1");
   await app.waitFor("id:child-card");
   await app.press("id:child-card");
-  await app.waitFor("id:subagent-strip");
+  await app.waitFor("id:session-heading-title");
   return app;
 }
 
 describe("child-session navigation parity", () => {
-  test("a viewed child keeps its root tab and the strip goes back by button and Esc", async () => {
+  test("a viewed child keeps its root tab and has one heading row, not a subagent-tab line", async () => {
     const app = await openChild();
     expect(app.shows("id:session-tab-ses_1")).toBe(true);
     expect(app.shows("id:session-tab-ses_child")).toBe(false);
     expect(app.shows("id:session-tab-ses_child2")).toBe(false);
-    expect(app.shows("id:subagent-ses_child")).toBe(true);
-    expect(app.shows("id:subagent-ses_child2")).toBe(true);
-    // The strip carries a state glyph, not a state word (as in the TUI).
-    const glyphBefore = () => { const t = app.texts(); return t[t.lastIndexOf("Research") - 2]; };
-    expect(glyphBefore()).toBe("✓");
-
-    await app.press("id:subagent-back");
-    await app.waitFor("id:child-card");
     expect(app.shows("id:subagent-strip")).toBe(false);
+    expect(app.shows("id:session-heading-title")).toBe(true);
+    expect(app.texts()).toContain("Scout · m · scripted · default");
+    // The child card is still the navigation path into a subagent.
+    await app.press("id:session-back");
+    await app.waitFor("id:child-card");
+    await app.press("id:child-card");
+    await app.waitFor("id:session-heading-title");
+  });
+
+  test("the heading names a viewed child and the full-height rail returns straight to the root", async () => {
+    const app = await openChild();
+    expect(app.shows("id:session-heading")).toBe(true);
+    expect(app.shows("id:session-heading-title")).toBe(true);
+    expect(app.shows("id:session-back-rail")).toBe(true);
+    expect(app.shows("id:session-back-arrow")).toBe(true);
+    expect(app.shows("id:session-heading-back")).toBe(false);
+    await app.press("id:session-back");
+    await app.waitFor("id:child-card");
+    // The root keeps the blank heading row but no rail and no child name.
+    expect(app.shows("id:session-heading")).toBe(true);
+    expect(app.shows("id:session-heading-title")).toBe(false);
+    expect(app.shows("id:session-heading-meta")).toBe(false);
+    expect(app.shows("id:session-back-rail")).toBe(false);
+    expect(app.shows("id:subagent-strip")).toBe(false);
+  });
+
+  test("the rail is exactly four text cells and reserves that gutter for content", () => {
+    expect(SESSION_BACK_CELLS).toBe(4);
+    expect(sessionBackRailPx()).toBe(textCellPoints() * 4);
+    expect(centreContentPadding(true)).toEqual({ marginLeft: sessionBackRailPx() });
+    expect(centreContentPadding(false)).toBe(undefined);
+  });
+
+  test("heading metadata stays in stable order and falls back compactly", () => {
+    expect(headingMeta(["Scout", "GPT-6", "codex", "high"], 80)).toBe("Scout · GPT-6 · codex · high");
+    expect(headingMeta(["Scout", "GPT-6", "codex", "high"], 24)).toBe("Scout·GPT-6·codex·high");
+    const tight = headingMeta(["Scout", "GPT-6", "codex", "high"], 14);
+    expect(tight.includes("…")).toBe(true);
+    expect(headingMeta([], 20)).toBe("");
+    // A readable title share is reserved before metadata is compacted.
+    expect(headingMetaRoom(70)).toBe(41);
+    expect(headingMetaRoom(30)).toBe(15);
+    expect(headingMetaRoom(10)).toBe(0);
+  });
+
+  test("Left returns a viewed child to the root outside text fields", async () => {
+    const app = await openChild();
+    await app.keyboard.press("left");
+    await app.waitFor("id:child-card");
+    expect(app.shows("id:session-heading-title")).toBe(false);
     expect(app.shows("id:session-tab-ses_1")).toBe(true);
+  });
+
+  test("Left in the composer still edits the draft while a child is viewed", async () => {
+    const app = await openChild();
+    await app.type("id:composer-input", "ab");
+    await app.waitUntil(() => app.value("id:composer-input") === "ab");
+    await app.keyboard.press("left");
+    expect(app.value("id:composer-input")).toBe("ab");
+    expect(app.shows("id:session-heading-title")).toBe(true);
+    expect(app.shows("id:session-back-rail")).toBe(true);
   });
 
   test("Esc returns a viewed child to its parent without dropping the root tab", async () => {
     const app = await openChild();
     await app.keyboard.press("escape");
     await app.waitFor("id:child-card");
-    expect(app.shows("id:subagent-strip")).toBe(false);
+    expect(app.shows("id:session-heading-title")).toBe(false);
     expect(app.shows("id:session-tab-ses_1")).toBe(true);
     expect(app.shows("id:session-tab-ses_child")).toBe(false);
-  });
-
-  test("the strip shows a running child as running", async () => {
-    const app = await openChild({ childStatus: "busy", running: [{ id: "turn_child", session_id: "ses_child" }] });
-    const t = app.texts();
-    expect(t[t.lastIndexOf("Research") - 2]).not.toBe("✓");
-    expect(app.shows("id:session-tab-ses_child")).toBe(false);
-  });
-
-  test("choosing a sibling in the strip keeps the same root tab", async () => {
-    const app = await openChild();
-    await app.press("id:subagent-ses_child2");
-    await app.waitFor("id:subagent-current-ses_child2");
-    expect(app.shows("id:session-tab-ses_1")).toBe(true);
-    expect(app.shows("id:session-tab-ses_child2")).toBe(false);
-  });
-
-  test("the strip shows a child waiting for input as waiting", async () => {
-    const app = await openChild({
-      childStatus: "busy",
-      running: [{ id: "turn_child", session_id: "ses_child" }],
-      approvals: [{ id: "ap_1", session_id: "ses_child", tool: "bash", call_id: "call_bash", args: { command: "ls" } }],
-    });
-    expect(app.texts().some((t) => t.includes("waiting"))).toBe(true);
-    expect(app.shows("id:session-tab-ses_child")).toBe(false);
-  });
-
-  test("the strip lays out as the TUI does: one 10..30 column cell, shrunk and thinned to its room", () => {
-    const item = (id: string, title: string, agent = "scout") => ({ id, title, agent });
-    const kids = ["a", "b", "c", "d", "e", "f"].map((k, i) => item(k, `Child number ${i}`));
-    // Room enough: nothing dropped, one shared cell clamped to 30 columns.
-    const roomy = stripLayout({ ancestors: [item("r", "Parent")], children: kids, viewed: "c", room: 400 });
-    expect(roomy.children.length).toBe(6);
-    expect(roomy.droppedLeft).toBe(false);
-    expect(roomy.cell).toBeGreaterThanOrEqual(10);
-    expect(roomy.cell).toBeLessThanOrEqual(30);
-    // Tight: tabs farthest from the viewed child go (the tail first), the viewed one stays, and cells never exceed the room.
-    const tight = stripLayout({ ancestors: [item("r", "Parent")], children: kids, viewed: "b", room: 70 });
-    expect(tight.children.length).toBeLessThan(6);
-    expect(tight.children.some((c) => c.id === "b")).toBe(true);
-    expect(tight.children[tight.children.length - 1].id).toBe("b");
-    expect((tight.ancestors.length + tight.children.length) * (tight.cell + 1) + 2).toBeLessThanOrEqual(67);
-    // A deep path drops the oldest ancestors from the left and marks it.
-    const deep = stripLayout({ ancestors: [item("r", "Root"), item("p", "Middle"), item("q", "Parent")], children: [item("c", "Leaf")], viewed: "c", room: 50 });
-    expect(deep.droppedLeft).toBe(true);
-    expect(deep.ancestors[deep.ancestors.length - 1].id).toBe("q");
   });
 });

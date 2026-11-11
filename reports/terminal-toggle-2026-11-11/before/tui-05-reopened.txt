@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files]    [Git]     · Terminal toggle parity ×    +                                                                                                □
+     │
+▏    │ + New session
+▏ T  │ ⌕ Search sessions       ctrl+k      System prompt ~996
+▏  1 │▏  Terminal toggle parity    8m
+     │▏                                    AGENTS.md  not found · /private/tmp/nexus-terminal-toggle-2026-11-11/ws/AGENTS.md
+     │
+  +  │                                     Tools [16] ~3.1K
+     │                                       ● read                      ● bash_kill                 ● ask
+     │                                       ● grep                      ● edit                      ● code
+     │                                       ● glob                      ● patch                     ● fork
+     │                                       ● ls                        ● write                     ● expose_workspace_tools
+     │                                       ● bash                      ● web_search
+     │                                       ● bash_output               ● web_fetch
+     │
+     │                                     Skills [0]  none
+     │
+     │                                     MCP [0]  none
+     │
+     │                                     total  ~4,105 tok
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                      Type a message…
+     │
+     │                                      Build · … · default                                                                                                     0
+     │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/nexus-terminal-toggle-2026-11-11/ws       2 terminal shell
+     │                                   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+     │                                 Terminals (2)  Ctrl+] tabs                                                              +  ✎  ×  [Release control]  [Attach]  ⧉  ▾
+     │                                  ● Terminal ×   ● Terminal ×
+     │                                 16:19:34 /private/tmp/nexus-terminal-toggle-2026-11-11/ws > cat -v
+     │                                 X
+     │                                 X
+     │                                       X
+     │                                       X
+     │
+     │
+     │
+     │
+     │
+     │
+     │ ▣ Show archive
+     │
+     │  Settings               ctrl+,

@@ -38,9 +38,13 @@ describe("session sidebar location", () => {
     expect(app.shows("id:new-session-row")).toBe(true);
     expect(app.shows("id:chip-archived")).toBe(true);
     const labels = app.texts();
-    expect(labels.filter((text) => text === "Show archive").length).toBe(1);
-    expect(labels.indexOf("New session")).toBeLessThan(labels.indexOf("Show archive"));
+    expect(labels.filter((text) => text === "Show archived").length).toBe(1);
+    expect(labels.indexOf("New session")).toBeLessThan(labels.indexOf("Search sessions"));
+    expect(labels.indexOf("Search sessions")).toBeLessThan(labels.indexOf("Show archived"));
     expect(app.shows("id:session-search")).toBe(true);
+    expect(app.shows("id:session-search-key")).toBe(true);
+    expect(app.shows("id:open-settings")).toBe(false);
+    expect(app.shows("id:rail-settings")).toBe(true);
   });
 });
 

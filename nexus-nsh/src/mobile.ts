@@ -31,7 +31,7 @@ const DESKTOP_PREFIXES = ["terminal.", "inspector.", "editor.", "git.", "file.",
 const DESKTOP_IDS = new Set([
   "app.open_inspector", "session.open_inspector", "app.usage", "app.help_keys", "palette.open",
   "sidebar.left.toggle", "sidebar.right.toggle", "sidebar.tab.files", "sidebar.tab.git", "sidebar.tab.projects", "sidebar.focus",
-  "session.worktrees", "session.worktree.integrate", "session.resources", "session.change_directory", "session.wire_toggle",
+  "session.worktrees", "session.worktree_info", "session.worktree.integrate", "session.resources", "session.change_directory", "session.wire_toggle",
   "session.tab_close", "session.tab_next", "session.tab_prev", "session.export", "session.copy_id",
   "project.overview", "project.move_up", "project.move_down", "project.status.current", "project.status.passive",
   "project.status.inactive", "project.remove", "project.add",
