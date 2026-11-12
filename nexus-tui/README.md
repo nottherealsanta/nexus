@@ -359,6 +359,12 @@ When a session needs approval or an answer, its header shows `⚠ N waiting`.
 The selected file can be copied as an absolute path, inserted as `@path`, or opened in
 `$VISUAL`/`$EDITOR` with the terminal suspended. Core serves whole files up to 1 MiB.
 
+The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a
+`folder · branch` line, then `N files changed · +A −D` and `S staged · U unstaged · T untracked`, then the changes
+grouped by top-level folder (`src/  2`, `./` for root files), collapsed by default; Enter or a click expands a folder
+to its file rows, which keep stage/unstage/discard and open the diff. With nothing changed it reads `No changes`.
+There is no branch list (switch from the worktree picker). Line counts come from Core's per-change `added`/`removed`.
+
 **Editor (K10).** The cursor starts at the top; `ctrl+s` saves and `ctrl+z`/`ctrl+y` undo and
 redo. `ctrl+f` opens Find/Replace: Enter/Shift+Enter cycle matches, Tab switches between the
 query and replacement, `alt+c` toggles case sensitivity, `ctrl+r` replaces one match and

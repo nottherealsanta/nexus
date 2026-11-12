@@ -648,6 +648,28 @@ pub struct GitRow {
     pub removed: u64,
 }
 
+/// One row of the project Git tab.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GitSideRow {
+    Folder {
+        name: String,
+        count: usize,
+        open: bool,
+    },
+    File(GitRow),
+}
+
+/// Totals shown at the top of the project Git tab.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitSummary {
+    pub files: usize,
+    pub added: u64,
+    pub removed: u64,
+    pub staged: usize,
+    pub unstaged: usize,
+    pub untracked: usize,
+}
+
 /// The Files root header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesHeader {
@@ -819,6 +841,8 @@ pub struct Ui {
     pub cursor: HashMap<Tab, usize>,
     pub side_top: usize,
     pub file_open: bool,
+    /// Expanded top-level folders of the project Git tab.
+    pub git_open: HashSet<String>,
     /// The editor over the open file, when editing (K10).
     pub file_edit: Option<FileEdit>,
     pub file_scroll: usize,
@@ -1282,6 +1306,7 @@ impl App {
                 cursor: HashMap::new(),
                 side_top: 0,
                 file_open: false,
+                git_open: HashSet::new(),
                 file_edit: None,
                 file_scroll: 0,
                 file_source: false,
@@ -3339,7 +3364,7 @@ impl App {
             "focus.git_file" => {
                 (self.ui.tab == Tab::Git
                     && self.ui.focus == Focus::Sidebar
-                    && self.project_git_rows().get(self.cursor(Tab::Git)).is_some())
+                    && self.project_git_file(self.cursor(Tab::Git)).is_some())
                     || (self.ui.focus == Focus::Right
                         && self.git_rows().get(self.ui.git_cursor).is_some())
             }
@@ -3934,7 +3959,8 @@ impl App {
             .map(str::to_owned)
     }
 
-    pub fn project_git_rows(&self) -> Vec<GitRow> {
+    /// Every changed file of the project Git tab, one entry per (group, path).
+    fn project_git_files(&self) -> Vec<GitRow> {
         let Some((project, Ok(data))) = &self.state.project_git else {
             return Vec::new();
         };
@@ -3958,13 +3984,75 @@ impl App {
                         group,
                         path: change["path"].as_str().unwrap_or("").into(),
                         status: status.into(),
-                        added: 0,
-                        removed: 0,
+                        added: change["added"].as_u64().unwrap_or(0),
+                        removed: change["removed"].as_u64().unwrap_or(0),
                     });
                 }
             }
         }
         rows
+    }
+
+    /// The summary of the project Git tab: files changed, lines, group counts.
+    pub fn project_git_summary(&self) -> GitSummary {
+        let files = self.project_git_files();
+        let count = |group| files.iter().filter(|r| r.group == group).count();
+        let mut paths: Vec<&str> = files.iter().map(|r| r.path.as_str()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        let mut lines: HashMap<&str, (u64, u64)> = HashMap::new();
+        for row in &files {
+            lines.insert(row.path.as_str(), (row.added, row.removed));
+        }
+        GitSummary {
+            files: paths.len(),
+            added: lines.values().map(|l| l.0).sum(),
+            removed: lines.values().map(|l| l.1).sum(),
+            staged: count(GitGroup::Staged),
+            unstaged: count(GitGroup::Unstaged),
+            untracked: count(GitGroup::Untracked),
+        }
+    }
+
+    /// The tab's rows: changes grouped by top-level folder, a folder's files
+    /// listed after it once it is expanded (collapsed by default).
+    pub fn project_git_rows(&self) -> Vec<GitSideRow> {
+        let files = self.project_git_files();
+        let folder_of = |path: &str| {
+            path.split_once('/')
+                .map_or("./".to_owned(), |(top, _)| format!("{top}/"))
+        };
+        let mut folders: Vec<String> = files.iter().map(|r| folder_of(&r.path)).collect();
+        folders.sort();
+        folders.dedup();
+        let mut rows = Vec::new();
+        for folder in folders {
+            let members: Vec<&GitRow> = files
+                .iter()
+                .filter(|r| folder_of(&r.path) == folder)
+                .collect();
+            let mut paths: Vec<&str> = members.iter().map(|r| r.path.as_str()).collect();
+            paths.sort_unstable();
+            paths.dedup();
+            let open = self.ui.git_open.contains(&folder);
+            rows.push(GitSideRow::Folder {
+                name: folder,
+                count: paths.len(),
+                open,
+            });
+            if open {
+                rows.extend(members.into_iter().cloned().map(GitSideRow::File));
+            }
+        }
+        rows
+    }
+
+    /// The changed-file row at a cursor index, `None` on a folder row.
+    fn project_git_file(&self, index: usize) -> Option<GitRow> {
+        match self.project_git_rows().into_iter().nth(index)? {
+            GitSideRow::File(row) => Some(row),
+            GitSideRow::Folder { .. } => None,
+        }
     }
 
     pub fn git_rows(&self) -> Vec<GitRow> {
@@ -4009,7 +4097,17 @@ impl App {
 
     /// Open the diff of a changed-file row in the centre column.
     fn open_project_git_diff(&mut self, index: usize) {
-        let Some(row) = self.project_git_rows().get(index).cloned() else {
+        if let Some(GitSideRow::Folder { name, open, .. }) =
+            self.project_git_rows().into_iter().nth(index)
+        {
+            if open {
+                self.ui.git_open.remove(&name);
+            } else {
+                self.ui.git_open.insert(name);
+            }
+            return;
+        }
+        let Some(row) = self.project_git_file(index) else {
             return;
         };
         let Some(project) = self.current_project() else {
@@ -6621,7 +6719,7 @@ impl App {
                 let worktree = self.git_worktree();
                 let action = id.trim_start_matches("git.").to_owned();
                 if action == "stage" || action == "unstage" {
-                    if let Some(row) = self.project_git_rows().get(self.cursor(Tab::Git)) {
+                    if let Some(row) = self.project_git_file(self.cursor(Tab::Git)) {
                         self.api(ApiCall::ProjectGitAction {
                             project,
                             worktree,
@@ -6632,7 +6730,7 @@ impl App {
                         });
                     }
                 } else if action == "discard" {
-                    if let Some(row) = self.project_git_rows().get(self.cursor(Tab::Git)) {
+                    if let Some(row) = self.project_git_file(self.cursor(Tab::Git)) {
                         self.api(ApiCall::ProjectGitLive {
                             project,
                             worktree,

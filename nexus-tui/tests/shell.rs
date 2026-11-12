@@ -6086,3 +6086,58 @@ fn files_watch_is_leased_only_while_its_surface_is_visible() {
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(joined(&rows).contains("Polling every 3 seconds"));
 }
+
+fn git_tab_app(changes: serde_json::Value) -> nexus_tui::app::App {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = app.current_project().unwrap();
+    app.ui.left_open = true;
+    app.ui.tab = nexus_tui::ui::Tab::Git;
+    app.state.project_git = Some((
+        project,
+        Ok(serde_json::json!({
+            "worktree": "/work/nexus-plan-40", "branch": "feature",
+            "changes": changes,
+            "branches": [{"name": "one", "current": true}, {"name": "two", "current": false}],
+        })),
+    ));
+    app
+}
+
+#[test]
+fn git_tab_without_changes_says_so_and_has_no_branch_list() {
+    let mut app = git_tab_app(serde_json::json!([]));
+    let (_, lines) = draw(&mut app, 120, 36);
+    let text = lines.join("\n");
+    assert!(text.contains("nexus-plan-40 · feature"), "{text}");
+    assert!(text.contains("No changes"));
+    assert!(!text.contains("Branches") && !text.contains("two"));
+}
+
+#[test]
+fn git_tab_groups_by_top_level_folder_and_expands_on_enter() {
+    let change = |path: &str, status: &str, staged: bool, unstaged: bool, a: u64, r: u64| {
+        serde_json::json!({"path": path, "status": status, "staged": staged,
+            "unstaged": unstaged, "added": a, "removed": r})
+    };
+    let mut app = git_tab_app(serde_json::json!([
+        change("plans/a.md", "M ", true, false, 10, 2),
+        change("src/x.rs", "MM", true, true, 5, 1),
+        change("src/y.rs", " M", false, true, 1, 0),
+        change("README.md", "??", false, true, 0, 0),
+    ]));
+    let (_, lines) = draw(&mut app, 120, 36);
+    let text = lines.join("\n");
+    assert!(text.contains("4 files changed · +16 −3"), "{text}");
+    assert!(text.contains("2 staged · 2 unstaged"), "{text}");
+    assert!(text.contains("▸ src/  2") && text.contains("▸ plans/  1"), "{text}");
+    assert!(!text.contains("x.rs"), "folders start collapsed");
+    app.ui.focus = nexus_tui::ui::Focus::Sidebar;
+    app.ui.cursor.insert(nexus_tui::ui::Tab::Git, 2);
+    press(&mut app, &["enter"]);
+    let (_, lines) = draw(&mut app, 120, 36);
+    let text = lines.join("\n");
+    assert!(text.contains("▾ src/  2") && text.contains("src/x.rs") && text.contains("src/y.rs"), "{text}");
+    press(&mut app, &["enter"]);
+    let (_, lines) = draw(&mut app, 120, 36);
+    assert!(!lines.join("\n").contains("src/x.rs"), "Enter on the folder collapses it");
+}

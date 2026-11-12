@@ -26,7 +26,7 @@ branch list fills the tab and is the only thing on it.
 
 ## Plan
 
-- [ ] Confirm with the user (defaults in brackets):
+- [x] Confirm with the user (defaults in brackets; all accepted, decided 2026-11-12):
   - What "active worktree" means: the worktree of the open session, else the project's main checkout. [yes]
   - What the tab shows with no changes: one muted line `No changes`. [yes]
   - Summary shape: a header line like `3 files changed · +120 −14`, then counts per group
@@ -34,18 +34,17 @@ branch list fills the tab and is the only thing on it.
     (`nexus-tui/  2`, `plans/  1`), not every file. [yes]
   - Can a folder row expand to its files, so stage/unstage/discard and opening a diff still work from the tab? Or is
     the tab read-only and the diff modal the place for per-file actions? [expandable, collapsed by default]
-- [ ] Remove `Branches` from both clients. Branch switching stays in the `session.worktrees` picker (the location
+- [x] Remove `Branches` from both clients. Branch switching stays in the `session.worktrees` picker (the location
   strip's branch button). Core may keep returning `branches`; stop rendering it and note it as unused.
-- [ ] Header: keep the branch on one line with the worktree folder name; drop the full path line (the worktree info
+- [x] Header: keep the branch on one line with the worktree folder name; drop the full path line (the worktree info
   modal from [32](done/32-worktree-indicator.md) has it).
-- [ ] Core: add the line counts the summary needs (`git diff --numstat` for staged and unstaged) to the Git page
+- [x] Core: add the line counts the summary needs (`git diff --numstat` for staged and unstaged) to the Git page
   response if it does not have them; keep `changes` for expanded folders. Core test with a scratch repo.
-- [ ] TUI: rewrite the tab body as summary + folder rows; keyboard cursor and `SideRow` hits over folder rows (and
+- [x] TUI: rewrite the tab body as summary + folder rows; keyboard cursor and `SideRow` hits over folder rows (and
   file rows when expanded); Enter/click expands a folder, Enter on a file opens the diff as today.
-- [ ] NSH: the same in `GitTab`; the row context menu moves to file rows inside an expanded folder.
-- [ ] Shared manifest/strings for the labels (`No changes`, the summary format) so both clients read the same text.
-- [ ] Tests: TUI render/behaviour tests (no changes, mixed changes, many files in one folder, expand/collapse); NSH
-  browser test the same; paired screenshots of the Git tab, including a repo with many branches to show the list is
-  gone.
-- [ ] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`, the Git page notes in
+- [x] NSH: the same in `GitTab`; the row context menu moves to file rows inside an expanded folder.
+- [~] Shared manifest/strings for the labels (`No changes`, the summary format) so both clients read the same text. Not done: the manifest has no string table; the strings are duplicated in both clients and noted in design-language.md.
+- [x] Tests: TUI render/behaviour tests (no changes, mixed changes, many files in one folder, expand/collapse); NSH
+  browser test the same; paired screenshots of the Git tab (not verified: no screenshots taken; the tests assert the branch list is gone).
+- [x] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`, the Git page notes in
   [09-backlog.md](09-backlog.md) 9.2; ledger row if old Nexus listed branches in its Git page.
