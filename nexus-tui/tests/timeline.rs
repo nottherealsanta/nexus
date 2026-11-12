@@ -1788,7 +1788,7 @@ fn reasoning_rows_follow_d07() {
         rows[0]
     );
     assert!(
-        rows[1].starts_with("▸ Thought · encrypted, replayed to the provider"),
+        rows[1].starts_with("◇ Thought · encrypted, replayed to the provider"),
         "{:?}",
         rows[1]
     );
