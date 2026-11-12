@@ -7074,6 +7074,10 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             QUESTION_LOCK.to_owned()
         } else if a.viewed().is_none() {
             "Message to start a new session".to_owned()
+        } else if a.viewed_id().is_some_and(|id| a.is_busy(id)) {
+            "Type a message\u{2026} Enter steer \u{b7} Tab queue \u{b7} Alt+Enter interrupt"
+                .replace('\u{2026}', cx.ell())
+                .replace('\u{b7}', cx.t.structure("separator"))
         } else {
             "Type a message\u{2026}".replace('\u{2026}', cx.ell())
         };

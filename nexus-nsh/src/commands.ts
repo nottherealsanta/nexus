@@ -240,7 +240,7 @@ export function stepTab(step: number) {
   if (next !== ids[at]) void selectSession(next);
 }
 
-export async function sendPrompt(rawText: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" = "send"): Promise<boolean> {
+export async function sendPrompt(rawText: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" | "interrupt" = "send"): Promise<boolean> {
   if (questionLocked()) { toast("info", "Answer the question above"); return false; }
   const source = draftKey();
   const raw = rawText.trim();

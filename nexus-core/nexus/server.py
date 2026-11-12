@@ -53,7 +53,7 @@ are in docs/api.md.
 | POST | /api/session/{id}/directory | `{directory}`; 200 applied or 202 pending while a call runs |
 | GET | /api/session/{id}/worktrees | list the repository's worktrees with branch and working-tree state |
 | POST | /api/session/{id}/worktrees | `{action: "list" or "create" or "delete", path?, branch?, base?}` |
-| POST | /api/session/{id}/prompt | `{text?, images?, mode?}` → 202; `send` is 409 while a turn runs, `steer`/`queue` return an input id |
+| POST | /api/session/{id}/prompt | `{text?, images?, mode?}` → 202; `send` is 409 while a turn runs, `steer`/`queue` return an input id, `interrupt` cancels the turn and runs this first (idle: `send`) |
 | POST | /api/session/{id}/continue | start a turn from the stored context with no new user message → 202 |
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
@@ -1571,7 +1571,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         mutation = getattr(request.state, "mutation", None)
         if runtime.session(p(request, "id")).kind == "manager":
             raise Conflict("The Manager debug session is read-only; type to the Manager in its dropdown.", code="manager_session_read_only")
-        result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), pastes=body.get("pastes"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
+        if body.get("mode") == "interrupt":
+            result = await runtime.interrupt_prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), pastes=body.get("pastes"), mutation=mutation, typed=True)
+        else:
+            result = runtime.prompt(p(request, "id"), str(body.get("text", "")), images=body.get("images"), pastes=body.get("pastes"), mutation=mutation, mode=body.get("mode", "send"), typed=True)
         if mutation is not None:
             result = {**result, "idempotency_key": mutation["key"]}
         return JSONResponse(result, status_code=202)

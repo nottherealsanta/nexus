@@ -200,6 +200,7 @@ pub const WIRED: &[&str] = &[
     "session.send",
     "composer.steer",
     "composer.queue",
+    "composer.interrupt_send",
     "session.export",
     "session.change_directory",
     "session.resources",
@@ -6905,6 +6906,7 @@ impl App {
             "voice.remove_tts" => self.ask_voice_model_remove(VoiceTarget::Tts),
             "session.send" | "composer.steer" => self.send(),
             "composer.queue" => self.send_mode(Some("queue")),
+            "composer.interrupt_send" => self.send_mode(Some("interrupt")),
             "composer.newline" => self.composer().newline(),
             "composer.undo" => self.composer().undo(),
             "composer.redo" => self.composer().redo(),
@@ -11879,6 +11881,12 @@ impl App {
             if !(printable && !WIRED.contains(&cmd.as_str())) {
                 if cmd == "session.send" || cmd == "composer.steer" {
                     return self.send();
+                }
+                if cmd == "composer.interrupt_send" {
+                    if self.composer_ref().has_text() || !self.composer_ref().images.is_empty() {
+                        return self.send_mode(Some("interrupt"));
+                    }
+                    return;
                 }
                 if cmd == "composer.queue" {
                     if self.composer_ref().has_text() || !self.composer_ref().images.is_empty() {
