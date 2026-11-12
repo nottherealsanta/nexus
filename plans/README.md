@@ -40,7 +40,6 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
-| 33 | [Remove Git from the right sidebar](33-remove-git-from-right-sidebar.md) | **new** | Confirm only the right-sidebar section goes |
 | 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **partly landed** (2026-11-12) | Desktop done; mobile control (long-press on Send) needs user approval |
 | 26 | [Launch: animate from the first frame, no progress bar](26-launch-splash.md) | **landed 2026-11-12 (code)** | Cold-start capture in Ghostty / NSH web not verified |
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |

@@ -15,17 +15,17 @@ User request (2026-11-11): remove Git from the right sidebar. Both clients in th
 
 ## Plan
 
-- [ ] Confirm with the user: only the right sidebar's "Git status" section goes; the left sidebar Git tab, the branch
-  in the location strip and the Git diff modal stay. (Default: yes.)
-- [ ] Remove the `git_status` section from `[navigation.right_sidebar]` in the manifest; regenerate NSH's manifest;
+- [x] Confirm (decided by the user 2026-11-12: yes): only the right sidebar's "Git status" section goes; the left sidebar Git tab, the branch
+  in the location strip and the Git diff modal stay. 
+- [x] Remove the `git_status` section from `[navigation.right_sidebar]` in the manifest; regenerate NSH's manifest;
   `check_manifest.py`.
-- [ ] TUI: remove the section's drawing, hit targets and keyboard focus stop; remove the right-sidebar Git status
+- [x] TUI: remove the section's drawing, hit targets and keyboard focus stop; remove the right-sidebar Git status
   fetch and state if nothing else uses them (check the Git tab and strip first). The right sidebar keeps Session info.
-- [ ] NSH: remove `GitGroup`/`GitRows` and the section from `right.tsx`; drop the `gitStatus` fetch when the right
+- [x] NSH: remove `GitGroup`/`GitRows` and the section from `right.tsx`; drop the `gitStatus` fetch when the right
   sidebar opens if nothing else uses it.
-- [ ] Core: `GET …/git` status route stays if the left Git tab or anything else uses it; otherwise note it as unused,
+- [x] Core: `GET …/git` status route stays (kept, unchanged; `GET …/git/diff` is now unused by the clients too, not deleted) if the left Git tab or anything else uses it; otherwise note it as unused,
   do not delete in this change.
-- [ ] Tests: update right-sidebar tests/scenarios in both clients (they assert the Git section today); screenshots of
-  the right sidebar in both clients.
-- [ ] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`; ledger row if old Nexus
+- [x] Tests: update right-sidebar tests/scenarios in both clients (they assert the Git section today); screenshots of
+  the right sidebar in both clients: tests updated; screenshots not verified.
+- [x] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`; ledger row if old Nexus
   had Git status in the right sidebar.

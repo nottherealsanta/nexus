@@ -109,15 +109,6 @@ pub enum SyncMsg {
         limit: u32,
         data: Result<Value, String>,
     },
-    Git {
-        session: String,
-        data: Result<Value, String>,
-    },
-    Diff {
-        session: String,
-        path: String,
-        data: Result<Value, String>,
-    },
     /// A project's own worktrees, used before a session exists.
     ProjectWorktrees {
         project: String,
@@ -209,11 +200,6 @@ pub enum Command {
     /// Refresh live kernels and background bash jobs.
     Resources,
     SkillMcp(String),
-    Git(String),
-    GitDiff {
-        session: String,
-        path: String,
-    },
     Files {
         project: String,
         session: Option<String>,
@@ -313,8 +299,6 @@ struct Ctx {
     project_worktrees: Vec<String>,
     resources: bool,
     skill_mcp: Option<String>,
-    git: Option<String>,
-    git_diff: Option<(String, String)>,
     files: Option<(String, Option<String>, String, bool)>,
     complete: Option<(String, Option<String>, String, u32)>,
     /// The selected session and its newest closed turn, the anchor of
@@ -363,8 +347,6 @@ impl Ctx {
             }
             Command::Resources => self.resources = true,
             Command::SkillMcp(project) => self.skill_mcp = Some(project),
-            Command::Git(session) => self.git = Some(session),
-            Command::GitDiff { session, path } => self.git_diff = Some((session, path)),
             Command::Files {
                 project,
                 session,
@@ -653,8 +635,6 @@ pub async fn run(
         project_worktrees: Vec::new(),
         resources: false,
         skill_mcp: None,
-        git: None,
-        git_diff: None,
         files: None,
         complete: None,
         newest_turn: None,
@@ -822,7 +802,6 @@ pub async fn run(
         spawn_slow_reads(&mut cx, &api);
         load_skill_mcp(&mut cx, &api).await;
         load_files(&mut cx, &api).await;
-        load_git_diff(&mut cx, &api).await;
         let end = stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await;
         // A view is bound to the stream that issued its id: never report the
         // old one while reconnecting. The next `server.connected` sets a new id.
@@ -868,13 +847,6 @@ fn spawn_slow_reads(cx: &mut Ctx, api: &CoreApi) {
             let _ = api.worktrees(&session).await;
         });
     }
-    if let Some(session) = cx.git.take() {
-        let (api, out) = (api.clone(), cx.out.clone());
-        tokio::spawn(async move {
-            let data = api.git_status(&session).await.map_err(|e| e.to_string());
-            let _ = out.send(SyncMsg::Git { session, data });
-        });
-    }
     for project in std::mem::take(&mut cx.project_worktrees) {
         let (api, out) = (api.clone(), cx.out.clone());
         tokio::spawn(async move {
@@ -883,20 +855,6 @@ fn spawn_slow_reads(cx: &mut Ctx, api: &CoreApi) {
                 .await
                 .map_err(|e| e.to_string());
             let _ = out.send(SyncMsg::ProjectWorktrees { project, data });
-        });
-    }
-}
-
-async fn load_git_diff(cx: &mut Ctx, api: &CoreApi) {
-    if let Some((session, path)) = cx.git_diff.take() {
-        let data = api
-            .git_diff(&session, &path)
-            .await
-            .map_err(|e| e.to_string());
-        cx.send(SyncMsg::Diff {
-            session,
-            path,
-            data,
         });
     }
 }
@@ -1484,7 +1442,7 @@ async fn stream(
                     }
                     Some(c) => {
                         let view_changed = matches!(&c, Command::View(_));
-                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Resources | Command::SkillMcp(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
+                        let was_catalog = matches!(c, Command::Config | Command::Context(_) | Command::DraftContext(_) | Command::PatchConfig { .. } | Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Resources | Command::SkillMcp(_) | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         if view_changed {
@@ -1519,7 +1477,6 @@ async fn stream(
                         load_skill_mcp(cx, api).await;
                         load_files(cx, api).await;
                         load_completion(cx, api).await;
-                        load_git_diff(cx, api).await;
                         if !was_catalog {
                             if let Some(cause) = cx.resync.take() {
                                 return StreamEnd::Resync { cause, progressed };

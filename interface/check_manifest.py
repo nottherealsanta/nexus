@@ -14,7 +14,7 @@ SECTION_ORDER = [
     "context", "dictation", "manager", "keybindings", "notifications", "about",
 ]
 TABS = ["sessions", "files", "git"]
-RIGHT = ["session_info", "git_status"]
+RIGHT = ["session_info"]
 ROW_KINDS = {"choice", "toggle", "number", "text", "list", "action", "info", "keymap"}
 SCOPES = {"core", "client"}
 CLIENTS = {"both", "tui", "nsh"}

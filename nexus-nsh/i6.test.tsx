@@ -124,19 +124,4 @@ describe("right sidebar (I6)", () => {
     expect(app.texts().includes("not reported")).toBe(true);
     expect(app.shows("id:session-context")).toBe(false);
   });
-
-  test("Git shows the branch, groups with counts and one row per file", async () => {
-    const git = { branch: "main", ahead: 1, behind: 0, changes: [
-      { path: "src/staged.py", status: "M ", staged: true, unstaged: false, added: 3, removed: 1 },
-      { path: "README.md", status: " M", staged: false, unstaged: true, added: 2, removed: 0 },
-      { path: "tests/new.py", status: "??", staged: false, unstaged: true, added: 0, removed: 0 },
-    ] };
-    const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")], { "GET */api/session/ses_1/git": { body: git } }), width: 1440, height: 900, platform: "web" });
-    await app.waitFor("text:Refactor loader");
-    await app.press("id:session-ses_1");
-    await app.press("id:toggle-right");
-    await app.waitFor("id:git-group-staged");
-    expect(app.count("id:git-row")).toBe(3);
-    for (const t of ["⌥ main", "↑1", "Staged", "Unstaged", "Untracked", "src/staged.py", "+3", "−1"]) expect(app.texts().includes(t)).toBe(true);
-  });
 });

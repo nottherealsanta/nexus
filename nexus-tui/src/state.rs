@@ -146,7 +146,6 @@ pub struct AppState {
     /// Project/session the tree listings belong to, so a late response for an
     /// old selection is ignored.
     pub file_scope: Option<(String, Option<String>)>,
-    pub git: Option<(String, Result<serde_json::Value, String>)>,
     pub project_git: Option<(String, Result<serde_json::Value, String>)>,
     pub file: Option<FileResponse>,
     /// Last diff read: session, path and the `/git/diff` body.
@@ -182,7 +181,6 @@ impl Default for AppState {
             resources_error: None,
             file_dirs: std::collections::BTreeMap::new(),
             file_scope: None,
-            git: None,
             project_git: None,
             diff: None,
             file: None,
@@ -256,12 +254,6 @@ impl AppState {
             }
             // The app owns completion replies.
             SyncMsg::Completion { .. } => {}
-            SyncMsg::Git { session, data } => self.git = Some((session, data)),
-            SyncMsg::Diff {
-                session,
-                path,
-                data,
-            } => self.diff = Some((session, path, data)),
             SyncMsg::ProjectWorktrees { project, data } => match data {
                 Ok(listing) => {
                     self.project_worktrees.insert(project, listing);
