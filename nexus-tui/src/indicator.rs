@@ -44,6 +44,10 @@ pub enum IndicatorState {
     Speaking,
     /// The exchange is over: fades out in `manager.idle`.
     Idle,
+    /// The voice is disconnected: a frozen, quiet wave. Nothing moves, no frames are asked for.
+    Still,
+    /// Connected with the microphone muted: a frozen flat line.
+    Muted,
 }
 
 impl IndicatorState {
@@ -52,6 +56,7 @@ impl IndicatorState {
         match self {
             IndicatorState::Listening => Some("Listening"),
             IndicatorState::Thinking => Some("Thinking"),
+            IndicatorState::Muted => Some("Muted"),
             _ => None,
         }
     }
@@ -59,6 +64,7 @@ impl IndicatorState {
     /// How fast the waves travel, in radians of drift per second.
     fn speed(self) -> f32 {
         match self {
+            IndicatorState::Still | IndicatorState::Muted => 0.0,
             IndicatorState::Idle => 1.1,
             IndicatorState::Thinking => 2.6,
             IndicatorState::Listening => 3.4,
@@ -69,7 +75,8 @@ impl IndicatorState {
     /// How bright the dots are, 0 to 1.
     fn brightness(self) -> f32 {
         match self {
-            IndicatorState::Idle => 0.55,
+            IndicatorState::Still => 0.4,
+            IndicatorState::Idle | IndicatorState::Muted => 0.55,
             IndicatorState::Thinking => 0.68,
             IndicatorState::Listening => 0.84,
             IndicatorState::Speaking => 1.0,
@@ -115,14 +122,22 @@ impl Indicator {
         self.presence > 0.003
     }
 
+    /// Does this state stand still once it has been reached?
+    fn at_rest(state: IndicatorState) -> bool {
+        matches!(
+            state,
+            IndicatorState::Idle | IndicatorState::Still | IndicatorState::Muted
+        )
+    }
+
     /// Still moving toward `target`? (The frame clock runs only then.)
     pub fn moving(&self, target: Option<IndicatorState>) -> bool {
         match target {
             // A call left open in the background is still: the header shows a
             // still field, and no frame clock stays awake for it.
-            Some(IndicatorState::Idle) => {
+            Some(rest) if Self::at_rest(rest) => {
                 self.visible()
-                    && (self.to != IndicatorState::Idle
+                    && (self.to != rest
                         || self.mix < 1.0
                         || self.presence < 1.0
                         || self.level > 0.01)
@@ -289,8 +304,10 @@ pub fn bounds_sized(area: Rect, at: Anchor, width: u16, height: u16) -> Rect {
 /// The glyph for a state where the field cannot be drawn (ASCII terminals).
 pub fn glyph(state: IndicatorState, ascii: bool) -> &'static str {
     match (state, ascii) {
-        (IndicatorState::Idle, false) => "·",
-        (IndicatorState::Idle, true) => ".",
+        (IndicatorState::Idle | IndicatorState::Still, false) => "·",
+        (IndicatorState::Idle | IndicatorState::Still, true) => ".",
+        (IndicatorState::Muted, false) => "–",
+        (IndicatorState::Muted, true) => "-",
         (IndicatorState::Thinking, false) => "○",
         (IndicatorState::Thinking, true) => "o",
         (_, false) => "◉",
@@ -305,6 +322,7 @@ pub fn braille_cell(t: f32, state: IndicatorState, level: f32, index: usize) -> 
     // The speaker's waves follow the measured voice: silence is a flat line, loud is tall.
     let amp = match state {
         IndicatorState::Listening | IndicatorState::Speaking => 0.12 + 0.88 * level,
+        IndicatorState::Muted => 0.0,
         _ => 0.78,
     };
     let mut bits = 0u8;
@@ -362,14 +380,13 @@ pub fn paint_sized(
     let base = wave_color(theme, indicator);
     // Indexed and mono tiers cannot blend a brightness; they still draw the field,
     // in the state's role token (the speaker's colour, gray otherwise), with idle dimmed.
-    let flat =
-        theme
-            .fg(state_token(state))
-            .add_modifier(if matches!(state, IndicatorState::Idle) {
-                Modifier::DIM
-            } else {
-                Modifier::empty()
-            });
+    let flat = theme.fg(state_token(state)).add_modifier(
+        if matches!(state, IndicatorState::Idle | IndicatorState::Still) {
+            Modifier::DIM
+        } else {
+            Modifier::empty()
+        },
+    );
     for x in zone.x..zone.right() {
         let at_cell = &mut buf[(x, y)];
         let dot = braille_cell(indicator.t, state, indicator.level, usize::from(x - zone.x));
@@ -659,5 +676,41 @@ mod tests {
             field(IndicatorState::Thinking, 0.0),
             field(IndicatorState::Thinking, 1.0)
         );
+    }
+
+    #[test]
+    fn still_and_muted_marks_never_ask_for_frames_and_do_not_drift() {
+        let mut ind = Indicator::default();
+        ind.pin(IndicatorState::Still, 0.0);
+        assert!(!ind.moving(Some(IndicatorState::Still)));
+        ind.pin(IndicatorState::Muted, 0.0);
+        assert!(!ind.moving(Some(IndicatorState::Muted)));
+        for state in [IndicatorState::Still, IndicatorState::Muted] {
+            for i in 0..WIDTH as usize {
+                assert_eq!(
+                    braille_cell(0.0, state, 0.0, i),
+                    braille_cell(7.3, state, 0.9, i)
+                );
+            }
+        }
+        // Muted is a flat line: every cell is the same.
+        let first = braille_cell(1.0, IndicatorState::Muted, 0.0, 0);
+        for i in 1..WIDTH as usize {
+            assert_eq!(braille_cell(1.0, IndicatorState::Muted, 0.0, i), first);
+        }
+    }
+
+    #[test]
+    fn colour_follows_the_speaker_and_the_rest_is_gray() {
+        assert_eq!(state_token(IndicatorState::Listening), "manager.listening");
+        assert_eq!(state_token(IndicatorState::Speaking), "manager.speaking");
+        for s in [
+            IndicatorState::Idle,
+            IndicatorState::Thinking,
+            IndicatorState::Still,
+            IndicatorState::Muted,
+        ] {
+            assert_eq!(state_token(s), "text.muted");
+        }
     }
 }

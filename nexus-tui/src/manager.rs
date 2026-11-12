@@ -1892,6 +1892,10 @@ impl App {
         if m.starting || (m.live_call && !crate::live::is_open()) {
             return Some(IndicatorState::Thinking);
         }
+        // Waves only while the voice is connected: a disconnected voice is a still, quiet mark.
+        if !m.voice_connected() {
+            return (m.call.is_some() || m.dropdown_open).then_some(IndicatorState::Still);
+        }
         if m.call.is_none() && m.dropdown_open {
             return Some(IndicatorState::Idle);
         }
@@ -1903,6 +1907,9 @@ impl App {
             }
             if levels.is_some() && m.phase == CallPhase::Idle && !m.mic_muted {
                 return Some(IndicatorState::Listening);
+            }
+            if levels.is_some() && m.phase == CallPhase::Idle && m.mic_muted {
+                return Some(IndicatorState::Muted);
             }
         }
         if m.listening() {
@@ -2505,6 +2512,8 @@ pub fn parse_pin(spec: &str) -> Option<Option<(IndicatorState, f32)>> {
         "thinking" => IndicatorState::Thinking,
         "speaking" => IndicatorState::Speaking,
         "idle" => IndicatorState::Idle,
+        "still" => IndicatorState::Still,
+        "muted" => IndicatorState::Muted,
         _ => return None,
     };
     Some(Some((state, level.parse::<f32>().ok()?.clamp(0.0, 1.0))))

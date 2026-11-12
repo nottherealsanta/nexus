@@ -43,7 +43,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 33 | [Remove Git from the right sidebar](33-remove-git-from-right-sidebar.md) | **new** | Confirm only the right-sidebar section goes |
 | 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **partly landed** (2026-11-12) | Desktop done; mobile control (long-press on Send) needs user approval |
 | 26 | [Launch: animate from the first frame, no progress bar](26-launch-splash.md) | **landed 2026-11-12 (code)** | Cold-start capture in Ghostty / NSH web not verified |
-| 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
+| 28 | [Manager indicator and voice control](28-manager-indicator.md) | **mostly landed** | Screenshots of the four states; verify NSH indicator box on each target |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
 | 5 | [Mobile client and the NSH look](05-mobile-and-design.md) | 5.1 implemented, unverified on device; 5.2 mobile redesign and 5.3 web/macOS look **new** | Answer the open questions in 5.2; audit screenshots for 5.3 |
 | 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Offline work done 11-12**: isolation test, `/api/state` `worker` fix, docs, D2 recorded, paired captures | Confirm Z1/Z2; real end-to-end run (approval); vendor terms |

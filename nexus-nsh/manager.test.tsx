@@ -741,3 +741,24 @@ test("scripted day applies the shared cards and dismissal", async () => {
   expect(sent.find(s => s.path === "/api/manager/card/dismiss")?.body.card_id).toBe(day.approval_card.id);
   await reset();
 });
+
+describe("indicator states: connected waves, still marks, speaker colour", () => {
+  test("a disconnected voice and a muted microphone are still marks that never drift", () => {
+    for (const mode of ["still", "muted"] as const) {
+      expect(waveSpeed(mode)).toBe(0);
+      expect(brailleField(0, mode, 0)).toBe(brailleField(9.7, mode, 0.9));
+    }
+    expect(brailleField(0, "muted", 0)).toBe(brailleCell(0, "muted", 0, 0).repeat(BRAILLE_WIDTH));
+    expect(waveSpeed("settling")).toBeGreaterThan(0);
+    expect(waveBrightness("still")).toBeLessThan(waveBrightness("muted"));
+  });
+  test("colour follows the speaker; every other state is the muted gray", () => {
+    for (const scheme of ["dark", "light"] as const) {
+      const listeningColor = waveColor("listening", "listening", 1, scheme), speakingColor = waveColor("speaking", "speaking", 1, scheme);
+      expect(listeningColor).not.toBe(speakingColor);
+      const gray = waveColor("settling", "settling", 1, scheme);
+      for (const mode of ["thinking", "still", "muted"] as const) expect(waveColor(mode, mode, 1, scheme)).toBe(gray);
+      expect(gray).not.toBe(listeningColor); expect(gray).not.toBe(speakingColor);
+    }
+  });
+});

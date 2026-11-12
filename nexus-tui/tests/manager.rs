@@ -887,7 +887,10 @@ fn default_voice_starts_on_open_and_can_be_disabled_while_connecting() {
     let shown = text(&mut a);
     assert!(shown.contains("Connect") && !shown.contains("Disconnect"));
     assert!(shown.contains("Mute"));
-    assert!(a.hits.rect_of(&Target::ManagerMute).is_none(), "nothing to mute until the voice is connected");
+    assert!(
+        a.hits.rect_of(&Target::ManagerMute).is_none(),
+        "nothing to mute until the voice is connected"
+    );
     assert!(!shown.lines().next().unwrap().contains("Manager"));
     assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
     assert!(!shown.contains('┌'));
@@ -899,7 +902,10 @@ fn voice_has_connect_and_mute_buttons() {
     a.ui.manager.silent = true;
     a.manager_execute("manager.header");
     let shown = text(&mut a);
-    assert!(shown.contains("Disconnect") && shown.contains("Mute"), "{shown}");
+    assert!(
+        shown.contains("Disconnect") && shown.contains("Mute"),
+        "{shown}"
+    );
     assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
     // Muting needs a live voice: with none the command does nothing.
     a.manager_execute("manager.mute_toggle");
@@ -919,6 +925,25 @@ fn voice_has_connect_and_mute_buttons() {
     a.manager_execute("manager.audio_toggle");
     assert!(!a.ui.manager.mic_muted && !a.ui.manager.live_call);
     assert!(text(&mut a).contains("Connect"));
+}
+
+#[test]
+fn indicator_is_still_unless_the_voice_is_connected() {
+    use nexus_tui::indicator::IndicatorState as S;
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
+    a.manager_execute("manager.header");
+    let now = std::time::Instant::now();
+    // Connected (the default) and quiet: the quiet wave; disconnected: a still mark, no frames.
+    assert!(a.ui.manager.voice_connected());
+    a.ui.manager.starting = false;
+    assert_eq!(a.indicator_target(now), Some(S::Idle));
+    a.manager_execute("manager.audio_toggle");
+    a.ui.manager.starting = false;
+    assert!(!a.ui.manager.voice_connected());
+    assert_eq!(a.indicator_target(now), Some(S::Still));
+    a.manager_frame(now);
+    a.manager_frame(now + std::time::Duration::from_secs(2));
+    assert!(!a.manager_animating(now + std::time::Duration::from_secs(2)));
 }
 
 #[test]
