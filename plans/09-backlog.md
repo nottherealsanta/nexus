@@ -55,6 +55,8 @@ numbered section above when it is started.
 
 ## 9.2 File explorer, editor and Git page (old 4.1)
 
+**11-12 (plan 40):** the Git tab is now a summary (counts, top-level folders, expandable files) for the active worktree only; the branch list is gone from both clients (Core still returns `branches`, unused by the tabs).
+
 **11-08 follow-up:** initial paired Git UI and one-mode editor are not release-complete. The twelve recorded TUI shell/editor failures are resolved; the full TUI suite passes (857 passed, 10 ignored). See [test cleanup](../reports/test-cleanup-2026-11-08.md). Matching source/Find captures were inspected in [editor parity](../reports/test-editor-parity/README.md); full interaction/performance/visual parity gates remain separate from automated-suite cleanup. Existing unapproved gaps remain open: TUI horizontal scrolling versus NSH soft wrapping, Find below versus above the source, header controls/status wording, and active-match distinction.
 
 Desktop and web only; never mobile. Decisions: the editor stays small (highlighting, undo/redo, no tabs, language servers or Vim mode); Git scope is worktrees, changes and branches with actions (no merge, stash, rebase, conflict UI or hunk staging); both are silent to the model; no new auth. Files and diffs open in a centred modal.

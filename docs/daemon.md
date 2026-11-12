@@ -776,6 +776,28 @@ and no pid or an unreadable `ps` is `unknown`. The recovery notice and the closi
 survivor is reported as still running, unsupervised and not stopped; the retained
 output is lost. Recovery never signals a process, and never kills from a pid alone.
 
+## Shared Rust build folder for session workspaces
+
+`nexus/cargo_env.py`. Every process Core starts in a workspace (foreground and background
+`bash`, composer `!` commands, integrated terminals) gets
+`CARGO_BUILD_BUILD_DIR=<cargo home>/build/nexus-<12 hex of the Git common dir>` when the
+workspace is inside a Git repository. The main checkout and all its linked worktrees share one
+common dir, so a new worktree reuses the dependencies the others compiled; two unrelated
+repositories never share. Cargo puts only intermediate artifacts there; final binaries stay in
+each worktree's `target/`. The common dir is found by reading `.git` files (no `git`
+subprocess) and cached per path; Code kernels start with an empty environment and are
+unaffected.
+
+Nothing is added when the user already chose: `CARGO_BUILD_BUILD_DIR` or `CARGO_TARGET_DIR`
+in the daemon's environment, a `build-dir` line in any `.cargo/config.toml`/`.cargo/config`
+from the workspace up to `/` or in `$CARGO_HOME`, or `tools.shared_rust_builds = false` in
+`config.toml` (default `true`; config file only, no settings-screen row). The variable is
+process environment, not model context, so nothing appears in the timeline.
+
+Nothing removes these folders. `nexus doctor` shows a `rust builds` row with their count and
+total size and the command to clear them (`rm -rf ~/.cargo/build/nexus-*`; the next build
+recompiles). Builds in two worktrees at once wait on Cargo's lock for the shared folder.
+
 ## Workspace controls
 
 The daemon owns the three workspace control tools (`nexus/workspace.py`): the

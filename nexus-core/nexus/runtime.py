@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
-from . import artifacts, oneshot, permissions, worktrees
+from . import artifacts, cargo_env, oneshot, permissions, worktrees
 from . import extensions as extension_files
 from . import mcp as mcp_files
 from . import questions as question_contract
@@ -1524,7 +1524,7 @@ class Runtime:
         if not command.strip():
             raise ValueError("Type a command after ! to run it with bash")
         proc = await asyncio.create_subprocess_exec(
-            "/bin/bash", "-c", command, cwd=session.directory, stdin=asyncio.subprocess.DEVNULL,
+            "/bin/bash", "-c", command, cwd=session.directory, env=cargo_env.process_env(session.directory), stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -3170,6 +3170,43 @@ class Runtime:
         if typed:
             self.store.record_prompt(session_id, Message("user", (*text_parts, *labelled_parts)))
         return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
+
+    async def interrupt_prompt(self, session_id: str, text: str, *, images: list[dict[str, Any]] | None = None,
+                               pastes: list[dict[str, Any]] | None = None, mutation: dict[str, Any] | None = None,
+                               typed: bool = False, via: str | None = None) -> dict[str, Any]:
+        """Interrupt the running turn (as Esc does) and start a turn with this message, which runs first.
+
+        Pending steers and queued messages stay and run after it. Idle, this is `send`. Checked before
+        anything is cancelled, so a refused message never costs the user their running turn."""
+        session = self.session(session_id)
+        if session_id in self.closing_sessions:
+            raise Conflict("session is being deleted")
+        if session_id not in self.turns:
+            return self.prompt(session_id, text, images=images, pastes=pastes, mutation=mutation, mode="send",
+                               typed=typed, via=via)
+        if session.archived:
+            raise Conflict("cannot add input to an archived session")
+        if not text.strip() and not images:
+            raise ValueError("text or images must not be empty")
+        if self._worker_ref(session):
+            raise Conflict("ZMX turns cannot be interrupted and replaced; queue the message instead")
+        # Hold first: if the turn ends by itself while we cancel, the queue must not start before this message.
+        self.inputs.hold(session_id, True)
+        await self.interrupt(session_id)
+        try:
+            if session_id in self.turns:  # something else (a notice) started a turn in the gap
+                await self.interrupt(session_id)
+            result = self.prompt(session_id, text, images=images, pastes=pastes, mutation=mutation, mode="send",
+                                 typed=typed, via=via)
+        except BaseException:
+            if self.inputs.list(session_id):
+                self.bus.publish("input.held", {"session_id": session_id, "held": True}, session_id=session_id)
+            raise
+        # The new turn is running: the queue now waits for it instead of for the user.
+        if self.inputs.held(session_id):
+            self.inputs.hold(session_id, False)
+            self.bus.publish("input.held", {"session_id": session_id, "held": False}, session_id=session_id)
+        return {**result, "mode": "interrupt", "interrupted": True}
 
     def _start_input(self, session_id: str, item: dict[str, Any]) -> dict[str, Any]:
         session = self.session(session_id)

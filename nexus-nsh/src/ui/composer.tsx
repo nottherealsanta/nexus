@@ -2,7 +2,7 @@ import { Image, Scroll, Text, View, computed, effect, keyboardFrame, keymap, saf
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import { compactApproval } from "../mobile";
@@ -169,7 +169,7 @@ function EditableComposer() {
   const hasText = computed(() => text().trim().length > 0);
   const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (hasText() || images().length > 0);
   const canDictate = () => live() && !ses()?.archived && !questionPending();
-  const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send", resumed = false) => {
+  const send = async (mode: "send" | "steer" | "queue" | "interrupt" = busy() ? "steer" : "send", resumed = false) => {
     const t = text().trim();
     // The question lock wins over a slash still in the draft; offline navigation stays available otherwise.
     if (t && !images().length && !questionPending() && runSlashCommand(t)) {
@@ -292,6 +292,26 @@ function EditableComposer() {
     pasteDrafts.update((d) => ({ ...d, [target]: [...(d[target] ?? []), entry] }));
     insertAtCaret(entry.marker);
   };
+  // Ctrl+V (and the palette's "Paste"): image if the clipboard has one, else text, else a toast.
+  pasteClipboard.fn = async () => {
+    if (reason()) return;
+    const empty = () => toast("info", "The clipboard is empty");
+    try {
+      const items = (await navigator.clipboard.read?.()) ?? [];
+      for (const item of items) {
+        const type = item.types.find((t: string) => t.startsWith("image/"));
+        if (type) { const blob = await item.getType(type); void pasteImages([new File([blob], "clipboard.png", { type })]); return; }
+      }
+      for (const item of items) {
+        if (item.types.includes("text/plain")) { const t = await (await item.getType("text/plain")).text(); if (t) { pasteText(t); return; } }
+      }
+      if (items.length) { empty(); return; }
+    } catch { /* read() may be refused or missing; readText is the fallback */ }
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) pasteText(t); else empty();
+    } catch { toast("error", "Could not read the clipboard; use the platform paste shortcut"); }
+  };
   // `viewed()` changes on every model bump; reload only when the project or the viewed session changes.
   let historyKey = "";
   effect(() => {
@@ -329,7 +349,11 @@ function EditableComposer() {
   });
   effect(() => {
     if (!focused() || !busy() || !canSend() || open()) return;
-    return bindOpenKeys({ tab: () => { void send("queue"); } });
+    // Alt+Enter (Option+Enter on macOS): cancel the running turn and run this message first (plan 25).
+    return bindOpenKeys({
+      tab: () => { void send("queue"); },
+      [toKeystroke(byId.get("composer.interrupt_send")?.keys?.nsh ?? "alt+enter")]: () => { void send("interrupt"); },
+    });
   });
   // Shift+Tab cycles the composer's eligible agents, wrapping. A picker, modal, inline edit,
   // completion list or focused terminal owns the keys instead; an existing session still asks
@@ -453,7 +477,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue" : "Type a message…")}
+            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
             readonly={!live() || questionPending()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }

@@ -26,7 +26,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"effort": "", "agent": "", "permission": "allow"},
     "agents": {"models": {}, "fallbacks": {}, "efforts": {}},
     "zmx": {"claude_backend": "sdk", "antigravity": False},
-    "tools": {"disabled": [], "permission": {}},
+    "tools": {"disabled": [], "permission": {}, "shared_rust_builds": True},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
     "usage": {"refresh_minutes": 10},
@@ -57,6 +57,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "defaults.agent": {"type": "string"},
     "defaults.permission": {"type": "string", "enum": ["allow", "ask"]},
     "tools.disabled": {"type": "array", "items": {"type": "string"}},
+    "tools.shared_rust_builds": {"type": "boolean", "description": "Rust builds in every worktree of a repository share one intermediate build folder under ~/.cargo/build (CARGO_BUILD_BUILD_DIR); skipped when you set your own build or target dir"},
     "tools.permission": {"type": "object", "description": "rule = allow | ask | deny, e.g. \"bash(git push*)\" = \"deny\"; "
                          "deny always wins, otherwise the last matching rule decides"},
     "context.handoff_percent": {"type": "integer", "minimum": 0, "maximum": 100,
@@ -183,6 +184,8 @@ def _valid(section: str, key: str, value: Any) -> bool:
     if section == "tools" and key == "permission":
         from .permissions import parse_rules
         return isinstance(value, dict) and not parse_rules(_plain(value))[1]
+    if section == "tools" and key == "shared_rust_builds":
+        return isinstance(value, bool)
     if section == "tools" and key == "disabled":
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             return False

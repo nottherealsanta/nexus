@@ -184,9 +184,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   the left only at 100-119, and below 100 drawers of 34 / 36 cells over the scrim with a header
   of toggles, status and a left-truncated breadcrumb. The empty and connecting screens carry the
   `_/` N splash logo in the accent colour (bold in mono), one block centred above the title.
-  The launch splash uses the same logo in `text.primary` (white in the dark theme) above a
-  30-segment milestone bar, its percentage and the next step; the bar follows the five startup
-  milestones, never the clock.
+  The launch splash uses the same logo in `text.primary` (white in the dark theme) and is
+  animated from the first frame (ambient field, intro particles, a light sweep across the logo while
+  Core starts); there is no progress bar, percentage or step name. After 5 s a quiet
+  "Starting Nexus Core…" line shows under it.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and
@@ -194,3 +195,11 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 
 This is an implementation direction, not visual sign-off. See `review.md` for
 captured evidence and open review items.
+
+## Git tab
+
+The left Git tab (both clients, desktop and web only) shows the active worktree's changes as a summary:
+`folder · branch`, `N files changed · +A −D`, `S staged · U unstaged · T untracked`, then one collapsed row per
+top-level folder with a file count (`▸ src/  2`; `./` holds root files); expanding shows the file rows. Empty state
+is one muted `No changes` line. No branch list. The strings are in both clients' code (the manifest has no string
+table).

@@ -24,6 +24,7 @@ from typing import Any
 
 import pyte
 
+from . import cargo_env
 from .runtime import Conflict, NotFound
 
 MAX_TERMINALS = 16
@@ -150,6 +151,7 @@ class Terminal:
             self._winsize(rows, cols)
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
+            env.update(cargo_env.extra_env(workspace))
             shell = env.get("SHELL") or "/bin/sh"
             child = Path(__file__).with_name("_terminal_child.py")
             argv = [sys.executable, "-I", str(child), shell]

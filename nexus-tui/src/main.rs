@@ -211,7 +211,7 @@ struct Interactive {
     commands: mpsc::UnboundedSender<sync::Command>,
     home: PathBuf,
     done_tx: mpsc::UnboundedSender<ActionDone>,
-    image_tx: mpsc::UnboundedSender<(String, Result<Option<nexus_tui::images::Image>, String>)>,
+    image_tx: mpsc::UnboundedSender<(String, Result<nexus_tui::images::Clip, String>)>,
     capture_tx: mpsc::UnboundedSender<nexus_tui::dictation::CaptureEvent>,
     capture: Option<nexus_tui::dictation::CaptureHandle>,
     loading_cue: Option<tokio::task::JoinHandle<()>>,
@@ -370,7 +370,7 @@ impl Interactive {
                 Effect::PasteImage(key) => {
                     let tx = self.image_tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send((key, nexus_tui::images::clipboard().await));
+                        let _ = tx.send((key, nexus_tui::images::clipboard_any().await));
                     });
                 }
                 Effect::Copy(text) => {
@@ -471,9 +471,9 @@ impl Interactive {
     fn apply_image(
         &mut self,
         key: String,
-        image: Result<Option<nexus_tui::images::Image>, String>,
+        image: Result<nexus_tui::images::Clip, String>,
     ) -> std::io::Result<Applied> {
-        self.app.apply_image_paste(key, image);
+        self.app.apply_clipboard_paste(key, image);
         let mut applied = self.settle()?;
         applied.dirty = true;
         Ok(applied)
@@ -540,7 +540,7 @@ enum Wake {
     Terminal(Option<nexus_tui::terminal_panel::TerminalEvent>),
     Input(Option<Event>),
     Sync(Option<SyncMsg>),
-    Image(Option<(String, Result<Option<nexus_tui::images::Image>, String>)>),
+    Image(Option<(String, Result<nexus_tui::images::Clip, String>)>),
     Done(Option<Box<ActionDone>>),
     Capture(Option<nexus_tui::dictation::CaptureEvent>),
     Splash,
@@ -616,7 +616,7 @@ async fn run(
     let mut handle = sync::spawn(cfg);
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
     let (image_tx, mut image_rx) =
-        mpsc::unbounded_channel::<(String, Result<Option<nexus_tui::images::Image>, String>)>();
+        mpsc::unbounded_channel::<(String, Result<nexus_tui::images::Clip, String>)>();
     let (capture_tx, mut capture_rx) =
         mpsc::unbounded_channel::<nexus_tui::dictation::CaptureEvent>();
     let (terminal_tx, mut terminal_rx) = mpsc::unbounded_channel();

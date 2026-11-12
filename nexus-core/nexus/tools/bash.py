@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .. import cargo_env
 from ..llmhub.types import ToolSpec
 from .base import Tool, ToolContext, ToolError, clip
 
@@ -63,7 +64,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
             "/bin/bash", "-c", PIPESTATUS_TRAP + command,
             cwd=ctx.workspace, stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True, env={**os.environ, "NEXUS_PIPESTATUS_FILE": status_file},
+            start_new_session=True,
+            env={**os.environ, **cargo_env.extra_env(ctx.workspace), "NEXUS_PIPESTATUS_FILE": status_file},
         )
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)

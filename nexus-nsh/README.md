@@ -27,6 +27,8 @@ or splices change content above it; the app does not apply a second height
 correction. Following the latest message and restoring a session's position remain
 app-controlled. Deferred follow commands are scoped to the session that queued them.
 
+Alt+Enter (Option+Enter on macOS) in the busy composer is `composer.interrupt_send`: it cancels the turn and sends the draft first. Allow for this session on an approval card moved from `alt+enter` to `cmd+shift+enter`. Mobile has no such control.
+
 **Open inspector** stays inside NSH, using the same authenticated transport as the
 session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
 same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,
@@ -184,9 +186,8 @@ settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. Each project has its own open
 tabs and last viewed session or new-session screen, held locally while the client runs.
-Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, a 30-segment
-milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), its percentage and the
-next step. It fades into the first live frame and is dismissed when a start fails.
+Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, animated from the first
+frame by a light sweep (no progress bar, percentage or step name; a quiet "Starting Nexus Core…" line after 5 s). It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
 context, Markdown (prose uses the 16/24 default in Google Sans; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is Monaspace at 12.5/20 on the panel), and three detail levels: finished activity groups collapse in low and medium,
@@ -478,6 +479,12 @@ Source control shows the numbered source, returning to the preview on a second p
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
 Esc closes the bar before the panel. Links in assistant prose, Markdown previews,
 new-session prose and context details open in the browser.
+
+The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a
+`folder · branch` line, then `N files changed · +A −D` and `S staged · U unstaged · T untracked`, then the changes
+grouped by top-level folder (`src/  2`, `./` for root files), collapsed by default; A click expands a folder
+to its file rows, which keep stage/unstage/discard and open the diff. With nothing changed it reads `No changes`.
+There is no branch list (switch from the worktree picker). Line counts come from Core's per-change `added`/`removed`.
 
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the file actions and live watcher, the Git workflow, worktree controls,
@@ -786,7 +793,10 @@ that removes its saved data and does not supply the missing capture record.
 
 ## Images and context notes
 
-Paste images into the composer using the platform paste shortcut. The draft
+Paste images or text into the composer using the platform paste shortcut. **Ctrl+V** is also bound on Apple
+platforms (where browsers paste with Cmd+V), matching the TUI: it reads the clipboard once, image first, else text
+(long text collapses into the paste preview), else the toast "The clipboard is empty"; Ctrl+V elsewhere is already
+the platform key. The draft
 shows a square thumbnail for each image above its input, with the muted filename
 above the thumbnail and an individual Remove image button. Image-only messages
 are supported; after sending, the same square thumbnail sits above the user

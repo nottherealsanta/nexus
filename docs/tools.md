@@ -459,6 +459,9 @@ Run a command with `/bin/bash -c` in the workspace.
 * Inside a `code` cell, the cell's own `timeout_s` still bounds a foreground
   call (and kills it); a background job outlives the cell.
 
+
+In a Git repository, bash commands (foreground and background) get `CARGO_BUILD_BUILD_DIR` so Rust builds in all worktrees of a repository share one intermediate build folder; see [daemon.md](daemon.md#shared-rust-build-folder-for-session-workspaces).
+
 ## Background bash jobs
 
 A background job runs in the caller's directory in its own process group,

@@ -2463,6 +2463,42 @@ fn pasted_images_get_distinct_markers_and_removal_clears_the_last() {
 }
 
 #[test]
+fn alt_enter_while_busy_sends_with_interrupt_mode_and_idle_does_not() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    typing(&mut a, "no turn running");
+    press(&mut a, &["alt+enter"]);
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, .. }) if mode == "interrupt")));
+    a.composer().take();
+    a.effects.clear();
+    busy(&mut a);
+    typing(&mut a, "stop and do this");
+    press(&mut a, &["alt+enter"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, text, .. }) if mode == "interrupt" && text == "stop and do this")));
+}
+
+#[test]
+fn clipboard_paste_takes_image_then_text_then_reports_empty() {
+    use nexus_tui::images::Clip;
+    let mut a = app();
+    let image = nexus_tui::images::Image::from_png(
+        "clipboard.png".into(),
+        include_bytes!("../fixtures/clipboard.png"),
+    )
+    .unwrap();
+    a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Image(image)));
+    assert_eq!(a.composer_ref().text(), "[Image A]");
+    a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Text(" hello".into())));
+    assert_eq!(a.composer_ref().text(), "[Image A] hello");
+    a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Text("word ".repeat(400))));
+    assert!(a.composer_ref().text().contains("[Pasted"), "long text collapses");
+    let toasts = a.ui.alerts.toasts.len();
+    a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Empty));
+    assert_eq!(a.ui.alerts.toasts.len(), toasts + 1);
+    assert!(format!("{:?}", a.ui.alerts.toasts.last()).contains("The clipboard is empty"));
+}
+
+#[test]
 fn busy_composer_steers_queues_and_completion_wins_tab() {
     use nexus_tui::actions::ApiCall;
     let mut a = app();

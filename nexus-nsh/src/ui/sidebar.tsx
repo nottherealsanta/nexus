@@ -9,7 +9,7 @@ import { availability, byId, commands, keyLabel, moveProject, newSession, run, s
 import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
-import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, openGitDiff } from "../store";
+import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, openGitDiff, gitOpen, toggleGitFolder, gitSummary, gitFolders, gitGroups, inGitGroup } from "../store";
 import { fileRows } from "../file-tree";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
@@ -76,22 +76,27 @@ export function LeftSidebar(p: { drawer?: boolean }) {
 function GitTab() {
   effect(() => { const project = currentProject(), worktree = currentWorktree()?.path; if (project && (gitPage()?.project !== project || gitPage()?.worktree !== worktree)) void loadGitPage(); });
   const data = () => gitPage()?.data;
-  const groups = ["Staged", "Unstaged", "Untracked"] as const;
-  const rows = (group: typeof groups[number]) => (data()?.changes ?? []).filter((c) => group === "Staged" ? c.staged : group === "Untracked" ? c.status === "??" : c.status !== "??" && c.unstaged);
+  const changes = () => data()?.changes ?? [];
+  const summary = () => gitSummary(changes());
+  const folderName = () => (data()?.worktree ?? "").split("/").filter(Boolean).pop() ?? "";
   return <Scroll class="flex-1"><View class="p-2" testID="git-page">
     <Text class={`${TS.base} font-medium text-foreground px-2 pb-2`}>Git</Text>
     <If when={!!gitPage()?.error}><Text class={`${T.sec} px-2`}>{gitPage()?.error}</Text></If>
     <If when={!!data()}>
-      <Text class={`${T.sec} px-2`}>{data()?.worktree ?? ""}</Text>
-      <Text class={`${TS.base} px-2 pb-2`}>{data()?.branch ?? ""}</Text>
-      <Each of={groups} key={(g) => g}>{(group) => <View>
-        <Text class={`${T.meta} px-2 pt-2`}>{group()}</Text>
-        <Each of={rows(group())} key={(c) => c.path}>{(change) => <ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); void openGitDiff(); }} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
-          <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
-        </ContextMenu>}</Each>
-      </View>}</Each>
-      <Text class={`${T.meta} px-2 pt-2`}>Branches</Text>
-      <Each of={data()?.branches ?? []} key={(b) => b.name}>{(branch) => <Text class={`${TS.base} px-2`}>{`${branch().current ? "● " : "  "}${branch().name}`}</Text>}</Each>
+      <Text class={`${TS.base} px-2 pb-2`} testID="git-branch">{`${folderName()} · ${data()?.branch ?? ""}`}</Text>
+      <If when={changes().length === 0}><Text class={`${T.meta} px-2`} testID="git-empty">No changes</Text></If>
+      <If when={changes().length > 0}>
+        <Text class={`${TS.base} px-2`} testID="git-summary">{`${summary().files} ${summary().files === 1 ? "file" : "files"} changed · +${summary().added} −${summary().removed}`}</Text>
+        <Text class={`${T.meta} px-2 pb-2`} testID="git-groups">{`${summary().staged} staged · ${summary().unstaged} unstaged · ${summary().untracked} untracked`}</Text>
+        <Each of={gitFolders(changes())} key={(f) => f.name}>{(folder) => <View>
+          <Button testID={`git-folder-${folder().name}`} onPress={() => toggleGitFolder(folder().name)} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{gitOpen().has(folder().name) ? "▾" : "▸"}</Text><Text class={TS.base}>{folder().name}</Text><Text class={T.meta}>{`${folder().files.length}`}</Text></Button>
+          <If when={gitOpen().has(folder().name)}>
+            <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); void openGitDiff(); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
+              <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
+            </ContextMenu>}</Each>}</Each>
+          </If>
+        </View>}</Each>
+      </If>
     </If>
   </View></Scroll>;
 }

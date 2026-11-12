@@ -13,7 +13,7 @@ use ratatui::Frame;
 use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::app::{now_secs, App, GitGroup, WaitKind, QUESTION_LOCK};
+use crate::app::{now_secs, App, GitGroup, GitSideRow, WaitKind, QUESTION_LOCK};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
 use crate::paint;
 use crate::state::ConnectionState;
@@ -2290,63 +2290,70 @@ fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mu
             return;
         }
     };
-    line(buf, y, data["worktree"].as_str().unwrap_or(""), MUTED);
-    y += 1;
-    line(buf, y, data["branch"].as_str().unwrap_or(""), PRIMARY);
+    let worktree = data["worktree"].as_str().unwrap_or("");
+    let folder = std::path::Path::new(worktree)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(worktree);
+    line(
+        buf,
+        y,
+        &format!("{folder} · {}", data["branch"].as_str().unwrap_or("")),
+        PRIMARY,
+    );
     y += 1;
     let rows = app.project_git_rows();
-    let cursor = app.cursor(Tab::Git);
-    for group in [GitGroup::Staged, GitGroup::Unstaged, GitGroup::Untracked] {
-        line(buf, y, group.label(), MUTED);
-        y += 1;
-        for (index, entry) in rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| row.group == group)
-        {
-            if y >= r.bottom() {
-                return;
-            }
-            let rect = Rect::new(r.x, y, r.width, 1);
-            let style = row_style(cx, focused && index == cursor, cx.hovered(rect));
-            clear(buf, rect, style);
-            let mark = match group {
-                GitGroup::Staged => entry.status.chars().next().unwrap_or(' '),
-                GitGroup::Unstaged => entry.status.chars().nth(1).unwrap_or(' '),
-                GitGroup::Untracked => '?',
-            };
-            put(
-                buf,
-                r.x + 1,
-                y,
-                &format!("{mark} {}", entry.path),
-                style,
-                r.width.saturating_sub(1),
-            );
-            hits.add(rect, Target::SideRow(index));
-            y += 1;
-        }
+    if rows.is_empty() {
+        line(buf, y, "No changes", MUTED);
+        return;
     }
-    line(buf, y, "Branches", MUTED);
+    let sum = app.project_git_summary();
+    line(
+        buf,
+        y,
+        &format!(
+            "{} {} changed · +{} −{}",
+            sum.files,
+            if sum.files == 1 { "file" } else { "files" },
+            sum.added,
+            sum.removed
+        ),
+        PRIMARY,
+    );
     y += 1;
-    for branch in data["branches"].as_array().into_iter().flatten() {
+    line(
+        buf,
+        y,
+        &format!(
+            "{} staged · {} unstaged · {} untracked",
+            sum.staged, sum.unstaged, sum.untracked
+        ),
+        MUTED,
+    );
+    y += 1;
+    let cursor = app.cursor(Tab::Git);
+    for (index, entry) in rows.iter().enumerate() {
         if y >= r.bottom() {
-            break;
+            return;
         }
-        line(
-            buf,
-            y,
-            &format!(
-                "{} {}",
-                if branch["current"].as_bool().unwrap_or(false) {
-                    "●"
-                } else {
-                    " "
-                },
-                branch["name"].as_str().unwrap_or("")
-            ),
-            PRIMARY,
-        );
+        let rect = Rect::new(r.x, y, r.width, 1);
+        let style = row_style(cx, focused && index == cursor, cx.hovered(rect));
+        clear(buf, rect, style);
+        let text = match entry {
+            GitSideRow::Folder { name, count, open } => {
+                format!("{} {name}  {count}", if *open { "▾" } else { "▸" })
+            }
+            GitSideRow::File(row) => {
+                let mark = match row.group {
+                    GitGroup::Staged => row.status.chars().next().unwrap_or(' '),
+                    GitGroup::Unstaged => row.status.chars().nth(1).unwrap_or(' '),
+                    GitGroup::Untracked => '?',
+                };
+                format!("  {mark} {}", row.path)
+            }
+        };
+        put(buf, r.x + 1, y, &text, style, r.width.saturating_sub(1));
+        hits.add(rect, Target::SideRow(index));
         y += 1;
     }
 }
@@ -6971,6 +6978,10 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             QUESTION_LOCK.to_owned()
         } else if a.viewed().is_none() {
             "Message to start a new session".to_owned()
+        } else if a.viewed_id().is_some_and(|id| a.is_busy(id)) {
+            "Type a message\u{2026} Enter steer \u{b7} Tab queue \u{b7} Alt+Enter interrupt"
+                .replace('\u{2026}', cx.ell())
+                .replace('\u{b7}', cx.t.structure("separator"))
         } else {
             "Type a message\u{2026}".replace('\u{2026}', cx.ell())
         };

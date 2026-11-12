@@ -1887,6 +1887,26 @@ export const manifest = {
    "note": "Enter steers at the next model step."
   },
   {
+   "id": "composer.interrupt_send",
+   "title": "Interrupt and send",
+   "category": "composer",
+   "keys": {
+    "tui": "alt+enter",
+    "nsh": "alt+enter"
+   },
+   "key_context": "composer_busy",
+   "when": [
+    "composer.has_text",
+    "session.busy"
+   ],
+   "unavailable_reason": "Interrupt and send needs a running turn.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "Alt+Enter (Option+Enter on macOS) cancels the running turn as Esc does and runs this message first; queued messages and pending steers stay and run after it. Idle, Enter sends. Mobile has no Alt key and gets no long-press (out of scope, needs approval)."
+  },
+  {
    "id": "composer.queue",
    "title": "Queue message for next turn",
    "category": "composer",
@@ -1939,6 +1959,23 @@ export const manifest = {
     "palette"
    ],
    "note": "Opens a filterable list of this project's earlier prompts, newest first (Core's per-project prompt history, so it survives a restart and is shared by both clients). Enter puts the chosen prompt in the composer, replacing the draft; Up/Down recall in the composer is unchanged. Reconnect to Core stays on its leader key and banner button."
+  },
+  {
+   "id": "composer.paste",
+   "title": "Paste (image or text)",
+   "category": "composer",
+   "keys": {
+    "tui": "ctrl+v",
+    "nsh": "ctrl+v"
+   },
+   "key_context": "composer",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Pastes the local clipboard into the composer: an image if there is one (it wins when the clipboard holds both), otherwise text, which follows the normal paste path (long text collapses into a paste preview). An empty clipboard shows a toast. Over SSH the TUI cannot read the clipboard and says to use the terminal's paste shortcut. The platform paste key (Cmd+V on macOS, Ctrl+V elsewhere in NSH web) works as before."
   },
   {
    "id": "composer.undo",
@@ -3269,7 +3306,7 @@ export const manifest = {
    "category": "waiting",
    "keys": {
     "tui": "a",
-    "nsh": "alt+enter"
+    "nsh": "cmd+shift+enter"
    },
    "key_context": "waiting",
    "when": [

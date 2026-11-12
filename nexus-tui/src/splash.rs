@@ -1,19 +1,20 @@
-//! The launch splash: the logo and a milestone bar until the first live frame.
+//! The launch splash: the logo, animated from the first frame, until the first live frame.
 //!
-//! The logo is painted from the first frame; the ambient field and the intro
-//! particles move on the clock alone, so a slow Core never freezes the screen.
-//! Only the bar follows milestones. The five milestones are what the client can
-//! observe while it starts: the client is up, Core answered, the
-//! snapshot/config is in, the event stream is open, and the first live frame is
-//! ready. Time never moves the bar.
+//! The logo is painted from the first frame; the ambient field, the intro
+//! particles and a light sweep across the logo move on the clock alone, so a
+//! slow Core never freezes the screen. There is no progress bar, percentage or
+//! step name. The five milestones are tracked only to know when `ready` is
+//! reached: the client is up, Core answered, the snapshot/config is in, the
+//! event stream is open, and the first live frame is ready. After 5 s of
+//! waiting one quiet "Starting Nexus Core…" line shows under the logo.
 //!
 //! Once `ready` is reached the logo flashes and a `▓▒░` curtain wipes into the
-//! first chat frame. With animations off the logo and bar are drawn in their
-//! final state and the chat follows the first live frame with a straight cut.
+//! first chat frame. With animations off the logo is static and the chat
+//! follows the first live frame with a straight cut.
 //!
 //! The palette comes from the theme: ink is `text.primary` (white in the dark
-//! theme), the ambient field is `text.faint`, and the unfilled bar is
-//! `border.strong`. The accent is deliberately not used on the splash.
+//! theme) and the ambient field is `text.faint`. The accent is deliberately not
+//! used on the splash.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -27,9 +28,12 @@ use crate::paint::LOGO;
 pub const FRAME: Duration = Duration::from_millis(8);
 /// Milestone names, in order. Reaching step `n` (1-based) marks the first `n`.
 pub const STEPS: [&str; 5] = ["daemon", "workspace", "providers", "session", "ready"];
-const BAR_SEGMENTS: usize = 30;
-/// Frames the bar takes to fill one fifth (200 ms).
-const FILL_FRAMES: u32 = 25;
+/// Width of the text block the ambient field keeps clear of.
+const BLOCK_WIDTH: i32 = 48;
+/// Frames of waiting (5 s) before one quiet "Starting Nexus Core..." line shows.
+pub const SLOW_FRAMES: u32 = 625;
+/// Frames per column step of the light sweep across the logo while waiting.
+const SWEEP_FRAMES: u32 = 4;
 /// Frames the intro particles take to settle on the clock alone (480 ms); also
 /// the least time before the flash.
 const MIN_FRAMES: u32 = 60;
@@ -38,14 +42,12 @@ const CURTAIN_STEP: u32 = 4;
 const CURTAIN_WIDTH: u32 = 3;
 /// Share of the intro range over which particle start times are staggered.
 const STAGGER: f32 = 0.6;
-/// Frames per cell step of the scanning pulse on the unfilled bar while waiting.
-const SCAN_FRAMES: u32 = 6;
 /// Sub-cell steps per cell of the ambient field's position.
 const AMBIENT_SUBCELL: i64 = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
-    /// Intro particles settle while the bar fills.
+    /// Intro particles settle, then the logo keeps moving until `ready`.
     Loading,
     Flash,
     /// The wipe is on screen over the first chat frame.
@@ -135,22 +137,6 @@ impl Splash {
         self.marks.iter().filter(|m| m.is_some()).count()
     }
 
-    /// Bar fill, 0..=1: the k-th milestone fills the bar to k/5 over 200 ms.
-    pub fn bar(&self, frame: u32) -> f32 {
-        if !self.animate {
-            return self.reached() as f32 / STEPS.len() as f32;
-        }
-        self.marks
-            .iter()
-            .enumerate()
-            .filter_map(|(k, mark)| {
-                let at = (*mark)?;
-                let t = frame.saturating_sub(at) as f32 / FILL_FRAMES as f32;
-                Some((k + 1) as f32 / STEPS.len() as f32 * ease(t))
-            })
-            .fold(0.0, f32::max)
-    }
-
     /// Intro particle settling, 0..=1: a function of the clock only, never a
     /// milestone.
     pub fn progress(&self, frame: u32) -> f32 {
@@ -160,10 +146,9 @@ impl Splash {
         (frame as f32 / MIN_FRAMES as f32).min(1.0)
     }
 
-    /// First frame at which bar and particles are both complete, once `ready`
-    /// was reached.
+    /// First frame at which the intro is complete, once `ready` was reached.
     pub fn complete_frame(&self) -> Option<u32> {
-        self.marks[4].map(|at| (at + FILL_FRAMES).max(MIN_FRAMES))
+        self.marks[4].map(|at| at.max(MIN_FRAMES))
     }
 
     pub fn phase(&self, frame: u32, width: u16) -> Phase {
@@ -220,12 +205,8 @@ impl Splash {
         Some(frame.saturating_sub(start) * CURTAIN_STEP)
     }
 
-    fn step_name(&self) -> &'static str {
-        STEPS[self.reached().min(STEPS.len() - 1)]
-    }
-
-    /// Still waiting on the milestones (animated, `ready` not reached): the scan
-    /// pulse runs on the unfilled track.
+    /// Still waiting for Core (animated, `ready` not reached): a light sweeps
+    /// the logo so the launch never looks stopped.
     fn waiting(&self) -> bool {
         self.animate && self.marks[4].is_none()
     }
@@ -269,7 +250,7 @@ impl Splash {
         }
     }
 
-    /// Draw the logo, its particles and the bar into `buf` (the whole `area`).
+    /// Draw the logo, its particles and, when Core is slow, a quiet line into `buf` (the whole `area`).
     pub fn render(&self, buf: &mut Buffer, area: Rect, frame: u32, p: &Palette) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -282,9 +263,9 @@ impl Splash {
             }
             _ => 0.0,
         };
-        // The logo, a blank row, the bar row, then the step name.
+        // The logo, a blank row, then the optional slow-start line.
         let mark = &LOGO;
-        let height = mark.len() as i32 + 3;
+        let height = mark.len() as i32 + 2;
         let top = i32::from(area.y) + (i32::from(area.height) - height).max(0) / 2;
         let mark_width = mark.iter().map(|row| row.width()).max().unwrap_or(0) as i32;
         let left = i32::from(area.x) + (i32::from(area.width) - mark_width).max(0) / 2;
@@ -305,7 +286,7 @@ impl Splash {
         // Layer 1, clock only: the ambient field behind everything, clear of the
         // text block.
         if self.animate {
-            let block = (BAR_SEGMENTS as i32 + 18).max(mark_width) + 4;
+            let block = BLOCK_WIDTH.max(mark_width) + 4;
             let clear_left =
                 (i32::from(area.x) + (i32::from(area.width) - block).max(0) / 2).max(0);
             let keep_clear = Rect::new(
@@ -341,55 +322,25 @@ impl Splash {
             put(buf, area, x, y, glyph, p.dim);
         }
         let logo = if flash > 0.0 { p.peak } else { p.logo };
+        // Waiting: a soft light sweeps left to right across the logo (colour
+        // only, a function of the clock).
+        let sweep = self.waiting().then(|| {
+            (frame / SWEEP_FRAMES) as i32 % (mark_width + 16) - 8 + left
+        });
         for (x, y, symbol) in &targets {
-            put(buf, area, *x, *y, symbol, logo);
+            let lit = sweep.is_some_and(|c| (*x - c).abs() <= 1);
+            put(buf, area, *x, *y, symbol, if lit { p.peak } else { logo });
         }
 
-        // The bar: segments centred on their own, the percentage on their right
-        // and the current step name centred on the row below.
-        let pct = (self.bar(frame) * 100.0).round() as u32;
-        let label = format!(" {pct:>3}%");
-        let room = i32::from(area.width) - label.width() as i32;
-        let segments = (BAR_SEGMENTS as i32).min(room.max(0)) as usize;
-        let filled = (self.bar(frame) * segments as f32).round() as usize;
-        // Centred; on a screen too narrow for the percentage beside it, shift
-        // left to fit.
-        let centred = (i32::from(area.width) - segments as i32).max(0) / 2;
-        let shifted = (room - segments as i32).max(0);
-        let mut x = i32::from(area.x) + centred.min(shifted);
-        let y = top + mark.len() as i32 + 1;
-        // Waiting: a pulse sweeps the unfilled track (colour only; the fill is
-        // unchanged).
-        let scan = (self.waiting() && segments > filled)
-            .then(|| filled + (frame / SCAN_FRAMES) as usize % (segments - filled));
-        for i in 0..segments {
-            let (symbol, style) = match (i < filled, p.ascii) {
-                (true, false) => ("▰", p.ink),
-                (false, false) => ("▱", p.border),
-                (true, true) => ("#", p.ink),
-                (false, true) => ("-", p.border),
-            };
-            let style = if scan == Some(i) { p.muted } else { style };
-            put(buf, area, x, y, symbol, style);
-            x += 1;
-        }
-        for ch in label.chars() {
-            let mut utf8 = [0u8; 4];
-            put(buf, area, x, y, ch.encode_utf8(&mut utf8), p.muted);
-            x += 1;
-        }
-        let name = self.step_name();
-        let name_x = i32::from(area.x) + (i32::from(area.width) - name.width() as i32).max(0) / 2;
-        for (i, ch) in name.chars().enumerate() {
-            let mut utf8 = [0u8; 4];
-            put(
-                buf,
-                area,
-                name_x + i as i32,
-                y + 1,
-                ch.encode_utf8(&mut utf8),
-                p.muted,
-            );
+        // Core is slow: one quiet line, no numbers.
+        if self.waiting() && frame >= SLOW_FRAMES {
+            let note = "Starting Nexus Core…";
+            let y = top + mark.len() as i32 + 1;
+            let x = i32::from(area.x) + (i32::from(area.width) - note.width() as i32).max(0) / 2;
+            for (i, ch) in note.chars().enumerate() {
+                let mut utf8 = [0u8; 4];
+                put(buf, area, x + i as i32, y, ch.encode_utf8(&mut utf8), p.muted);
+            }
         }
     }
 
@@ -462,42 +413,28 @@ mod tests {
     }
 
     #[test]
-    fn bar_follows_milestones_not_the_clock() {
-        let t0 = Instant::now();
-        let mut s = Splash::new(t0, true);
-        assert_eq!(s.bar(0), 0.0);
-        assert_eq!(s.bar(500), 0.0, "time alone never moves the bar");
-        s.reach(1, t0);
-        assert_eq!(s.bar(0), 0.0);
-        assert_eq!(s.bar(FILL_FRAMES), 0.2);
-        s.reach(3, t0);
-        assert_eq!(s.bar(FILL_FRAMES), 0.6);
-        s.reach(5, at(t0, FILL_FRAMES));
-        assert_eq!(
-            s.bar(FILL_FRAMES),
-            0.6,
-            "the last step fills from its own frame"
-        );
-        assert_eq!(s.bar(FILL_FRAMES * 2), 1.0);
-    }
-
-    #[test]
-    fn particles_and_background_do_not_read_the_milestones() {
+    fn logo_moves_while_waiting_and_ignores_milestones() {
         let t0 = Instant::now();
         let mut one = Splash::new(t0, true);
         one.reach(1, t0);
         let mut four = Splash::new(t0, true);
         four.reach(4, t0);
-        // Outside the bar rows the two frames are identical: the logo and the
-        // ambient field are a function of the clock alone.
-        let a = rendered(&one, 30, 80, 24);
-        let b = rendered(&four, 30, 80, 24);
-        for y in 0..24 {
-            if y == 14 || y == 15 {
-                continue; // bar and step name
-            }
-            assert_eq!(text(&a, y), text(&b, y), "row {y}");
-        }
+        assert_eq!(one.phase(500, 80), Phase::Loading, "time alone never finishes");
+        assert_eq!(rendered(&one, 30, 80, 24), rendered(&four, 30, 80, 24));
+    }
+
+    #[test]
+    fn quiet_line_only_after_a_slow_start_and_has_no_numbers() {
+        let t0 = Instant::now();
+        let s = Splash::new(t0, true);
+        let all = |f| {
+            let b = rendered(&s, f, 80, 24);
+            (0..24).map(|y| text(&b, y)).collect::<Vec<_>>().join("\n")
+        };
+        assert!(!all(SLOW_FRAMES - 1).contains("Starting Nexus Core"));
+        let late = all(SLOW_FRAMES + 1);
+        assert!(late.contains("Starting Nexus Core…"));
+        assert!(!late.contains('%') && !late.contains("daemon") && !late.contains('▰'));
     }
 
     #[test]
@@ -506,11 +443,9 @@ mod tests {
         let mut s = Splash::new(t0, false);
         s.reach(1, t0);
         assert_eq!(s.progress(0), 1.0);
-        assert_eq!(s.bar(0), 0.2);
         assert_eq!(s.phase(0, 80), Phase::Loading);
         s.reach(5, t0);
         assert_eq!(s.phase(0, 80), Phase::Done);
-        assert_eq!(s.bar(0), 1.0);
     }
 
     #[test]

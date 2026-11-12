@@ -1331,6 +1331,16 @@ describe("large text paste", () => {
     expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
   });
 
+  test("Paste (image or text) is a composer command in the palette", async () => {
+    const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press(`${mod}+p`);
+    await app.waitFor("id:palette");
+    await app.type("id:palette-input", "Paste (image");
+    await app.waitFor("text:Paste (image or text)");
+    expect(app.texts().some((t) => t.startsWith("Paste (image or text)"))).toBe(true);
+  });
+
   test("the user message shows a clickable marker, never the pasted text", async () => {
     const collapsed = {
       id: "m_paste", session_id: "ses_1", seq: 1, created: 1, role: "user",

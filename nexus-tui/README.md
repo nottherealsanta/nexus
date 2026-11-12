@@ -138,7 +138,7 @@ the provider, then the meter as the column narrows; while busy its right side
 reads `esc stop` instead of the meter. The focus bar at the card's left edge is
 drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
 composer; their text starts where the input starts, with a primary-colour,
-normal-weight `Q` for a queued message or `S` for a steer one cell to its left. A held queue says `held`
+normal-weight `Q` for a queued message or `S` for a steer one cell to its left. Alt+Enter (`ESC CR` in Ghostty, a modified Enter with the kitty protocol) while busy cancels the turn and sends the draft first (`composer.interrupt_send`); the busy placeholder lists `Enter steer · Tab queue · Alt+Enter interrupt`. A held queue says `held`
 after the message. Hovering or selecting a **queued** row right-aligns `✎ ↑ ↓ ×`
 (ASCII `e ^ v x`): edit restores it to the composer, up and down move it within
 the queued group only (disabled on the first and last queued row), and remove asks
@@ -359,6 +359,12 @@ When a session needs approval or an answer, its header shows `⚠ N waiting`.
 The selected file can be copied as an absolute path, inserted as `@path`, or opened in
 `$VISUAL`/`$EDITOR` with the terminal suspended. Core serves whole files up to 1 MiB.
 
+The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a
+`folder · branch` line, then `N files changed · +A −D` and `S staged · U unstaged · T untracked`, then the changes
+grouped by top-level folder (`src/  2`, `./` for root files), collapsed by default; Enter or a click expands a folder
+to its file rows, which keep stage/unstage/discard and open the diff. With nothing changed it reads `No changes`.
+There is no branch list (switch from the worktree picker). Line counts come from Core's per-change `added`/`removed`.
+
 **Editor (K10).** The cursor starts at the top; `ctrl+s` saves and `ctrl+z`/`ctrl+y` undo and
 redo. `ctrl+f` opens Find/Replace: Enter/Shift+Enter cycle matches, Tab switches between the
 query and replacement, `alt+c` toggles case sensitivity, `ctrl+r` replaces one match and
@@ -394,12 +400,13 @@ drawer). Under 100 the header keeps the two toggles, the run status and the bell
 strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`). The old subagent-tab row is gone: a viewed child keeps the root tab at the top and uses the heading rail and its timeline child cards for navigation.
 
 States (D18): launch shows the splash (`nexus-tui/src/splash.rs`): the `_/` logo in
-`text.primary` (white in the dark theme), a 30-segment milestone bar, its percentage and the
-next step. The milestones are `daemon`, `workspace`, `providers`, `session` and `ready`; the
-bar follows them, while the ambient dots and intro particles run on the clock; the logo is
-painted from the first frame, before the terminal capability probes.
+`text.primary` (white in the dark theme). There is no progress bar, percentage or step name: the
+ambient dots, intro particles and a light sweep across the logo run on the clock, so the launch
+moves from the first frame (painted before the terminal capability probes); after 5 s of waiting one
+quiet `Starting Nexus Core…` line shows. The milestones (`daemon` … `ready`) are tracked only to
+know when `ready` is reached.
 When the stream is live the logo flashes and a `▓▒░` curtain wipes into the first frame; with
-animations off the logo and bar are static and the frame follows with a cut. A failed start
+animations off the logo is static and the frame follows with a cut. A failed start
 dismisses the splash so the error is readable. After launch, the connecting screen and the
 empty workspace show the same logo (`paint::LOGO`, five rows of `_/` strokes, accent, bold in
 mono, centred as one block) over the title. An empty workspace reads `No projects yet` with
@@ -849,9 +856,14 @@ TUI can be driven by hand in a browser.
   turn. One completion shows `$` in place of the fold and drops the `→` prefix;
   consecutive completions stay one group with `▸`, and expanding shows the full
   context in order, including any output clipping notice.
-- Clipboard images: **Ctrl+V** in the composer in a local macOS or Linux
-  terminal (macOS reads PNG/TIFF through AppKit; Linux uses `wl-paste` or
-  `xclip`; SSH clipboard reads are refused). Pasting inserts `[Image A]`,
+- Clipboard paste: **Ctrl+V** in the composer in a local macOS or Linux
+  terminal reads the clipboard once: an image if present (it wins when the
+  clipboard holds both), otherwise text, otherwise the toast "The clipboard is
+  empty". Text takes the bracketed-paste path, so long text collapses into the
+  paste preview and a pending question card keeps its lock (up to 1 MiB; macOS
+  uses AppKit for images and `pbpaste` for text, Linux uses `wl-paste` or
+  `xclip`, and a missing tool is named in the error; over SSH the read is
+  refused: use the terminal's paste shortcut). An image paste inserts `[Image A]`,
   `[Image B]`, … at the cursor. The composer shows a square thumbnail for each
   attachment above its input, with the muted name above the thumbnail; deleting
   a marker removes its attachment. Clicking a thumbnail opens the drawing modal:

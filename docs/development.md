@@ -150,8 +150,9 @@ crate's own `target/`, so worktrees never overwrite each other's `nexus-tui`.
   `cargo clean` in a crate frees them.
 - `CARGO_BUILD_BUILD_DIR` in the environment overrides the setting.
 
-Sharing for worktrees of *other* projects that Nexus sessions work in is planned in
-[plans/36-shared-rust-builds.md](../plans/36-shared-rust-builds.md).
+For *other* projects, Core does the same per repository: see
+[daemon.md](daemon.md#shared-rust-build-folder-for-session-workspaces). This repository's own
+`build-dir` setting wins there, so its builds keep using `~/.cargo/build/nexus`.
 
 ## Vendored crates
 
