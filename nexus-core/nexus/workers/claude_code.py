@@ -250,7 +250,8 @@ class ClaudeCodeWorker:
                                                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
                 os.close(slave)
                 slave = None
-                await send(WorkerEvent("process", {"pid": process.pid, "session_id": session, "transcript_path": str(expected)}))
+                await send(WorkerEvent("process", {"pid": process.pid, "session_id": session, "transcript_path": str(expected),
+                                                    "policy_fingerprint": fingerprint}))
                 while True:
                     try:
                         chunk = os.read(master, 65536)

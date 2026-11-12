@@ -268,3 +268,47 @@ def test_recorded_agy_plan_mode_write_request_ends_as_a_plan_not_a_denial():
     for line in lines:
         parser.feed(line)
     assert parser.finished and not parser.denied and not parser.attention and "implementation plan" in parser.text
+
+
+async def test_interrupted_turn_keeps_the_cli_session_id_so_the_next_prompt_resumes(tmp_path, monkeypatch):
+    """Live finding (agy 1.5.0, Claude 2.1.322): an interrupt returns no result, so the ids must be stored when they are first seen."""
+    from nexus.config import ConfigFile
+    from nexus.workers import agent as agent_module
+    from nexus.workers.agent import WorkerState
+    from nexus.workers.base import WorkerEvent
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"zmx.claude_backend": "zmx", "zmx.antigravity": True}, [])
+    monkeypatch.setattr(agent_module, "cli_path", lambda pid: "/bin/true")
+    started = asyncio.Event()
+
+    class Hang:
+        def __init__(self, *a, **k): ...
+
+        async def run(self, *, emit, **k):
+            await emit(WorkerEvent("process", {"pid": 1, "session_id": CLAUDE_SESSION, "transcript_path": "/t.jsonl", "policy_fingerprint": "fp"}))
+            await emit(WorkerEvent("init", {"conversation_id": "conv-9"}))
+            started.set()
+            await asyncio.sleep(60)
+
+    for pid, attr, ref in (("claude-code", "ClaudeCodeWorker", "claude-code/claude-haiku-5-5"), ("agy", "AntigravityWorker", "agy/gemini-3.8-flash-low")):
+        monkeypatch.setattr(agent_module, attr, Hang)
+        started.clear()
+        agent = agent_module.ExternalAgent(ref=ref, workspace=tmp_path, messages=[], instructions="", permission="allow", effort=None)
+        states = []
+
+        async def drive(agent=agent, states=states):
+            async for event in agent.turn("go"):
+                if isinstance(event, WorkerState):
+                    states.append(event.worker)
+
+        task = asyncio.create_task(drive())
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.sleep(.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        last = states[-1]
+        assert last["session_id"] in (CLAUDE_SESSION, "conv-9")
+        if pid == "claude-code":
+            assert last["policy_fingerprint"] == "fp" and last["transcript_path"] == "/t.jsonl"

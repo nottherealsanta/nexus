@@ -209,6 +209,10 @@ class ExternalAgent:
                 if event.kind == "wire":
                     raw = event.raw.decode("utf-8", "replace") if event.raw else data
                     yield WireEvent(self.pid, {"raw": raw, "context_complete": False})
+                elif event.kind == "init" and data.get("conversation_id"):
+                    # An interrupted turn returns no result, so the CLI session id is stored as soon as it is known.
+                    self.worker.update(session_id=data["conversation_id"])
+                    yield WorkerState(dict(self.worker))
                 elif event.kind in ("launch", "process"):
                     self.worker.update(data)
                     if isinstance(data.get("pid"), int):
