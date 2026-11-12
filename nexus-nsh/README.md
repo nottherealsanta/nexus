@@ -785,7 +785,10 @@ that removes its saved data and does not supply the missing capture record.
 
 ## Images and context notes
 
-Paste images into the composer using the platform paste shortcut. The draft
+Paste images or text into the composer using the platform paste shortcut. **Ctrl+V** is also bound on Apple
+platforms (where browsers paste with Cmd+V), matching the TUI: it reads the clipboard once, image first, else text
+(long text collapses into the paste preview), else the toast "The clipboard is empty"; Ctrl+V elsewhere is already
+the platform key. The draft
 shows a square thumbnail for each image above its input, with the muted filename
 above the thumbnail and an individual Remove image button. Image-only messages
 are supported; after sending, the same square thumbnail sits above the user

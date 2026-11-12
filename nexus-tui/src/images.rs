@@ -180,7 +180,7 @@ pub fn decode(data_url: &str) -> Option<image::DynamicImage> {
 
 pub async fn clipboard() -> Result<Option<Image>, String> {
     if std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some() {
-        return Err("Image paste requires a local terminal".into());
+        return Err(SSH_ERROR.into());
     }
     let mut cmd;
     if cfg!(target_os = "macos") {
@@ -204,9 +204,7 @@ if (data) { if (data.length > 8388608) throw Error('Image exceeds 8 MiB'); data.
     cmd.kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Could not read clipboard: {e}"))?;
+    let mut child = cmd.spawn().map_err(spawn_error)?;
     let stdout = child.stdout.take().ok_or("No clipboard output")?;
     let mut bytes = Vec::new();
     let limit = MAX_BYTES * 4 / 3 + 128;
@@ -236,6 +234,82 @@ if (data) { if (data.length > 8388608) throw Error('Image exceeds 8 MiB'); data.
         return Ok(None);
     }
     Image::from_png("clipboard.png".into(), &bytes).map(Some)
+}
+
+pub const SSH_ERROR: &str =
+    "Ctrl+V reads the local clipboard; over SSH use your terminal's paste shortcut";
+/// Largest clipboard text Ctrl+V will insert.
+pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// What one Ctrl+V found on the clipboard.
+#[derive(Debug, Clone)]
+pub enum Clip {
+    Image(Image),
+    Text(String),
+    Empty,
+}
+
+fn spawn_error(e: std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound && cfg!(target_os = "linux") {
+        let tool = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            "wl-paste"
+        } else {
+            "xclip"
+        };
+        return format!("Could not read the clipboard: {tool} is not installed");
+    }
+    format!("Could not read clipboard: {e}")
+}
+
+/// One clipboard read for Ctrl+V: an image if present, else text, else empty.
+pub async fn clipboard_any() -> Result<Clip, String> {
+    if let Some(image) = clipboard().await? {
+        return Ok(Clip::Image(image));
+    }
+    let text = clipboard_text().await?;
+    Ok(if text.is_empty() { Clip::Empty } else { Clip::Text(text) })
+}
+
+pub async fn clipboard_text() -> Result<String, String> {
+    let mut cmd;
+    if cfg!(target_os = "macos") {
+        cmd = tokio::process::Command::new("pbpaste");
+    } else if cfg!(target_os = "linux") {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            cmd = tokio::process::Command::new("wl-paste");
+            cmd.args(["--no-newline", "--type", "text/plain"]);
+        } else {
+            cmd = tokio::process::Command::new("xclip");
+            cmd.args(["-selection", "clipboard", "-o"]);
+        }
+    } else {
+        return Err("Clipboard paste is supported on macOS and Linux".into());
+    }
+    cmd.kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = cmd.spawn().map_err(spawn_error)?;
+    let stdout = child.stdout.take().ok_or("No clipboard output")?;
+    let mut bytes = Vec::new();
+    let read = async {
+        stdout
+            .take(MAX_TEXT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        child.wait().await
+    };
+    let status = tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .map_err(|_| "Clipboard read timed out")?
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_TEXT_BYTES {
+        return Err("Clipboard text exceeds 1 MiB".into());
+    }
+    if !status.success() {
+        // wl-paste/xclip fail when the clipboard has no text target.
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(test)]

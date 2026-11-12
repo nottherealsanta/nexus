@@ -592,6 +592,9 @@ export async function sideQuestion(question: string) {
 
 export const blurComposer = { fn: (() => {}) as () => void };
 export const focusComposer = { fn: (() => {}) as () => void };
+/** Composer-owned: reads the clipboard (image first, else text) through the same paths as the platform paste key. */
+export const pasteClipboard = { fn: (async () => {}) as () => Promise<void> };
+const applePaste = () => { try { return /⌘|cmd/i.test(keymap.label("mod+v")); } catch { return false; } };
 export const rightWidthHint = { w: 1280 };
 
 on("palette.open", () => paletteOpen.set(true));
@@ -650,6 +653,7 @@ for (const action of ["commit", "switch", "branch_create", "branch_delete", "bra
 on("sidebar.tab.projects", () => tab("projects"));
 on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.set(true); });
 on("composer.focus", () => focusComposer.fn());
+on("composer.paste", () => pasteClipboard.fn());
 on("session.new", newSession);
 on("session.tab_close", () => { const id = rootOf(viewed()?.id); if (id) closeTab(id); });
 on("session.tab_next", () => stepTab(1));
@@ -1191,6 +1195,12 @@ export function bindKeys(): () => void {
       if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
       try { offs.push(keymap.bind(toKeystroke(k), () => { if (!terminalFocused()) void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
     }
+  }
+  // Ctrl+V pastes in the TUI. Browsers paste with Cmd+V on Apple platforms, so Ctrl+V is free there and is
+  // bound for parity; elsewhere it already is the platform paste key (binding it would paste twice).
+  if (applePaste() && !phone) {
+    const k = byId.get("composer.paste")?.keys?.nsh;
+    if (k) try { offs.push(keymap.bind(toKeystroke(k), () => { if (composerFocused() && !terminalFocused()) void run("composer.paste"); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {
     const c = byId.get(id);
