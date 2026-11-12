@@ -1778,7 +1778,7 @@ fn reasoning_rows_follow_d07() {
     );
     let rows: Vec<&str> = rows.iter().map(|r| r.trim_start()).collect();
     assert!(
-        rows[0].starts_with("▸ Thought · Looking for where the manifest is parsed."),
+        rows[0].starts_with("◇ Thought · Looking for where the manifest is parsed."),
         "{:?}",
         rows[0]
     );
@@ -2065,7 +2065,7 @@ fn background_shell_completion_is_a_notice_without_a_user_turn() {
         .messages
         .push(message);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("→ Background Shell Done:"));
+    assert!(text.contains("$ Background Shell Done: 'make test'"), "{text}");
     assert!(!text.contains("exit code 0"));
     let index = a
         .blocks()

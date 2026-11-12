@@ -2961,7 +2961,7 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 50);
     let all = joined(&rows);
-    for needle in ["Appearance", "Providers", "Agents", "11 sections"] {
+    for needle in ["Appearance", "Providers", "Agents", "12 sections"] {
         assert!(all.contains(needle), "missing {needle:?}: {all}");
     }
     // The Providers pane.
@@ -4781,7 +4781,7 @@ fn the_connecting_screen_uses_the_same_logo_rows() {
 }
 
 #[test]
-fn a_cold_launch_shows_the_logo_and_the_milestone_bar() {
+fn a_cold_launch_shows_the_logo_without_a_progress_bar() {
     let mut app = nexus_tui::app::App::new(
         nexus_tui::state::AppState::new(),
         nexus_tui::theme::Theme::new(opts(Mode::Dark, Tier::TrueColor)),
@@ -4792,8 +4792,8 @@ fn a_cold_launch_shows_the_logo_and_the_milestone_bar() {
     for row in nexus_tui::paint::LOGO {
         assert!(all.contains(row.trim()), "{row:?} missing:\n{all}");
     }
-    assert!(all.contains("daemon"), "{all}");
-    assert!(all.contains("0%"), "{all}");
+    // Plan 26: no bar, percentage or step label while Core starts.
+    assert!(!all.contains("0%") && !all.contains("daemon"), "{all}");
 }
 
 #[test]

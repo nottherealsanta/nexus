@@ -798,10 +798,8 @@ fn the_focused_call_shows_the_latest_model_excerpt_and_real_tool() {
         "manager.preview",
         json!({"preview": scenario["preview"]}),
     );
-    let shown = text(&mut a);
-    for expected in scenario["preview"]["lines"].as_array().unwrap() {
-        assert!(shown.contains(expected.as_str().unwrap()), "{shown}");
-    }
+    // Neither client draws the preview text any more (ca97629e); the state is still kept.
+    assert_eq!(a.ui.manager.preview.as_ref(), Some(&scenario["preview"]));
     a.manager_execute("manager.stop");
     assert!(a.ui.manager.preview.is_none());
 }
