@@ -809,6 +809,7 @@ DESCRIPTION = "Greet someone."
 PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}
 GUIDANCE = "Use to say hello."   # optional; appended to the description
 TIMEOUT = 30                     # optional seconds, at most 600 (default 60)
+MEMORY_MB = 512                  # optional address-space cap, 64 to 16384 (default 2048)
 READ_ONLY = True                 # optional boolean, default False; required for forks
 
 def run(args):                   # or `async def`; returns text
@@ -837,8 +838,13 @@ def run(args):                   # or `async def`; returns text
   `extension.failed` event. A tool that raises, times out or dies returns an
   error result; it never fails the turn.
 - **Switches:** user tools appear in the starting-context tools grid and take
-  per-session switches. A `[tools] disabled` entry in config is validated
-  against built-ins and global user tools only.
+  per-session switches. A `[tools] disabled` entry in config must be a built-in
+  tool name or a well-formed user-tool name, `skill:<name>` or `mcp:<server>`; a
+  name the new session's project does not have (a project-only tool) is skipped
+  for that session and never drops the other entries.
+- **Memory and files:** the child sets `RLIMIT_AS` to `MEMORY_MB` (a `MemoryError`
+  becomes the tool's error result) and disables core dumps. The address-space cap
+  is enforced on Linux only; macOS ignores it, and it is not verified there.
 
 ## Skills and the `skill` tool
 

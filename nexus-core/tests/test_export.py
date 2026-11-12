@@ -774,3 +774,32 @@ async def test_export_cancellation_scope_does_not_close_active_worker():
         tasks.cancel_scope.cancel()
         release.set()
     assert iterator.closed
+
+
+async def test_event_log_is_clipped_with_an_explicit_marker_but_messages_never_are(env, monkeypatch):
+    from nexus import export as export_module
+    _, client, _, workspace = env
+    project, _ = env.store.project_for_path(str(workspace))
+    session = env.store.create_session(project, title="clip", agent="build")
+    sid = session.id
+    env.store.append_message(sid, Message("user", (Text("keep me"),)))
+    now = time.time()
+    with env.store.db:
+        env.store.db.executemany(
+            "insert into event (session_id, seq, time, type, data) values (?, ?, ?, ?, ?)",
+            [(sid, 1_000 + i, now, "probe", json.dumps({"n": "x" * 100})) for i in range(50)],
+        )
+    monkeypatch.setattr(export_module, "MAX_EVENT_BYTES", 1_000)
+    document = (await client.get(f"/api/session/{sid}/export", params={"format": "json"})).json()
+    entry = document["sessions"][0]
+    clipped = entry["events_clipped"]
+    assert 0 < clipped["events_emitted"] < 50 and len(entry["events"]) == clipped["events_emitted"]
+    assert clipped["events_stored"] == 50 and "event budget" in clipped["reason"]
+    assert clipped["first_omitted_event_id"] > entry["events"][-1]["id"]
+    assert [m["parts"][0]["text"] for m in entry["messages"] if m["role"] == "user"] == ["keep me"]
+    monkeypatch.setattr(export_module, "MAX_EVENT_BYTES", 10**9)
+    full = (await client.get(f"/api/session/{sid}/export", params={"format": "json"})).json()["sessions"][0]
+    assert full["events_clipped"] is None and len(full["events"]) == 50
+    monkeypatch.setattr(export_module, "MAX_HOLD_SECONDS", -1.0)
+    held = (await client.get(f"/api/session/{sid}/export", params={"format": "json"})).json()["sessions"][0]
+    assert "read snapshot" in held["events_clipped"]["reason"] and held["events"] == []

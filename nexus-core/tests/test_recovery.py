@@ -181,6 +181,12 @@ def test_interrupted_stream_keeps_output_as_diagnostic_history_only(tmp_path):
                                                      "origin": "codex", "raw": {"type": "message"}}}),
     ]
     ids = [crash.event(session, name, data)["id"] for name, data in notes]
+    from nexus.live import LivePartial
+    live = LivePartial(request["id"])
+    for name, data in notes:
+        if name in ("text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done"):
+            live.apply(data)
+    crash.store.save_partial(request["id"], live.json())
     crash.close()
 
     rt = restart(tmp_path / "nexus.db")
@@ -313,7 +319,7 @@ def test_completed_result_missing_from_history_is_inserted_once(tmp_path):
 
 
 def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
-    # A turn left open before `turn.ended` existed: the log's `turn_end` is the fallback evidence.
+    # `turn.ended` is the only evidence; the legacy `turn_end` event fallback was removed.
     workspace = tmp_path / "proj"
     workspace.mkdir()
     crash = Crash(tmp_path / "nexus.db", workspace)
@@ -326,6 +332,7 @@ def test_durable_turn_end_is_not_reported_as_interrupted(tmp_path):
         session.id, Message("assistant", (Text("done"),)), turn_id=turn["id"], request_id=request["id"])
     crash.publish_message(session, assistant)
     crash.event(session, "turn_end", {"type": "turn_end", "stop": "end_turn", "steps": 1})
+    crash.store.mark_turn_ended(turn["id"], "end_turn", 1)
     # Crash before finish_turn wrote `completed`.
     crash.close()
 
@@ -1190,5 +1197,95 @@ def test_wire_payload_expiry_waits_for_recovery_and_leaves_restored_parts_identi
         assert message_json(again)["parts"] == parts
         assert rt.store.session_usage(session.id)["models"]["unknown"]["input"] == 12
         assert {e["id"]: e for e in rt.store.events(session.id)}[wire["id"]]["payload_state"] == "expired"
+    finally:
+        rt.store.close()
+
+
+def test_turn_end_event_alone_is_no_longer_evidence(tmp_path):
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    crash.request(turn)
+    crash.event(session, "turn_end", {"type": "turn_end", "stop": "end_turn", "steps": 1})
+    crash.close()
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [stored] = rt.store.turns_for_session(session.id)
+        assert stored["status"] == "interrupted"
+    finally:
+        rt.store.close()
+
+
+def _lost_job(tmp_path, pid, started):
+    workspace = tmp_path / "proj"
+    workspace.mkdir(exist_ok=True)
+    crash = Crash(tmp_path / "nexus.db", workspace)
+    session = crash.session()
+    turn = crash.turn(session)
+    request = crash.request(turn)
+    crash.assistant(session, turn, [], request=request)
+    crash.event(session, "bash.started", {
+        "id": "job_p", "session_id": session.id, "root": session.id, "command": "sleep 100",
+        "directory": str(workspace), "started": started, "status": "running", "pid": pid})
+    crash.close()
+    return session
+
+
+def test_recovery_reports_a_verified_surviving_job_and_never_kills_it(tmp_path):
+    import subprocess
+    import sys
+    import time
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        session = _lost_job(tmp_path, proc.pid, time.time())
+        rt = restart(tmp_path / "nexus.db")
+        try:
+            [notice] = texts(rt.store, session.id, "user")
+            assert f"`job_p` (pid {proc.pid})" in notice and "still running as the same process group" in notice
+            assert "nothing was killed" in notice and proc.poll() is None  # still alive
+            [finished] = [e for e in rt.store.events(session.id, limit=5000) if e["type"] == "bash.finished"]
+            assert finished["data"]["process"] == {"pid": proc.pid, "state": "running"}
+        finally:
+            rt.store.close()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_recovery_does_not_trust_a_reused_or_vanished_pid(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    session = _lost_job(tmp_path, dead.pid, time.time())
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "no longer running" in notice
+    finally:
+        rt.store.close()
+    other = tmp_path / "other"
+    other.mkdir()
+    # The test process itself is a live pid, but not a group leader that started with the job.
+    session = _lost_job(other, os.getpid(), time.time())
+    rt = restart(other / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "no longer running" in notice and "still running as the same" not in notice
+    finally:
+        rt.store.close()
+
+
+def test_a_job_without_a_recorded_pid_stays_unknown(tmp_path):
+    import time
+    session = _lost_job(tmp_path, None, time.time())
+    rt = restart(tmp_path / "nexus.db")
+    try:
+        [notice] = texts(rt.store, session.id, "user")
+        assert "may still be running" in notice and "was not killed by PID" in notice
     finally:
         rt.store.close()

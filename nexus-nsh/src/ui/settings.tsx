@@ -263,6 +263,7 @@ export function ProviderDetailModal() {
     <View class="gap-3">
       <ModalTitle title={provider()!.label ?? id()!} />
       <Text class={T.sec}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(provider())}</Text>
+      <If when={provider()!.note}>{() => <Text class={provider()!.connected ? T.meta : `${TS.base} text-warning`} testID="provider-detail-note">{provider()!.note}</Text>}</If>
       <If when={provider()!.connected}>{() => <View class="gap-2">
         <If when={provider()!.key_source === "env"}>{() => <Text class={T.meta}>{`Using $${provider()!.key_env}`}</Text>}</If>
         <View class="flex-row"><Btn label="Disconnect" kind="danger" disabled={!live()} onPress={() => void disconnect(provider())} testID="provider-detail-disconnect" /></View>

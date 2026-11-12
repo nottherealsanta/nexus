@@ -367,6 +367,7 @@ mod tests {
                 "providers",
                 "agents",
                 "tools",
+                "zmx",
                 "mcp",
                 "context",
                 "dictation",

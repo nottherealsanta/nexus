@@ -7,6 +7,7 @@ DESCRIPTION = "Greet someone."       # required
 PARAMETERS = {"type": "object", "properties": {"who": {"type": "string"}}, "required": ["who"]}
 GUIDANCE = "Use to say hello."       # optional: one line for the system prompt
 TIMEOUT = 30                         # optional seconds, at most 600 (default 60)
+MEMORY_MB = 512                      # optional address-space cap, 64 to 16384 (default 2048)
 
 def run(args):                       # or `async def`; returns text
     return f"Hello, {args['who']}!"
@@ -46,6 +47,8 @@ from .tools.base import MAX_OUTPUT_CHARS, ToolError, clip
 MAX_SOURCE_BYTES = 256 * 1024
 DEFAULT_TIMEOUT = 60.0
 MAX_TIMEOUT = 600.0
+DEFAULT_MEMORY_MB = 2048
+MIN_MEMORY_MB, MAX_MEMORY_MB = 64, 16384
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SAFE_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TZ")
 
@@ -53,6 +56,14 @@ _RUNNER = r"""
 import asyncio, inspect, json, sys, traceback
 payload = json.load(sys.stdin)
 out, sys.stdout = sys.stdout, sys.stderr
+try:
+    import resource
+    cap = int(payload.get("memory_mb") or 0) << 20
+    if cap:  # enforced where the OS honours RLIMIT_AS (Linux); a best effort elsewhere
+        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+except Exception:
+    pass
 try:
     ns = {"__name__": "nexus_user_tool", "__file__": payload["path"]}
     exec(compile(payload["source"], payload["path"], "exec"), ns)
@@ -83,11 +94,12 @@ class UserTool:
     sha256: str
     timeout: float = DEFAULT_TIMEOUT
     read_only: bool = False
+    memory_mb: int = DEFAULT_MEMORY_MB
 
     def record(self, *, source: bool = True) -> dict[str, Any]:
         """The snapshot form: the schema a request needs, and (with `source`) the frozen code."""
         info: dict[str, Any] = {"path": self.path, "scope": self.scope, "sha256": self.sha256,
-                                "timeout": self.timeout, "read_only": self.read_only}
+                                "timeout": self.timeout, "read_only": self.read_only, "memory_mb": self.memory_mb}
         if source:
             info["source"] = self.source
         return {"name": self.name, "description": self.description, "parameters": self.parameters,
@@ -127,7 +139,7 @@ def parse(path: Path, scope: str) -> UserTool:
             key, value = node.target.id, node.value
         else:
             continue
-        if key in ("NAME", "DESCRIPTION", "PARAMETERS", "GUIDANCE", "TIMEOUT", "READ_ONLY"):
+        if key in ("NAME", "DESCRIPTION", "PARAMETERS", "GUIDANCE", "TIMEOUT", "READ_ONLY", "MEMORY_MB"):
             try:
                 meta[key] = ast.literal_eval(value)
             except (ValueError, SyntaxError) as exc:
@@ -152,10 +164,13 @@ def parse(path: Path, scope: str) -> UserTool:
     read_only = meta.get("READ_ONLY", False)
     if not isinstance(read_only, bool):
         raise ValueError("READ_ONLY must be a boolean")  # noqa: TRY004 - a content error, reported like the others
+    memory = meta.get("MEMORY_MB", DEFAULT_MEMORY_MB)
+    if isinstance(memory, bool) or not isinstance(memory, int) or not MIN_MEMORY_MB <= memory <= MAX_MEMORY_MB:
+        raise ValueError(f"MEMORY_MB must be a whole number from {MIN_MEMORY_MB} to {MAX_MEMORY_MB}")
     description = description.strip() + (f"\n{guidance.strip()}" if guidance.strip() else "")
     return UserTool(name=name, description=description, parameters=parameters,
                     source=source, path=str(path), scope=scope, sha256=hashlib.sha256(raw).hexdigest(),
-                    timeout=float(timeout), read_only=read_only)
+                    timeout=float(timeout), read_only=read_only, memory_mb=memory)
 
 
 def discover(project_path: str | None, reserved: frozenset[str] | set[str] = frozenset()) -> ExtensionSet:
@@ -214,7 +229,8 @@ def _environment(workspace: Path, name: str) -> dict[str, str]:
 async def call(record: dict[str, Any], args: dict[str, Any], workspace: Path) -> str:
     """Run a stored tool record in a child process and return its text (or raise ToolError)."""
     info = record["extension"]
-    payload = json.dumps({"source": info["source"], "path": info["path"], "args": args}).encode()
+    payload = json.dumps({"source": info["source"], "path": info["path"], "args": args,
+                          "memory_mb": int(info.get("memory_mb") or DEFAULT_MEMORY_MB)}).encode()
     timeout = float(info.get("timeout") or DEFAULT_TIMEOUT)
     try:
         proc = await asyncio.create_subprocess_exec(
