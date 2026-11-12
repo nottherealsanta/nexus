@@ -12,6 +12,11 @@ surfaces, including rounded modals and picker rows. Manager consent uses a
 translucent solid fill rather than backdrop blur. This presentation-only difference
 is recorded in the porting ledger.
 
+The Manager header indicator is the same braille wave field in both clients. Waves travel only while the voice is
+connected; disconnected is a frozen quiet wave, muted a frozen flat line, neither asks for animation frames. It
+is coloured by speaker (`manager.listening`, `manager.speaking`, otherwise `text.muted`) and is never dimmed by the
+open Manager panel's scrim.
+
 These rules apply to both clients, including NSH's Void palette. Modal widths have three
 classes: small (TUI 60 cells / NSH 500 px) for confirmations and short input; medium
 (72 cells / 600 px) for palettes, pickers, provider details, usage and notifications;

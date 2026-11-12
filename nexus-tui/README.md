@@ -930,10 +930,10 @@ The session context meter reads Core's context budget; `~` marks estimates.
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
 current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
 call is open, a one-row field of braille cells replaces the label: three slow sine waves travel across ten cells,
-lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
+lighting only a few dots. Waves travel only while the voice is connected (disconnected: a frozen quiet wave; muted microphone: a frozen flat line; no animation frames). Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
 drawn in `manager.listening` and speaking in `manager.speaking`, and their height follows the measured voice level.
 Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
-dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
+dropdown dims everything outside it except the indicator. With the live voice connected, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown has two voice buttons: **Connect** / **Disconnect** (connected by default: opening Manager or Connect starts Live immediately; Disconnect stops only audio) and **Mute** / **Unmute** (live voice only; keeps the connection, sends no microphone audio, wave gray and still, caption "Muted"; Disconnect clears it). The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with the voice disconnected, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal

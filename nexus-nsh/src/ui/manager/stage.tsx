@@ -3,8 +3,8 @@ import { Overlay, Scroll, Text, View, colorScheme, effect, keymap, signal, windo
 import { Button, Input } from "nsh/base";
 import { FOCUS, Icon, T, TS } from "../kit";
 import { CardBody } from "./cards";
-import { brailleField, waveColor, waveOpacity } from "./braille";
-import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
+import { WaveMode, brailleField, waveColor, waveOpacity } from "./braille";
+import { WORDS, cardCaption, cardTitle } from "../../manager";
 import {
   dropdownOpen, dropdownInteractive, closeManagerDropdown, voiceEnabled, audioRequested, callMinimised, card, consent, cardCollapsed,
   detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, micMuted, notice, voiceConnected,
@@ -23,10 +23,11 @@ export const stageVisible = () => consent() !== null || dropdownOpen();
 
 export const managerHeaderIndicatorVisible = () => dropdownOpen() || inCall() || connecting();
 
-/** The header indicator's state, from the same signals as the call. */
-const waveMode = (): OrbMode => connecting() ? "thinking" : listening() && !micMuted() ? "listening" : speaking() ? "speaking" : phase() !== "idle" || transcribing() ? "thinking" : "settling";
-/** A call left idle in the background is still; the dropdown being open means the user is looking. */
-const waveMoving = () => dropdownOpen() || connecting() || (listening() && !micMuted()) || speaking() || phase() !== "idle" || transcribing();
+/** The header indicator's state, from the same signals as the call. Waves only while the voice is connected; a disconnected
+ *  voice is a still quiet mark and a muted microphone a still flat line. */
+const waveMode = (): WaveMode => !voiceConnected() && !connecting() ? "still" : connecting() ? "thinking" : listening() && !micMuted() ? "listening" : speaking() ? "speaking" : phase() !== "idle" || transcribing() ? "thinking" : liveVoice() && micMuted() ? "muted" : "settling";
+/** Nothing moves unless the voice is connected; a call left idle in the background is still too. */
+const waveMoving = () => (voiceConnected() || connecting()) && (dropdownOpen() || connecting() || (listening() && !micMuted()) || speaking() || phase() !== "idle" || transcribing());
 
 const waveFrame = signal(0);
 let waveTimer: ReturnType<typeof setInterval> | undefined;
@@ -45,7 +46,7 @@ function holdWave() {
 
 /** The braille wave field: the header indicator on a desktop, the title of the phone's Manager tab. */
 export function ManagerWave() {
-  const animated = () => !reducedMotion() && (waveMoving() || liveVoice());
+  const animated = () => !reducedMotion() && waveMode() !== "still" && waveMode() !== "muted" && (waveMoving() || liveVoice());
   effect(() => { if (!animated()) return; return holdWave(); });
   // Read on every waveFrame tick (and whenever the call's signals change): `visual` is plain data the call's frame loop
   // updates, so the colour blend and the measured level are current at each 33 ms render. Without the loop (reduced
@@ -56,7 +57,7 @@ export function ManagerWave() {
     const mode = waveMode();
     const eased = animated() && visual.running;
     const from = eased ? visual.from : mode, blend = eased ? visual.blend : 1, to = eased ? visual.mode : mode;
-    return { mode: to, level: eased ? visual.level : 0.5, color: waveColor(from, to, blend, scheme), opacity: reducedMotion() ? 0.7 : waveOpacity(from, to, blend) };
+    return { mode: to, level: eased ? visual.level : 0.5, color: waveColor(from, to, blend, scheme), opacity: reducedMotion() && mode !== "still" && mode !== "muted" ? 0.7 : waveOpacity(from, to, blend) };
   };
   return <Text class="font-mono text-[13px] leading-[18px]" testID="manager-indicator-wave"
     style={{ color: wave().color, opacity: wave().opacity, numberOfLines: 1 }}>
@@ -64,10 +65,17 @@ export function ManagerWave() {
   </Text>;
 }
 
+/** Where the header indicator sits in the window: the open panel's scrim leaves this box undimmed (the wave stays at full strength). */
+export const indicatorBox = signal<{ x: number; y: number; w: number; h: number } | null>(null);
+
 export function ManagerHeaderIndicator() {
   const hovered = signal(false);
   const stopping = () => liveVoice() && hovered();
   return <If when={managerHeaderIndicatorVisible()}>{() => <View onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}
+    onLayout={(b: any) => {
+      const r = b?.bounds ?? b, o = r?.origin ?? r, z = r?.size ?? r;
+      if (z?.width && z?.height && Number.isFinite(o?.x) && Number.isFinite(o?.y)) indicatorBox.set({ x: o.x, y: o.y, w: z.width, h: z.height });
+    }}
     style={{ width: 100, height: 20 }}>
     <Button
       onPress={() => { if (liveVoice()) void stopManagerVoice(); else void run("manager.header"); }}
@@ -148,11 +156,29 @@ export function ManagerTab() {
   return <View class="flex-1 min-h-0 bg-popover p-4 gap-3" testID="manager-tab"><ManagerPanel full /></View>;
 }
 
+/** The scrim of an open panel: the whole window except the header indicator's box, so the wave is never dimmed. */
+function Backdrop() {
+  const dim = (style: Record<string, number | string>, testID?: string) => <View class={`absolute ${DIM}`} style={{ pointerEvents: "none", ...style }} accessible={false} testID={testID} />;
+  const boxed = () => indicatorBox() !== null && managerHeaderIndicatorVisible();
+  return <>
+    <If when={!boxed()}>{() => dim({ left: 0, right: 0, top: 0, bottom: 0 }, "manager-backdrop")}</If>
+    <If when={boxed()}>{() => {
+      const b = indicatorBox()!;
+      return <>
+        {dim({ left: 0, right: 0, top: 0, height: b.y }, "manager-backdrop")}
+        {dim({ left: 0, right: 0, top: b.y + b.h, bottom: 0 })}
+        {dim({ left: 0, width: b.x, top: b.y, height: b.h }, "manager-backdrop-hole")}
+        {dim({ left: b.x + b.w, right: 0, top: b.y, height: b.h })}
+      </>;
+    }}</If>
+  </>;
+}
+
 function Layer() {
   return <Overlay class="inset-0" style={{ pointerEvents: "box-none" }} testID="manager-stage">
     <If when={dropdownOpen() && !phone}>{() => <>
       {/* The whole viewport recedes behind the panel; the panel is opaque above it. */}
-      <View class={`absolute inset-0 ${DIM}`} style={{ pointerEvents: "none" }} accessible={false} testID="manager-backdrop" />
+      <Backdrop />
       <View class="absolute left-0 right-0 bottom-0" style={{ top: isNarrow() ? 56 : 44 }} onPress={closeManagerDropdown} />
       <View class="absolute right-3 bg-popover p-4 gap-3" style={{ top: isNarrow() ? 56 : 44, width: Math.min(560, windowSize().width - 24), boxShadow: SHADOW }} testID="manager-dropdown">
         <Text class={T.section}>Manager</Text>

@@ -3538,7 +3538,7 @@ export const manifest = {
     "header",
     "palette"
    ],
-   "note": "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen. Voice defaults to connected: explicitly opening Manager starts audio immediately unless it was disconnected. Esc closes the dropdown."
+   "note": "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen except the indicator. Waves only while the voice is connected; disconnected is a still quiet wave, muted a still flat line. Voice defaults to connected: explicitly opening Manager starts audio immediately unless it was disconnected. Esc closes the dropdown."
   },
   {
    "id": "manager.audio_toggle",

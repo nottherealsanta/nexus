@@ -16,20 +16,24 @@ const WAVES: [number, number, number, number, number, number][] = [
   [1.70, 0.55, 0.80, 1.3, 3.7, 0.5],
 ];
 
-/** Radians of drift per second. */
-export const waveSpeed = (mode: OrbMode): number =>
-  mode === "speaking" ? 5.2 : mode === "listening" ? 3.4 : mode === "thinking" ? 2.6 : 1.1;
+/** What the field draws: the call's modes, plus two still marks. `still`: the voice is disconnected, a frozen quiet
+ *  wave. `muted`: connected with the microphone muted, a frozen flat line. Neither moves or asks for animation frames. */
+export type WaveMode = OrbMode | "still" | "muted";
+
+/** Radians of drift per second (the still marks do not drift). */
+export const waveSpeed = (mode: WaveMode): number =>
+  mode === "speaking" ? 5.2 : mode === "listening" ? 3.4 : mode === "thinking" ? 2.6 : mode === "settling" ? 1.1 : 0;
 
 /** How bright the dots are, 0 to 1. */
-export const waveBrightness = (mode: OrbMode): number =>
-  mode === "speaking" ? 1 : mode === "listening" ? 0.84 : mode === "thinking" ? 0.68 : 0.55;
+export const waveBrightness = (mode: WaveMode): number =>
+  mode === "speaking" ? 1 : mode === "listening" ? 0.84 : mode === "thinking" ? 0.68 : mode === "muted" ? 0.55 : mode === "still" ? 0.4 : 0.55;
 
 /** The braille cell for dot columns `index * 2` and `index * 2 + 1` at time `t`. */
-export function brailleCell(t: number, mode: OrbMode, level: number, index: number): string {
+export function brailleCell(t: number, mode: WaveMode, level: number, index: number): string {
   const time = t * waveSpeed(mode);
   const lv = Math.max(0, Math.min(1, level));
   // The speaker's waves follow the measured voice: silence is a flat line, loud is tall.
-  const amp = mode === "listening" || mode === "speaking" ? 0.12 + 0.88 * lv : 0.78;
+  const amp = mode === "listening" || mode === "speaking" ? 0.12 + 0.88 * lv : mode === "muted" ? 0 : 0.78;
   let bits = 0;
   for (let col = 0; col < 2; col++) {
     const dx = index * 2 + col;
@@ -47,7 +51,7 @@ export function brailleCell(t: number, mode: OrbMode, level: number, index: numb
 }
 
 /** The whole field, one character per cell. */
-export function brailleField(t: number, mode: OrbMode, level: number, width = BRAILLE_WIDTH): string {
+export function brailleField(t: number, mode: WaveMode, level: number, width = BRAILLE_WIDTH): string {
   let out = "";
   for (let i = 0; i < width; i++) out += brailleCell(t, mode, level, i);
   return out;
@@ -59,7 +63,7 @@ const lerp = (a: Rgb, b: Rgb, k: number): Rgb => [a[0] + (b[0] - a[0]) * k, a[1]
 const ease = (x: number) => { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); };
 
 /** The colour a mode draws its waves in: the speaker's role colour while somebody talks, `text.muted` otherwise. */
-export function waveRole(mode: OrbMode, scheme: "light" | "dark"): string {
+export function waveRole(mode: WaveMode, scheme: "light" | "dark"): string {
   return mode === "listening" ? managerColors[scheme].listening : mode === "speaking" ? managerColors[scheme].speaking : diagramPalettes[scheme].muted;
 }
 
@@ -67,13 +71,13 @@ export function waveRole(mode: OrbMode, scheme: "light" | "dark"): string {
  * The colour (`#rrggbb`) the waves are drawn in while easing from `from` to `mode` (`blend` 0 to 1); the dot brightness
  * stays an opacity, so this is the role colour itself.
  */
-export function waveColor(from: OrbMode, mode: OrbMode, blend: number, scheme: "light" | "dark"): string {
+export function waveColor(from: WaveMode, mode: WaveMode, blend: number, scheme: "light" | "dark"): string {
   const c = lerp(rgb(waveRole(from, scheme)), rgb(waveRole(mode, scheme)), ease(blend));
   return "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 }
 
 /** The dot opacity while easing from `from` to `mode`. */
-export function waveOpacity(from: OrbMode, mode: OrbMode, blend: number): number {
+export function waveOpacity(from: WaveMode, mode: WaveMode, blend: number): number {
   const k = ease(blend);
   return waveBrightness(from) * (1 - k) + waveBrightness(mode) * k;
 }
