@@ -202,4 +202,6 @@ while a final answer streams, the loop takes another step before ending the turn
 Queued inputs start separate turns after completion or failure. Interruption
 holds the queue; sending the next item explicitly releases it. Recovery keeps
 pending input, converts undelivered steers to queued input and holds it, without
-starting model work automatically. See [Pending inputs](api.md#pending-inputs-steer-and-queue).
+starting model work automatically.
+
+`mode: "interrupt"` on a prompt (Alt+Enter) is interrupt-and-send in one call: the queue is held while the turn is cancelled (so a turn that ends by itself in that instant cannot start the queue first), the message runs as a normal `send`, then the hold is released so existing queued messages and steers run after it. Idle, it is `send`. See [Pending inputs](api.md#pending-inputs-steer-and-queue).

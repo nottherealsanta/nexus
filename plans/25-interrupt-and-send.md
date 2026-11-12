@@ -21,22 +21,31 @@ So the meaning is **interrupt and send this message**, not a second Esc.
   (`interface/manifest.toml` ~2103; the TUI uses `a`).
 - API: `POST /api/session/{id}/prompt {text, mode}` with `send` / `steer` / `queue`, and `POST …/interrupt`.
 
+## Decisions (2026-11-12)
+
+- Queue: existing queued messages and pending steers are kept; the interrupt message runs first (priority), the queue runs after it, as old Nexus did. Nothing returns to the composer.
+- Idle: `interrupt` behaves like `send`. A waiting approval or question is cancelled as Esc does.
+- NSH `waiting.allow_session` moved from `alt+enter` to `cmd+shift+enter` (the contexts were not proven disjoint: the approval card and a busy composer are both live).
+- Mobile: no long-press added (out of scope, needs user approval). Open.
+
 ## Plan
 
-- [ ] **Core:** add `mode: "interrupt"` to `POST …/prompt`. Atomic on the server: cancel the running turn the same way
+- [x] **Core:** add `mode: "interrupt"` to `POST …/prompt`. Atomic on the server: cancel the running turn the same way
   `/interrupt` does, then start a turn with this message. Decide what happens to existing pending steers and queued
   messages (default: as Esc today, returned to the client, which puts them back in the composer *after* the sent
   message is gone; or keep the queue and run it after: **ask the user**). When idle, `interrupt` behaves like `send`.
   Mutation matrix and idempotency in `docs/api.md`; tests for busy, idle, awaiting approval/question (a waiting
   approval is denied/cancelled as Esc does), and a race with the turn finishing.
-- [ ] **Manifest:** new `composer.interrupt_send` ("Interrupt and send"), keys `alt+enter` in both clients,
+- [x] **Manifest:** new `composer.interrupt_send` ("Interrupt and send"), keys `alt+enter` in both clients,
   `key_context = "composer"`, `when = ["session.busy"]` (idle: falls through to send). Move NSH
   `waiting.allow_session` off `alt+enter` (proposal: `cmd+shift+enter`) or confirm the contexts never overlap; run
   `check_manifest.py`.
-- [ ] **TUI:** detect Alt+Enter in `composer.rs`/`keys.rs` (Ghostty sends `ESC CR`; with the kitty keyboard
+- [x] **TUI:** detect Alt+Enter in `composer.rs`/`keys.rs` (Ghostty sends `ESC CR`; with the kitty keyboard
   protocol it is a modified Enter); route to the new command. Composer hint line shows it while busy.
-- [ ] **NSH:** the same key in `composer.tsx`; on web check the browser does not eat Alt+Enter; macOS Option+Enter.
+- [ ] **NSH:** (desktop/web done; mobile long-press NOT added, awaiting approval; real-browser Alt+Enter unchecked, only the nsh web test)  the same key in `composer.tsx`; on web check the browser does not eat Alt+Enter; macOS Option+Enter.
   Mobile gets it as a long-press on Send (or a menu item), since there is no Alt key: ask before adding.
-- [ ] Timeline: the interrupted turn shows its normal interrupted state, then the user message; nothing hidden.
-- [ ] Docs: `docs/loop.md` (interrupt), `docs/api.md`, both READMEs, ledger row ("ported from old Nexus").
-- [ ] Tests: Core API tests; TUI behaviour test (Alt+Enter while busy sends and interrupts); NSH browser test.
+- [x] Timeline: the interrupted turn shows its normal interrupted state, then the user message; nothing hidden.
+- [x] Docs: `docs/loop.md` (interrupt), `docs/api.md`, both READMEs, ledger row ("ported from old Nexus").
+- [x] Tests: Core API tests; TUI behaviour test (Alt+Enter while busy sends and interrupts); NSH browser test.
+
+Not verified: screenshots (none taken); real Ghostty ESC CR (crossterm maps it to Alt+Enter; unit-tested via key name); real-browser Option+Enter. Seen failing: `nexus-tui/tests/manager.rs::the_focused_call_shows_the_latest_model_excerpt_and_real_tool` (manager preview, not on the composer path; not checked against base).

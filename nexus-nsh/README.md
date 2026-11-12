@@ -27,6 +27,8 @@ or splices change content above it; the app does not apply a second height
 correction. Following the latest message and restoring a session's position remain
 app-controlled. Deferred follow commands are scoped to the session that queued them.
 
+Alt+Enter (Option+Enter on macOS) in the busy composer is `composer.interrupt_send`: it cancels the turn and sends the draft first. Allow for this session on an approval card moved from `alt+enter` to `cmd+shift+enter`. Mobile has no such control.
+
 **Open inspector** stays inside NSH, using the same authenticated transport as the
 session (Inspector API v2), and does the same as the Rust TUI with buttons, inputs and the
 same keys. Six views: Timing (one shared-axis Gantt, lanes grouped by session, a fixed ruler,

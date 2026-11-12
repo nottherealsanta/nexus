@@ -1904,6 +1904,26 @@ export const manifest = {
    "note": "Enter steers at the next model step."
   },
   {
+   "id": "composer.interrupt_send",
+   "title": "Interrupt and send",
+   "category": "composer",
+   "keys": {
+    "tui": "alt+enter",
+    "nsh": "alt+enter"
+   },
+   "key_context": "composer_busy",
+   "when": [
+    "composer.has_text",
+    "session.busy"
+   ],
+   "unavailable_reason": "Interrupt and send needs a running turn.",
+   "placement": [
+    "palette",
+    "composer"
+   ],
+   "note": "Alt+Enter (Option+Enter on macOS) cancels the running turn as Esc does and runs this message first; queued messages and pending steers stay and run after it. Idle, Enter sends. Mobile has no Alt key and gets no long-press (out of scope, needs approval)."
+  },
+  {
    "id": "composer.queue",
    "title": "Queue message for next turn",
    "category": "composer",
@@ -3286,7 +3306,7 @@ export const manifest = {
    "category": "waiting",
    "keys": {
     "tui": "a",
-    "nsh": "alt+enter"
+    "nsh": "cmd+shift+enter"
    },
    "key_context": "waiting",
    "when": [

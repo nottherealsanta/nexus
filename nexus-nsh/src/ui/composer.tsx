@@ -168,7 +168,7 @@ function EditableComposer() {
   };
   const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
   const canDictate = () => live() && !ses()?.archived && !questionPending();
-  const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send", resumed = false) => {
+  const send = async (mode: "send" | "steer" | "queue" | "interrupt" = busy() ? "steer" : "send", resumed = false) => {
     const t = text().trim();
     // The question lock wins over a slash still in the draft; offline navigation stays available otherwise.
     if (t && !images().length && !questionPending() && runSlashCommand(t)) {
@@ -326,7 +326,11 @@ function EditableComposer() {
   });
   effect(() => {
     if (!focused() || !busy() || !canSend() || open()) return;
-    return bindOpenKeys({ tab: () => { void send("queue"); } });
+    // Alt+Enter (Option+Enter on macOS): cancel the running turn and run this message first (plan 25).
+    return bindOpenKeys({
+      tab: () => { void send("queue"); },
+      [toKeystroke(byId.get("composer.interrupt_send")?.keys?.nsh ?? "alt+enter")]: () => { void send("interrupt"); },
+    });
   });
   // Shift+Tab cycles the composer's eligible agents, wrapping. A picker, modal, inline edit,
   // completion list or focused terminal owns the keys instead; an existing session still asks
@@ -450,7 +454,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue" : "Type a message…")}
+            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
             readonly={!live() || questionPending()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }

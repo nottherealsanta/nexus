@@ -2463,6 +2463,21 @@ fn pasted_images_get_distinct_markers_and_removal_clears_the_last() {
 }
 
 #[test]
+fn alt_enter_while_busy_sends_with_interrupt_mode_and_idle_does_not() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    typing(&mut a, "no turn running");
+    press(&mut a, &["alt+enter"]);
+    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, .. }) if mode == "interrupt")));
+    a.composer().take();
+    a.effects.clear();
+    busy(&mut a);
+    typing(&mut a, "stop and do this");
+    press(&mut a, &["alt+enter"]);
+    assert!(a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, text, .. }) if mode == "interrupt" && text == "stop and do this")));
+}
+
+#[test]
 fn busy_composer_steers_queues_and_completion_wins_tab() {
     use nexus_tui::actions::ApiCall;
     let mut a = app();

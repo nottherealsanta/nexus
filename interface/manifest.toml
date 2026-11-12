@@ -1299,6 +1299,17 @@ placement = ["palette", "composer"]
 note = "Enter steers at the next model step."
 
 [[command]]
+id = "composer.interrupt_send"
+title = "Interrupt and send"
+category = "composer"
+keys = { tui = "alt+enter", nsh = "alt+enter" }
+key_context = "composer_busy"
+when = ["composer.has_text", "session.busy"]
+unavailable_reason = "Interrupt and send needs a running turn."
+placement = ["palette", "composer"]
+note = "Alt+Enter (Option+Enter on macOS) cancels the running turn as Esc does and runs this message first; queued messages and pending steers stay and run after it. Idle, Enter sends. Mobile has no Alt key and gets no long-press (out of scope, needs approval)."
+
+[[command]]
 id = "composer.queue"
 title = "Queue message for next turn"
 category = "composer"
@@ -2144,7 +2155,7 @@ placement = ["card"]
 id = "waiting.allow_session"
 title = "Allow for this session"
 category = "waiting"
-keys = { tui = "a", nsh = "alt+enter" }
+keys = { tui = "a", nsh = "cmd+shift+enter" }
 key_context = "waiting"
 when = ["waiting.approval"]
 unavailable_reason = "No approval is waiting; or Core does not offer session grants for this tool."

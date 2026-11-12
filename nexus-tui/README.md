@@ -138,7 +138,7 @@ the provider, then the meter as the column narrows; while busy its right side
 reads `esc stop` instead of the meter. The focus bar at the card's left edge is
 drawn only in ANSI-16 and mono. Pending inputs appear in a padded card above the
 composer; their text starts where the input starts, with a primary-colour,
-normal-weight `Q` for a queued message or `S` for a steer one cell to its left. A held queue says `held`
+normal-weight `Q` for a queued message or `S` for a steer one cell to its left. Alt+Enter (`ESC CR` in Ghostty, a modified Enter with the kitty protocol) while busy cancels the turn and sends the draft first (`composer.interrupt_send`); the busy placeholder lists `Enter steer · Tab queue · Alt+Enter interrupt`. A held queue says `held`
 after the message. Hovering or selecting a **queued** row right-aligns `✎ ↑ ↓ ×`
 (ASCII `e ^ v x`): edit restores it to the composer, up and down move it within
 the queued group only (disabled on the first and last queued row), and remove asks
