@@ -67,7 +67,7 @@ export function Icon(p: { name: IconName; size?: number; class?: string; selecte
   return <Image src={p.selected === false && (p.name === "panel-left" || p.name === "panel-right") ? panelClosed : icons[p.name]} style={{ width: size, height: size }} class={`shrink-0 ${p.class ?? "tint-foreground-secondary"}`} accessible={false} />;
 }
 
-export function IconButton(p: { icon: IconName; label: string; onPress?: () => void; disabled?: boolean; selected?: boolean; testID?: string; class?: string; tint?: string; reason?: string }) {
+function IconButtonBase(p: { icon: IconName; label: string; onPress?: () => void; onLongPress?: () => void; disabled?: boolean; selected?: boolean; testID?: string; class?: string; tint?: string; reason?: string }) {
   return (
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
@@ -76,6 +76,18 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
     >
       <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>
+  );
+}
+
+/** A long press (phone only) needs a plain pressable view: the base Button does not forward `onLongPress`. */
+export function IconButton(p: Parameters<typeof IconButtonBase>[0]) {
+  if (!p.onLongPress) return <IconButtonBase {...p} />;
+  return (
+    <View role="button" focusable onPress={() => { if (!p.disabled) p.onPress?.(); }} onLongPress={() => { if (!p.disabled) p.onLongPress?.(); }}
+      accessibilityLabel={p.label} testID={p.testID}
+      class={`items-center justify-center rounded-full active:bg-selection ${p.disabled ? "opacity-50" : ""} size-11 ${FOCUS} ${p.class ?? ""}`}>
+      <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
+    </View>
   );
 }
 

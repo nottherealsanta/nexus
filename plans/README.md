@@ -41,7 +41,6 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
 | 33 | [Remove Git from the right sidebar](33-remove-git-from-right-sidebar.md) | **new** | Confirm only the right-sidebar section goes |
-| 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **partly landed** (2026-11-12) | Desktop done; mobile control (long-press on Send) needs user approval |
 | 26 | [Launch: animate from the first frame, no progress bar](26-launch-splash.md) | **landed 2026-11-12 (code)** | Cold-start capture in Ghostty / NSH web not verified |
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
@@ -52,7 +51,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
 Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
-[22 remove `/continuation`](done/22-remove-continuation.md), [29 session commands](done/29-session-commands.md),
+[22 remove `/continuation`](done/22-remove-continuation.md), [25 interrupt and send](done/25-interrupt-and-send.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md),
 [32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md),
 [1 release](done/01-release.md), [2 terminal](done/02-terminal.md), [3 Manager](done/03-manager.md),

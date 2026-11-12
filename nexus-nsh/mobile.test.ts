@@ -3,9 +3,10 @@ import { PHONE_TABS, compactApproval, connectProblem, desktopOnly, healthSummary
 import { manifest } from "./src/gen/manifest";
 
 describe("mobile client rules", () => {
-  test("uses the cut-down client on iPhone and iPad but keeps desktop and web", () => {
+  test("uses the cut-down client on iPhone only; iPad, desktop and web keep the desktop layout", () => {
     expect(mobileClient(true, "ios", "phone")).toBe(true);
-    expect(mobileClient(true, "ios", "tablet")).toBe(true);
+    expect(mobileClient(true, "ios", "pad")).toBe(false);
+    expect(mobileClient(true, "ios", "tablet")).toBe(false);
     expect(mobileClient(true, "macos", "desktop")).toBe(false);
     expect(mobileClient(false, "web", "phone")).toBe(false);
   });

@@ -100,6 +100,19 @@ describe("phone sessions (plans/05 5.2)", () => {
     await app.waitUntil(() => posts(app, "/ses_3/archive").length === 1);
   });
 
+  test("long-pressing Send in a running turn offers Queue or Interrupt and send", async () => {
+    const app = await openPhone({ "POST */api/session/ses_3/prompt*": { body: {} } });
+    await app.press("id:session-ses_3");
+    await app.waitFor("id:composer-input");
+    await app.type("id:composer-input", "stop and do this");
+    await app.longPress("id:send");
+    await app.waitFor("id:send-sheet");
+    expect(app.shows("id:send-queue")).toBe(true);
+    await app.press("id:send-interrupt");
+    await app.waitUntil(() => posts(app, "/ses_3/prompt").length === 1);
+    expect(JSON.parse(posts(app, "/ses_3/prompt")[0].body as string).mode).toBe("interrupt");
+  });
+
   test("the drawer opens from the header button, lists sessions and switches", async () => {
     const app = await openPhone();
     await app.press("id:session-ses_1");

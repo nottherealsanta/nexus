@@ -1,5 +1,6 @@
 import { Image, Scroll, Text, View, computed, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
+import { sendChoice } from "./mobile/state";
 import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
@@ -512,7 +513,7 @@ function EditableComposer() {
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
               </If>
-              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={`${phone ? "rounded-full " : ""}${canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"}`} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
+              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} onLongPress={() => { if (phone && busy() && canSend()) sendChoice.set({ choose: (mode) => void send(mode) }); }} class={`${phone ? "rounded-full " : ""}${canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"}`} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
           <View class="h-2" />

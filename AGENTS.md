@@ -27,7 +27,8 @@ for deliberate changes from old Nexus.
   the TUI and NSH on desktop and web only. The peer rule above applies between the TUI
   and NSH desktop/web. Mobile leaving something out needs no ledger row, but adding
   anything to mobile beyond this list needs the user's approval. Approved (2026-11-09): mobile
-  gets all slash commands (for example `/btw`).
+  gets all slash commands (for example `/btw`). Approved (2026-11-12): long-press Send offers Queue / Interrupt and send;
+  the iPad runs the desktop/web client, not this one (no iPad app).
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.
