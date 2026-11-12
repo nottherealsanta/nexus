@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]    [Git]     · Hello ×    +                                                                                                       □
+     │
+▏2   │▏  Hello                     4m   i 2 other sessions waiting for input                                                                                go
+▏ W  │▏
+▏  3 │                                    System prompt ~990
+     │   Streaming and tools       4m
+     │                                    AGENTS.md  not found · /private/tmp/nexus-look.h1/workspace/AGENTS.md
+     │
+     │ ◆ Waiting approval          4m     Tools [16] ~3.1K
+     │                                      ● read                      ● bash_kill                 ● ask
+     │                                      ● grep                      ● edit                      ● code
+     │   Rich text reply           4m       ● glob                      ● patch                     ● fork
+     │                                      ● ls                        ● write                     ● expose_workspace_tools
+     │
+     │ ◆ Waiting question          4m         Command palette
+     │
+     │                                    Sk  ⌕ type to filter commands
+     │                                        ────────────────────────────────────────────────────────────────────
+     │                                    MC  SESSION
+     │                                       ▌  New session                                                 ctrl+n
+     │                                    to    Switch session                                              ctrl+k
+     │                                          Search sessions                                             ctrl+f
+     │                                          Close tab                                                    alt+x
+     │                                  │       Next tab                                                     alt+]
+     │                                  │  S    Previous tab                                                 alt+[                              #1 · 10:34 PM
+     │                                  │       Rename session
+     │                                          Archive session
+     │                                     H    Delete session
+     │                                     ─    Export session
+     │                                          Hand off to a new session
+     │                                     T    Change session directory
+     │                                          Kernels and shells
+     │                                     •
+     │                                     •  ↑↓ move · enter run · esc close                             1 of 202
+     │
+     │                                     ✓ mock verdict — hello: 1/1 checks passed
+     │
+     │                                     • ✓ exactly 0 tool error(s)
+     │
+     │                                                                                              hello · 0 tools · 15i · 0o · 0r · 333%c · 0.0s · 10:34 PM
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · hello mock · default                                                                          15 · 0.0%
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/nexus-look.h1/workspace
+     │                                   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

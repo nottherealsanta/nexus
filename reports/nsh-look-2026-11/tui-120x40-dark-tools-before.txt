@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Hello               ×    · Streaming and tools ×    +                            □
+     │
+▏2   │   Hello               1m   i 2 other sessions waiting for input                                              go
+▏ W  │                            │  Work through the marathon.                                         #1 · 10:34 PM
+▏  3 │                            │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 112 lines of this turn above
+     │▏  Streaming and tools 1m      Marathon step 27.
+     │▏
+     │                               ▸ 1 read
+     │ ◆ Waiting approval    1m
+     │                               Marathon step 28.
+     │
+     │   Rich text reply     1m      ▸ 1 read
+     │
+     │                               Marathon step 29.
+     │ ◆ Waiting question    1m
+     │                               ▸ 1 read
+     │
+     │                               Marathon step 30.
+     │
+     │                               ▸ 1 read
+     │
+     │                               Marathon complete: every step above ran for real in the selected workspace.
+     │
+     │                               ✓ mock verdict — tool-marathon: 5/5 checks passed
+     │
+     │                               • ✓ read called >= 30 times
+     │                               • ✓ write called == 1 times
+     │                               • ✓ edit called == 1 times
+     │                               • ✓ bash called == 1 times
+     │                               • ✓ exactly 0 tool error(s)
+     │
+     │                                            tool_marathon · 35 tools · 59.0Ki · 0o · 0r · 1%c · 0.4s · 10:34 PM
+     │
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Build · tool_marathon mock · default                              3.3K · 1.6%
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nexus-look.h1/workspace
+     │                             ───────────────────────────────────────────────────────────────────────────────────

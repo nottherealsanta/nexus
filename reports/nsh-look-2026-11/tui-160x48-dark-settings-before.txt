@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]    [Git]     · Hello  ×    Settings      +                                                                                        □
+     │                                  i 2 other sessions waiting for input                                                                                go
+▏2   │▏  Hello                     3m  ▌
+▏ W  │▏
+▏  3 │                                    System prompt ~990
+     │   Streaming and tools       3m
+     │                                    AGENTS.md  not found · /private/tmp/nexus-look.h1/workspace/AGENTS.md
+     │
+     │ ◆ Waiting approval          3  Settings
+     │
+     │                                ⌕ Filter settings…
+     │   Rich text reply           3  ────────────────────────────────────────────────────────────────────────────────────
+     │                                ▌ Appearance          │   Theme                                         light  dark
+     │                                  Providers           │   Monochrome mode                                   off  on
+     │ ◆ Waiting question          3    Agents              │   Animations                                        on  off
+     │                                  Tools               │   Sidebar                                        full  rail
+     │                                  ZMX                 │   Timeline detail                         low  medium  high
+     │                                  MCP                 │   Scroll bar                                        off  on
+     │                                  Context             │   Details sidebar                                   off  on
+     │                                  Voice and speech    │   Sessions shown                 this project  all projects
+     │                                  Manager             │   Archived sessions                                 off  on
+     │                                  Keybindings         │
+     │                                  Notifications       │
+     │                                  About               │
+     │                                                      │                                                                                   #1 · 10:34 PM
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │                                                      │
+     │
+     │                                ↑↓ section · enter open · esc close                                      12 sections
+     │                                                                                                                      0o · 0r · 333%c · 0.0s · 10:34 PM
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · hello mock · default                                                                          15 · 0.0%
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/nexus-look.h1/workspace
+     │                                   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

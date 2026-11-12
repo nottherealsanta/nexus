@@ -89,14 +89,16 @@ The user asked for better-looking NSH web and macOS interfaces, and to do it tog
 three share one visual language (type scale, spacing, radii, list rows, cards, buttons, status dots, the approval
 card).
 
-- [ ] **Audit first:** screenshots of NSH web at 1024 / 1440 px and the macOS app beside the TUI at 120×40 / 160×48,
+- [x] **Audit first (NSH web and TUI done 11-11; macOS app open):** screenshots of NSH web at 1024 / 1440 px and the macOS app beside the TUI at 120×40 / 160×48,
   dark and light, across the main surfaces (sessions sidebar, session view, composer, waiting cards, modals,
   Settings). List what looks unfinished: spacing, alignment, weights, contrast, hover/pressed states, borders.
-- [ ] **One component pass** in `nexus-nsh/src/ui/kit.tsx` and the theme tokens: list row, card, primary/secondary
+- [~] **One component pass (first pass landed 11-11: `Btn` hairline, `Seg` spacing, approval table label column and TUI-matching key order, Settings label column; list row, card, status dot and section header reviewed, unchanged)** in `nexus-nsh/src/ui/kit.tsx` and the theme tokens: list row, card, primary/secondary
   button, segmented control, status dot/ring, section header. Mobile 5.2 uses the same components.
 - [ ] **Parity rule:** layout, wording, order and interactions still match the TUI. Purely rendering-level finish
   (radius, font rendering, shadows, translucency) follows the existing approved NSH difference (rounded surfaces,
   2026-11-06 ledger). Anything else that the TUI cannot or should not copy needs the user's approval and a ledger row.
   Where a change is also right for the TUI (spacing, wording, grouping), land it there in the same change.
-- [ ] Verify with Playwright screenshots (web) and the macOS app; before/after pairs saved under
+- [~] Verify with Playwright screenshots (web done, 1024/1440 dark/light; macOS app not attempted: no non-interactive launch) and the macOS app; before/after pairs saved under
   `reports/nsh-look-2026-11/`.
+
+Audit list, open items (tab clip without ellipsis, light-theme selection contrast, Settings notes vs TUI one-line rows, palette disabled reasons) and before/after pairs: [reports/nsh-look-2026-11/README.md](../reports/nsh-look-2026-11/README.md).

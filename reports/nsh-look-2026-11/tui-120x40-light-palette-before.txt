@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Hello ×    +                                                                     □
+     │
+▏2   │▏  Hello               2m   i 2 other sessions waiting for input                                              go
+▏ W  │▏                               ● bash                      ● ask
+▏  3 │                                ● bash_output               ● code
+     │   Streaming and tools 2m       ● bash_kill                 ● fork
+     │                                ● edit                      ● expose_workspace_tools
+     │
+     │ ◆ Waiting approval    2m     Skills [0]  none
+     │
+     │                    Command palette
+     │   Rich text reply
+     │                    ⌕ type to filter commands
+     │                    ────────────────────────────────────────────────────────────────────
+     │ ◆ Waiting questio  SESSION
+     │                   ▌  New session                                                 ctrl+n
+     │                      Switch session                                              ctrl+k          #1 · 10:34 PM
+     │                      Search sessions                                             ctrl+f
+     │                      Close tab                                                    alt+x
+     │                      Next tab                                                     alt+]
+     │                      Previous tab                                                 alt+[
+     │                      Rename session
+     │                      Archive session
+     │                      Delete session
+     │                      Export session
+     │                      Hand off to a new session
+     │                      Change session directory
+     │                      Kernels and shells
+     │
+     │                    ↑↓ move · enter run · esc close                             1 of 202
+     │
+     │                                                      hello · 0 tools · 15i · 0o · 0r · 333%c · 0.0s · 10:34 PM
+     │
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Build · hello mock · default                                        15 · 0.0%
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nexus-look.h1/workspace
+     │                             ───────────────────────────────────────────────────────────────────────────────────

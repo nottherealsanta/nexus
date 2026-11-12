@@ -1,0 +1,48 @@
+  ◧      [Sessions] [Files]    [Git]     · Hello           ×    · Rich text reply ×    +                                                                      □
+     │
+▏2   │   Hello                     3m   i 2 other sessions waiting for input                                                                                go
+▏ W  │
+▏  3 │                                    Skills [0]  none
+     │   Streaming and tools       3m
+     │                                    MCP [0]  none
+     │
+     │ ◆ Waiting approval          3m     total  ~4,099 tok
+     │
+     │
+     │▏  Rich text reply           3m   │
+     │▏                                 │  Show rich text.                                                                                      #1 · 10:34 PM
+     │                                  │
+     │ ◆ Waiting question          3m
+     │                                     Streaming showcase
+     │                                     ──────────────────
+     │
+     │                                     Lists and emphasis
+     │
+     │                                     1. bold, italic, struck,  inline code
+     │
+     │                                     │ A block quote
+     │
+     │                                     ┌───────┬─────────┐
+     │                                     │ tool  │ mutates │
+     │                                     ├───────┼─────────┤
+     │                                     │ read  │ no      │
+     │                                     │ write │ yes     │
+     │                                     └───────┴─────────┘
+     │
+     │                                       ╭─ python
+     │                                       │ def fib(n): return n if n < 2 else fib(n-1)+fib(n-2)
+     │                                       ╰─
+     │
+     │                                     日本語 · Ελληνικά · مرحبا · 🚀🔥✅
+     │
+     │                                     ✓ mock verdict — streaming-rich: 0/0 checks passed
+     │
+     │                                                                                     streaming_rich · 0 tools · 17i · 0o · 0r · 471%c · 0.1s · 10:34 PM
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · streaming_rich mock · default                                                                 17 · 0.0%
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/nexus-look.h1/workspace
+     │                                   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
