@@ -36,7 +36,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 44 | [Tooling and prompts from a session review](44-session-review-tooling.md) | **landed 2026-11-12** except background-job pipe status | Re-run its measurement queries after a week of use; revisit triggers are in the file |
 | 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |
 | 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
-| 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **mostly landed** | Open: shared string table, paired screenshots |
+| 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **mostly landed** | Open: paired screenshots (not verified) |
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
