@@ -4,7 +4,7 @@ import { phoneRow } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Btn, FOCUS, Icon, IconButton, PHONE_FONT, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
+import { Btn, FOCUS, Icon, IconButton, UI_FONT, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -973,7 +973,7 @@ function RowView(p: { r: () => Row; sid: string }) {
                   : <CodeFence block={block} />;
               }}
               classes={PROSE}
-              styles={phone ? { root: { fontFamily: "Geist", fontSize: 16, lineHeight: 25 } } : undefined}
+              styles={{ root: phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 25 } : { fontFamily: "Google Sans" } }}
             />
           </View>
         </If>
@@ -1274,13 +1274,13 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...PHONE_FONT }} class={`${TS.body} text-foreground`}>{body()}</Text>
+            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class={`${TS.body} text-foreground`}>{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
                 <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
                 <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
-                <Text style={PHONE_FONT} class={`${META} pt-[3px]`}>{meta()}</Text>
+                <Text style={UI_FONT} class={`${META} pt-[3px]`}>{meta()}</Text>
               </View>
             </If>
           </View>

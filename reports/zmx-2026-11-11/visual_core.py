@@ -14,7 +14,7 @@ import uvicorn
 from nexus.codec import message_from_json
 from nexus.config import ConfigFile
 from nexus.daemon import _write_info
-from nexus.llmhub.types import Message, Text
+from nexus.llmhub.types import Message, Text, ToolCall, ToolResult
 from nexus.server import build_app, make_runtime
 from nexus.store import Store
 
@@ -50,6 +50,13 @@ async def main():
         rt.store.finish_turn(turn["id"], "completed", steps=1)
         rt._save_worker(child.id, info["worker"])
         ids[name] = child.id
+    # The parent's `session` calls, so both clients show a child card per ZMX child to open it from.
+    calls = [ToolCall(f"call_{name}", "session", json.dumps({"agent": "scout", "title": rt.session(cid).title,
+                                                              "prompt": "Run the check."}))
+             for name, cid in ids.items()]
+    rt.store.append_message(parent.id, Message("assistant", tuple(calls)))
+    rt.store.append_message(parent.id, Message("tool", tuple(
+        ToolResult(c.id, json.dumps({"session": ids[c.id.removeprefix("call_")], "status": "done"})) for c in calls)))
     port = int(os.environ["NEXUS_PORT"])
     url, token = f"http://127.0.0.1:{port}", "zmx-visual-check"
     _write_info({"url": url, "pid": os.getpid(), "token": token, "started": time.time()})

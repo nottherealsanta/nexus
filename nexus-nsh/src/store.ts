@@ -16,6 +16,7 @@ import { receiveVoiceProgress } from "./voice-state";
 import { managerHooks } from "./core/manager-hooks";
 import { inspectorHooks } from "./core/inspector-hooks";
 import { playNotificationCue } from "./cues";
+import { listenNotificationPresses, notifySession } from "./os-notify";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
@@ -185,7 +186,7 @@ export const leftOpen = signal(true);
 /** The project rail stays beside the sidebar, open or closed, wherever the window has room for it. */
 export const railShown = () => !phone && width() >= 560;
 export const rightOpen = signal<boolean | null>(null); // null = default by width
-export const leftTab = signal<"sessions" | "files" | "git" | "projects">("sessions");
+export const leftTab = signal<"sessions" | "files" | "git">("sessions");
 export const centre = signal<CentreView>("session");
 export const previousCentre = signal<CentreView>("session");
 export const currentProject = signal<string | null>(null);
@@ -205,7 +206,7 @@ export const worktreeInfoOpen = signal(false);
 export type PickerItem = { id: string; label: string; hint?: string; detail?: string[]; run: () => void | Promise<void> };
 /** The projects overview (PLAN 15.4): the selected row and the projects whose archived sessions are shown. */
 export const projectsOverview = signal<null | { cursor: number; archived: string[] }>(null);
-/** The keyboard flow from an empty composer: the session list, then the project list, which holds the keys. */
+/** The keyboard flow from an empty composer: the session list, then the project rail, which holds the keys. */
 /** The composer has the keyboard focus. */
 export const composerFocused = signal(false);
 export const flowStage = signal<null | "sessions" | "projects">(null);
@@ -683,8 +684,8 @@ const host: SyncHost = {
   },
   contextChanged(id) { void loadContext(id).catch(() => {}); },
   inputsChanged(id) { void loadInputs(id).catch(() => {}); },
-  sessionFinished() { if (notificationSoundsOn()) playNotificationCue("finished"); },
-  sessionInput() { if (notificationSoundsOn()) playNotificationCue("input"); },
+  sessionFinished(id) { if (notificationSoundsOn()) playNotificationCue("finished"); void notifySession("finished", id, model.sessions.get(id)?.title ?? "", model.selected?.sessionId ?? null); },
+  sessionInput(id) { if (notificationSoundsOn()) playNotificationCue("input"); void notifySession("input", id, model.sessions.get(id)?.title ?? "", model.selected?.sessionId ?? null); },
   handoffEvent(e) {
     if (e.type === "session.handoff_failed") { toast("warning", `Automatic handoff failed: ${(e.data as any)?.error ?? "unknown error"}`); return; }
     const d = e.data as { reason?: string; to?: string };
@@ -702,6 +703,7 @@ const host: SyncHost = {
   streamClosed(streamId) { viewReporter.closed(streamId); managerHooks.closed?.(streamId); },
 };
 export const sync = new Sync(host);
+listenNotificationPresses((id) => void selectSession(id));
 
 /** Core's ephemeral view registry; a rejected client id asks for a fresh stream. */
 export const viewReporter = new ViewReporter({ onMismatch: () => sync.forceSnapshot() });

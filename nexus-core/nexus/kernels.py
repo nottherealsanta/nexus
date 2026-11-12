@@ -33,6 +33,7 @@ from .tools.base import Tool, ToolContext, ToolError, clip
 MAX_KERNELS = 8
 MAX_CALLS = 64
 MAX_CELLS = 100  # retained metadata; cell numbers keep increasing
+MAX_KEPT_CHARS = 300_000  # completed outputs a failed cell keeps in `last_outputs`
 LIMITS = {"max_feed_duration_secs": 10, "max_memory": 64 * 1024 * 1024,
           "max_recursion_depth": 200, "max_suspensions": 1024}
 
@@ -249,6 +250,31 @@ class Kernels:
             state = "kernel discarded" if kernel.id not in self.items else "queued cell did not run; kernel preserved"
             raise ToolError(f"kernel {kernel.id} · cell timed out after {timeout:g} s (including queue and tool calls); {state}") from exc
 
+    async def _keep_outputs(self, k: Kernel, calls: list[dict[str, Any]]) -> str:
+        """After a failed cell, keep its completed calls' outputs in `last_outputs` instead of losing them.
+
+        In two weeks of sessions (2026-11) 58 of 70 cells that died on one uncaught tool error (usually a
+        guessed path inside `asyncio.gather`) had other calls that had already completed; the model then
+        re-ran all of them. Monty's gather has no `return_exceptions`. Returns the note for the error text."""
+        kept: dict[int, str] = {}
+        size = 0
+        for record in calls:
+            output = str(record["output"])
+            if record["error"] or not output or size + len(output) > MAX_KEPT_CHARS:
+                continue
+            kept[record["index"]] = output
+            size += len(output)
+        if not kept:
+            return ""
+        try:
+            await k.worker.feed_run(f"last_outputs = {kept!r}", print_callback=lambda *_: None)
+        except (MontyError, OSError, ValueError, RuntimeError):
+            return ""
+        k.names.add("last_outputs")
+        return (f"\nOutputs of the calls that completed are kept in last_outputs[N] (N = {', '.join(map(str, kept))}, "
+                "numbered below); print what you need from them instead of re-running those calls. Wrap a call "
+                "that may fail in try/except RuntimeError.")
+
     async def _cell(self, k: Kernel, code: str, caller: str, ctx: ToolContext,
                     tools: list[Tool], approve: Approve, publish: Publish) -> str:
         k.counter += 1
@@ -291,6 +317,10 @@ class Kernels:
                 raise ToolError("the user declined this tool call")
             return await tool.run(arguments, nested_ctx)
 
+        # How a nested call that never finished is labelled: a cell can stop by interrupt/timeout or
+        # because another call (or the cell's own code) raised and Monty abandoned the rest.
+        abort_reason = {"text": "interrupted or timed out"}
+
         async def dispatch(name: str, arguments: dict[str, Any]) -> str:
             if len(cell["calls"]) >= MAX_CALLS:
                 raise RuntimeError(f"nested call limit ({MAX_CALLS}) reached")
@@ -308,7 +338,7 @@ class Kernels:
                 record["output"] = await task
                 return record["output"]
             except asyncio.CancelledError:
-                record["error"] = record["error"] or "interrupted or timed out"
+                record["error"] = record["error"] or abort_reason["text"]
                 raise
             except Exception as exc:
                 record["error"] = f"{type(exc).__name__}: {exc}"
@@ -335,7 +365,7 @@ class Kernels:
                     elif not record["error"]:
                         record["error"] = f"{type(error).__name__}: {error}"
                 if not record["output"] and not record["error"]:
-                    record["error"] = "interrupted or timed out"
+                    record["error"] = abort_reason["text"]
                 close(record)
 
         k.dispatch = dispatch
@@ -355,6 +385,7 @@ class Kernels:
             error = "interrupted or timed out"
             raise
         except (MontyError, OSError, ValueError, RuntimeError) as exc:
+            abort_reason["text"] = "cancelled when the cell stopped at an uncaught error"
             error = (str(exc).strip().splitlines() or [type(exc).__name__])[-1]
             if isinstance(exc, (MontyCrashedError, MontyDisconnectError)) or any(
                 marker in error for marker in ("MemoryError", "TimeoutError", "RecursionError", "suspension limit")
@@ -369,6 +400,8 @@ class Kernels:
             cell["stdout"] = "".join(printed) + (f"\n[… clipped {dropped} stdout characters …]" if dropped else "")
             cell["value"] = clip(repr(value)) if value is not None else None
             publish("code.cell", {"kernel_id": k.id, **cell})
+        if error and k.id in self.items:
+            error += await self._keep_outputs(k, cell["calls"])
         # Monty has no globals()/dir(). Track assigned names with Python's parser,
         # then ask the sandbox for type names and bounded reprs; never evaluate on host.
         try:

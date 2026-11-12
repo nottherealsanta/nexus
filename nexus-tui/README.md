@@ -465,6 +465,11 @@ messages, copied from the parent, into one group row at the top,
 unknown), folded by default and toggled like a group (Enter/Space, a click,
 Left/Right). Open, the copied messages render as usual, three cells in under
 the chevron; the `[Nexus fork]` task message after them is a normal user band.
+A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
+`ZMX · Claude Code` or `ZMX · Antigravity` on its parent's child card and in its heading. Its timeline
+opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
+`Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
+own subagents show read-only inside the calling tool's card. As in NSH.
 Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,
 from `paint::verb_glyph` and `[glyphs.verb]` in `theme.toml`) that the status
 glyph replaces while running, failed, denied or waiting. Opening a member shows

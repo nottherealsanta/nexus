@@ -192,6 +192,45 @@ class NotFound(Exception):
     pass
 
 
+# HTTP statuses where the provider refused the request itself: resending the same request to the same
+# model fails the same way (408 and 429 are transient and excluded).
+_REJECTED = {400, 401, 402, 403, 404, 413, 422}
+
+
+def failure_advice(error: dict[str, Any]) -> tuple[str, str]:
+    """The provider's own reason for a failed child turn, and whether resuming it can help.
+
+    A parent only saw "copilot: HTTP 400" and kept resuming a child whose model the provider did not
+    support (2026-11-11). Returns (" (reason)" or "", " advice sentence" or "")."""
+    status = error.get("status")
+    if error.get("kind") != "provider" or not isinstance(status, int):
+        return "", ""
+    reason = ""
+    body = error.get("body")
+    if isinstance(body, str) and body.strip():
+        try:
+            data: Any = json.loads(body)
+        except ValueError:
+            data = body.strip().splitlines()[0]
+        inner = data.get("error", data) if isinstance(data, dict) else data
+        if isinstance(inner, dict):
+            code = inner.get("code") or inner.get("type")
+            text = inner.get("message")
+            reason = ": ".join(str(x) for x in (code, text) if x)
+        elif isinstance(inner, str):
+            reason = inner
+        reason = " ".join(reason.split())[:240]
+    if status in _REJECTED:
+        advice = (" The provider rejected the request itself, so resuming this sub agent on the same model will "
+                  "most likely fail the same way; fix the cause (a different model, signing in again, a smaller "
+                  "request) or do the work yourself.")
+    elif status == 429:
+        advice = " The provider is rate- or usage-limited; resuming works only once the limit resets, or on another model."
+    else:
+        advice = ""
+    return (f" ({reason})" if reason else ""), advice
+
+
 def project_json(p: Project) -> dict[str, Any]:
     return {"id": p.id, "path": p.path, "name": p.name, "created": p.created, "updated": p.updated,
             "revision": p.revision, "position": p.position, "status": p.status}
@@ -271,6 +310,7 @@ class Runtime:
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
+        self.error_details: dict[str, dict[str, Any]] = {}  # session id -> that failure's full error (status, body)
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
         self.removing_worktrees: set[Path] = set()
         self.closing_sessions: set[str] = set()
@@ -1243,6 +1283,10 @@ class Runtime:
             from .workers.registry import child_ref
             selected = child_ref(ref)
             if selected != ref:
+                # The configured effort for `claude/<id>` follows the child onto `claude-code/<id>`.
+                efforts = snapshot.get("model_efforts") or {}
+                if ref in efforts:
+                    efforts[selected] = efforts.pop(ref)
                 model = ref = selected
         self._guard_worker_model(ref, child=parent is not None)
         if ref.partition("/")[0] in ("claude-code", "agy"):
@@ -1505,8 +1549,11 @@ class Runtime:
             self.store.link_message_event(stored.id, event["id"])
 
     def _notify(self, session_id: str, text: str, *,
-                notices: tuple[dict[str, Any], ...] = ()) -> None:
+                notices: tuple[dict[str, Any], ...] = (), wake: bool = True) -> None:
         """Deliver an automatic notice without waking an archived session.
+
+        `wake=False` (a shell the user stopped) saves an idle session's notice as
+        context without starting a turn, like an archived one.
 
         Busy: before the next model call. Idle: start a turn (the existing
         behavior). Archived: save the model-visible notice as context but do not
@@ -1517,7 +1564,7 @@ class Runtime:
         session = self.store.session(session_id)
         if session is None:
             return
-        if session.archived:
+        if session.archived or (not wake and session_id not in self.turns):
             stored = self.store.append_message(session_id, Message("user", (Text(text),)), notices=notices)
             self._publish_message(session_id, stored)
         elif session_id in self.turns:
@@ -2389,7 +2436,7 @@ class Runtime:
         self.bus.publish("bash.finished", data, session_id=job.session_id)
         if self.store.session(job.session_id) is None:
             return
-        self._notify(job.session_id, self._job_notice(job))
+        self._notify(job.session_id, self._job_notice(job), wake=not job.user_stopped)
 
     @staticmethod
     def _job_notice(job: Job) -> str:
@@ -2964,7 +3011,8 @@ class Runtime:
             error = self.errors[child_id]
             outcome = ("was interrupted by the user" if error == "interrupted by the user"
                        else f"failed: {error.rstrip('.')}")
-            return (f"Sub agent {child_id} ({self._child_label(child)}) {outcome}."
+            reason, advice = failure_advice(self.error_details.get(child_id) or {})
+            return (f"Sub agent {child_id} ({self._child_label(child)}) {outcome}{reason}." + advice
                     + self._resume_hint(child.parent_id, child_id) + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
@@ -3052,6 +3100,7 @@ class Runtime:
         """
         session_id = session.id
         self.errors.pop(session_id, None)
+        self.error_details.pop(session_id, None)
         data: dict[str, Any] = {"origin": origin}
         if continuation is not None:
             data["continuation"] = continuation
@@ -3207,6 +3256,7 @@ class Runtime:
         closed = False
         completed = False
         interrupted = False
+        crashed = False  # an unexpected exception; queued inputs are held, as for an interrupt
         try:
             agent = self._agent(self.session(session_id))
             agent.turn_id = turn_id
@@ -3379,6 +3429,22 @@ class Runtime:
             self._fail(session_id, error)
             self.store.finish_turn(turn_id, "failed", steps=step, error=error)
             closed = True
+        except Exception as exc:
+            # A Nexus bug or a failing store (a full disk on 11-12). Log it, and close the turn's calls
+            # so the next prompt is not refused by the provider for tool calls without results. If
+            # these writes fail too, the fallback below and startup recovery still apply.
+            crashed = True
+            logging.getLogger(__name__).exception("turn %s of session %s failed unexpectedly", turn_id, session_id)
+            failure = f"{type(exc).__name__}: {exc}"[:300]
+            error = {"kind": "internal", "message": f"Nexus failed during this turn: {failure}"}
+            if active_request is not None:
+                self.store.interrupt_request(active_request, reason=error["message"], reasoning_seconds=clock.seconds())
+            if active_attempt is not None:
+                self.store.finish_attempt(active_attempt, "failed", error=error["message"])
+            self._close_dangling_calls(session_id, started, finished, turn_id, failure=failure)
+            self._fail(session_id, error)
+            self.store.finish_turn(turn_id, "failed", steps=step, error=error)
+            closed = True
         finally:
             if partial is not None:
                 partial.reasoning_seconds = clock.peek()
@@ -3409,7 +3475,7 @@ class Runtime:
                 with self.store.db:
                     self.store.db.execute("update pending_input set mode = 'queue' where id = ?", (item["id"],))
                 self.bus.publish("input.updated", self.inputs.get(session_id, item["id"]), session_id=session_id)
-            if (interrupted or not closed) and self.inputs.list(session_id):
+            if (interrupted or crashed or not closed) and self.inputs.list(session_id):
                 self.inputs.hold(session_id, True)
                 if self.inputs.list(session_id):
                     self.bus.publish("input.held", {"session_id": session_id, "held": True}, session_id=session_id)
@@ -3490,6 +3556,7 @@ class Runtime:
 
     def _fail(self, session_id: str, error: dict[str, Any]) -> None:
         self.errors[session_id] = error["message"]
+        self.error_details[session_id] = error
         self.bus.publish("session.error", error, session_id=session_id)
 
     def _pending_approval_calls(self, session_id: str) -> set[str]:
@@ -3505,13 +3572,19 @@ class Runtime:
 
     def _close_dangling_calls(self, session_id: str, started: set[str],
                               finished: dict[str, ToolResult], turn_id: str, *,
-                              pending_approvals: set[str] | None = None) -> None:
+                              pending_approvals: set[str] | None = None, failure: str | None = None) -> None:
+        """Give every call of the last assistant message a result, so the next request is provider-valid.
+
+        `failure` is set when Nexus itself failed mid-turn (an unexpected exception) rather than the
+        user interrupting; the wording then says so, and running sub agents were not stopped.
+        """
         messages = self.store.messages(session_id)
         if not messages or messages[-1].message.role != "assistant":
             return
         calls = [p for p in messages[-1].message.parts if isinstance(p, ToolCall)]
         if not calls:
             return
+        cause = f"Nexus failed during this turn ({failure})" if failure else "interrupted by the user"
         waiting = pending_approvals or set()
         results: list[ToolResult] = []
         for call in calls:
@@ -3520,26 +3593,27 @@ class Runtime:
             elif call.id in waiting:
                 results.append(ToolResult(
                     call.id,
-                    "interrupted by the user while this call was waiting for approval; it did not run",
+                    f"{cause} while this call was waiting for approval; it did not run",
                     is_error=True,
                 ))
             elif call.id in started and call.name in ("session", agent_files.FORK_TOOL) and (child := self._child_for_call(session_id, call.id)):
+                stopped = ("the sub agent was not stopped and may still be working" if failure
+                           else "the sub agent was interrupted too and may have changed the workspace")
                 results.append(ToolResult(
                     call.id,
-                    f"interrupted by the user while sub agent {child.id} ({self._child_label(child)}) was working; the "
-                    "sub agent was interrupted too and may have changed the workspace."
+                    f"{cause} while sub agent {child.id} ({self._child_label(child)}) was working; {stopped}."
                     + self._resume_hint(session_id, child.id),
                     is_error=True,
                 ))
             elif call.id in started:
                 results.append(ToolResult(
                     call.id,
-                    "interrupted by the user while this tool was running; its result is unknown and it may have "
+                    f"{cause} while this tool was running; its result is unknown and it may have "
                     "changed the workspace",
                     is_error=True,
                 ))
             else:
-                results.append(ToolResult(call.id, "interrupted by the user before this tool ran", is_error=True))
+                results.append(ToolResult(call.id, f"{cause} before this tool ran", is_error=True))
         message = Message("tool", tuple(results))
         stored = self.store.save_tool_message(session_id, message, turn_id=turn_id)
         self._publish_message(session_id, stored)

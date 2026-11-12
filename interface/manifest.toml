@@ -18,7 +18,7 @@ terms = [
   # project rail (saved order and three-tier status)
   "project.current", "project.passive", "project.inactive",
   "project.can_move_up", "project.can_move_down",
-  # keyboard flow from an empty composer (PLAN 15.4): the sidebar's Projects list holds the keys
+  # keyboard flow from an empty composer: the project rail holds the keys
   "sidebar.projects_focus",
   # session state (the session shown in the centre column)
   "session.idle", "session.busy", "session.interrupted",
@@ -115,7 +115,7 @@ note = "Inline rename, settings field, find bar, key capture: cancel the edit an
 id = "sidebar_back"
 when = ["sidebar.projects_focus"]
 action = "sidebar.step_back"
-note = "The sidebar's project list steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
+note = "The project rail steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
 
 [[keymap.escape]]
 id = "drawer"
@@ -950,15 +950,6 @@ unavailable_reason = "Open a project first."
 placement = ["palette", "sidebar"]
 
 [[command]]
-id = "sidebar.tab.projects"
-title = "Sidebar: Projects"
-category = "navigation"
-keys = { tui = "alt+3", nsh = "cmd+3" }
-key_context = "global"
-when = ["always"]
-placement = ["palette", "sidebar"]
-
-[[command]]
 id = "sidebar.focus"
 title = "Focus sidebar"
 category = "navigation"
@@ -1025,9 +1016,9 @@ category = "navigation"
 keys = { tui = "esc", nsh = "esc" }
 key_context = "escape_chain"
 when = ["sidebar.projects_focus"]
-unavailable_reason = "The project list does not have the keys."
+unavailable_reason = "The project rail does not have the keys."
 placement = ["sidebar"]
-note = "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project list (Up/Down select), Left again opens the projects overview. Esc or Right steps back out in reverse. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
+note = "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project rail (Up/Down move between projects, the focused tile shows its full name and four counts, Enter opens the project and shows its sessions). Esc or Right steps back out. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
 
 [[command]]
 id = "overlay.close"

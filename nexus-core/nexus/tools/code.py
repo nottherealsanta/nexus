@@ -14,8 +14,11 @@ SPEC = ToolSpec(
         "No filesystem or network access except through these tools. Control tools and code are unavailable inside. "
         "Example: import asyncio; results = await asyncio.gather(grep(pattern='TODO', path='src'), ls(path='tests')); print(results[0]). "
         "Inspect current affected text before editing: retained-but-unprinted results have not been inspected by the model. "
-        "Print only relevant excerpts or summaries, not every result. For independent operations that may fail, catch RuntimeError per operation "
-        "so one failure does not discard other evidence. Omit kernel_id for your private kernel; pass an id to share deliberately. "
+        "Print only relevant excerpts or summaries, not every result. A failing call raises RuntimeError and stops the cell; gather has no "
+        "return_exceptions, so for a path you have not confirmed wrap the call: async def safe(c):\\n try: return await c\\n except RuntimeError as e: return str(e). "
+        "If a cell stops anyway, the completed calls' outputs are in last_outputs[N]; read them there, do not re-run. "
+        "Images cannot be viewed inside a cell; call read directly for those. "
+        "Omit kernel_id for your private kernel; pass an id to share deliberately. "
         "Forks cannot borrow other sessions' kernels."
     ),
     parameters={"type": "object", "properties": {

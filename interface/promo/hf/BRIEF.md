@@ -19,14 +19,14 @@ Rules
 - Edit ONLY your own scene file(s) in `hf/compositions/` (named in your task) and add assets under `hf/assets/cap/`.
   Do not edit `index.html`, `assets/kit/kit.css`, other scenes, or anything outside `hf/`.
 - Scene file shape (format.md): everything inside `<template>`; start with `<link rel="stylesheet" href="assets/kit/kit.css" />`
-  (fonts Geist + Monaspace Argon, Nexus colour vars); root `<div id="root" data-composition-id="<id>" …>` styled as `#root { position:absolute; inset:0 }`;
+  (fonts Google Sans + Monaspace Argon, Nexus colour vars); root `<div id="root" data-composition-id="<id>" …>` styled as `#root { position:absolute; inset:0 }`;
   timed elements have `class="clip"`, `data-start`, `data-duration` (seconds local to the scene) and unique ids prefixed with the scene id;
   one paused GSAP timeline (`gsap` is global, loaded by the root) registered last as `window.__timelines["<id>"] = tl`.
   Use `fromTo` with absolute positions. Never animate a `.clip` element's transform/visibility: animate a child.
   Per-frame drawing (typewriters, counters, a moving selection) may use the `hf-seek` protocol in runtimes.md, deriving state from time alone.
   No Math.random (use a seeded mulberry32), no timers, no Date.
 - Accuracy: show only real Nexus behaviour from the captures; captions use the wording in plan.md.
-- Look: premium dark product film (Apple, Linear or Vercel launch style). Restraint, big confident Geist captions (one at a time),
+- Look: premium dark product film (Apple, Linear or Vercel launch style). Restraint, big confident Google Sans captions (one at a time),
   real UI framed large and crisp, slow eased 3D camera drifts (CSS perspective + GSAP rotationX/rotationY/z on a wrapper),
   punch-in zooms onto the exact region of a capture that matters, light accent glows, hard cuts exactly on the phrase times in plan.md.
   The TUI accent is `#e8a46e`. NSH Void is monochrome; agent colours are its only colour.

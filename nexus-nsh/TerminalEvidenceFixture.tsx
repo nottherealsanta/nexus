@@ -4,7 +4,7 @@ import { Confirm } from "./src/ui/overlays";
 import { centre, connection, currentProject, draft } from "./src/store";
 import { previewTerminalEvidence } from "./src/terminal-evidence-preview";
 import { terminalEvidence } from "./src/terminal-evidence";
-import "./fonts/Geist-Regular.ttf";
+import "./fonts/GoogleSans-Variable.ttf";
 
 function Fixture() {
   centre.set("new_session");

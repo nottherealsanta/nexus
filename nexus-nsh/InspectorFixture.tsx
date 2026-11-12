@@ -1,7 +1,7 @@
 import { mount, View, Text, keymap } from "nsh";
 import { InspectorModal } from "./src/ui/inspector";
 import { closeInspector, inspectSession, scrollTop } from "./src/inspector";
-import "./fonts/Geist-Regular.ttf";
+import "./fonts/GoogleSans-Variable.ttf";
 import { inspectorHooks } from "./src/core/inspector-hooks";
 // The inspector opened through the real request path; tests answer its requests with the shared scenario.
 function Fixture() {

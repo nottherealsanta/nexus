@@ -32,10 +32,10 @@ import { Splash } from "./src/ui/splash";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { coreReady, coreUrl, m, model, selectSession, isNarrow, leftOpen, loadPrefs, native, panelOpen, phone, phonePage, railShown, startApp, syncView, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
-import "./fonts/Geist-Regular.ttf";
-import "./fonts/Geist-Medium.ttf";
-import "./fonts/Geist-SemiBold.ttf";
-import "./fonts/Geist-Bold.ttf";
+// A value import, though nothing is read from it: `nsh package` links a native UI set into the web runtime only
+// when the bundle imports it, and the modules look it up by name (`nativeModule`), which the packager cannot see.
+import "nexus/native";
+import "./fonts/GoogleSans-Variable.ttf";
 
 /** The system tray: projects and session status as a menu, and the icon marks a session that needs attention. */
 function installTray() {

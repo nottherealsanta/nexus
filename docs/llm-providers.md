@@ -41,6 +41,11 @@ scenario defaults to `hello` inside `MockProvider`. `ProviderInfo.verified` is t
 the adapter: `codex`, `grok`, `copilot`, `opencode`, `groq`, `nvidia` and the dev `mock`. It is false for `claude`, `openai` and `ollama`. Sign-in itself is not verified for
 copilot, grok and opencode (PLAN.md, step 3).
 
+Two more ids live outside `PROVIDERS`, in `nexus/workers/registry.py`: `claude-code` (`ZMX · Claude Code`) and `agy`
+(`ZMX · Antigravity`), dialect `external-cli`. They are not request/stream providers: `stream()` refuses, and a child
+on one of them runs the CLI's own loop through `workers.ExternalAgent` instead of Nexus's. Off by default, children
+only. See [external-workers.md](external-workers.md).
+
 ### Quirks per provider
 
 | id | Quirks |

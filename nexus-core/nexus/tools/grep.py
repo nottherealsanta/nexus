@@ -21,7 +21,8 @@ from typing import Any
 
 from ..llmhub.types import ToolSpec
 from .base import Tool, ToolContext, ToolError, clip, resolve
-from .walk import glob_match, pattern_error, walk
+from .suggest import did_you_mean
+from .walk import glob_match, pattern_error, search_base, walk
 
 DEFAULT_MATCHES = 100
 MAX_MATCHES = 2000
@@ -52,10 +53,12 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         except re.error as exc:
             if not shutil.which("rg"):  # with rg the pattern is rg syntax, so only rg can judge it
                 raise ToolError(f"invalid pattern: {exc}") from exc
-    root = resolve(ctx, args.get("path") or ".")  # a directory, or a single file
+    # A directory or a single file. Like `read`, it may leave the workspace; permission rules gate that.
+    root = resolve(ctx, args.get("path") or ".", outside=True)
     if not root.exists():
-        raise ToolError(f"{args.get('path')} does not exist")
-    workspace = ctx.workspace.resolve()
+        raise ToolError(f"{args.get('path')} does not exist" + await did_you_mean(ctx, root))
+    outside = search_base(ctx, root)
+    workspace = outside or ctx.workspace.resolve()  # the search's base; results are absolute when outside
     options = {"regex": regex, "ignore_case": bool(args.get("case_insensitive")),
                "hidden": bool(args.get("include_hidden")), "glob": file_glob}
     try:
@@ -68,6 +71,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
                         "or narrow `path` and `glob`") from exc
     lines = []
     for rel, number, text in matches:
+        if outside:
+            rel = str(outside / rel)
         if len(text) > MAX_LINE_CHARS:
             text = text[:MAX_LINE_CHARS] + f" [… line clipped at {MAX_LINE_CHARS} characters]"
         lines.append(f"{rel}:{number}:{text}")
@@ -76,7 +81,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
                      "or raise max_matches]")
     elif not matches:
         lines.append("no matches")
-    prefix = f"[workspace: {workspace}]\n" if ctx.cwd_changed else ""
+    prefix = f"[workspace: {ctx.workspace.resolve()}]\n" if ctx.cwd_changed and not outside else ""
     return clip(prefix + "\n".join(lines))
 
 

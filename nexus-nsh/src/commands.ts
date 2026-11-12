@@ -5,12 +5,12 @@ import type { UsageProvider } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
 // only evaluates terms and binds handlers for the actions whose Core API exists.
-import { Clipboard, effect, keymap, openUrl, platform } from "nsh";
+import { Clipboard, computed, effect, keymap, openUrl, platform } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, railShown, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   composerFocused, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
@@ -88,6 +88,8 @@ export function term(t: string): boolean {
   const v = evalTerm(name);
   return neg ? !v : v;
 }
+// A boolean memo: typing inside a non-empty draft does not wake every command's availability.
+const draftHasText = computed(() => (draft()[draftKey()] ?? "").trim().length > 0);
 function evalTerm(t: string): boolean {
   const ses = viewed();
   const inSession = centre() === "session" && !!ses;
@@ -117,8 +119,8 @@ function evalTerm(t: string): boolean {
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
     case "waiting.question": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question"; }
     case "waiting.multiple": return waitItems().length > 1;
-    case "composer.has_text": return (draft()[draftKey()] ?? "").trim().length > 0 || (imageDrafts()[draftKey()]?.length ?? 0) > 0;
-    case "composer.empty": return (draft()[draftKey()] ?? "").trim().length === 0 && !(imageDrafts()[draftKey()]?.length);
+    case "composer.has_text": return draftHasText() || (imageDrafts()[draftKey()]?.length ?? 0) > 0;
+    case "composer.empty": return !draftHasText() && !(imageDrafts()[draftKey()]?.length);
     case "has_queued": return !!viewed() && (pendingInputs()[viewed()!.id]?.inputs.length ?? 0) > 0;
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
@@ -195,11 +197,11 @@ export function openSettings() {
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
-function tab(t: "sessions" | "files" | "git" | "projects") {
+function tab(t: "sessions" | "files" | "git") {
   if (t === "files") void loadFiles(); if (t === "git") void loadGitPage(); leftTab.set(t);
   // As in the TUI, the sidebar tab holds the keys: Esc and Right step back, Left goes further in.
   flowStage.set(t === "files" || t === "git" ? null : t);
-  if (t === "projects") flowProject.set(currentProject() ?? null); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+  savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
 }
 
 export function newSession() {
@@ -456,6 +458,7 @@ export function askDelete(id?: string) {
 }
 /** The project a project command acts on: the row whose menu is open or focused, else the current project. */
 export function targetProject(): string | null {
+  if (flowStage() === "projects" && flowProject()) return flowProject();
   const row = focusedSidebarRow();
   return row?.kind === "project" ? row.id : currentProject() ?? null;
 }
@@ -647,7 +650,6 @@ for (const action of ["commit", "switch", "branch_create", "branch_delete", "bra
     else void confirmGit(action, value);
   } });
 }, true);
-on("sidebar.tab.projects", () => tab("projects"));
 on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.set(true); });
 on("composer.focus", () => focusComposer.fn());
 on("session.new", newSession);
@@ -1231,8 +1233,6 @@ void selectProject;
 /** Open the projects overview. */
 export function openProjectsOverview() {
   if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
-  leftTab.set("projects");
-  flowStage.set("projects");
   projectsOverview.set({ cursor: 0, archived: [] });
 }
 /** Left in an empty composer: open the left session sidebar and give it the keys. */
@@ -1245,20 +1245,19 @@ export function flowStart() {
   blurComposer.fn?.();
 }
 export function flowEnd() { flowStage.set(null); flowProject.set(null); flowSession.set(null); focusComposer.fn?.(); }
-/** Left again: the sessions give way to the project list, whose Left opens the overview. */
+/** Left again: the sessions give way to the project rail, which has no deeper step. */
 function flowIn() {
-  const stage = flowStage();
-  if (stage === "sessions") {
-    leftTab.set("projects");
-    flowStage.set("projects");
-    flowProject.set(currentProject() ?? orderedProjects(model.projects.values())[0]?.id ?? null);
-  } else if (stage === "projects") openProjectsOverview();
+  if (flowStage() !== "sessions" || !railShown()) return;
+  const ids = railProjects(model.projects.values()).map((p) => p.id);
+  if (!ids.length) return;
+  flowStage.set("projects");
+  flowProject.set(ids.includes(currentProject() ?? "") ? currentProject() : ids[0]);
 }
 /** Esc or Right: one step back out, in reverse order. */
 function flowBack() {
   if (projectsOverview()) { projectsOverview.set(null); return; }
   const stage = flowStage();
-  if (stage === "projects") { leftTab.set("sessions"); flowStage.set("sessions"); flowProject.set(null); flowSession.set(viewed()?.id ?? null); }
+  if (stage === "projects") { flowStage.set("sessions"); flowProject.set(null); flowSession.set(viewed()?.id ?? null); }
   else flowEnd();
 }
 function flowMove(delta: number) {
@@ -1270,7 +1269,7 @@ function flowMove(delta: number) {
     return;
   }
   if (flowStage() !== "projects") return;
-  const ids = orderedProjects(model.projects.values()).map((p) => p.id);
+  const ids = railProjects(model.projects.values()).map((p) => p.id);
   if (!ids.length) return;
   const at = ids.indexOf(flowProject() ?? "");
   flowProject.set(ids[Math.max(0, Math.min(ids.length - 1, (at < 0 ? 0 : at) + delta))]);
@@ -1284,9 +1283,14 @@ function flowOpen() {
   const id = flowProject();
   const project = id ? model.projects.get(id) : undefined;
   if (!id || !project) return;
-  if (projectStatus(project) === PROJECT_STATUS.inactive) void setProjectStatus(id, PROJECT_STATUS.current);
   selectProject(id);
-  flowEnd();
+  scopeAll.set(false);
+  leftTab.set("sessions");
+  if (isNarrow()) drawer.set("left"); else leftOpen.set(true);
+  savePrefs();
+  flowStage.set("sessions");
+  flowProject.set(null);
+  flowSession.set(viewed()?.id ?? rowSessions()[0]?.id ?? null);
 }
 // While the flow holds the keys (and the overview, which binds its own, is closed) these keys are ours.
 effect(() => {

@@ -10,14 +10,14 @@ format (`nexus config import-mcp` reads it).
 Upstream launch command:
 
 ```sh
-uvx --from 'browser-use[cli]==0.13.14' browser-use --mcp
+uvx --from 'browser-use[cli]==1.0.2' browser-use --cli-mcp
 ```
 
 Reference: https://github.com/browser-use/browser-use/blob/main/skills/open-source/references/integrations.md
 
-Pinned to 0.13.14. Verified on 2026-10-29 through Nexus's MCP manager: it launched,
-discovered 16 tools, and `browser_navigate` and `browser_get_state` fetched
-example.com. Screenshots and the optional LLM-backed tools were not exercised.
+Pinned to 1.0.2 (upgraded from 0.13.14 on 2026-11-12; 1.0 is a rewrite whose tools are
+`browser_exec`, `browser_screenshot`, `browser_login` and `browser_feedback`). Only the server
+start and `initialize` were checked; the tools were not exercised.
 Core owns lazy startup, shutdown, health, session isolation and error reporting.
 Browser-use is configured by default, subject to each agent's tool restrictions.
 

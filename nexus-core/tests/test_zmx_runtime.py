@@ -102,6 +102,9 @@ async def test_child_runs_stores_standard_records_and_resumes(env):
     assert data["worker"]["session_id"] == "conv-1" and data["worker"]["context_complete"] is False
     assert data["worker"]["label"] == "ZMX · Antigravity" and "Nexus permission rules" in data["worker"]["not_applied"]
     assert data["tools"] == []
+    # A client rebuilding from the state snapshot (start, reconnect) gets the same facts as `session.updated`.
+    rows = {r["id"]: r for r in rt.store.state_snapshot()["sessions"]}
+    assert rows[child.id]["worker"] == data["worker"] and rows[root.id]["worker"] is None
     usage = rt.store.session_usage(child.id)["models"]
     assert sum(m["input"] for m in usage.values()) == 7
     rt.prompt(child.id, "second request")
@@ -143,3 +146,59 @@ async def test_normal_children_are_unchanged(env):
     rt.prompt(child.id, "ordinary")
     await idle(rt)
     assert [p.text for m in rt.store.messages(child.id) for p in m.message.parts if isinstance(p, Text)][-1] == "normal"
+
+
+async def test_daemon_with_zmx_off_probes_no_cli_and_registers_no_provider(tmp_path, monkeypatch):
+    """Starting the daemon and serving its provider, model and config routes with ZMX off never looks for a CLI,
+    never spawns one and lists no ZMX provider or model."""
+    import httpx
+
+    from nexus.llmhub.hub import connected
+    from nexus.server import build_app
+    from nexus.workers import registry
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("NEXUS10_AGY_CLI", str(tmp_path / "must-not-run"))
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("ZMX touched a CLI while switched off")
+
+    monkeypatch.setattr(registry, "cli_path", forbidden)
+    monkeypatch.setattr(registry, "probe", forbidden)
+    real_exec = asyncio.create_subprocess_exec
+
+    async def guarded_exec(program, *args, **kwargs):
+        assert "must-not-run" not in str(program) and os.path.basename(str(program)) not in ("agy", "claude"), program
+        return await real_exec(program, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", guarded_exec)
+    rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "mock/m"))
+    app = build_app(rt, token="t", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer t"}) as client:
+        providers = (await client.get("/api/provider")).json()
+        models = (await client.get("/api/model")).json()["models"]
+        config = (await client.get("/api/config")).json()
+    assert not [p for p in providers if p.get("zmx") or p["id"] in registry.IDS]
+    assert not [m for m in models if m.get("zmx") or m["ref"].partition("/")[0] in registry.IDS]
+    assert config["values"]["zmx"] == {"claude_backend": "sdk", "antigravity": False}
+    assert not set(connected()) & set(registry.IDS)
+    assert registry.visible() == {}
+
+
+def test_claude_pool_child_maps_to_claude_code_and_keeps_its_configured_effort(env, monkeypatch):
+    """`[agents.models] build = ["claude/<id>"]` with `[agents.efforts.build]` on that ref: with the Claude backend set
+    to ZMX the child runs `claude-code/<id>` at the configured effort, not the agent's or the provider's."""
+    rt, workspace, _ = env
+    monkeypatch.setattr(runtime_module, "connected", lambda: ["claude", "fake"])
+    monkeypatch.setattr("nexus.workers.registry.cli_path", lambda pid: "/bin/true")
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"zmx.claude_backend": "zmx",
+                                             "agents.models": {"build": ["claude/claude-sonnet-5-5"]},
+                                             "agents.efforts": {"build": {"claude/claude-sonnet-5-5": "medium"}}}, [])
+    project = rt.open_project(str(workspace))
+    root = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission="allow", agent="build", parent=root)
+    data = rt.session_json(rt.session(child.id))
+    assert data["model"] == "claude-code/claude-sonnet-5-5" and data["worker"]["label"] == "ZMX · Claude Code"
+    assert (data["effort"], data["effort_source"]) == ("medium", "config")

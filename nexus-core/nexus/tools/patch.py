@@ -13,6 +13,7 @@ from typing import Any
 
 from ..llmhub.types import ToolSpec
 from .base import MAX_PATCH_CHARS, Tool, ToolContext, ToolError, resolve
+from .suggest import did_you_mean
 
 
 @dataclass
@@ -138,6 +139,11 @@ async def _apply_patch(text: Any, ctx: ToolContext) -> str:
     if not isinstance(text, str):
         raise ToolError("patch must be a string")
     ops = parse_patch(text)
+    for op in ops:  # checked again under the lock; this check can name likely paths
+        if op.kind in ("delete", "update") and not (path := resolve(ctx, op.path)).is_file():
+            shown = str(path) if ctx.cwd_changed else op.path
+            raise ToolError(f"{'Delete' if op.kind == 'delete' else 'Update'} File {shown}: does not exist"
+                            + await did_you_mean(ctx, path, want_dir=False))
     lock = ctx.file_lock
     if lock is None:  # a bare tool context (unit use), not a Nexus session
         return _apply_patch_now(ops, ctx)

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, clip
+from .base import Tool, ToolContext, ToolError, clip, resolve
+from .suggest import did_you_mean
 from .walk import resolve_dir
 
 MAX_ENTRIES = 1000
@@ -27,7 +28,13 @@ def _describe(entry: os.DirEntry[str], workspace: Path) -> str:
 
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> str:
-    root = resolve_dir(ctx, args.get("path"))
+    try:
+        root = resolve_dir(ctx, args.get("path"), outside=True)  # like `read`; permission rules gate it
+    except ToolError as exc:
+        missing = resolve(ctx, args.get("path") or ".", outside=True)
+        if missing.exists():  # a file, not a missing path
+            raise
+        raise ToolError(f"{args.get('path')} does not exist" + await did_you_mean(ctx, missing)) from exc  # `nexus/loop` may be `nexus/loop.py`
     hidden = bool(args.get("include_hidden"))
     try:
         with os.scandir(root) as iterator:

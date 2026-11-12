@@ -186,7 +186,7 @@ export const manifest = {
      "sidebar.projects_focus"
     ],
     "action": "sidebar.step_back",
-    "note": "The sidebar's project list steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
+    "note": "The project rail steps back to the session list (Right does the same); the projects overview, when open, closes first with the overlay rule."
    },
    {
     "id": "drawer",
@@ -1313,23 +1313,6 @@ export const manifest = {
    ]
   },
   {
-   "id": "sidebar.tab.projects",
-   "title": "Sidebar: Projects",
-   "category": "navigation",
-   "keys": {
-    "tui": "alt+3",
-    "nsh": "cmd+3"
-   },
-   "key_context": "global",
-   "when": [
-    "always"
-   ],
-   "placement": [
-    "palette",
-    "sidebar"
-   ]
-  },
-  {
    "id": "sidebar.focus",
    "title": "Focus sidebar",
    "category": "navigation",
@@ -1446,11 +1429,11 @@ export const manifest = {
    "when": [
     "sidebar.projects_focus"
    ],
-   "unavailable_reason": "The project list does not have the keys.",
+   "unavailable_reason": "The project rail does not have the keys.",
    "placement": [
     "sidebar"
    ],
-   "note": "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project list (Up/Down select), Left again opens the projects overview. Esc or Right steps back out in reverse. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
+   "note": "Keyboard flow from an empty composer: Left opens the session sidebar, Left again focuses the project rail (Up/Down move between projects, the focused tile shows its full name and four counts, Enter opens the project and shows its sessions). Esc or Right steps back out. With text in the composer Left moves the cursor as usual, so the flow carries no key of its own."
   },
   {
    "id": "overlay.close",

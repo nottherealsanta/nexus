@@ -1157,10 +1157,7 @@ describe("sidebar row menus", () => {
     });
     await app.waitFor("id:rail-project-prj_1");
     await app.waitUntil(() => app.texts().join(" ").includes("Disconnected from Core"));
-    await app.keyboard.press("mod+3");
-    await app.waitFor("id:project-prj_1");
-    expect(app.shows("id:add-project")).toBe(true);
-    await app.rightClick("id:project-prj_1");
+    await app.rightClick("id:rail-project-prj_1");
     await app.waitFor("text:Remove project");
     await app.press("id:row-action-project.remove");
     await app.waitFor("id:confirm-dialog");

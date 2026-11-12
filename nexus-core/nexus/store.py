@@ -3079,8 +3079,16 @@ class Store:
             generation = self.log_generation()
             projects = [dict(row) for row in self.db.execute(
                 "select * from project where hidden = 0 order by position, created, id")]
-            sessions = [dict(row) for row in self.db.execute(
-                "select * from session where kind = 'user' order by updated desc")]
+            # `worker` (a ZMX child's launch facts, frozen in its snapshot) rides on the row so a client that
+            # rebuilds from this snapshot labels the child and shows its CLI card exactly as `session.updated` does.
+            sessions = []
+            for row in self.db.execute(
+                    "select s.*, json_extract(ss.data, '$.worker') as worker from session s"
+                    " left join session_snapshot ss on ss.session_id = s.id"
+                    " where s.kind = 'user' order by s.updated desc"):
+                item = dict(row)
+                item["worker"] = json.loads(item["worker"]) if item["worker"] else None
+                sessions.append(item)
             out: dict[str, Any] = {
                 "watermark": {"generation": generation, "head": head, "floor": floor,
                               "head_cursor": f"{generation}:{head}"},

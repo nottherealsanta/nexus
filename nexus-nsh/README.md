@@ -167,6 +167,8 @@ and web are unchanged):
   address. Opening a `nexus://` link straight from the Camera app is not wired (no URL-scheme handler yet), and the
   app has no in-app QR scanner; the link is pasted.
 
+The phone's look differs from desktop in rendering only: Google Sans for interface text and prose (`--font-ui`), rounded cards, composer and buttons.
+
 Desktop workspace surfaces are unavailable on phones. The Manager tab supports typed interaction; native voice
 capture remains unverified. The search field is dismissed before opening a session.
 
@@ -186,7 +188,7 @@ Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, a
 milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), its percentage and the
 next step. It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
-context, Markdown (prose uses the 16/24 default in Geist; fenced code is a panel card with the language and
+context, Markdown (prose uses the 16/24 default in Google Sans; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is Monaspace at 12.5/20 on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
@@ -245,6 +247,12 @@ while its title is unknown), collapsed by default and opened or closed by its ch
 row like an activity group; open, the copied messages follow as ordinary timeline
 rows, indented under the chevron as a group's members are. The `[Nexus fork]` task message after it is an ordinary user message. A phone
 keeps the folded row with the same wording.
+
+A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
+`ZMX · Claude Code` or `ZMX · Antigravity` on its parent's child card and in its heading. Its timeline
+opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
+`Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
+own subagents show read-only inside the calling tool's card. As in the TUI.
 
 Selecting a session loads, after the bounded snapshot view, every message, the
 frozen starting context and the turn summaries with the session's spend ledger
@@ -633,7 +641,7 @@ No global shortcut is registered.
   `◇ mermaid · copy source`; `src/mermaid.ts` caches by `(source, width, appearance)`
   and looks the native module up with `nativeModule("nexus/native")` when it is
   first needed, so importing the timeline for a pure helper does not load
-  `nexus/native` outside the app bundle. `src/dictation.ts` does the same for
+  `nexus/native` outside the app bundle. `App.tsx` therefore has a bare `import "nexus/native"`: `nsh package` links a native UI set into the web runtime only when the bundle imports it, and without that import the packaged web build (`npm run build`, `npm run serve`) fails with `unknown native module nexus/native`, so every Mermaid block falls back to source (the dev host links everything and hid this). `e2e/shots.mjs` fails if the Mermaid shot has no diagram. `src/dictation.ts` does the same for
   `Microphone` and treats a missing module as a client without capture. The Apple native bridge records 16 kHz mono WAV for dictation and Manager pipeline voice on macOS and iOS; packaged apps need `NSMicrophoneUsageDescription` (set by `scripts/native-info.mjs`). Device permission, recording and playback on macOS remain unverified. `src/mermaid-logic.ts` holds the
   closed-fence scan and tone classes.
 - **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ.

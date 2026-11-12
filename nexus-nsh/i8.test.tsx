@@ -119,6 +119,19 @@ describe("waiting card (D14)", () => {
     expect(app.texts().some((t) => t.includes("submit"))).toBe(true);
   });
 
+  test("arrows move the highlighted option and Enter confirms it, as in the TUI", async () => {
+    const lone = { ...question, questions: [{ ...question.questions[0], allow_free_text: false }] };
+    const app = await view(snapshot({ questions: [lone] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-b");
+    await app.keyboard.press("down");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(JSON.stringify(post.body ?? "")).toContain('"selected":["b"]');
+  });
+
   test("long questions, option labels and previews remain in the scrollable card", async () => {
     const app = await open("./App.tsx", { network: network({}, snapshot({ questions: [readability] })), width: 1024, height: 480, platform: "web" });
     await app.waitFor("text:Refactor loader");

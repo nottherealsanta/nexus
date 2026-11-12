@@ -21,11 +21,20 @@ MAX_PATTERN_CHARS = 1024
 MAX_STAR_STAR = 4
 
 
-def resolve_dir(ctx: ToolContext, path: object) -> Path:
-    target = resolve(ctx, path or ".")
+def resolve_dir(ctx: ToolContext, path: object, *, outside: bool = False) -> Path:
+    target = resolve(ctx, path or ".", outside=outside)
     if not target.is_dir():
         raise ToolError(f"{path or '.'} is not a directory")
     return target
+
+
+def search_base(ctx: ToolContext, root: Path) -> Path | None:
+    """None when `root` is in the workspace (results are workspace-relative). For a read-only search
+    outside it, the directory to walk from; results are then shown as absolute paths."""
+    workspace = ctx.workspace.resolve()
+    if root == workspace or workspace in root.parents:
+        return None
+    return root if root.is_dir() else root.parent
 
 
 def pattern_error(pattern: str) -> str | None:

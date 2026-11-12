@@ -130,10 +130,10 @@ def diagram(mode: str) -> dict[str, object]:
 # surfaces are square, matching the TUI's cell grid; only circular indicators keep their shape.
 RADIUS = {"radius": "0", "radius-card": "0"}
 FONTS = {
-    "font-sans": "Monaspace Argon, ui-monospace, monospace",
+    "font-sans": "Google Sans, system-ui, sans-serif",
     "font-mono": "Monaspace Argon, ui-monospace, monospace",
     "font-code": "Monaspace Argon, ui-monospace, monospace",
-    "font-ui": "Geist, system-ui, sans-serif",
+    "font-ui": "Google Sans, system-ui, sans-serif",
 }
 cssvars = {
     "theme": {**FONTS, **RADIUS},

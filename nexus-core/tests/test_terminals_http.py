@@ -374,3 +374,25 @@ async def test_closing_an_exited_terminal_hides_it_and_is_idempotent(terminal_se
         assert closed.status_code == 200 and closed.json()["status"] == "closed"
     listing = await client.get("/api/terminal", params={"project_id": project.id})
     assert [t["status"] for t in listing.json()] == ["closed"]
+
+
+async def test_user_stopped_job_does_not_wake_idle_session(tmp_path, monkeypatch):
+    from nexus.tools import ToolContext
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    runtime = make_runtime(Store(tmp_path / "db.sqlite"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project = runtime.open_project(str(workspace))
+    session = runtime.create_session(project, title=None, model=None, permission=None)
+    prompts = []
+    monkeypatch.setattr(runtime, "prompt", lambda *a, **k: prompts.append(a))
+    app = build_app(runtime, token="secret", url="http://test")
+    async with (httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                  headers={"Authorization": "Bearer secret"}) as client,
+                app.router.lifespan_context(app)):
+        await runtime._start_job(session, session, {"command": "sleep 30"}, ToolContext(workspace))
+        job = runtime.jobs.list()[0]
+        assert (await client.delete(f"/api/bash/{job.id}")).status_code == 204
+    assert prompts == []
+    assert any("Background Shell Done" in str(m.message) for m in runtime.store.messages(session.id))

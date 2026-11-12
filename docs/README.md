@@ -8,7 +8,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Doc | About |
 | --- | --- |
 | [llm-providers.md](llm-providers.md) | The provider table, both dialects, Claude's Agent SDK, quirks, replay, redaction, errors, examples |
-| [external-workers.md](external-workers.md) | Isolated ZMX transport groundwork, nexus01 references, offline tests and integration still to do |
+| [external-workers.md](external-workers.md) | ZMX mode: Claude Code and Antigravity CLIs as labelled child sessions; switch, routing, the ZMX card (timeline exception D2), guards, recovery, tested versions |
 | [porting-ledger.md](porting-ledger.md) | Historical changes from old Nexus and their rationale |
 | [turn-summary-benchmark.md](turn-summary-benchmark.md) | TUI turn-summary load and render-replay measurements |
 | [config.md](config.md) | `config.toml`: defaults, agents, tools, context, sessions, UI, web, MCP, voice |

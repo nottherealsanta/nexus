@@ -40,7 +40,7 @@ and no phone-to-Manager voice yet.
 | 0:34.95 – 0:38.85 | Dictation: red recording square, live partial text streaming into the composer; `/speak` reads a reply aloud. | *Local speech-to-text & text-to-speech.* |
 | 0:38.85 – 0:46.6 | Rapid montage, ~1 s per card on the beat: Worktrees → Background jobs → Mermaid → Skills → Files → Diff → Palette → Questions. | kinetic one-word labels |
 | 0:46.6 – 0:48.3 | Vacuum: TUI freezes, edges glow, compresses to a point. | — |
-| 0:48.3 – 0:56.1 | **Drop 2.** Burst into NSH (Void palette, Geist): web, macOS window and iPhone side by side, same session updating live. | *NSH. Web, macOS and iPhone.* |
+| 0:48.3 – 0:56.1 | **Drop 2.** Burst into NSH (Void palette, Google Sans): web, macOS window and iPhone side by side, same session updating live. | *NSH. Web, macOS and iPhone.* |
 | 0:56.1 – 0:63.9 | NSH desktop close-ups: file tree with Git letters, diff review, expanding tool calls, command palette. | *TUI and NSH are peers. Every feature, both places.* |
 | 0:63.9 – 1:19.5 | **The Manager** (music ducked −9 dB, 1:04–1:18): header orb listening → thinking → speaking; dropdown attention cards across sessions; approval card; the Staging migration session shows the result. | *Meet the Manager. A voice above every session.* |
 | | **User:** "Hey Manager, what needs me?" · **Manager:** "One session needs you. Staging migration wants to run the migration script on staging." · **User:** "Approve it." · **Manager:** "Approved. The migration is running on staging." (Matches the real Manager captures: board card → approval → the session result "3 revisions applied to staging".) | captions |

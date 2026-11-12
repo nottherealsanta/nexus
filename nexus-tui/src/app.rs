@@ -118,7 +118,6 @@ pub const WIRED: &[&str] = &[
     "sidebar.right.toggle",
     "sidebar.tab.sessions",
     "sidebar.tab.files",
-    "sidebar.tab.projects",
     "copy.file_path",
     "file.open_external",
     "file.insert_mention",
@@ -808,6 +807,8 @@ pub struct Ui {
     pub left_drag: bool,
     /// A project tile drag in progress.
     pub rail_drag: Option<crate::ui::RailDrag>,
+    /// The project the keyboard has on the rail (index into `rail_project_ids`).
+    pub rail_cursor: usize,
     pub right_open: bool,
     /// The user (or a saved preference) chose the right sidebar's state, so a
     /// size change no longer picks it (D17: closed by default at 100-119).
@@ -1274,6 +1275,7 @@ impl App {
                 left_width: 0,
                 left_drag: false,
                 rail_drag: None,
+                rail_cursor: 0,
                 right_open: false,
                 right_chosen: false,
                 sized: false,
@@ -3212,7 +3214,6 @@ impl App {
     fn list_len(&self, tab: Tab) -> usize {
         match tab {
             Tab::Sessions => self.side_entries().len(),
-            Tab::Projects => self.state.model.projects.len(),
             Tab::Files => self.file_rows().len(),
             Tab::Git => self.project_git_rows().len(),
         }
@@ -3280,11 +3281,7 @@ impl App {
             "composer.empty" => {
                 self.composer_ref().is_empty() && self.composer_ref().images.is_empty()
             }
-            "sidebar.projects_focus" => {
-                self.ui.focus == Focus::Sidebar
-                    && self.ui.tab == Tab::Projects
-                    && self.ui.overlay.is_none()
-            }
+            "sidebar.projects_focus" => self.ui.focus == Focus::Rail && self.ui.overlay.is_none(),
             "has_queued" => !self.pending_inputs().is_empty(),
             "timeline.scrolled_up" => !self.ui.scroll.follow,
             "timeline.has_older" => self
@@ -3304,9 +3301,7 @@ impl App {
                     && self.list_len(Tab::Sessions) > 0
             }
             "focus.project" => {
-                self.ui.focus == Focus::Sidebar
-                    && self.ui.tab == Tab::Projects
-                    && self.list_len(Tab::Projects) > 0
+                self.ui.focus == Focus::Rail && !self.rail_project_ids().is_empty()
             }
             "focus.assistant_block" => {
                 self.ui.focus == Focus::Timeline
@@ -4175,7 +4170,7 @@ impl App {
                 }
             }
             PaletteMode::RowMenu => {
-                let projects = self.ui.tab == Tab::Projects;
+                let projects = self.ui.focus == Focus::Rail;
                 let files = self.ui.tab == Tab::Files;
                 let git = self.ui.tab == Tab::Git;
                 for (i, c) in self.manifest.command.iter().enumerate().filter(|(_, c)| {
@@ -5993,9 +5988,6 @@ impl App {
         if self.edit_blocks() {
             return;
         }
-        self.ui.left_open = true;
-        self.ui.tab = Tab::Projects;
-        self.ui.focus = Focus::Sidebar;
         self.open_overlay(OverlayKind::Projects(crate::ui::ProjectsOverview::default()));
     }
 
@@ -6307,12 +6299,6 @@ impl App {
                     self.open_session(&id);
                 }
             }
-            Tab::Projects => {
-                if let Some(id) = self.project_ids().get(index).cloned() {
-                    self.select_project(&id);
-                    self.ui.tab = Tab::Sessions;
-                }
-            }
             Tab::Git => {
                 self.open_project_git_diff(index);
             }
@@ -6585,7 +6571,10 @@ impl App {
                     };
                 }
             }
-            "sidebar.step_back" => self.set_tab(Tab::Sessions),
+            "sidebar.step_back" => {
+                self.set_tab(Tab::Sessions);
+                self.ui.focus = Focus::Sidebar;
+            }
             "nav.back" => {
                 if let Some(p) = self.viewed().and_then(|s| s.parent_id.clone()) {
                     self.open_session(&p);
@@ -6695,7 +6684,6 @@ impl App {
                     });
                 }
             }
-            "sidebar.tab.projects" => self.set_tab(Tab::Projects),
             "git.open_diff" => {
                 if self.ui.tab == Tab::Git && self.ui.focus == Focus::Sidebar {
                     self.open_project_git_diff(self.cursor(Tab::Git));
@@ -6737,8 +6725,8 @@ impl App {
                 self.sidebar_activate(c);
             }
             "project.open" => {
-                let c = self.cursor(Tab::Projects);
-                self.sidebar_activate(c);
+                let c = self.ui.rail_cursor;
+                self.rail_enter(c);
             }
             "project.add" => {
                 let mut buf = Composer::new();
@@ -7269,8 +7257,8 @@ impl App {
     /// The project a Projects row menu or `project.remove` acts on: the focused
     /// row in the Projects tab, otherwise the current project.
     fn menu_project(&self) -> Option<String> {
-        if self.ui.tab == Tab::Projects && self.ui.focus == Focus::Sidebar {
-            if let Some(id) = self.project_ids().get(self.cursor(Tab::Projects)) {
+        if self.ui.focus == Focus::Rail {
+            if let Some(id) = self.rail_project_ids().get(self.rail_cursor()) {
                 return Some(id.clone());
             }
         }
@@ -10070,6 +10058,7 @@ impl App {
             Focus::Right => vec!["sidebar.git".into()],
             Focus::Waiting => vec!["waiting".into()],
             Focus::Sidebar => vec![format!("sidebar.{}", self.ui.tab.id()), "sidebar".into()],
+            Focus::Rail => vec!["sidebar.projects".into(), "sidebar".into()],
             _ => vec![],
         }
     }
@@ -10965,6 +10954,7 @@ impl App {
             Focus::Composer => self.composer_key(&ev, &name),
             Focus::Timeline => self.timeline_key(&name),
             Focus::Sidebar => self.sidebar_key(&name),
+            Focus::Rail => self.rail_key(&name),
             Focus::Waiting => self.waiting_key(&ev, &name),
             Focus::ToggleLeft | Focus::ToggleRight => {
                 if matches!(name.as_str(), "enter" | "space") {
@@ -12778,6 +12768,69 @@ impl App {
         }
     }
 
+    /// The rail's keyboard cursor, kept inside the projects it shows.
+    pub fn rail_cursor(&self) -> usize {
+        self.ui
+            .rail_cursor
+            .min(self.rail_project_ids().len().saturating_sub(1))
+    }
+
+    /// Left from the session list: the project rail takes the keys, on the current project.
+    fn focus_rail(&mut self) {
+        if self.regions.rail.is_none() {
+            return;
+        }
+        let ids = self.rail_project_ids();
+        if ids.is_empty() {
+            return;
+        }
+        self.ui.rail_cursor = self
+            .current_project()
+            .and_then(|id| ids.iter().position(|p| *p == id))
+            .unwrap_or(0);
+        self.ui.focus = Focus::Rail;
+    }
+
+    /// Enter on a rail project: open it and show its sessions.
+    pub(crate) fn rail_enter(&mut self, index: usize) {
+        if self.edit_blocks() {
+            return;
+        }
+        let Some(project) = self.rail_project_ids().get(index).cloned() else {
+            return;
+        };
+        if self.current_project().as_deref() != Some(project.as_str()) {
+            self.rail_activate(index);
+        }
+        self.ui.scope_all = false;
+        self.set_tab(Tab::Sessions);
+    }
+
+    fn rail_key(&mut self, name: &str) {
+        let n = self.rail_project_ids().len();
+        let c = self.rail_cursor();
+        let set = |s: &mut Self, v: usize| s.ui.rail_cursor = v.min(n.saturating_sub(1));
+        match name {
+            "up" | "k" => set(self, c.saturating_sub(1)),
+            "down" | "j" => set(self, c + 1),
+            "home" => set(self, 0),
+            "end" => set(self, n.saturating_sub(1)),
+            "enter" => self.rail_enter(c),
+            "right" | "l" => self.execute("sidebar.step_back"),
+            "tab" => self.cycle_focus(false),
+            "shift+tab" => self.cycle_focus(true),
+            _ => {
+                if let Some(cmd) = self
+                    .focus_contexts()
+                    .iter()
+                    .find_map(|ctx| self.lookup(ctx, name))
+                {
+                    self.run_command(&cmd);
+                }
+            }
+        }
+    }
+
     fn sidebar_key(&mut self, name: &str) {
         let n = self.list_len(self.ui.tab);
         let c = self.cursor(self.ui.tab);
@@ -12795,9 +12848,7 @@ impl App {
             "pagedown" => set(self, c + 8),
             "left" | "h" if self.ui.tab == Tab::Files => self.files_up(),
             "right" | "l" if self.ui.tab == Tab::Files => self.files_expand(),
-            "left" | "h" if self.ui.tab == Tab::Sessions => self.set_tab(Tab::Projects),
-            "left" | "h" if self.ui.tab == Tab::Projects => self.open_projects_overview(),
-            "right" | "l" if self.ui.tab == Tab::Projects => self.set_tab(Tab::Sessions),
+            "left" | "h" if self.ui.tab == Tab::Sessions => self.focus_rail(),
             "right" | "l" if self.ui.tab == Tab::Sessions => self.ui.focus = Focus::Composer,
             "left" | "h" => self.set_tab(Tab::Sessions),
             "right" | "l" => self.set_tab(Tab::Files),
@@ -15205,6 +15256,7 @@ impl App {
                             self.ui.focus,
                             Focus::Timeline
                                 | Focus::Sidebar
+                                | Focus::Rail
                                 | Focus::Right
                                 | Focus::ToggleLeft
                                 | Focus::ToggleRight
@@ -15269,6 +15321,7 @@ impl App {
                         self.ui.focus,
                         Focus::Timeline
                             | Focus::Sidebar
+                            | Focus::Rail
                             | Focus::Right
                             | Focus::ToggleLeft
                             | Focus::ToggleRight
@@ -15282,15 +15335,8 @@ impl App {
                     return;
                 }
                 if let Some(Target::RailProject(i)) = self.hits.at(ev.column, ev.row).cloned() {
-                    let project = self.rail_project_ids().get(i).cloned();
-                    self.ui.focus = Focus::Sidebar;
-                    self.ui.left_open = true;
-                    self.ui.tab = Tab::Projects;
-                    if let Some(index) =
-                        project.and_then(|id| self.project_ids().iter().position(|p| *p == id))
-                    {
-                        self.ui.cursor.insert(Tab::Projects, index);
-                    }
+                    self.ui.focus = Focus::Rail;
+                    self.ui.rail_cursor = i;
                     self.execute("sidebar.row_menu");
                 } else if let Some(Target::SideRow(i)) = self.hits.at(ev.column, ev.row).cloned() {
                     self.ui.focus = Focus::Sidebar;
@@ -15425,6 +15471,7 @@ impl App {
                                 self.ui.focus,
                                 Focus::Timeline
                                     | Focus::Sidebar
+                                    | Focus::Rail
                                     | Focus::Right
                                     | Focus::ToggleLeft
                                     | Focus::ToggleRight
@@ -15625,7 +15672,6 @@ impl App {
                     Tab::Sessions => "sidebar.tab.sessions",
                     Tab::Files => "sidebar.tab.files",
                     Tab::Git => "sidebar.tab.git",
-                    Tab::Projects => "sidebar.tab.projects",
                 };
                 self.run_command(id);
             }

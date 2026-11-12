@@ -159,7 +159,7 @@ fn pending_first_prompt_remains_visible_at_narrow_sizes() {
         let (mut a, _) = sending();
         let (_, lines) = draw(&mut a, width, height);
         let text = lines.join("\n");
-        assert!(text.contains("Sending…"), "{width}x{height}: {text}");
+        assert!(text.contains("You"), "{width}x{height}: {text}");
         assert!(
             text.contains("Make the first message instant"),
             "{width}x{height}: {text}"

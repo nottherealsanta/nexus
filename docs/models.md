@@ -86,11 +86,14 @@ A model is named `provider/model`, for example `grok/grok-4.7`.
   model id may itself contain `/`.
 * No `/` means codex: `gpt-6.1-terra` returns `("codex", "gpt-6.1-terra")`.
 * An unknown provider before the `/` raises `ValueError` listing the known ones.
+* `claude-code/…` and `agy/…` are ZMX refs ([external-workers.md](external-workers.md)): valid only for child
+  sessions while their `[zmx]` switch is on. `claude-code` lists models.dev `anthropic` ids; `agy` lists what
+  `agy models` prints (bounded, cached 60 s). Neither is ever a root or Manager model.
 
 `hub.provider_for(ref)` returns `(provider, model_id)` where the provider comes
 from `providers.make(provider_id, SIGN_INS[provider_id]())`.
 `hub.connected()` lists provider ids (in table order) whose sign-in reports
-`logged_in()`.
+`logged_in()`, then each ZMX provider that is switched on and whose CLI is found (no CLI is looked for while off).
 
 ## No default model
 

@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files] [Git]        · Orchestrator ×    +                                                                                                          □
+     │
+▏    │▏  Orchestrator             now
+▏ W  │▏                           5 ↳     AGENTS.md  not found · /private/tmp/claude-501/-Users-santa-repos-nexus/5af54951-9e56-45ed-9c0a-4…
+▏  1 │
+     │                                    Tools [16] ~3.3K
+     │                                      ● read                      ● bash_kill                 ● ask
+     │                                      ● grep                      ● edit                      ● code
+     │                                      ● glob                      ● patch                     ● fork
+     │                                      ● ls                        ● write                     ● expose_workspace_tools
+     │                                      ● bash                      ● web_search
+     │                                      ● bash_output               ● web_fetch
+     │
+     │                                    Skills [0]  none
+     │
+     │                                    MCP [0]  none
+     │
+     │                                    total  ~4,354 tok
+     │
+     │
+     │                                  │
+     │                                  │  Delegate the checks to the CLI subagents.                                                                       #1 · 2:41 PM
+     │                                  │
+     │
+     │                                     ⣿ ZMX · Claude Code ZMX parallel tools
+     │                                       claude-code/claude-haiku-5-5 · 0.0s
+     │
+     │                                     ⣿ ZMX · Antigravity ZMX denied action
+     │                                       agy/gemini-3.8-flash-low · 0.0s
+     │
+     │                                     ⣿ ZMX · Claude Code ZMX needs attention
+     │                                       claude-code/claude-haiku-5-5 · 0.0s
+     │
+     │                                     ⣿ ZMX · Claude Code ZMX interrupted
+     │                                       claude-code/claude-haiku-5-5 · 0.0s
+     │
+     │                                     ⣿ ZMX · Claude Code ZMX recovered
+     │                                       claude-code/claude-haiku-5-5 · 0.0s
+     │
+     │                                                                                                                                                  5 tools · ~0.0s
+     │
+     │                                  … the turns above have no recorded details (tokens, models, timings): pruned, or older than turn records
+     │
+  +  │
+     │                                      Type a message…
+     │
+     │ + New session                        Build · … · default                                                                                              continue
+  ⚙  │ ⌕ Search sessions       ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                   /private/tmp/claude-501/-Users-santa-repos-nexus/5af54951-9e56-45ed-9c0a-4d61a21c9267/scratchpad/zv/home/workspace
+     │                                   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -123,9 +123,12 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     except httpx.TimeoutException as exc:
         raise ToolError("web_search: the search service timed out") from exc
     except httpx.ConnectError as exc:
-        raise ToolError(f"web_search: the search service at {url} is not reachable. Start it from nexus-search/ "
-                        "(`docker compose up -d`, or Apple `container`; see nexus-search/README.md), or set "
-                        "[web] search_url") from exc
+        # Core never starts the service unasked (porting ledger), so neither should the model: the text
+        # names the user's options and steers the model to web_fetch instead of retrying.
+        raise ToolError(f"web_search: the search service at {url} is not reachable, so web_search will keep failing "
+                        "until the user starts it. Do not start it yourself or retry; use web_fetch on a URL you know, "
+                        "or tell the user. (The user can start it in Settings › Tools › Start web search, from "
+                        "nexus-search/ with `docker compose up -d`, or set [web] search_url.)") from exc
     except httpx.HTTPError as exc:
         raise ToolError("web_search: the search request failed") from exc
     try:

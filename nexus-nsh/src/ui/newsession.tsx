@@ -502,7 +502,7 @@ export function NewSessionView() {
               <StartingContext sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
               <If when={pendingFirstPrompt()}>
                 {() => <View class="w-full px-4 py-3 gap-2" testID="first-prompt-sending">
-                  <Text class={T.sec}>You · Sending…</Text>
+                  <Text class={T.sec}>You</Text>
                   <Text class={`${TS.body} text-foreground`}>{pendingFirstPrompt()!.text}</Text>
                   <If when={pendingFirstPrompt()!.images > 0}><Text class={T.sec}>{`[${pendingFirstPrompt()!.images} image${pendingFirstPrompt()!.images === 1 ? "" : "s"}]`}</Text></If>
                 </View>}

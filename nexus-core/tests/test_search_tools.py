@@ -81,14 +81,27 @@ async def test_grep_announces_clipping(ctx, engine):
 
 
 async def test_grep_refuses_bad_input(ctx, engine):
-    with pytest.raises(ToolError, match="outside the workspace"):
-        await grep({"pattern": "x", "path": ".."}, ctx)
     with pytest.raises(ToolError, match="does not exist"):
         await grep({"pattern": "x", "path": "nope.md"}, ctx)
     with pytest.raises(ToolError):
         await grep({"pattern": "("}, ctx)
     with pytest.raises(ToolError, match="non-empty"):
         await grep({"pattern": ""}, ctx)
+
+
+async def test_search_tools_read_outside_the_workspace(ctx, tmp_path_factory, engine):
+    """Like `read` (2026-11-12): nexus-old is a documented reference outside the workspace, and refusals
+    sent agents to `bash` grep instead. Results outside are absolute; permission rules key on that path."""
+    outside = tmp_path_factory.mktemp("reference")
+    (outside / "pkg").mkdir()
+    (outside / "pkg" / "worker.py").write_text("class Worker:\n    pass\n")
+    found = await grep({"pattern": "class Worker", "path": str(outside)}, ctx)
+    assert found == f"{outside}/pkg/worker.py:1:class Worker:"
+    assert await grep({"pattern": "pass", "path": str(outside / "pkg" / "worker.py")}, ctx) == f"{outside}/pkg/worker.py:2:    pass"
+    assert await glob({"pattern": "**/*.py", "path": str(outside)}, ctx) == f"{outside}/pkg/worker.py"
+    assert await ls({"path": str(outside / "pkg")}, ctx) == "worker.py"
+    with pytest.raises(ToolError, match="did you mean"):
+        await grep({"pattern": "x", "path": str(outside / "pkg" / "workr.py")}, ctx)
 
 
 async def test_grep_does_not_follow_symlinks_out(ctx, tmp_path_factory, engine):
@@ -128,8 +141,6 @@ async def test_glob_announces_clipping_and_refuses_bad_patterns(ctx):
         await glob({"pattern": "/etc/*"}, ctx)
     with pytest.raises(ToolError, match="too many"):
         await glob({"pattern": "/".join(["**"] * 6)}, ctx)
-    with pytest.raises(ToolError, match="outside the workspace"):
-        await glob({"pattern": "*", "path": "../"}, ctx)
 
 
 async def test_ls_lists_one_directory(ctx, tmp_path_factory):
@@ -144,8 +155,8 @@ async def test_ls_lists_one_directory(ctx, tmp_path_factory):
     assert await ls({"path": "empty"}, ctx) == "(empty directory)"
     with pytest.raises(ToolError):
         await ls({"path": "missing"}, ctx)
-    with pytest.raises(ToolError, match="outside"):
-        await ls({"path": "/"}, ctx)
+    with pytest.raises(ToolError, match="is not a directory"):
+        await ls({"path": "notes.md"}, ctx)
 
 
 async def test_ls_announces_clipping(ctx):

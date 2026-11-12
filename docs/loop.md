@@ -200,6 +200,6 @@ together; clients show it at that point in the context line. If a steer arrives
 while a final answer streams, the loop takes another step before ending the turn.
 
 Queued inputs start separate turns after completion or failure. Interruption
-holds the queue; sending the next item explicitly releases it. Recovery keeps
+and an unexpected internal failure hold the queue; sending the next item explicitly releases it. Recovery keeps
 pending input, converts undelivered steers to queued input and holds it, without
 starting model work automatically. See [Pending inputs](api.md#pending-inputs-steer-and-queue).

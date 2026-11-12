@@ -56,10 +56,11 @@ server only; the others still load. `GET /api/config` masks global `env` and
 `headers`, and a PATCH that sends the mask back keeps the stored value.
 
 **browser-use** is offered by default, switched off: the pinned upstream
-`uvx --from 'browser-use[cli]==0.13.14' browser-use --mcp`. Enabling it in
+`uvx --from 'browser-use[cli]==1.0.2' browser-use --cli-mcp`. Enabling it in
 Settings writes the entry into `config.toml`. Nexus never starts it on its own.
-Verified 2026-10-29 against the pinned version: 16 tools discovered, and
-`browser_navigate` plus `browser_get_state` fetched `https://example.com`.
+Upgraded from 0.13.14 on 2026-11-12: 1.0.2 is a rewrite that drives the user's own Chrome through
+`browser_exec` (Python on CDP), `browser_screenshot`, `browser_login` and `browser_feedback`. Only
+the server start and `initialize` were checked; the tools were not exercised.
 
 ## Project servers
 

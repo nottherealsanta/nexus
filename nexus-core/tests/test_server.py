@@ -181,6 +181,43 @@ async def test_interrupt_closes_a_waiting_tool_call(setup):
     assert len(replies) == 1 and replies[0]["outcome"] == "cancelled" and replies[0]["allow"] is False
 
 
+async def test_unexpected_failure_closes_tool_calls_so_the_next_prompt_is_valid(setup, monkeypatch, caplog):
+    """11-12: a turn died mid-tool (full disk), left two calls without results, and every later
+    prompt was refused by the provider ("tool_use ids were found without tool_result blocks")."""
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("c1", "bash", '{"command": "echo hi"}'), ToolCall("c2", "bash", '{"command": "true"}')],
+                        [Text("back")]]
+    real = rt.store.mark_tool_finished
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            real(*args, **kwargs)
+            raise OSError(28, "No space left on device")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(rt.store, "mark_tool_finished", flaky)
+    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    await client.post(f"/api/session/{session['id']}/prompt", json={"text": "go"})
+    await _wait_idle(rt, session["id"])
+    assert "failed unexpectedly" in caplog.text and "No space left on device" in caplog.text
+
+    messages = (await client.get(f"/api/session/{session['id']}/message")).json()
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    first, second = messages[2]["parts"]
+    assert first["call_id"] == "c1" and "hi" in first["output"]  # the finished result is kept
+    assert second["call_id"] == "c2" and second["is_error"] is True
+    assert second["output"].startswith("Nexus failed during this turn (OSError: [Errno 28] No space left on device)")
+    turn = rt.store.turns_for_session(session["id"])[-1]
+    assert turn["status"] == "failed" and "No space left on device" in turn["error"]["message"]
+
+    await client.post(f"/api/session/{session['id']}/prompt", json={"text": "continue"})
+    await _wait_idle(rt, session["id"])
+    roles = [m["role"] for m in (await client.get(f"/api/session/{session['id']}/message")).json()]
+    assert roles == ["user", "assistant", "tool", "user", "assistant"]
+
+
 async def test_project_agent_sets_prompt_tools_model_and_effort(setup):
     _, client, _, workspace = setup
     (workspace / ".agents" / "agents").mkdir(parents=True)

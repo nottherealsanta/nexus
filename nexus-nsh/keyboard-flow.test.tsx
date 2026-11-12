@@ -59,7 +59,7 @@ describe("projects overview rows (logic)", () => {
 });
 
 describe("keyboard flow from an empty composer (app)", () => {
-  test("Left opens the session sidebar, again the project list (Up/Down select), again the overview", async () => {
+  test("Left opens the session sidebar, again the project rail (Up/Down move, the tooltip opens, Enter shows the project's sessions)", async () => {
     const app = await launch();
     await app.waitFor("id:composer-input");
     await app.type("id:composer-input", "");
@@ -67,17 +67,19 @@ describe("keyboard flow from an empty composer (app)", () => {
     await app.waitFor("id:left-sidebar");
     expect(app.shows("id:session-ses_b1")).toBe(true);
     await app.keyboard.press("left");
-    await app.waitFor("id:project-cursor-prj_bravo");
-    await app.keyboard.press("down");
-    await app.waitFor("id:project-cursor-prj_charlie");
+    await app.waitFor("id:rail-cursor-prj_bravo");
+    await app.waitFor("id:rail-popup-prj_bravo");
     await app.keyboard.press("up");
-    await app.waitFor("id:project-cursor-prj_bravo");
+    await app.waitFor("id:rail-cursor-prj_alpha");
+    await app.keyboard.press("down");
+    await app.waitFor("id:rail-cursor-prj_bravo");
     await app.keyboard.press("left");
-    await app.waitFor("id:projects-overview");
-    expect(app.shows("label:Project Alpha, Current")).toBe(true);
-    expect(app.shows("label:Alpha chat, idle, project Alpha")).toBe(true);
-    expect(app.shows("label:Alpha, 1 archived session, collapsed")).toBe(true);
-    expect(app.shows("id:overview-row-0")).toBe(true);
+    expect(app.shows("id:projects-overview")).toBe(false);
+    await app.keyboard.press("up");
+    await app.waitFor("id:rail-cursor-prj_alpha");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => !app.shows("id:rail-cursor-prj_alpha"));
+    await app.waitFor("id:session-cursor-ses_a1");
   });
 
   test("Esc and Right step back out in reverse order", async () => {
@@ -85,15 +87,16 @@ describe("keyboard flow from an empty composer (app)", () => {
       const app = await launch();
       await app.waitFor("id:composer-input");
       await app.type("id:composer-input", "");
-      await app.keyboard.press("left"); await app.keyboard.press("left"); await app.keyboard.press("left");
-      await app.waitFor("id:projects-overview");
+      await app.keyboard.press("left"); await app.keyboard.press("left");
+      await app.waitFor("id:rail-cursor-prj_bravo");
       await app.keyboard.press(out);
-      await app.waitUntil(() => !app.shows("id:projects-overview"));
-      expect(app.shows("id:project-cursor-prj_bravo")).toBe(true);
-      await app.keyboard.press(out);
-      await app.waitUntil(() => !app.shows("id:project-cursor-prj_bravo"));
+      console.log("STEP1", out, app.shows("id:rail-popup-prj_bravo"), app.shows("id:rail-cursor-prj_bravo"));
+      if (out === "escape") { await app.keyboard.press(out); console.log("STEP1c", app.shows("id:rail-popup-prj_bravo"), app.shows("id:rail-cursor-prj_bravo")); }
+      await app.waitUntil(() => !app.shows("id:rail-cursor-prj_bravo"));
+      console.log("STEP1b", out);
       expect(app.shows("id:session-ses_b1")).toBe(true);
       await app.keyboard.press(out);
+      console.log("STEP2", out);
       await app.keyboard.press("x");
       await app.waitUntil(() => app.value("id:composer-input") === "x");
     }
@@ -113,9 +116,12 @@ describe("keyboard flow from an empty composer (app)", () => {
     const app = await launch();
     await app.waitFor("id:composer-input");
     await app.type("id:composer-input", "");
-    for (let i = 0; i < 3; i++) await app.keyboard.press("left");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Projects overview");
+    await app.keyboard.press("enter");
     await app.waitFor("id:projects-overview");
-    const text = app.texts().join("\n").replace(/\u00a0/g, " ");
+    const all = app.texts().join("\n").replace(/\u00a0/g, " ");
+    const text = all.slice(all.indexOf("Projects\n"));
     const at = (needle: string) => { const i = text.indexOf(needle); if (i < 0) throw new Error(`missing: ${needle}`); return i; };
     expect(at("Alpha chat")).toBeLessThan(at("Bravo notes"));
     expect(at("Bravo notes")).toBeLessThan(at("Inactive"));
@@ -138,7 +144,9 @@ describe("keyboard flow from an empty composer (app)", () => {
     const app = await launch({ "PATCH */api/project/prj_charlie": { body: { ...projects[2], status: "current", revision: 2 } } });
     await app.waitFor("id:composer-input");
     await app.type("id:composer-input", "");
-    for (let i = 0; i < 3; i++) await app.keyboard.press("left");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Projects overview");
+    await app.keyboard.press("enter");
     await app.waitFor("id:projects-overview");
     expect(app.texts().join("\n").replace(/\u00a0/g, " ")).toContain("· Inactive");
     await app.keyboard.press("end"); // Charlie's session row: restore acts on its project
@@ -180,22 +188,14 @@ describe("keyboard flow from an empty composer (app)", () => {
     await app.waitUntil(() => !app.shows("id:session-cursor-ses_b1"));
   });
 
-  test("Esc steps back from the Projects tab whenever it has focus, e.g. opened by its command", async () => {
-    const app = await launch();
-    await app.waitFor("id:composer-input");
-    await app.keyboard.press("mod+3");
-    await app.waitFor("id:project-cursor-prj_bravo");
-    await app.keyboard.press("escape");
-    await app.waitUntil(() => !app.shows("id:project-cursor-prj_bravo"));
-    expect(app.shows("id:session-cursor-ses_b1") || app.shows("id:session-ses_b1")).toBe(true);
-  });
-
   test("a session whose last turn failed shows as failed in the overview", async () => {
     const failing = sessions.map((x) => (x.id === "ses_a1" ? { ...x, status: "failed" } : x));
     const app = await launch({ "GET */api/snapshot*": { body: { watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" }, projects, sessions: failing, running: [], approvals: [], questions: [], selected: null } } });
     await app.waitFor("id:composer-input");
     await app.type("id:composer-input", "");
-    for (let i = 0; i < 3; i++) await app.keyboard.press("left");
+    await app.keyboard.press("mod+p");
+    await app.type("id:palette-input", "Projects overview");
+    await app.keyboard.press("enter");
     await app.waitFor("id:projects-overview");
     expect(app.texts().join("\n")).toContain("· failed");
   });

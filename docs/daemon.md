@@ -119,7 +119,7 @@ metadata, so release and development versions follow the package version.
 - **Messages.** Append-only rows in session order, saved as each one is
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
-  Both clients show a new session's first submission immediately as `You · Sending…`
+  Both clients show a new session's first submission immediately as a `You` message
   below the unchanged context preview while creation (including MCP startup) runs.
   This pending UI is not inserted into canonical messages. The confirmed user
   message and loaded starting history replace it together; failures restore the
@@ -402,6 +402,11 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   User-created children may explicitly override the inherited switches.
 - **`wait: true` (default).** The tool returns the child's final answer, or its
   error: `Sub agent ID (agent A) was interrupted by the user.` or `… failed: ERROR.`
+  A provider HTTP failure adds the provider's own reason from the response body
+  (`… failed: copilot: HTTP 400 (model_not_supported: …).`). For a rejection
+  (400, 401, 402, 403, 404, 413, 422) it adds that resuming on the same model will
+  most likely fail the same way. For 429 it says to wait for the limit to reset or use another
+  model (`failure_advice` in `runtime.py`). Clients' `session.error` text is unchanged.
   When the parent has `message_session`, a stopped child's report adds that it is
   idle, keeps its conversation, and should be resumed or redirected with
   `message_session` (naming its id) rather than replaced by a new child, and that
@@ -515,6 +520,14 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   the same provenance. A client must not repeat an ambiguous POST.
 - **Failures.** Provider, sign-in and request errors end the turn with
   `session.error`. Saved messages stay as they are.
+- **Unexpected failures.** Any other exception (a Nexus bug, or a store write
+  failing on a full disk) is logged with its traceback and ends the turn as
+  `failed` with `kind: "internal"` and the exception text. Tool calls left
+  without a result are closed as for an interrupt, but the results say
+  "Nexus failed during this turn (…)", and a running sub agent is not stopped.
+  Queued inputs are held, as after an interrupt. Without this, the next prompt
+  sent calls without results and the provider refused it. If these writes fail
+  too, the turn is left for startup recovery.
 - **Summary.** Every closed turn (completed, failed or interrupted) is followed
   by a durable `turn.summary` event before the idle `session.status`
   ([Turn summaries](#turn-summaries-and-the-spend-ledger)).
@@ -658,6 +671,13 @@ whose session had no interrupted turn is not reported individually after a
 restart; its record and retained output are simply gone. The same applies to a
 kernel from a session with no interrupted turn: nothing durable can prove it was
 live, so recovery does not invent a loss report.
+
+**ZMX children.** A turn whose tools the Claude Code or Antigravity CLI ran itself reconciles the same way, but its
+recovery text says the CLI ran the tool and it **may have finished or still be running**; nothing is retried. For
+Claude Code, the rest of the CLI's transcript is read once and added as labelled recovered output, and the CLI session
+id is kept so the next prompt resumes. A CLI process that outlived the daemon is never killed automatically:
+`nexus doctor` lists it from `$NEXUS10_HOME/workers/records/`, and `nexus workers clean` stops it only when the pid and
+its start time still match ([external-workers.md](external-workers.md#recovery-and-orphans)).
 
 ## The CLI as a client (`nexus/cli.py`, `nexus/client.py`)
 

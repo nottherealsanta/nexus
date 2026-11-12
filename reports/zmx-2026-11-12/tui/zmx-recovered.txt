@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files] [Git]            · Orchestrator ×    +                                                                                                      □
+     │                                      ZMX recovered                                                    ZMX · Claude Code · claude-haiku-5-5 · claude-code · default
+▏    │   Orchestrator             now
+▏ W  │                            5 ↳
+▏  1 │                                        ZMX · Claude Code  context incomplete
+     │
+     │                                        Run  model claude-code/claude-haiku-5-5 · permission auto · cwd /work/demo
+     │
+     │                                        Settings  CLI inherited
+     │
+     │                                        Not applied  Nexus permission rules, disabled tools, step limits
+     │
+     │                                        total  ~0 tok
+     │
+     │
+     │                                      │
+     │                                      │  Refactor the parser                                                                                         #1 · 2:41 PM
+     │                                      │
+     │
+     │                                         ▸ 1 tool
+     │
+     │                                         ▸ context · Nexus recovery: interrupted turn · show details
+     │
+     │                                                                                                           claude-code/claude-haiku-5-5 · 1 tool · 0.0s · 2:41 PM
+     │
+     │                                  ←
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+  +  │
+     │                                          Type a message…
+     │
+     │ + New session                            Scout · claude-haiku-5-5 claude-code · default                                                                      0
+  ⚙  │ ⌕ Search sessions       ctrl+k        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived                       /private/tmp/claude-501/-Users-santa-repos-nexus/5af54951-9e56-45ed-9c0a-4d61a21c9267/scratchpad/zv/home/workspace
+     │                                       ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

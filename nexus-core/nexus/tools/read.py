@@ -9,6 +9,7 @@ from typing import Any
 
 from ..llmhub.types import Media, ToolSpec
 from .base import Tool, ToolContext, ToolError, ToolOutput, clip, resolve
+from .suggest import did_you_mean
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
@@ -34,7 +35,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         entries = sorted(p.name + ("/" if p.is_dir() else "") for p in path.iterdir())
         return clip(f"{display} is a directory ({len(entries)} entries):\n" + "\n".join(entries))
     if not path.is_file():
-        raise ToolError(f"{display} does not exist")
+        raise ToolError(f"{display} does not exist" + await did_you_mean(ctx, path))
     data = path.read_bytes()
     mime = _image_mime(data)
     if mime is not None:
@@ -62,7 +63,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
 def _image(ctx: ToolContext, path: Any, display: str, data: bytes, mime: str) -> str:
     """An image file goes to the model as an image, stored as an artifact like any tool image."""
     if ctx.save_media is None:
-        raise ToolError(f"{display} is an image ({mime}, {len(data)} bytes); images cannot be shown outside a session")
+        where = ("a code cell cannot show images; call `read` directly, outside `code`, to see it"
+                 if not ctx.model_visible else "images cannot be shown outside a session")
+        raise ToolError(f"{display} is an image ({mime}, {len(data)} bytes); {where}")
     try:
         artifact = ctx.save_media(data, mime, path.name)
     except ValueError as exc:

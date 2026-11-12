@@ -2,7 +2,7 @@
   "mcpServers": {
     "browser-use": {
       "command": "uvx",
-      "args": ["--from", "browser-use[cli]==0.13.14", "browser-use", "--mcp"]
+      "args": ["--from", "browser-use[cli]==1.0.2", "browser-use", "--cli-mcp"]
     }
   }
 }

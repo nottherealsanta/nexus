@@ -1394,16 +1394,16 @@ fn scroll_cells(s: &str, offset: usize) -> String {
 fn session_glyph(cx: &Cx, id: &str, bg: &str) -> (String, Style) {
     let a = cx.app;
     let ascii = cx.t.opts.ascii;
-    if a.is_busy(id) {
+    if a.session_waiting(id) {
+        let (g, tok) = cx.t.attention("waiting");
+        (g.to_owned(), cx.st(tok, bg))
+    } else if a.is_busy(id) {
         (cx.t.spinner(a.frame).to_owned(), cx.st(PRIMARY, bg))
     } else if a.ui.failed_sessions.contains(id) {
         (
             if ascii { "o" } else { "\u{25cf}" }.to_owned(),
             cx.st("status.error", bg),
         )
-    } else if a.session_waiting(id) {
-        let (g, tok) = cx.t.attention("waiting");
-        (g.to_owned(), cx.st(tok, bg))
     } else if a.ui.unread_sessions.contains(id) {
         (
             if ascii { "*" } else { "\u{25cf}" }.to_owned(),
@@ -1847,7 +1847,6 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         Tab::Sessions => draw_sessions(cx, buf, body, focused, hits),
         Tab::Files => draw_files(cx, buf, body, focused, hits),
         Tab::Git => draw_project_git(cx, buf, body, focused, hits),
-        Tab::Projects => draw_projects(cx, buf, body, focused, hits),
     }
     if false && a.ui.tab == Tab::Sessions && body.width >= 8 && body.height >= 3 {
         let scope = Rect::new(body.right() - 3, body.y, 2, 1);
@@ -1895,7 +1894,6 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
             Tab::Sessions => "tab_sessions",
             Tab::Files => "tab_files",
             Tab::Git => "tab_files",
-            Tab::Projects => "tab_projects",
         };
         // Sessions is 10 cells; the rest take their bracketed label's width after an
         // 8-cell stride, so Files keeps its place and Git fits the 28-cell sidebar.
@@ -1931,7 +1929,6 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
         let label = match tab {
             Tab::Sessions => "[Sessions]",
-            Tab::Projects => "[Projects]",
             Tab::Files => "[Files]",
             Tab::Git => "[Git]",
         };
@@ -1959,10 +1956,13 @@ pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
     let room = r.height.saturating_sub(12);
     let shown = (room / RAIL_ITEM) as usize;
     // The current project stays in view when the rail overflows.
-    let current = a
-        .current_project()
-        .and_then(|id| entries.iter().position(|e| *e == id))
-        .unwrap_or(0);
+    let current = if a.ui.focus == Focus::Rail {
+        a.rail_cursor()
+    } else {
+        a.current_project()
+            .and_then(|id| entries.iter().position(|e| *e == id))
+            .unwrap_or(0)
+    };
     let top = (current + 1).saturating_sub(shown);
     let mut out = Vec::new();
     let mut y = r.y.saturating_add(1);
@@ -2084,6 +2084,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     continue;
                 };
                 let selected = a.current_project().as_deref() == Some(p.id.as_str());
+                let focused = a.ui.focus == Focus::Rail && a.rail_cursor() == i;
                 let dragging = a.ui.rail_drag;
                 let is_source = dragging.is_some_and(|d| d.active && d.from == i);
                 let is_target = dragging.is_some_and(|d| d.active && !d.cancelled && d.to == i);
@@ -2094,7 +2095,7 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 } else {
                     MUTED
                 };
-                let lifted = selected || hovered;
+                let lifted = selected || hovered || focused;
                 let bg = if lifted { ACTIVE } else { SIDEBAR };
                 let tile = Rect::new(band.x, band.y, inner, 3).intersection(r);
                 if lifted {
@@ -2117,7 +2118,18 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 let label_width = width(label) as u16;
                 let label_x = tile.x + tile.width.saturating_sub(label_width) / 2;
                 put(buf, label_x, band.y + 1, label, style, label_width);
-                if selected {
+                if focused {
+                    for y in tile.y..tile.bottom() {
+                        put(
+                            buf,
+                            band.x,
+                            y,
+                            if cx.t.opts.ascii { "|" } else { "▌" },
+                            cx.st("interactive.focus", bg).add_modifier(Modifier::BOLD),
+                            1,
+                        );
+                    }
+                } else if selected {
                     for y in tile.y..tile.bottom() {
                         put(
                             buf,
@@ -2188,10 +2200,14 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     let a = cx.app;
     let entries = a.rail_project_ids();
-    let Some((RailItem::Project(i), band)) = rail_layout(a, r)
-        .into_iter()
-        .find(|(item, band)| matches!(item, RailItem::Project(_)) && cx.hovered(*band))
-    else {
+    let keyed = a.ui.focus == Focus::Rail;
+    let Some((RailItem::Project(i), band)) = rail_layout(a, r).into_iter().find(|(item, band)| {
+        match item {
+            RailItem::Project(i) if keyed => *i == a.rail_cursor(),
+            RailItem::Project(_) => cx.hovered(*band),
+            _ => false,
+        }
+    }) else {
         return;
     };
     let Some(p) = entries.get(i).and_then(|id| a.state.model.projects.get(id)) else {
@@ -3859,125 +3875,6 @@ fn session_detail(
     (left, meta)
 }
 
-fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
-    let a = cx.app;
-    let ids = a.project_ids();
-    let add_row = |buf: &mut Buffer, y: u16, hits: &mut HitMap| {
-        if y >= r.bottom() {
-            return;
-        }
-        let rr = Rect::new(r.x, y, r.width, 1);
-        let style = if cx.hovered(rr) {
-            cx.st(PRIMARY, SIDEBAR)
-        } else {
-            cx.st(MUTED, SIDEBAR)
-        };
-        clear(buf, rr, style);
-        put(
-            buf,
-            rr.x + 1,
-            y,
-            "+ Add project",
-            style,
-            rr.width.saturating_sub(1),
-        );
-        hits.add(rr, Target::AddProject);
-    };
-    if ids.is_empty() {
-        put(
-            buf,
-            r.x + 1,
-            r.y + 1,
-            "No projects yet.",
-            cx.st(MUTED, SIDEBAR),
-            r.width - 1,
-        );
-        add_row(buf, r.y + 3, hits);
-        return;
-    }
-    let cursor = a.cursor(Tab::Projects);
-    let cur_proj = a.current_project();
-    let per = 2u16;
-    let h = (r.height / per) as usize;
-    let top = if cursor < h { 0 } else { cursor + 1 - h };
-    let now = now_secs();
-    for (i, id) in ids.iter().enumerate().skip(top).take(h) {
-        let p = &a.state.model.projects[id];
-        let y = r.y + (i - top) as u16 * per;
-        let rr = Rect::new(r.x, y, r.width, per);
-        let selected = cur_proj.as_deref() == Some(id.as_str());
-        let style = row_style(cx, selected, cx.hovered(rr));
-        clear(buf, rr, style);
-        if focused && i == cursor {
-            put(
-                buf,
-                rr.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", SIDEBAR)
-                    .patch(style)
-                    .add_modifier(Modifier::BOLD),
-                1,
-            );
-        }
-        let n = a
-            .state
-            .model
-            .sessions
-            .values()
-            .filter(|s| &s.project_id == id)
-            .count();
-        let hot_row = cx.hovered(rr);
-        let right = format!("{n}  {}", text::age(now, p.updated));
-        let rw = width(&right) as u16;
-        let rx = rr.right().saturating_sub(rw + 1);
-        // Hovering a project offers `×` where the count and time are.
-        let close = hot_row.then(|| Rect::new(rr.right().saturating_sub(4), y, 3, 1));
-        if let Some(x) = close {
-            put(
-                buf,
-                x.x + 1,
-                y,
-                if cx.t.opts.ascii { "x" } else { "\u{00d7}" },
-                cx.st(if cx.hovered(x) { PRIMARY } else { MUTED }, SIDEBAR)
-                    .patch(style),
-                1,
-            );
-        } else {
-            put(buf, rx, y, &right, cx.st(MUTED, SIDEBAR), rw);
-        }
-        let nw = rx.saturating_sub(rr.x + 4) as usize;
-        put(
-            buf,
-            rr.x + 3,
-            y,
-            &truncate(&p.name, nw, cx.ell()),
-            if selected {
-                style.add_modifier(Modifier::BOLD)
-            } else {
-                style
-            },
-            nw as u16,
-        );
-        let path = truncate_middle(&p.path, r.width.saturating_sub(5) as usize, cx.ell());
-        put(
-            buf,
-            rr.x + 3,
-            y + 1,
-            &path,
-            cx.st(MUTED, SIDEBAR),
-            r.width - 4,
-        );
-        hits.add(rr, Target::SideRow(i));
-        if let Some(x) = close {
-            hits.add(x, Target::RemoveProject(id.clone()));
-        }
-    }
-    // The closing row follows the last visible project.
-    let shown = ids.len().saturating_sub(top).min(h) as u16;
-    add_row(buf, r.y + shown * per, hits);
-}
-
 // ============================================================================
 // right sidebar
 // ============================================================================
@@ -4563,7 +4460,7 @@ fn empty_state(cx: &Cx) -> EmptyState {
         _ if a.state.model.projects.is_empty() => EmptyState {
             logo: true,
             hints: vec![
-                (key("sidebar.tab.projects", "alt+3"), "add a project".into()),
+                ("+".into(), "on the rail adds a project".into()),
                 (key("palette.open", "ctrl+p"), "commands".into()),
             ],
             ..plain("No projects yet", vec![])
@@ -5007,7 +4904,7 @@ fn draw_timeline(
             let pending = a.pending_first_prompt();
             let mut sent = Vec::new();
             if let Some(p) = pending {
-                sent.push("You · Sending…".to_owned());
+                sent.push("You".to_owned());
                 sent.extend(text::wrap(&p.text, inner.width.saturating_sub(2) as usize));
                 if p.images > 0 {
                     sent.push(format!(
@@ -7103,15 +7000,23 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             }
         }
         if rows.len() > input_height {
-            let more = format!("{}/{}", cr + 1, rows.len());
-            put(
-                buf,
-                panel.right().saturating_sub(width(&more) as u16 + 2),
-                inner.y,
-                &more,
-                cx.st(MUTED, PANEL),
-                8,
-            );
+            let track = input_height as u32;
+            let total = rows.len() as u32;
+            let thumb = (track * track).div_ceil(total).clamp(1, track);
+            let max_top = (total - track).max(1);
+            let travel = track - thumb;
+            let offset = (first as u32).min(max_top) * travel / max_top;
+            let x = panel.right().saturating_sub(2);
+            for y in 0..thumb {
+                put(
+                    buf,
+                    x,
+                    inner.y + (offset + y) as u16,
+                    cx.t.structure("rail"),
+                    cx.st(MUTED, PANEL),
+                    1,
+                );
+            }
         }
     }
     // Selectors and the meter share the control row; each has its own hit

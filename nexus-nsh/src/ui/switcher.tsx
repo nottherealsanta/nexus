@@ -25,14 +25,14 @@ function fuzzyMatch(query: string, text: string) {
 function switchState(id: string) {
   m();
   const session = model.sessions.get(id);
+  if (attention(id) === "waiting") {
+    return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting", spin: false };
+  }
   if (model.running.has(id) || session?.status === "busy") {
     return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
   }
   if (model.failedSessions.has(id) || session?.status === "failed") {
     return { glyph: "\u25cf", tone: "text-error", label: "failed", spin: false };
-  }
-  if (attention(id) === "waiting") {
-    return { glyph: attentionGlyph.waiting.unicode, tone: TONE[attentionGlyph.waiting.token], label: "waiting", spin: false };
   }
   if (model.unreadSessions.has(id)) {
     return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread", spin: false };

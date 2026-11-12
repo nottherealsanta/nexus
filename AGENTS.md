@@ -39,6 +39,9 @@ for deliberate changes from old Nexus.
   Manager touches: whatever it sends or answers
   shows there, labelled `via Manager`, and what a card shows is what the Manager
   asked to show. Do not add a separate Manager chat implementation; the explicit read-only backend session is for debugging.
+  **Exception: ZMX children** ([docs/external-workers.md](docs/external-workers.md), decision D2). A Claude Code or
+  Antigravity CLI adds context Nexus cannot see, so a ZMX child's timeline opens with a ZMX card saying the context is
+  incomplete and what was not applied, then shows everything Nexus does observe, in order. Nothing else may use this.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.
@@ -57,6 +60,10 @@ uv run nexus login codex       # or: login codex --device
 uv run nexus chat --wire       # see every request and SSE event
 uv add <pkg>                   # never pip install
 ```
+
+NSH web tests, from `nexus-nsh`: `node scripts/nsh-web.mjs test --target web <file>.test.tsx`
+(no `--browser` or llvm `PATH` needed; never `npx nsh`). Visual checks: the
+`nexus-nsh-web-screenshots` and `nexus-tui-screenshots` skills, not ad-hoc Playwright scripts.
 
 The repo launcher `scripts/nexus` gives whole-repo shortcuts from any
 directory when linked into `~/.local/bin`: `nexus`/`nexus tui`, `nexus build`,
@@ -83,3 +90,4 @@ change as the code.
 | HTTP API and event stream | [docs/api.md](docs/api.md) |
 | Daemon, projects, sessions, turns, approvals | [docs/daemon.md](docs/daemon.md) |
 | The Manager (voice agent above all sessions): hidden sessions, tools, authority, cards, navigation | [docs/manager.md](docs/manager.md) |
+| ZMX: Claude Code / Antigravity CLIs as child sessions | [docs/external-workers.md](docs/external-workers.md) |

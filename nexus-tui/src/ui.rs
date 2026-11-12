@@ -11,6 +11,8 @@ use crate::composer::Composer;
 pub enum Focus {
     ToggleLeft,
     Sidebar,
+    /// The project rail, reached with Left from the session list.
+    Rail,
     Timeline,
     Waiting,
     Composer,
@@ -31,7 +33,6 @@ pub enum Tab {
     Sessions,
     Files,
     Git,
-    Projects,
 }
 
 impl Tab {
@@ -40,7 +41,6 @@ impl Tab {
             Tab::Sessions => "sessions",
             Tab::Files => "files",
             Tab::Git => "git",
-            Tab::Projects => "projects",
         }
     }
     pub fn from_id(id: &str) -> Option<Tab> {
@@ -48,7 +48,6 @@ impl Tab {
             "sessions" => Some(Tab::Sessions),
             "files" => Some(Tab::Files),
             "git" => Some(Tab::Git),
-            "projects" => Some(Tab::Projects),
             _ => None,
         }
     }
@@ -699,7 +698,7 @@ pub enum Target {
     RailProject(usize),
     SessionScope,
     NewSession,
-    /// The closing row of the Projects tab.
+    /// The add-project control on the rail.
     AddProject,
     RightSection(usize),
     /// One changed file in the right sidebar's Git status, by row index.

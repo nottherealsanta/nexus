@@ -156,6 +156,18 @@ The Manager ([manager.md](manager.md)) is off until its soak passes.
 
 There is no `stage` setting. The Manager's prompt and tool catalog are code and cannot be extended from a file.
 
+## `[zmx]` settings
+
+ZMX mode ([external-workers.md](external-workers.md)): child sessions on the real Claude Code or Antigravity CLI. User
+config only; a project file cannot set these. Both are off by default, and while off no CLI is probed.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `claude_backend` | `"sdk"` | `sdk`: `claude/…` is the Agent SDK provider. `zmx`: `claude/…` *child* sessions run the `claude` CLI as `claude-code/…`, and `claude-code` models are listed for subagent pools. Roots keep the SDK |
+| `antigravity` | `false` | list `agy/…` models for subagent pools and run them on the `agy` CLI |
+
+The vendors' terms for this use are not verified; Settings › ZMX says so.
+
 ## `[web]`
 
 `search_url` is the SearXNG endpoint `web_search` calls (default

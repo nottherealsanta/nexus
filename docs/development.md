@@ -45,6 +45,14 @@ toolchain's `llvm-ar`. If missing, install `rustup component add llvm-tools` or
 set `AR_wasm32_unknown_unknown` to a WebAssembly-capable archiver. macOS's
 system `ar` cannot replace it.
 
+Run one NSH web test file through the same wrapper, from `nexus-nsh`:
+`node scripts/nsh-web.mjs test --target web <file>.test.tsx` (or `npm test -- <file>.test.tsx`,
+which also regenerates `gen/`). It finds an installed Chrome and the archiver, so it needs no
+`--browser` and no `PATH=…/llvm/bin`. `nsh` is the binary in `~/.local/bin`: never run `npx nsh`,
+which installs an unrelated npm package of that name. (2026-11-12: agents spent about 300 shell
+calls in two days hand-resolving a Playwright browser and an llvm path that this wrapper makes
+unnecessary.)
+
 The shared Mermaid crate accepts `unicode-width` 0.2 patch releases: the dedicated
 Ratatui client retains its 0.2.0 lock, while NSH 0.4 requires 0.2.2 or newer.
 An exact shared 0.2.0 pin prevents the NSH native host from resolving dependencies.

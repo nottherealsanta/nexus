@@ -38,7 +38,7 @@ _VAR = re.compile(r"\$\{([^}]+)\}|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 # Offered, switched off, until the user enables it in Settings (which then writes the entry into config.toml).
 # Version pinned; see nexus-browser/README.md. Never launched by Nexus on its own.
 DEFAULT_SERVERS: dict[str, dict[str, Any]] = {
-    "browser-use": {"command": "uvx", "args": ["--from", "browser-use[cli]==0.13.14", "browser-use", "--mcp"],
+    "browser-use": {"command": "uvx", "args": ["--from", "browser-use[cli]==1.0.2", "browser-use", "--cli-mcp"],
                     "enabled": False},
 }
 

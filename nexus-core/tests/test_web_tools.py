@@ -108,6 +108,19 @@ async def test_fetch_errors_and_unsupported_types(server, ctx):
             await fetch({"url": server.base + path}, ctx)
 
 
+async def test_fetch_reads_json_apis(server, ctx):
+    """pypi.org/pypi/<name>/json was refused as an unsupported type (2026-11-12)."""
+    server.routes["/json"] = (200, {"Content-Type": "application/json"}, b'{"info":{"name":"browser-use","version":"9.1"}}')
+    server.routes["/problem"] = (200, {"Content-Type": "application/problem+json; charset=utf-8"}, b'{"title":"x"}')
+    server.routes["/bad"] = (200, {"Content-Type": "application/json"}, b"{not json")
+    out = await fetch({"url": server.base + "/json"}, ctx)
+    assert '  "info": {\n    "name": "browser-use",\n    "version": "9.1"\n  }' in out
+    assert '"title": "x"' in await fetch({"url": server.base + "/problem"}, ctx)
+    assert "{not json" in await fetch({"url": server.base + "/bad"}, ctx)
+    paged = await fetch({"url": server.base + "/json", "offset": 2, "limit": 1}, ctx)
+    assert '>>>\n  "info": {\n[showing lines 2–2 of 6; use offset=3 to read on]' in paged
+
+
 async def test_fetch_decodes_compressed_bodies(server, ctx):
     packed = zlib.compress(b"compressed hello")
     server.routes["/z"] = (200, {"Content-Type": "text/plain", "Content-Encoding": "deflate"}, packed)
@@ -218,7 +231,7 @@ async def test_search_service_problems_are_actionable(search_at, ctx, tmp_path):
         s.routes["/search"] = (200, {}, b"<html>nope</html>")
         with pytest.raises(ToolError, match="not SearXNG JSON"):
             await search({"query": "q"}, ctx)
-    with pytest.raises(ToolError, match="not reachable.*nexus-search"):  # the server is gone now
+    with pytest.raises(ToolError, match="not reachable.*Do not start it yourself.*web_fetch.*nexus-search"):  # gone now
         await search({"query": "q"}, ctx)
 
 

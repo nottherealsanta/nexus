@@ -5,6 +5,7 @@ from typing import Any
 
 from ..llmhub.types import ToolSpec
 from .base import Tool, ToolContext, ToolError, resolve
+from .suggest import did_you_mean
 
 # Matching tiers only normalize typography and line endings, never indentation.
 _TYPOGRAPHY = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'", "–": "-", "—": "-"})
@@ -62,16 +63,20 @@ def _replace_now(display: str, path: Any, edits: list[dict[str, Any]]) -> str:
         raise ToolError(f"{display} does not exist")
     text = path.read_text(newline="")
     total = 0
+    unchanged = 0
     normalized = False
     for edit in edits:
         old, new = edit.get("old_string"), edit.get("new_string")
         if not isinstance(old, str) or not isinstance(new, str) or not old:
             raise ToolError("old_string (non-empty) and new_string must be strings")
-        if old == new:
+        if old == new and len(edits) == 1:
             raise ToolError("old_string and new_string are identical")
         matches, fuzzy = _matches(text, old)
         if not matches:
             raise ToolError(f"old_string was not found in {display}")
+        if old == new:  # one no-op entry in a list should not discard the real ones; it must still match
+            unchanged += 1
+            continue
         if len(matches) > 1 and not edit.get("replace_all"):
             raise ToolError(f"old_string occurs {len(matches)} times in {display}; add context or set replace_all")
         # Preserve CRLF files when a fallback matched a prompt using LF line endings.
@@ -81,9 +86,13 @@ def _replace_now(display: str, path: Any, edits: list[dict[str, Any]]) -> str:
             text = text[:start] + new + text[end:]
         total += len(matches)
         normalized |= fuzzy
+    if unchanged == len(edits):
+        raise ToolError("every old_string is identical to its new_string; nothing would change")
     # Every edit is validated in memory first: a failed later edit writes nothing.
     path.write_text(text, newline="")
     suffix = "; normalized matching" if normalized else ""
+    if unchanged:
+        suffix += f"; skipped {unchanged} entr{'ies' if unchanged != 1 else 'y'} whose old_string and new_string are identical"
     return f"edited {display} ({total} replacement{'s' if total != 1 else ''}{suffix})"
 
 
@@ -100,6 +109,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
             raise ToolError("edits must contain between 1 and 64 replacement objects")
     else:
         edits = [args]
+    if not path.is_file():  # checked again under the lock; this one can name likely paths
+        raise ToolError(f"{display} does not exist" + await did_you_mean(ctx, path, want_dir=False))
     if ctx.file_lock is None:
         return _replace_now(display, path, edits)
     async with ctx.file_lock:

@@ -64,6 +64,30 @@ len(r)''', approve=approve, events=events)
     assert not (tmp_path / "bad").exists()
 
 
+async def test_failed_cell_keeps_completed_outputs(kernels, tmp_path):
+    (tmp_path / "a").write_text("alpha")
+    (tmp_path / "b").write_text("beta")
+    with pytest.raises(ToolError) as caught:
+        await run(kernels, tmp_path, 'import asyncio\n'
+                  'r = await asyncio.gather(read(path="a"), read(path="nope"), read(path="b"))')
+    text = str(caught.value)
+    assert "RuntimeError: ToolError: nope does not exist" in text
+    assert "kept in last_outputs[N] (N = 1, 3, numbered below)" in text
+    assert "2. read {'path': 'nope'} · error: ToolError: nope does not exist" in text
+    later = await run(kernels, tmp_path, "print(sorted(last_outputs), 'alpha' in last_outputs[1], 'beta' in last_outputs[3])")
+    assert "[1, 3] True True" in later
+    # A failure in the cell's own code keeps finished calls too; a cell with nothing finished adds no note.
+    with pytest.raises(ToolError, match=r"N = 1, numbered below"):
+        await run(kernels, tmp_path, 'x = await read(path="a")\nnext([1])')
+    with pytest.raises(ToolError) as caught:
+        await run(kernels, tmp_path, 'await read(path="nope")')
+    assert "last_outputs" not in str(caught.value)
+    # A sibling still running when another call fails says why it stopped; it was not a timeout.
+    with pytest.raises(ToolError) as caught:
+        await run(kernels, tmp_path, 'import asyncio\nawait asyncio.gather(bash(command="sleep 5"), read(path="nope"))')
+    assert "bash {'command': 'sleep 5'} · error: cancelled when the cell stopped at an uncaught error" in str(caught.value)
+
+
 async def test_parallel_read_and_bash(kernels, tmp_path):
     (tmp_path / "a.txt").write_text("alpha\n")
     events = []

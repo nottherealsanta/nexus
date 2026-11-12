@@ -135,17 +135,4 @@ describe("project rail (app)", () => {
     expect(app.requests().some((r) => r.method === "DELETE")).toBe(false);
   });
 
-  test("an inactive project is listed in the Projects tab and one press restores it", async () => {
-    const app = await open("./App.tsx", {
-      network: network(projects, { "PATCH */api/project/prj_delta": { body: { ...projects[3], status: "current", revision: 2 } } }),
-      width: 1024, height: 768, platform: "web",
-    });
-    await app.waitFor("id:rail-project-prj_alpha");
-    await app.keyboard.press("mod+3");
-    await app.waitFor("id:project-prj_delta");
-    await app.press("id:project-prj_delta");
-    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/project/prj_delta")));
-    const patch = app.requests().find((r) => r.method === "PATCH") as any;
-    expect(JSON.parse(patch.body)).toEqual({ status: "current" });
-  });
 });

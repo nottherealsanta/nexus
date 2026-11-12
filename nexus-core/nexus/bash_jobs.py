@@ -97,6 +97,7 @@ class Job:
     exit_code: int | None = None
     timed_out: bool = False
     killed: bool = False
+    user_stopped: bool = False  # stopped from a client: the notice must not wake the model
     error: str | None = None
     task: asyncio.Task[None] | None = None
     watchdog: asyncio.Task[None] | None = None
@@ -241,10 +242,11 @@ class Jobs:
                 with contextlib.suppress(Exception):
                     on_finish(job)
 
-    async def kill(self, job_id: str, *, root: str | None = None) -> Job:
+    async def kill(self, job_id: str, *, root: str | None = None, user: bool = False) -> Job:
         job = self.get(job_id, root=root)
         if job.finished is None:
             job.killed = True
+            job.user_stopped = user
             kill_process(job.process)
             if job.task is not None:
                 await self._settle([job])

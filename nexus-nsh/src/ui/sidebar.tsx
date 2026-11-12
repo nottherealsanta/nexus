@@ -24,7 +24,7 @@ const sidebarResized = signal(false);
 effect(() => { if (!sidebarResized()) leftSidebarWidth.set(defaultLeftSidebarWidth(width())); });
 /** The project rail's width. */
 export const RAIL_PX = 40;
-const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "git" | "projects"; label: string; command: string; order: number }[];
+const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "git"; label: string; command: string; order: number }[];
 
 function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -68,7 +68,6 @@ export function LeftSidebar(p: { drawer?: boolean }) {
         <If when={leftTab() === "sessions"}><SessionsTab /></If>
         <If when={leftTab() === "files"}><FilesTab /></If>
         <If when={leftTab() === "git"}><GitTab /></If>
-        <If when={leftTab() === "projects"}><ProjectsTab /></If>
       </View>
       <If when={!p.drawer}><View {...resize.panHandlers} class="absolute right-0 top-0 bottom-0 w-2" testID="left-sidebar-resize" accessibilityLabel="Resize left sidebar" /></If>
     </View>
@@ -135,6 +134,12 @@ export function SessionRail() {
   const railMenu = signal<string | null>(null);
   const railTip = signal<string | null>(null);
   const railFocus = signal<string | null>(null);
+  let tipTimer: ReturnType<typeof setTimeout> | undefined;
+  const showTip = (id: string) => {
+    railTip.set(id);
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(() => { railTip.set(null); railFocus.set(null); }, 3000);
+  };
   const tones = ["text-multi", "text-info", "text-success", "text-foreground"];
   const CORNERS = [{ at: 0, kind: "attention" }, { at: 1, kind: "finished" }, { at: 2, kind: "running" }, { at: 3, kind: "idle" }];
   return (
@@ -146,6 +151,7 @@ export function SessionRail() {
             const pan = dragPan(p().id);
             const passive = () => projectStatus(p()) === PROJECT_STATUS.passive;
             const dragging = () => railDrag()?.id === p().id;
+            const keyed = () => flowStage() === "projects" && flowProject() === p().id;
             const target = () => { const d = railDrag(); return !!d && !d.cancelled && projects()[d.to]?.id === p().id && d.id !== p().id; };
             return (
               <ContextMenu
@@ -174,28 +180,28 @@ export function SessionRail() {
                   }
                   savePrefs();
                 }}
-                onFocus={() => { railFocus.set(p().id); railTip.set(p().id); }}
+                onFocus={() => { railFocus.set(p().id); showTip(p().id); }}
                 onBlur={() => { if (railFocus() === p().id) railFocus.set(null); if (railTip() === p().id) railTip.set(null); }}
                 accessibilityState={{ selected: currentProject() === p().id }}
                 accessibilityLabel={`${p().name} · ${details(p().id).join(", ")}`}
                 testID={`rail-project-${p().id}`}
-                tooltip={<Tooltip placement="right" offset={8} delay={120} open={railTip() === p().id || railFocus() === p().id}
-                  onOpenChange={({ open }) => { if (!open) railTip.set(null); else railTip.set(p().id); }}>
+                tooltip={<Tooltip placement="right" offset={8} delay={120} open={railTip() === p().id || railFocus() === p().id || keyed()}
+                  onOpenChange={({ open }) => { if (!open) railTip.set(null); else showTip(p().id); }}>
                   <View class="gap-1 rounded-(--radius) bg-raised px-3 py-2" testID={`rail-popup-${p().id}`}>
                     <Text class={`${TS.base} font-semibold text-foreground`}>{p().name}</Text>
-                    <View class="flex-row gap-3" testID={`rail-popup-${p().id}-above`}>
-                      <Text class={`w-[112px] ${TS.base} text-multi tabular-nums`}>{details(p().id)[0]}</Text>
-                      <Text class={`w-[64px] ${TS.base} text-info tabular-nums`}>{details(p().id)[1]}</Text>
+                    <View testID={`rail-popup-${p().id}-above`}>
+                      <Text class={`${TS.base} text-multi tabular-nums`}>{details(p().id)[0]}</Text>
+                      <Text class={`${TS.base} text-info tabular-nums`}>{details(p().id)[1]}</Text>
                     </View>
-                    <View class="flex-row gap-3" testID={`rail-popup-${p().id}-below`}>
-                      <Text class={`w-[112px] ${TS.base} text-success tabular-nums`}>{details(p().id)[2]}</Text>
-                      <Text class={`w-[64px] ${TS.base} text-foreground tabular-nums`}>{details(p().id)[3]}</Text>
+                    <View testID={`rail-popup-${p().id}-below`}>
+                      <Text class={`${TS.base} text-success tabular-nums`}>{details(p().id)[2]}</Text>
+                      <Text class={`${TS.base} text-foreground tabular-nums`}>{details(p().id)[3]}</Text>
                     </View>
                   </View>
                 </Tooltip>}
                 style={{ width: RAIL_PX }}
-                class={`relative items-center rounded-none hover:bg-accent ${currentProject() === p().id ? "bg-active hover:bg-active" : ""} ${dragging() ? "opacity-40" : ""} ${target() ? "bg-accent" : ""} ${FOCUS}`}>
-                <If when={currentProject() === p().id}><ActiveBar testID={`rail-active-${p().id}`} /></If>
+                class={`relative items-center rounded-none hover:bg-accent ${currentProject() === p().id || keyed() ? "bg-active hover:bg-active" : ""} ${dragging() ? "opacity-40" : ""} ${target() ? "bg-accent" : ""} ${FOCUS}`}>
+                <If when={keyed()} else={<If when={currentProject() === p().id}><ActiveBar testID={`rail-active-${p().id}`} /></If>}><FocusEdge testID={`rail-cursor-${p().id}`} /></If>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
@@ -328,7 +334,7 @@ function ArchivedToggle() {
 
 export function ProjectSelector() {
   return <Button onPress={() => run("project.switch")} accessibilityLabel="Current project" testID="project-selector" class={`flex-1 min-w-0 flex-row items-center gap-1.5 rounded-(--radius) hover:bg-accent ${phone ? "min-h-11 px-2" : isNarrow() ? "min-h-11 px-2" : "min-h-8 px-2"} ${FOCUS}`}>
-    <Text style={{ numberOfLines: 1, ...(phone ? { fontFamily: "Geist" } : {}) }} class={`flex-1 ${phone ? "text-[22px] leading-7 font-semibold text-foreground" : `${TS.base} font-medium text-foreground`}`}>{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
+    <Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`flex-1 ${phone ? "text-[22px] leading-7 font-semibold text-foreground" : `${TS.base} font-medium text-foreground`}`}>{scopeAll() ? "All projects" : currentProject() ? projectName(currentProject()!) : "No project"}</Text>
     <Icon name="chevron-down" size={14} class="tint-muted-foreground" />
   </Button>;
 }
@@ -378,7 +384,7 @@ export function SessionsTab() {
         </If>
       }>
         <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
-          {(x) => <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, ...(phone ? { fontFamily: "Geist" } : {}) }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${TS.base} font-medium text-muted-foreground`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View></If>}
+          {(x) => <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${TS.base} font-medium text-muted-foreground`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View></If>}
         </List>
       </If>
       </View>
@@ -446,7 +452,7 @@ function SessionRow(p: { s: () => Session }) {
             </View></If>
             <If when={phone && !!att()}><AttentionMark kind="waiting" /></If>
             <If when={phone && !att() && sessionRunning(s())}><Status kind="running" /></If>
-            <Text style={{ numberOfLines: 1, ...(phone ? { fontFamily: "Geist" } : {}) }} class={`flex-1 min-w-0 ${phone ? "text-[16px] leading-6 font-medium" : TS.base} ${sel() ? "text-highlight" : "text-foreground"}`}>{s().title || "Untitled"}</Text>
+            <Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`flex-1 min-w-0 ${phone ? "text-[16px] leading-6 font-medium" : TS.base} ${sel() ? "text-highlight" : "text-foreground"}`}>{s().title || "Untitled"}</Text>
             <If when={!phone}>
               <View class="flex-row items-center gap-1">
                 <Text class={`${T.meta} ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
@@ -455,9 +461,9 @@ function SessionRow(p: { s: () => Session }) {
           </View>
           <If when={two()}>
             <View class={`flex-row items-center gap-1 h-6 ${phone ? "" : "pl-6"}`} testID={`session-line-${s().id}`}>
-              <If when={phone}><Text style={{ numberOfLines: 1, fontFamily: "Geist" }} class={`text-[13px] leading-5 min-w-0 ${att() ? "text-warning" : "text-muted-foreground"}`}>{att() ? "Needs your input" : projectName(s().project_id)}</Text></If>
+              <If when={phone}><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`text-[13px] leading-5 min-w-0 ${att() ? "text-warning" : "text-muted-foreground"}`}>{att() ? "Needs your input" : projectName(s().project_id)}</Text></If>
               <If when={!phone && place()}><Text style={{ numberOfLines: 1 }} testID={`session-place-${s().id}`} class={`${T.meta} min-w-0`}>{place()}</Text></If>
-              <If when={phone}><Text style={{ fontFamily: "Geist" }} class="text-[13px] leading-5 text-muted-foreground">{` · ${relTime(s().updated, (tick(), Date.now()))}`}</Text></If>
+              <If when={phone}><Text style={{ fontFamily: "Google Sans" }} class="text-[13px] leading-5 text-muted-foreground">{` · ${relTime(s().updated, (tick(), Date.now()))}`}</Text></If>
               <If when={snippetOf(s().id)}>{(t) => <Text style={{ numberOfLines: 1 }} testID={`session-snippet-${s().id}`} class={`${T.meta} flex-1 min-w-0`}>{`· ${t()}`}</Text>}</If>
               <View class="flex-1" />
               <If when={!phone && n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
@@ -547,70 +553,5 @@ function FilesTab() {
       </View>}
     </If>
   </Scroll>;
-}
-function ProjectsTab() {
-  const rows = () => { m(); return orderedProjects(model.projects.values()); };
-  const items = () => [...rows().map((project) => ({ kind: "project" as const, id: project.id, project })), { kind: "add" as const, id: "add-project" }];
-  const count = (id: string) => { let n = 0; for (const s of model.sessions.values()) if (s.project_id === id && !s.parent_id && !s.archived) n++; return n; };
-  return (
-    <View class="flex-1 min-h-0">
-      <View class="flex-row items-center gap-2 p-2">
-        <Text class={`flex-1 ${TS.base} font-medium text-foreground px-2`}>Projects</Text>
-      </View>
-      <If when={rows().length === 0}><Empty title="No projects yet" body="Add a project by its directory path. Core creates it if it is new." /></If>
-      <List each={items()} keyExtractor={(x) => x.id} class="flex-1" contentStyle={{ paddingHorizontal: 8, paddingBottom: 8, gap: 2 }} testID="project-list">
-        {(item) => {
-          const row = item();
-          if (row.kind === "add") return <Button onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} testID="add-project" accessibilityLabel="+ Add project"
-            class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${FOCUS}`}>
-            <Text class={`${TS.base} text-primary`}>+</Text>
-            <Text class={`${TS.base} text-foreground`}>Add project</Text>
-          </Button>;
-          return <ProjectRow project={() => row.project} count={count} />;
-        }}
-      </List>
-      <ProjectMcpPanel />
-    </View>
-  );
-}
-
-function ProjectRow(p: { project: () => Project; count: (id: string) => number }) {
-  const project = p.project;
-  const home = () => {
-    const stateHome = info()?.home ?? "";
-    return userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
-  };
-  const short = () => shortPath(project().path, home());
-  const ref = () => ({ kind: "project" as const, id: project().id });
-  const selected = () => currentProject() === project().id;
-  const cursor = () => flowStage() === "projects" && flowProject() === project().id;
-  return (
-    <ContextMenu
-      open={sidebarRowMenu()?.kind === "project" && sidebarRowMenu()?.id === project().id}
-      onOpenChange={({ open }) => {
-        if (open) {
-          focusedSidebarRow.set(ref());
-          sidebarRowMenu.set(ref());
-          selectProject(project().id);
-        } else if (sidebarRowMenu()?.id === project().id) sidebarRowMenu.set(null);
-      }}
-      popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
-      trigger={
-        <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
-          onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
-          onPress={() => { focusedSidebarRow.set(ref()); if (projectStatus(project()) === PROJECT_STATUS.inactive) void setProjectStatus(project().id, PROJECT_STATUS.current); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
-          class={`relative gap-0.5 rounded-none px-2.5 py-1.5 hover:bg-accent ${selected() || cursor() ? "bg-selection" : ""} ${FOCUS}`}>
-          <If when={cursor()}><FocusEdge testID={`project-cursor-${project().id}`} /></If>
-          <View class="flex-row items-center gap-2">
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 ${TS.base} ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
-            <Text class={T.meta}>{`${projectStatus(project()) === PROJECT_STATUS.current ? "" : `${projectStatus(project())} · `}${p.count(project().id)} session${p.count(project().id) === 1 ? "" : "s"} · ${relTime(project().updated)}`}</Text>
-          </View>
-          <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`${T.mono} w-full min-w-0`}>{short()}</Text>
-        </View>
-      }
-    >
-      <RowMenuItems row={ref} />
-    </ContextMenu>
-  );
 }
 void Input; void Scroll; void abbrev; void icons; void fold; void newSession; void toggleLeft; void connection; void live; void viewed;

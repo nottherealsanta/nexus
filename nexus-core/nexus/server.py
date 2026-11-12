@@ -1748,7 +1748,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if jid not in runtime.jobs.items:
             raise NotFound(f"no bash job {jid}")
         if request.method == "DELETE":
-            await runtime.jobs.kill(jid, root=None)
+            await runtime.jobs.kill(jid, root=None, user=True)
             return Response(status_code=204)
         return JSONResponse(runtime.jobs.get(jid).json(output=True))
 

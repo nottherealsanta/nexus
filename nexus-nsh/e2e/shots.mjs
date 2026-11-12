@@ -43,6 +43,13 @@ for (const scheme of ["dark", "light"]) for (const [label, w, h] of sizes) {
   await shot(p, "02-sessions-list", tag);
   await tid(p, `session-${ids.refactor}`).click(); await settle(p, 1200);
   await shot(p, "03-session-messages", tag);
+  // Wide code scrolls sideways instead of being clipped (the TUI wraps it; both show every character).
+  const clipped = await p.evaluate(() => [...document.querySelectorAll('[data-testid="code-fence"]')].filter((f) => {
+    const wide = [...f.querySelectorAll("*")].some((e) => e.scrollWidth > e.clientWidth + 2 && ["auto", "scroll"].includes(getComputedStyle(e).overflowX));
+    const inner = [...f.querySelectorAll("*")].some((e) => e.scrollWidth > f.clientWidth + 2 && !["auto", "scroll"].includes(getComputedStyle(e).overflowX) && getComputedStyle(e).overflowX !== "visible");
+    return !wide && inner;
+  }).length);
+  if (clipped) throw new Error(`${tag}: ${clipped} code block(s) clip instead of scrolling`);
   await tid(p, "ctx-system-open").click(); await settle(p, 400); await shot(p, "03c-context-detail", tag); await closeAll(p);
   if (w >= 820) { await tid(p, "toggle-left").click(); await settle(p, 400); await shot(p, "03a-session-rail", tag); await tid(p, "toggle-left").click(); await settle(p, 300); }
   if (w >= 820) { await tid(p, "toggle-right").click(); await settle(p, 500); await shot(p, "03b-session-info", tag); await tid(p, "toggle-right").click(); await settle(p, 300); }
@@ -59,11 +66,14 @@ for (const scheme of ["dark", "light"]) for (const [label, w, h] of sizes) {
   await p.keyboard.press(`${mod}+,`); await settle(p, 900);
   await shot(p, "06-settings", tag);
   await tid(p, "section-providers").click(); await settle(p, 700); await shot(p, "06b-settings-providers", tag);
-  await p.keyboard.press("Escape"); await settle(p, 400);
+  // Settings is two layers deep here: the first Escape leaves the section (footer "esc back"), the second closes the modal.
+  await closeAll(p); await closeAll(p);
   // shared Mermaid presentation: PNG for the flowchart, text rows for the pie,
   // and the source fallback for the unsupported mindmap
   await openDrawerLeft(p, w); await tid(p, `session-${ids.diagrams}`).click(); await settle(p, 1200);
   await shot(p, "06c-mermaid", tag);
+  // The packaged web runtime must link the native Mermaid set (App.tsx imports "nexus/native"): flowchart PNG + pie rows.
+  if (await tid(p, "mermaid-diagram").count() < 1 || await tid(p, "mermaid-text").count() < 1) throw new Error(`${tag}: Mermaid did not render (no PNG or text rows)`);
   // confirm dialog
   await openDrawerLeft(p, w); await tid(p, `session-${ids.release}`).click(); await settle(p, 900);
   await p.keyboard.press(`${mod}+p`); await settle(p, 500); await p.keyboard.type("Delete session"); await settle(p, 300); await p.keyboard.press("Enter"); await settle(p, 700);

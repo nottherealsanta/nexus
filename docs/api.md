@@ -107,18 +107,18 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/kernel` | `?summary=1` | Live kernels, metadata, retained cells and variable previews; `summary` omits the retained cell bodies |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
-| GET | `/api/config` | | `{revision, values, defaults, schema, errors}` for the initial settings |
+| GET | `/api/config` | | `{revision, values, defaults, schema, errors, zmx_unavailable}` for the initial settings; `zmx_unavailable` is why ZMX cannot run on this machine (non-POSIX), else null |
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title", "user" or "final_answer", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET, POST | `/api/usage` | | GET reads the saved snapshot; POST refreshes it. `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}` ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
-| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null); `claude` adds `note` ("Needs Claude Code 2.1.248 or newer", or that Claude Code is not installed), shown in the provider detail of both clients |
+| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null); `claude` adds `note` ("Needs Claude Code 2.1.248 or newer", or that Claude Code is not installed), shown in the provider detail of both clients. With ZMX on, `claude-code`/`agy` rows follow with `zmx: true`, `dialect: "external-cli"` and no `methods` ([external-workers.md](external-workers.md)) |
 | GET | `/api/provider/{id}/login` | | the in-progress sign-in, or `{status: "idle"}` ([Configuration](#configuration-provider-login-and-context-budget)) |
 | POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a browser, device, CLI or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. 400 for a method the provider does not list. A `browser` flow listens on the daemon's `127.0.0.1:1455` and publishes its URL; the client opens it |
 | DELETE | `/api/provider/{id}/login` | | 204; cancels a pending flow and signs out |
-| GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
+| GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers; ZMX models add `zmx: true` and are offered only in subagent pools |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
 | (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error, scope?: "global" or "project"}]`: what the starting-context header switches. `state` is `on`, `off` or `unavailable`; a disabled project entry is not part of the session ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md#project-servers)) |
@@ -242,6 +242,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom; a child row also has "tokens" (input + output spent)
  "fork": null,  // a fork child: {"parent_id": "ses_…", "inherited": 12}; its first `inherited` messages are copied from the parent, in order
+ "worker": null,  // a ZMX child (external-workers.md): {provider, label, model, status, permission_mode, context_complete: false, disclosure, not_applied, …}; its `tools`, `skills` and `mcp` are []
  "model": "codex/gpt-6.1-terra", "model_source": "session",   // session | agent | parent | none (default: only before models were remembered)
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
@@ -664,7 +665,7 @@ watermark:
 ```jsonc
 {
   "watermark": {"generation": "log_…", "head": 4200, "floor": 0, "head_cursor": "log_…:4200"},
-  "projects": [Project], "sessions": [raw session rows],
+  "projects": [Project], "sessions": [raw session rows],  // each row also carries `worker` (null, or a ZMX child's facts)
   "running": [turn], "approvals": [pending approval], "questions": [pending question],
   "selected": {"session_id": "ses_…", "messages": [Message], "messages_limit": 200,
                "messages_more": false, "oldest_seq": 1}
@@ -1037,6 +1038,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `log.retention` | a global retention pass: `{at, elapsed_ms, events: {removed, floor, head, protected, pinned, batches, retained_bytes, over_budget}, wire: {expired, expired_bytes, wire_bytes, over_budget, blocked}, migration, turn_links, scheduled, turns, mutations, storage, blockers, worked, settings}` |
 | `session.notified` | `{from, text, notice}`: a `wait: false` child finished, and its answer goes to this (parent) session. `notice` is the structured subagent metadata clients also receive on the stored message |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
+| `session.worker` | a ZMX child's `worker` object, each time its CLI starts or ends a turn ([external-workers.md](external-workers.md)); `session.updated` follows with the same object on the session |
 | `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
 | `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |

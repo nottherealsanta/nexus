@@ -1,5 +1,6 @@
 """Bounded foreground bash, plus daemon background jobs."""
 import asyncio
+import subprocess
 
 import pytest
 
@@ -27,6 +28,26 @@ async def test_foreground_bash_is_bounded_and_accepts_an_explicit_timeout(tmp_pa
     monkeypatch.setattr(module, "DEFAULT_FOREGROUND_TIMEOUT", 0.05)
     assert "killed after 0.05s timeout" in await bash({"command": "sleep 5"}, ctx)
     assert module.timeout_value(None) is None
+
+
+async def test_foreground_bash_reports_failures_a_pipeline_hides(tmp_path):
+    ctx = ToolContext(tmp_path)
+    out = await bash({"command": "printf 'x\\n' | grep zzz | cat"}, ctx)  # grep fails in the middle
+    assert out.startswith("[exit code 0 · pipeline exit codes 0 1 0, no output]")
+    out = await bash({"command": "nexus-no-such-cmd --check 2>&1 | tail -3"}, ctx)
+    assert out.startswith("[exit code 0 · pipeline exit codes 127 0 · command not found: nexus-no-such-cmd]")
+    out = await bash({"command": "nexus-no-such-cmd 2>&1 | head -1; echo done"}, ctx)  # not the last pipeline
+    assert out.startswith("[exit code 0 · command not found: nexus-no-such-cmd]")
+    # Normal cases stay plain: SIGPIPE from an early-closing reader, single commands and real failures.
+    assert (await bash({"command": "yes | head -1"}, ctx)).startswith("[exit code 0]\ny")
+    assert (await bash({"command": "false"}, ctx)).startswith("[exit code 1, no output]")
+    assert (await bash({"command": "false | true; exit 3"}, ctx)).startswith("[exit code 3, no output]")
+    # Bash's own error text, line numbers included, is unchanged by the status trap.
+    script = "echo a\necho b\nnexus-no-such-cmd"
+    plain = (await asyncio.to_thread(subprocess.run, ["/bin/bash", "-c", script], check=False,
+                                     capture_output=True, text=True, cwd=tmp_path)).stderr
+    assert (await bash({"command": script}, ctx)).endswith(plain)
+    assert not list(tmp_path.iterdir())  # nothing left in the workspace
 
 
 async def test_job_output_finish_timeout_kill_and_tree_scope(tmp_path):

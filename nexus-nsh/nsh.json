@@ -12,6 +12,7 @@
       "hosts": []
     },
     "clipboard": true,
+    "notifications": true,
     "network": {
       "hosts": [
         "*"

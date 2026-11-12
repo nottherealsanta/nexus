@@ -263,6 +263,48 @@ async def test_agent_list_reports_subagent_models(env):
     assert "subagent" not in by_name["orchestrate"]
 
 
+def test_failure_advice_reads_real_provider_bodies():
+    from nexus.runtime import failure_advice
+
+    def advice(status, body):
+        return failure_advice({"kind": "provider", "message": "x: HTTP", "status": status, "body": body})
+
+    # Bodies as recorded in turn errors, 2026-11-09..12.
+    reason, hint = advice(400, '{"error":{"message":"The requested model is not supported.","code":"model_not_supported",'
+                               '"param":"model","type":"invalid_request_error"}}\n')
+    assert reason == " (model_not_supported: The requested model is not supported.)"
+    assert "will most likely fail the same way" in hint
+    assert advice(402, '{"error":"Grok Build usage balance exhausted"}')[0] == " (Grok Build usage balance exhausted)"
+    assert advice(413, "Request Entity Too Large\n")[0] == " (Request Entity Too Large)"
+    reason, hint = advice(429, '{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}')
+    assert reason == " (usage_limit_reached: The usage limit has been reached)" and "limit resets" in hint
+    assert advice(500, "")[1] == "" and advice(None, "x") == ("", "")
+    assert failure_advice({"kind": "interrupted", "message": "interrupted by the user"}) == ("", "")
+
+
+async def test_failed_child_report_names_the_provider_reason(env):
+    from nexus.llmhub.types import ProviderError
+
+    rt, _, providers, workspace = env
+
+    class Rejecting(Scripted):
+        async def stream(self, req):
+            raise ProviderError("copilot: HTTP 400", status=400, phase="response",
+                                body='{"error":{"message":"The requested model is not supported.","code":"model_not_supported"}}')
+            yield  # pragma: no cover
+
+    providers["child"] = Rejecting([])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    rt.prompt(child.id, "go")
+    await _idle(rt)
+    report = rt._child_report(child.id)
+    assert report.startswith(f"Sub agent {child.id} (agent helper) failed: copilot: HTTP 400 "
+                             "(model_not_supported: The requested model is not supported.). The provider rejected")
+    assert rt.errors[child.id] == "copilot: HTTP 400"  # what clients show is unchanged
+
+
 async def test_child_fallback_is_recorded_and_partial_output_is_not_retried(env):
     from nexus.config import ConfigFile
     from nexus.llmhub.types import ProviderError, TextDelta

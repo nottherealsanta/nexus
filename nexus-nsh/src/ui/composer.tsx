@@ -1,6 +1,6 @@
-import { Image, Scroll, Text, View, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, computed, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, FOCUS, PHONE_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
@@ -166,7 +166,8 @@ function EditableComposer() {
     if (!currentProject() && centre() === "new_session") return "Add or choose a project first";
     return null;
   };
-  const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (text().trim().length > 0 || images().length > 0);
+  const hasText = computed(() => text().trim().length > 0);
+  const canSend = () => dictationPhase() === "idle" && !reason() && !pasting() && (hasText() || images().length > 0);
   const canDictate = () => live() && !ses()?.archived && !questionPending();
   const send = async (mode: "send" | "steer" | "queue" = busy() ? "steer" : "send", resumed = false) => {
     const t = text().trim();
@@ -237,11 +238,12 @@ function EditableComposer() {
   const meterPct = () => Math.min(100, usage()?.pct ?? 0);
 
   // Completion: the rows for the draft, the keys while it is open, and the file listing for `@`.
-  const completion = () => completionFor(text());
-  const open = () => {
+  // Memoised so a keystroke that leaves completion closed (the usual one) wakes nothing that depends on it.
+  const completion = computed(() => completionFor(text()));
+  const open = computed(() => {
     const c = completion();
     return !!c && c.rows.length > 0 && dismissed() !== text();
-  };
+  });
   const accept = (row: CompletionRow) => {
     const c = completion();
     if (!c) return;
@@ -262,13 +264,14 @@ function EditableComposer() {
   // returns toward the draft. Elsewhere the arrows belong to the input and move the caret between
   // lines, so a recalled multi-line prompt is walked line by line before the one before it.
   const recall = signal<{ at: number; scratch: string } | null>(null);
-  const recalled = () => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; };
+  const recalled = computed(() => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; });
   // The caret as the input reports it (UTF-16 units, clamped to the draft a replacement shortened);
   // a selection takes no arrow.
   const caret = signal({ start: 0, end: 0 });
   const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
-  const onFirstLine = () => { const at = caretAt(); return at >= 0 && !text().slice(0, at).includes("\n"); };
-  const onLastLine = () => { const at = caretAt(); return at >= 0 && !text().slice(at).includes("\n"); };
+  const onFirstLine = computed(() => { const at = caretAt(); return at >= 0 && !text().slice(0, at).includes("\n"); });
+  const onLastLine = computed(() => { const at = caretAt(); return at >= 0 && !text().slice(at).includes("\n"); });
+  const draftEmpty = computed(() => !(draft()[draftKey()] ?? "").length);
   // The input reports a paste instead of inserting it: small text goes in at the caret, and a
   // big paste becomes one atomic marker, as it does in the TUI.
   const insertAtCaret = (insert: string) => {
@@ -299,7 +302,7 @@ function EditableComposer() {
     if (project) void loadPromptHistory(project).catch(() => { historyKey = ""; });
   });
   effect(() => {
-    if (!focused() || open() || pendingSelection() || (!(draft()[draftKey()] ?? "").length && (pendingInputs()[viewed()?.id ?? ""]?.inputs.length ?? 0) > 0)) return;
+    if (!focused() || open() || pendingSelection() || (draftEmpty() && (pendingInputs()[viewed()?.id ?? ""]?.inputs.length ?? 0) > 0)) return;
     const entries = promptHistory().entries;
     if (!entries.length) return;
     // A recalled prompt lands with its caret at the end: Up then walks its lines before the next one.
@@ -455,6 +458,8 @@ function EditableComposer() {
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
               if (dictationPhase() !== "idle") return;
+              // Enter belongs to the question card while it locks the composer.
+              if (questionPending()) return;
               void send();
             }}
             onChange={({ value: t }) => { if (questionPending()) return; selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
@@ -466,7 +471,7 @@ function EditableComposer() {
               if (open()) dismissed.set(text());
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
-            style={{ height: h(), ...PHONE_FONT }}
+            style={{ height: h(), ...UI_FONT }}
             class={`flex-1 min-w-0 px-0 py-0 ${T.body} placeholder:text-muted-foreground`}
           />
             <View class="shrink-0 flex-row items-center gap-3 pb-1">
@@ -589,8 +594,8 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
       class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-9" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1, ...PHONE_FONT }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...PHONE_FONT }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1, ...UI_FONT }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -661,8 +666,8 @@ function WorkingRow() {
     <View class="shrink-0 flex-row items-center gap-2 h-7" testID="working-row">
       <Status kind="running" />
       <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
-      <Text style={PHONE_FONT} class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
-      <Text style={PHONE_FONT} class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
+      <Text style={UI_FONT} class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
+      <Text style={UI_FONT} class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
     </View>
   );
 }
@@ -965,6 +970,32 @@ function answerProblem(qq: QuestionItem, a: { selected: string[]; text: string }
   return selected || text ? null : "Pick an option or type an answer";
 }
 
+/**
+ * Enter on a question page, as in the TUI: a single choice with nothing picked and no text takes the
+ * highlighted option; then a lone question sends, another page locks its answer and moves on, and
+ * the review sends every page.
+ */
+function confirmQuestion(q: Question) {
+  if (submitted().has(q.id)) return;
+  const total = q.questions.length;
+  const page = Math.min(askPageOf(q.id), total);
+  if (total > 1 && page >= total) { submitAllQuestions(q); return; }
+  const qq = q.questions[page];
+  const id = `${q.id}:${qq.id}`;
+  const a = answers()[id] ?? blankAnswer();
+  if (!qq.multiple && !a.selected.length && !a.text.trim() && qq.options.length) {
+    const o = qq.options[Math.min(choice(), qq.options.length - 1)];
+    answers.update((all) => ({ ...all, [id]: { ...a, selected: [o.id] } }));
+  }
+  if (total === 1) { submitAllQuestions(q); return; }
+  const problem = answerProblem(qq, answers()[id] ?? blankAnswer());
+  if (problem) { waitError.set(problem); return; }
+  waitError.set(null);
+  setAskPage(q.id, page + 1);
+}
+/** The question's free-text field has focus: Enter is its own submit. */
+const questionFieldFocused = signal(false);
+
 /** Send every page, first showing the first one that is not ready. */
 function submitAllQuestions(q: Question) {
   for (const [i, qq] of q.questions.entries()) {
@@ -1081,13 +1112,26 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
       map["enter"] = () => { if (!(draft()[draftKey()] ?? "").length) approvalChoices(a)[choice()]?.run?.(); };
     }
     if (q && live()) bind("waiting.submit_answers", () => submitAllQuestions(q));
+    // Up/down move the highlighted option of the page in view; Enter confirms it (the free-text field keeps its own Enter).
+    const askPage = q ? askPageOf(q.id) : 0;
+    const shown = q && askPage < q.questions.length ? q.questions[askPage] : undefined;
+    if (q && live() && !submitted().has(q.id)) {
+      if (shown?.options.length) {
+        const last = shown.options.length - 1;
+        map["down"] = () => choice.set(Math.min(choice() + 1, last));
+        map["up"] = () => choice.set(Math.max(choice() - 1, 0));
+      }
+      map["enter"] = () => { if (!questionFieldFocused()) confirmQuestion(q); };
+    }
     const offs: (() => void)[] = [];
     const letter = (key: string, fn: () => void) => { try { offs.push(keymap.bind(key, fn, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ } };
     if (a && live()) for (const row of approvalChoices(a)) { const key = byId.get(row.cmd)?.keys?.tui; if (key && row.run) letter(key, row.run); }
     // Number keys act on the page in view; the review page has no choices.
     const page = q ? askPageOf(q.id) : 0;
     const one = q?.questions[page];
-    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => chooseAnswer(q, one, o.id)));
+    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => { choice.set(i); chooseAnswer(q, one, o.id); }));
+    // Space picks (or, multi-select, ticks) the highlighted option.
+    if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id); });
     const off = bindOpenKeys(map);
     return () => { off(); offs.forEach((f) => f()); };
   });
@@ -1101,7 +1145,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
             <Text class={`text-[16px] leading-6 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground ${phone ? "font-(family-name:--font-ui)" : ""}`} testID="waiting-title">
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground ${"font-(family-name:--font-ui)"}`} testID="waiting-title">
               {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
             </Text>
             <If when={p.count > 1}>
@@ -1180,7 +1224,7 @@ function ApprovalBody(p: { a: Approval }) {
                   style={phone ? { width: "48%" } : {}}
                   class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${phone ? "min-h-11 justify-center bg-background" : isNarrow() ? "min-h-11" : "min-h-8"} ${!phone && i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
                   <If when={!phone}><Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text></If>
-                  <Text style={{ numberOfLines: 1, ...(phone ? { fontFamily: "Geist" } : {}) }} class={`${phone ? "text-center text-[14px] font-semibold" : "flex-1 text-[16px]"} min-w-0 leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
+                  <Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`${phone ? "text-center text-[14px] font-semibold" : "flex-1 text-[16px]"} min-w-0 leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
                 </Button>
               );
@@ -1231,6 +1275,13 @@ function QuestionBody(p: { q: Question }) {
     }, 0);
     return () => clearTimeout(timer);
   });
+  // The highlight starts on the page's first picked option, else the first one.
+  effect(() => {
+    const cur = current();
+    if (reviewing()) return;
+    const first = cur.options.findIndex((o) => (answers()[`${q.id}:${cur.id}`]?.selected ?? []).includes(o.id));
+    choice.set(Math.max(0, first));
+  });
   const go = (to: number) => { waitError.set(null); setAskPage(q.id, to); };
   /** Enter on a question page locks its answer and moves on; the last page goes to the review. */
   const advance = () => {
@@ -1238,10 +1289,6 @@ function QuestionBody(p: { q: Question }) {
     const problem = answerProblem(cur, answerOf(cur));
     if (problem) { waitError.set(problem); return; }
     go(page() + 1);
-  };
-  const submitText = () => {
-    if (single) { submitAllQuestions(q); return; }
-    advance();
   };
   return (
     <View class="gap-3">
@@ -1261,8 +1308,8 @@ function QuestionBody(p: { q: Question }) {
               return (
                 <Button role={current().multiple ? "checkbox" : "radio"} selected={sel()} disabled={done()}
                   accessibilityLabel={`${current().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
-                  onPress={() => chooseAnswer(q, current(), o().id)}
-                  class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${sel() ? "bg-selection" : ""} ${FOCUS}`}>
+                  onPress={() => { choice.set(n()); chooseAnswer(q, current(), o().id); }}
+                  class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${(phone ? sel() : n() === choice()) ? "bg-selection" : ""} ${FOCUS}`}>
                   <If when={current().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel() ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel()} testID={`choice-mark-${o().id}`} /></If>
                   <View class="flex-1 min-w-0 py-1">
                     <Text class={`text-[16px] leading-6 ${sel() ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
@@ -1278,7 +1325,8 @@ function QuestionBody(p: { q: Question }) {
               const cur = current();
               answers.update((all) => ({ ...all, [`${q.id}:${cur.id}`]: { selected: all[`${q.id}:${cur.id}`]?.selected ?? [], text: t } }));
             }}
-            onSubmit={submitText} submitBehavior="submit"
+            onSubmit={() => confirmQuestion(q)} submitBehavior="submit"
+            onFocus={() => questionFieldFocused.set(true)} onBlur={() => questionFieldFocused.set(false)}
             accessibilityLabel={`${current().question} Free-text answer`} testID={`question-free-${current().id}`}
             class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
           <If when={!single}>

@@ -75,6 +75,8 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
   Partial 2026-11-12: manual connect shows two setup steps, LAN/Tailscale guidance, a trusted-network warning and
   permission troubleshooting. Pairing, QR scanning and recent Cores are not implemented.
 
+Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device.
+
 Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims but does not slide the conversation aside). Search is the always-visible field in the list and drawer rather than a separate button.
 
 Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11 (recorded in [decisions.md](decisions.md)); `nexus pair` is implemented:**

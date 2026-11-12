@@ -15,8 +15,8 @@ const titleSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[16px] leading-6" : typeSize;
 const metaSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[12px] leading-5" : typeSize;
-// The phone reads in Geist (a proportional face is easier on a small screen); code and mono text keep Monaspace.
-const ui = phone ? " font-(family-name:--font-ui)" : "";
+// Interface text reads in Google Sans; code and mono text keep Monaspace.
+const ui = " font-(family-name:--font-ui)";
 export const TS = {
   title: titleSize + ui,
   body: typeSize + ui,
@@ -34,8 +34,8 @@ export const T = {
   section: `${metaSize}${ui} font-medium text-muted-foreground`,
   mono: `${TS.mono} text-foreground-secondary`,
 };
-/** The phone reads in Geist, not the desktop's monospace; code keeps its own family. */
-export const PHONE_FONT: { fontFamily?: string } = phone ? { fontFamily: "Geist" } : {};
+/** Interface text reads in Google Sans, not monospace; code keeps its own family. */
+export const UI_FONT: { fontFamily?: string } = { fontFamily: "Google Sans" };
 export const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
 
 export const iconGlyphs: Record<IconName, string> = {

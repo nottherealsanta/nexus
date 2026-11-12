@@ -13,7 +13,10 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import signal
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from ..llmhub.types import ToolSpec
@@ -52,27 +55,56 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     if background:
         raise ToolError("background bash requires the daemon's job registry")
     timeout = timeout_value(args.get("timeout"), foreground=True)
-    proc = await asyncio.create_subprocess_exec(
-        "/bin/bash", "-c", command,
-        cwd=ctx.workspace, stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,
-    )
+    fd, status_file = tempfile.mkstemp(prefix="nexus-pipestatus-")
+    os.close(fd)
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        status = f"exit code {proc.returncode}"
-    except TimeoutError:
-        _kill(proc)
-        out, _ = await proc.communicate()
-        status = f"killed after {timeout:g}s timeout"
-    except asyncio.CancelledError:
-        # A cancelled call must stop its command too; otherwise it keeps changing the workspace.
-        _kill(proc)
-        raise
-    text = out.decode("utf-8", "replace")
+        proc = await asyncio.create_subprocess_exec(
+            # Same line as the command, so bash's "line N" in error messages is unchanged.
+            "/bin/bash", "-c", PIPESTATUS_TRAP + command,
+            cwd=ctx.workspace, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True, env={**os.environ, "NEXUS_PIPESTATUS_FILE": status_file},
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            status = f"exit code {proc.returncode}"
+        except TimeoutError:
+            _kill(proc)
+            out, _ = await proc.communicate()
+            status = f"killed after {timeout:g}s timeout"
+        except asyncio.CancelledError:
+            # A cancelled call must stop its command too; otherwise it keeps changing the workspace.
+            _kill(proc)
+            raise
+        text = out.decode("utf-8", "replace")
+        if proc.returncode == 0:
+            pipestatus = await asyncio.to_thread(Path(status_file).read_text, encoding="utf-8", errors="replace")
+            status += hidden_failures(pipestatus, text)
+    finally:
+        os.unlink(status_file)
     prefix = f"[cwd: {ctx.workspace}]\n" if ctx.cwd_changed else ""
     body = f"[{status}]\n{text}" if text else f"[{status}, no output]"
     return clip(prefix + body)
+
+
+# Records the exit codes of the command's last pipeline, so `cmd 2>&1 | tail` cannot report a failing
+# `cmd` as plain "exit code 0" (280 such test-failure outputs in one week of sessions, 2026-11).
+PIPESTATUS_TRAP = "trap 'printf \"%s\" \"${PIPESTATUS[*]}\" > \"$NEXUS_PIPESTATUS_FILE\" 2>/dev/null' EXIT; "
+_NOT_FOUND = re.compile(r"^/bin/bash: (?:line \d+: )?([^\s:]+): command not found$", re.MULTILINE)
+
+
+def hidden_failures(pipestatus: str, output: str) -> str:
+    """A note for a successful exit that hides a failure: a failing earlier stage of the last
+    pipeline, or a command bash could not find anywhere in the list. 141 (SIGPIPE, from a reader
+    such as `head` closing early) is normal and not reported."""
+    notes = []
+    codes = pipestatus.split()
+    if len(codes) > 1 and any(code not in ("0", "141") for code in codes[:-1]):
+        notes.append(f"pipeline exit codes {' '.join(codes)}")
+    missing = list(dict.fromkeys(_NOT_FOUND.findall(output)))
+    if missing:
+        notes.append("command not found: " + ", ".join(missing[:5]))
+    return "".join(f" · {note}" for note in notes)
 
 
 async def unbound_output(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -137,8 +169,11 @@ TOOL = Tool(
     ToolSpec(
         name="bash",
         description=(
-            "Run a bash command. It starts in the workspace directory, so do not `cd` there first. stdout and "
-            "stderr are combined; foreground commands have no stdin. Users can control background PTYs. "
+            "Run a bash command. Every call starts fresh in the workspace directory (a `cd` does not carry over "
+            "to the next call), so never `cd` to the workspace itself; `cd sub && …` is fine. stdout and "
+            "stderr are combined; commands have no stdin. "
+            "If an earlier stage of a pipeline fails (`cmd | tail`), the status line says so. "
+            "Do not wrap commands in `timeout` (missing on macOS); use the timeout parameter. "
             "Use it for git, tests, linters and builds, and for "
             "anything the other tools cannot do; use `read`, `grep`, `glob`, `ls`, `edit` and `patch` rather than "
             "cat, sed, rg, find or redirects. Foreground timeout defaults to 120 seconds, maximum 600. "

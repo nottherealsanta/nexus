@@ -105,9 +105,9 @@ still make any tool ask or deny it.
 **Workspace confinement** (`resolve`). `path` must be a non-empty string.
 Relative paths are relative to the workspace. The path is resolved (symlinks
 followed) and must be the workspace or inside it, otherwise `ToolError("... is
-outside the workspace ...")`. `read`, `edit` and `write` all use it, except that `read` may
-read any path outside the workspace (allowed by default; the key is the absolute path, so a rule such as
-`"read(/Users/*)" = "ask"` gates it). `bash` is
+outside the workspace ...")`. `edit`, `patch` and `write` use it as is. The read-only tools `read`, `grep`,
+`glob` and `ls` may reach any path outside the workspace (allowed by default; the key is the absolute path, so
+a rule such as `"read(/Users/*)" = "ask"` or `"grep(/Users/*)" = "deny"` gates it). `bash` is
 not sandboxed: it starts in the workspace but can reach anything the user can
 (PLAN.md, known gaps).
 
@@ -314,10 +314,20 @@ Read a text file with line numbers, view an image file, or list a directory.
 
 ## grep, glob, ls
 
-Adapted from old Nexus. All three are read-only, confined to the session
-directory (a path outside it, or a symlink out of it, is refused or skipped),
-and auto-approved. Output is clipped to the
-30,000-character rule, and every cut says so in the result.
+Adapted from old Nexus. All three are read-only and auto-approved. Like `read`,
+an explicit `path` outside the session directory is allowed (since 2026-11-12;
+old Nexus refused it): the walk or search is rooted there and results are
+absolute paths, so they go straight into `read` and permission rules match
+the absolute key. A symlink out of the directory being walked is still never
+followed. Output is clipped to the 30,000-character rule, and every cut says
+so in the result.
+
+A missing path's error names up to three likely paths (`…; did you mean
+nexus-nsh/App.tsx?`), as do `read`, `edit` and `patch`
+(`tools/suggest.py`). They are found from the same Git-aware walk, matching
+the base name (or its stem: `nexus/loop` → `nexus/loop.py`) or a close
+spelling, and ranked by similarity of the whole path. Outside the workspace
+only the nearest existing parent directory is consulted.
 
 The walk (`tools/walk.py`) is what Git would show in a work tree (tracked and
 untracked, minus `.gitignore`d, recomputed on every call so a file written a
@@ -357,8 +367,12 @@ workspace). At most 1000 entries, then a clip notice. An empty directory returns
 
 `web_search {query, limit?, page?}` queries the SearXNG at `[web] search_url`
 ([config.md](config.md)), the service in `nexus-search/` (Docker Compose or Apple
-`container`; see its README). Core never starts a container: when the service is
-down the error says how to start it. Only JSON is read (`json` must be an
+`container`; see its README). Core never starts a container. When the service is
+down, the error tells the model that it will keep failing until the user starts it,
+not to start it or retry, and to use `web_fetch` on a known URL or tell the user. The
+user's options (Settings › Tools › Start web search, `docker compose up -d`, or `[web]
+search_url`) follow in parentheses. Before 2026-11-12 it led with the start command,
+an invitation for an agent to run Docker itself. Only JSON is read (`json` must be an
 enabled format in SearXNG's `settings.yml`, which the shipped one does).
 `query` is at most 1000 characters, `limit` 1 to 10, `page` 1 or 2, the response
 at most 512,000 bytes, the call 15 s.
@@ -380,7 +394,10 @@ after a header with `Source`, `Final URL`, `HTTP status`, `Content-Type` and
 `Title`. The header never contains credentials, query or fragment. HTML is
 converted offline by `_html_markdown.py` (scripts, styles, forms and navigation
 are dropped; limits on input, nodes, depth and output); `text/plain` and
-Markdown are returned as they are; PDFs and other types are refused.
+Markdown are returned as they are; JSON (`application/json`, `text/json`, any
+`+json`) is re-indented with two spaces so `offset`/`limit` page through it,
+or returned as sent when it does not parse (since 2026-11-12; the PyPI JSON API
+was refused before); PDFs and other types are refused.
 `offset`/`limit` select Markdown lines (1-based). The output is cut to the
 30,000-character limit with `[showing lines A–B of N; use offset=… to read on]`,
 a single line longer than the budget is cut and says so, and a download stopped
@@ -425,6 +442,18 @@ Run a command with `/bin/bash -c` in the workspace.
   `[killed after Ns timeout]`. A non-zero exit code is a normal result, not an
   error result. Output is decoded as UTF-8 with replacement and clipped at
   30,000 characters.
+* **Hidden failures.** A foreground command that exits 0 can still hide a
+  failure behind a pipe (`pytest 2>&1 | tail` reports `tail`'s status). An
+  `EXIT` trap, prepended on the command's first line so bash's line numbers are
+  unchanged, writes the last pipeline's `PIPESTATUS` to a temporary file. When an earlier stage failed,
+  the status reads `[exit code 0 · pipeline exit codes 1 0]`. 141 (SIGPIPE from
+  a reader such as `head` closing early) is not reported. When bash itself printed
+  `/bin/bash: X: command not found` anywhere, the status adds
+  `· command not found: X`. The exit code itself is never changed; there is no
+  `pipefail`. Background jobs do not have this yet.
+* Each call starts in the workspace; a `cd` does not carry over. The
+  description says not to `cd` to the workspace itself (a third of calls did,
+  2026-11) and not to use `timeout`, which macOS lacks.
 * `background: true` returns `started background job job_…` immediately; see
   below.
 * Inside a `code` cell, the cell's own `timeout_s` still bounds a foreground
@@ -504,7 +533,12 @@ file's newline convention. A fallback result says `normalized matching`.
 An `edits` array runs sequentially against an in-memory copy and writes only after
 every replacement validates. A later failure leaves the file unchanged. Top-level
 replacement fields cannot be mixed with `edits`. Errors include not found,
-ambiguous, identical strings, invalid replacement objects and missing file.
+ambiguous, identical strings, invalid replacement objects and missing file (with
+likely paths, see [grep, glob, ls](#grep-glob-ls)). Within an `edits` array an
+entry whose `old_string` equals its `new_string` must still match, but is skipped
+instead of failing the whole call; the result adds `skipped N entr(y|ies) whose
+old_string and new_string are identical`. A lone no-op edit, or an array of only
+no-ops, is still an error.
 Result: `edited <path> (N replacement[s])`. No approval is requested.
 
 ### `patch` (`apply_patch` format)
@@ -784,6 +818,23 @@ results = await asyncio.gather(inspect("README.md"), inspect("optional.md"))
 print(results[0][:1200])
 print(results[1][:300])
 ```
+
+Monty's `asyncio.gather` takes no keyword arguments, so `return_exceptions=True`
+is unavailable; the tool description gives a generic `safe(coroutine)` wrapper
+instead. Models still often skip the wrapper (2026-11: 70 cells in two weeks
+stopped on one uncaught tool error, usually a guessed path). When a cell stops at
+an uncaught error, the kernel stores the outputs of the calls that **completed** in
+the variable `last_outputs`, a dict keyed by the call numbers listed in the error.
+The error text names them, so the next cell prints what it needs instead of
+re-running tools; a call that may have changed the workspace is never repeated
+blindly. The total kept is bounded (`MAX_KEPT_CHARS`, 300,000 characters); the
+variable is replaced by the next failed cell. A call still running when the cell
+stops is labelled `cancelled when the cell stopped at an uncaught error`, not
+`interrupted or timed out`.
+
+Images cannot be shown from inside a cell: `read` of an image there fails with
+"a code cell cannot show images; call `read` directly". A direct `read` returns
+the image to the model.
 
 The earlier shared-default parent/child smoke is historical. Sharing now requires
 passing the kernel id explicitly; forks always keep their own default kernel.

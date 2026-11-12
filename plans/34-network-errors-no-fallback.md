@@ -70,7 +70,10 @@ any response event (the loop only retries then).
   turn or a resume starts on the primary model again. If the model has to stay switched for cache reasons, show it and
   let the user switch back. Ask the user which. Separately, `copilot/gpt-6.1-terra` returned `model_not_supported`,
   so the child's fallback list contained a model this account can't use. Validate fallbacks against the live catalog
-  when the child starts.
+  when the child starts. (2026-11-12, [plan 44](44-session-review-tooling.md): the parent's child-failure report now
+  shows the provider's reason, e.g. `model_not_supported`, and says that resuming on the same model will fail the
+  same way, so a parent stops resuming such a child. That is not this fix: the model is still switched, and
+  `~/.nexus/config.toml` still lists `copilot/gpt-6.1-terra` as a `build` fallback.)
 - [ ] **Visible state:** while waiting, show "Waiting for network · retrying in Ns" (new `waiting_network` phase on
   `RetryScheduled`) in the session status strip ([21](done/21-session-status.md)) and on the parent's child card, in both
   clients. Today's `retry_scheduled` events don't say they are network waits. Nothing is added to model context.

@@ -702,11 +702,11 @@ export function SettingsView(p: { inline?: boolean }) {
   const phoneContent = () => <View class="flex-1 min-h-0" testID="phone-settings">
     <If when={!phoneDetail()} else={<View class="flex-1 min-h-0">
       <Button onPress={() => { phoneDetail.set(false); settingsPageOpen.set(false); settingsPage.set(null); }} accessibilityLabel="Back to Settings" testID="phone-settings-back" class={`flex-row items-center gap-2 min-h-11 px-4 ${FOCUS}`}>
-        <Icon name="arrow-left" size={16} class="tint-foreground" /><Text style={{ fontFamily: "Geist" }} class="text-[16px] text-foreground">Settings</Text>
+        <Icon name="arrow-left" size={16} class="tint-foreground" /><Text style={{ fontFamily: "Google Sans" }} class="text-[16px] text-foreground">Settings</Text>
       </Button>
       <Scroll class="flex-1" testID={`settings-page-${page() ?? cur().id}`}>
         <View class="px-4 pb-6 gap-2">
-          <Text style={{ fontFamily: "Geist" }} class="text-[24px] leading-8 font-semibold text-foreground px-3">{cur().label}</Text>
+          <Text style={{ fontFamily: "Google Sans" }} class="text-[24px] leading-8 font-semibold text-foreground px-3">{cur().label}</Text>
           <If when={page() === "providers"}><ProvidersPage sec={cur()} /></If>
           <If when={!page()}>
             <If when={cur().note}><Text class={`px-3 ${T.meta}`}>{cur().note!}</Text></If>
@@ -718,12 +718,12 @@ export function SettingsView(p: { inline?: boolean }) {
       <Scroll class="flex-1" contentStyle={{ padding: 16, paddingBottom: 24 }}>
         <View class="gap-5">
           <Button onPress={() => coreEditing.set(true)} testID="phone-core-card" accessibilityLabel="Change Core address" class={`rounded-(--radius-card) bg-raised p-4 gap-2 ${FOCUS}`}>
-            <View class="flex-row items-center gap-2"><Text style={{ fontFamily: "Geist" }} class="flex-1 text-[16px] leading-6 font-semibold text-foreground">Core connection</Text><Text style={{ fontFamily: "Geist" }} class={`text-[13px] leading-5 ${live() ? "text-success" : "text-warning"}`}>{live() ? "Connected" : connection().kind === "connecting" ? "Connecting" : "Disconnected"}</Text></View>
+            <View class="flex-row items-center gap-2"><Text style={{ fontFamily: "Google Sans" }} class="flex-1 text-[16px] leading-6 font-semibold text-foreground">Core connection</Text><Text style={{ fontFamily: "Google Sans" }} class={`text-[13px] leading-5 ${live() ? "text-success" : "text-warning"}`}>{live() ? "Connected" : connection().kind === "connecting" ? "Connecting" : "Disconnected"}</Text></View>
             <Text style={{ numberOfLines: 2 }} class={`${T.mono} text-foreground-secondary`}>{coreUrl() ?? "No address configured"}</Text>
           </Button>
           <View class="gap-1 rounded-(--radius-card) bg-raised overflow-hidden">
             <Each of={sections} key={(s) => s.id}>{(s) => <Button onPress={() => { settingsQuery.set(""); settingsSection.set(s().id); settingsPage.set(null); settingsPageOpen.set(!!s().page); phoneDetail.set(true); }} testID={`section-${s().id}`} accessibilityLabel={s().label} class={`flex-row items-center min-h-14 px-4 gap-2 ${FOCUS}`}>
-              <Text style={{ fontFamily: "Geist" }} class="flex-1 text-[16px] leading-6 font-medium text-foreground">{s().label}</Text><Icon name="chevron-right" size={16} class="tint-muted-foreground" />
+              <Text style={{ fontFamily: "Google Sans" }} class="flex-1 text-[16px] leading-6 font-medium text-foreground">{s().label}</Text><Icon name="chevron-right" size={16} class="tint-muted-foreground" />
             </Button>}</Each>
           </View>
         </View>

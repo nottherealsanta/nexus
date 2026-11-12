@@ -2911,14 +2911,11 @@ fn right_click_on_a_session_row_opens_its_action_menu() {
 fn projects_can_be_added_and_removed_from_the_sidebar() {
     use nexus_tui::actions::ApiCall;
     use nexus_tui::app::Effect;
-    use nexus_tui::ui::Tab;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.ui.tab = Tab::Projects;
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("+ Add project"));
-    let add = app.hits.rect_of(&Target::AddProject).expect("add row");
+    draw(&mut app, 120, 36);
+    let add = app.hits.rect_of(&Target::AddProject).expect("add control");
     app.effects.clear();
-    click(&mut app, add.x + 2, add.y);
+    click(&mut app, add.x + 2, add.y + 1);
     assert!(app.ui.edit.is_some(), "an inline path field opens");
     // Replace the prefilled path.
     app.ui.edit.as_mut().unwrap().buf.set_text("");
@@ -4725,7 +4722,7 @@ fn the_empty_workspace_shows_the_centred_logo_and_the_next_step() {
         let all = joined(&rows);
         assert!(all.contains("No projects yet"), "{all}");
         assert!(
-            all.contains("alt+3 add a project \u{b7} ctrl+p commands"),
+            all.contains("+ on the rail adds a project \u{b7} ctrl+p commands"),
             "{all}"
         );
         // five logo rows, one block: every row starts at the same column, so
