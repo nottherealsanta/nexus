@@ -18,7 +18,7 @@ Implemented in the working tree for iPhone and iPad: three tabs, reduced timelin
 - [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
   backend-session view only if the user wants it).
-- [~] **Session view:** filtering and compact cards implemented; 390 px runtime verification remains open. Status, user messages, agent replies, composer. **Mobile can approve and answer everything a
+- [~] **Session view:** filtering and compact cards implemented; verified headless and at 390 px in a browser (2026-11-11), simulator open. Status, user messages, agent replies, composer. **Mobile can approve and answer everything a
   desktop client can** (user, 2026-11-06): allow once/always/deny, answer a question (options and free text), choose
   among offered choices, steer/queue/interrupt. It shows less, because the screen is small: a compact card with the
   command or question and the choices, not the full diff, parameter table or tool group. Define the compact card once
@@ -27,11 +27,9 @@ Implemented in the working tree for iPhone and iPad: three tabs, reduced timelin
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
 - [x] **Remove** desktop capabilities from the iPhone/iPad build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
   management, row menus that reach them. Make them unreachable from the palette and shortcuts too.
-- [ ] Phone polish already listed in the archive (8.5 keyboard avoidance, 44 px targets, safe areas, gestures,
-  Settings as pushed pages, Connect copy for a tailnet host, iPad decision); do the ones on the three tabs.
+- [~] Phone polish on the three tabs (2026-11-11): keyboard avoidance (shell pads by `keyboardFrame()`), 44 px targets, safe areas on bars, sheets and drawer, gestures (long press, pull to refresh, edge swipe), Settings as pushed pages and the Connect copy are done and verified headless and in a 390 px browser. Open: the iPad decision, composer-selector targets under 44 px (the desktop composer row is hidden on a phone but not audited), landscape insets, Dynamic Type, and everything on a device.
 - [ ] Native mic for the Manager (section 3) so the Manager tab can talk.
-- [ ] Tests on the phone idiom at 390 px, a phone screenshot of each tab, a real simulator run and a signed device build
-  (see the `nexus-ios-device` skill); update `nexus-nsh/README.md` and `docs/`.
+- [~] Tests on the phone idiom at 390 px (`phone-redesign.test.tsx`, `mobile.test.ts`, `phone-session-controls.test.tsx`) and a phone screenshot of each tab, dark and light, are done ([reports/mobile-2026-11-11](../reports/mobile-2026-11-11/)); `nexus-nsh/README.md` and docs updated. **Open:** a real simulator run and a signed device build (see the `nexus-ios-device` skill).
 - [ ] **Remote iPhone install (from 2026-11-09):** Capture the paired iPhone's Bonjour announcement with Xcode Tailscale Bridge
   while phone and Mac are on the same local network, then verify a signed Nexus
   update from a different network over Tailscale. Remote diagnostics/build passed,
@@ -48,29 +46,31 @@ one to one or copy text. Nexus keeps its own design language (`interface/design-
 
 The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
 
-- [ ] **Session drawer (swipe from the left edge).** In an open session, an edge swipe (and a header button) reveals
+- [x] **Session drawer (swipe from the left edge).** In an open session, an edge swipe (and a header button) reveals
   the session list over the conversation, which slides aside and dims. Tapping a row opens that session and closes the
   drawer. Rows show the title, a project colour dot, the status (spinner while busy, a `Needs your input` line for a
   pending approval or question) and a relative time. The top of the drawer has the **project switcher** (current
   project name + chevron → a list of projects and "All projects") and a search button that opens the search modal
   focused (see [29](done/29-session-commands.md)). Reuse `EdgeDrawer` in `nexus-nsh/src/ui/overlays.tsx`; the gesture must not fight
   iOS back-swipe or horizontal scrolling inside code blocks.
-- [ ] **Sessions tab** is the same list full screen: project switcher title, search button, then sections. Proposed
+- [x] **Sessions tab** is the same list full screen: project switcher title, search button, then sections. Proposed
   sections: *Needs you* (waiting sessions, with a count), *Running*, *Recent*. Long-press for the row menu (rename,
   archive). Pull to refresh.
-- [ ] **Session view:** a compact header (title, project as a subtitle, a status ring/spinner, overflow menu with
+- [x] **Session view:** a compact header (title, project as a subtitle, a status ring/spinner, overflow menu with
   rename / archive). Messages in a readable column. The approval/question card follows 5.1 (compact card) and should
   read like the reference: the command or question, primary choices as two big buttons (`Allow once`, `Always allow`),
   then a free-text line "Tell it what to do instead" with `Deny`. 44 px targets, keyboard avoidance.
-- [ ] **Settings tab:** a grouped list with drill-in pages (iOS style). A **connection card** at the top: the Core's
+- [x] **Settings tab:** a grouped list with drill-in pages (iOS style). A **connection card** at the top: the Core's
   host name, address and transport (LAN / Tailscale), a live latency figure and a small health trace. Then
   Appearance, Notifications, Voice, Providers, About.
-- [ ] **Connect / pairing screen** (first run and when disconnected): a short numbered setup (install Nexus on the
+- [x] **Connect / pairing screen** (first run and when disconnected): a short numbered setup (install Nexus on the
   computer; run a pairing command; scan its QR code or paste the link it prints), plus "Enter a server manually".
   Recent Cores list. Clear "cannot reach (Local Network permission?)" error and Retry. This absorbs the Connect flow
   item in [09-backlog.md](09-backlog.md) 9.6.
 
-Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11:**
+Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims but does not slide the conversation aside). Search is the always-visible field in the list and drawer rather than a separate button.
+
+Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11 (recorded in [decisions.md](decisions.md)); `nexus pair` is implemented:**
 
 | Question | Default |
 | --- | --- |

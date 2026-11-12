@@ -231,7 +231,7 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
   reduced motion.
 - [ ] Copy pass: sentence case, one verb per meaning (close / back / cancel), no developer notes in the UI.
-- [ ] **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
+- [~] (phone shell now pads by `keyboardFrame()`; desktop/touch modals still open) **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
   (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
   palette and search modals have the same gap. Add the keyboard height to the dock and anchor modals above it.
 - [ ] **Desktop affordances in modals.** The shared pass removed the title's Esc chip, but footers and the composer
@@ -242,13 +242,13 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   `:216`), `project-mcp.tsx:23`, Settings rows and pills (`settings.tsx:497`, `:582`, `:600`), `Seg`
   (`kit.tsx:161`), sidebar chips (`sidebar.tsx:320`), header tabs. Add one `hitMin()` helper keyed on `touch`, not
   `isNarrow()`, so an iPad gets touch sizes too.
-- [ ] **Conversation header** shows only back, title and the panel button: add project/branch as a subtitle, an
+- [x] (done in plan 5.2, 2026-11-11, simulator unverified) **Conversation header** shows only back, title and the panel button: add project/branch as a subtitle, an
   overflow menu (rename, archive, context) and swipe back.
-- [ ] **Gestures:** long-press on session rows for the menu, swipe actions (archive, rename), pull to refresh on
+- [x] (done in plan 5.2: long press and pull to refresh; swipe actions not built) **Gestures:** long-press on session rows for the menu, swipe actions (archive, rename), pull to refresh on
   Sessions.
-- [ ] **Settings on the phone** is the desktop two-pane dialog collapsed (`settings.tsx:518–580`): make it a
+- [x] (done in plan 5.2) **Settings on the phone** is the desktop two-pane dialog collapsed (`settings.tsx:518–580`): make it a
   grouped list with drill-in rows and keyboard-aware scrolling.
-- [ ] **Connect flow** (`connect.tsx`, `App.tsx:73–79`): the copy asks for `NEXUS_HOST=0.0.0.0 nexus serve`, which a
+- [x] (done in plan 5.2; no in-app QR scanner, offline banner with Retry not built) **Connect flow** (`connect.tsx`, `App.tsx:73–79`): the copy asks for `NEXUS_HOST=0.0.0.0 nexus serve`, which a
   phone user cannot act on; add a recent-Cores list, paste or QR, a clear "cannot reach (Local Network permission?)"
   error, a spinner while booting (today a blank background), and an offline banner with Retry.
 - [ ] **Microphone:** no in-app capture on native (toast at `commands.ts:586`); check

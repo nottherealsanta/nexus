@@ -697,3 +697,7 @@ export function SettingsView(p: { inline?: boolean }) {
       </View>;
   return p.inline ? content() : <Modal size="large" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }
+
+// The phone's Settings tab (ui/mobile/settings.tsx) renders these same rows and pages as drill-in screens.
+export { SettingRow as PhoneSettingRow, ProvidersPage as PhoneProvidersPage, sections as settingsSections };
+export type { Section as SettingsSection };

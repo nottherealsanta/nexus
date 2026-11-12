@@ -124,15 +124,43 @@ drafts). The same note stays in the sent context and model input. Empty or
 cancelled dictation does not mark a draft; OS keyboard dictation cannot be
 identified automatically. See [Voice](../docs/voice.md#transcript-provenance).
 
-On iOS and native phones, Sessions, Manager and Settings are bottom tabs. Sessions offers the
-project picker, project/all-project scope, search and archive filter; selecting a
-session opens the conversation full screen, with a back control to the list. The
-conversation shows status, user messages and agent replies, with compact cards for
-approvals and questions. Desktop workspace surfaces are unavailable on phones.
-The Manager tab supports typed interaction; native voice capture remains unverified.
-Subtle dividers separate the touch-sized session rows, which show the branch or
-project and relative activity time without covering the title. The search field is
-dismissed before opening a session. Desktop keeps the sidebar-based navigation.
+On iOS and native phones, Sessions, Manager and Settings are bottom tabs (`src/ui/mobile/`, phone only; desktop
+and web are unchanged):
+
+- **Sessions** is the project switcher as the title (name and a chevron: a sheet of projects and "All projects"; the choice
+  both filters the list and is the project new sessions go to), a search field and sections *Needs you* (with a count),
+  *Running* and *Recent*. A row has a project colour dot, the title, a relative time and either `Needs your input`,
+  `Working` with a spinner, or the project. Long press opens the row menu (Rename, Archive or Unarchive); pull down to
+  refresh. Pinned sessions, a catch-up digest and a "Used N tools" line do not exist on mobile (decided 2026-11-11).
+- **A conversation** has a compact header (a sessions button, the title, the project and status as a subtitle, a status
+  ring, and an overflow menu with Rename and Archive), the user's messages and the agent's replies. The **session
+  drawer** (`EdgeDrawer`) slides over the conversation from the header button or a rightward drag from a 20 px strip on
+  the left edge (it claims only a mostly horizontal move, so scrolling and a code block's own horizontal scroll are
+  untouched; the app has no navigation stack, so there is no iOS back-swipe to fight). It is the Sessions list with the
+  same search and project switcher; a row opens that session and closes it. The tab bar is hidden in a conversation.
+- **Approvals** show the command in a compact block, `Allow once` and `Always allow` (this session) as two big
+  buttons, then "Tell it what to do instead" with `Deny` (the text goes to the model with the refusal). All targets are
+  at least 44 px; the shell pads by `keyboardFrame()` so the keyboard never covers the card or composer, and the bars
+  pad by `safeArea()`. Questions keep the compact card with 44 px choices.
+- **Settings** starts with a connection card (the Core's host and address, LAN / Tailscale / This device from the
+  address, a live latency figure probed every 5 s and a small trace of the last 30 probes, failures in red, and
+  Change), then a grouped list (Appearance, Notifications, Voice, Manager, Providers, About) whose rows push a page
+  with the desktop's rows for that section.
+- **Connect** (first run, and Settings > Change) is a numbered setup (start Nexus, run `nexus pair`, scan the QR code and
+  paste the link), a pairing-link field with Paste, "Enter a server manually", recent Cores (kept in Storage) and, when
+  a Core cannot be reached, an explanation (on a LAN address it names iOS Local Network permission) with Retry. `nexus
+  pair` is a Core command ([daemon](../docs/daemon.md)); the app accepts its `nexus://pair?url=…` link or a plain
+  address. Opening a `nexus://` link straight from the Camera app is not wired (no URL-scheme handler yet), and the
+  app has no in-app QR scanner; the link is pasted.
+
+Desktop workspace surfaces are unavailable on phones. The Manager tab supports typed interaction; native voice
+capture remains unverified. The search field is dismissed before opening a session.
+
+Review the phone client in a browser (390x844, no Core needed beyond mocked routes): build with
+`NEXUS_PHONE_PREVIEW=1 npm run build` (this makes the web build the phone client; `npm run gen` restores the normal
+flag), serve `dist/Nexus`, and run `reports/mobile-2026-11-11/shots.mjs`. Headless tests for the phone idiom are
+`phone-redesign.test.tsx`, `phone-session-controls.test.tsx` and `mobile.test.ts` (`nsh test <file>` without
+`--target`). Simulator and signed device builds, and everything on a physical iPhone, are still unverified.
 
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
 workspace session tabs, new-session view, timeline, waiting card, composer,
@@ -527,7 +555,8 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
-| `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
+| `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). A phone shows `ui/mobile/connect.tsx` instead. |
+| `src/ui/mobile/` | The phone client's UI: `shell.tsx` (tabs, conversation header, edge swipe, drawer), `sessions.tsx` (sections, rows), `sheets.tsx`/`sheet.tsx` (row menu, project switcher), `approval.tsx`, `settings.tsx` (connection card, grouped list), `connect.tsx` (pairing), `state.ts`. Pure rules (sections, transport, pairing links, health) are in `src/mobile.ts`. |
 | `src/ui/splash.tsx` | The launch splash: logo, five milestone stages, 30-segment bar and the fade into the first live frame. |
 | `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |

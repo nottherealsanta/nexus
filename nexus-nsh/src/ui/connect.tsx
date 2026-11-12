@@ -1,7 +1,8 @@
 import { Scroll, Text, View, effect, keyboardFrame, platform, safeArea, signal, windowSize } from "nsh";
 import { Input } from "nsh/base";
 import { Btn, FOCUS, T } from "./kit";
-import { connectCore, coreUrl } from "../store";
+import { connectCore, coreUrl, phone } from "../store";
+import { PhoneConnect } from "./mobile/connect";
 
 /** Native only: the Connect screen is open over a running app to change the saved address. */
 export const coreEditing = signal(false);
@@ -36,6 +37,8 @@ export function slashField(cols: number, rows: number): string[] {
  * the same network as Core and need no pairing, token or host process — just where it listens.
  */
 export function ConnectScreen() {
+  // A phone has its own pairing screen (ui/mobile/connect.tsx).
+  if (phone) return <PhoneConnect onDone={() => coreEditing.set(false)} canCancel={!!coreUrl()} />;
   effect(() => {
     const saved = coreUrl();
     const key = `${coreEditing()}|${saved ?? ""}`;

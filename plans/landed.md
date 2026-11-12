@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Mobile redesign (11-11, plan 5.1/5.2).** Phone client: Sessions sections (Needs you / Running / Recent), project switcher sheet that also sets the new-session project, long-press row menu (rename, archive), pull to refresh, session drawer (header button and left-edge swipe on `EdgeDrawer`), compact conversation header with status ring and overflow menu, approval card (Allow once / Always allow / tell it instead + Deny), Settings connection card (host, address, LAN/Tailscale, live latency, trace) with a grouped drill-in list, and a numbered Connect/pairing screen with recent Cores and a Local Network error + Retry. Core: `nexus pair` (address, token, link, terminal QR; `segno`). Tests: `phone-redesign.test.tsx` 9, `mobile.test.ts` 11, `tests/test_pair.py` 6. Simulator, signed device build and physical iPhone remain open. [Screenshots](../reports/mobile-2026-11-11/).
+
 - **Plans 01–23 audit (11-11).** 1, 2, 3, 21 and 23 moved to done/: their remaining boxes need hardware, a paid call or branch-deletion approval. Retook the 21/23 paired captures from current code (TUI 170×50, NSH 1440×900 and 390×844); status strips match, and the `/btw` modal divergence is now plan 42. ZMX isolation test fixed (77/77). 5, 6, 9 and 10 stay open with real offline work. [Captures](../reports/sections21-23/).
 
 - **Search startup with an existing Apple container (11-11).** Recheck for the container after starting its system and serialize concurrent Core start requests; regression tests cover both cases.

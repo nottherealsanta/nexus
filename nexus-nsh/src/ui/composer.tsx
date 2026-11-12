@@ -28,6 +28,7 @@ import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePa
 import { cancelDictation, stopDictation } from "../dictation";
 import { formatBytes } from "../dictation-logic";
 import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "../voice-state";
+import { PhoneApprovalChoices } from "./mobile/approval";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // a Working row above it while busy, the completion block on its top edge and the project strip below.
@@ -1141,7 +1142,11 @@ function ApprovalBody(p: { a: Approval }) {
   return (
     <View class="gap-2.5">
       {/* A phone shows a compact card: the command or path, not the parameter table or the diff. */}
-      <If when={phone}><View class="rounded-(--radius) bg-background px-3 py-2" testID="waiting-compact"><Text style={{ numberOfLines: 4, userSelect: "text" }} class={`${T.mono} text-foreground`}>{compactApproval(a)}</Text></View></If>
+      <If when={phone}>
+        <PhoneApprovalChoices id={a.id} command={compactApproval(a)} busy={busyWait()} live={live()}
+          onAllowOnce={() => void reply(a, true)} onAllowSession={() => void reply(a, true, { session: true })}
+          onDeny={(note) => void reply(a, false, note ? { note } : {})} />
+      </If>
       <If when={!phone && parts().table.length > 0}>
         <View class="rounded-(--radius) bg-background px-3 py-2 gap-0.5" testID="waiting-table">
           <Each of={parts().table} key={(r) => r[0]}>
@@ -1160,7 +1165,7 @@ function ApprovalBody(p: { a: Approval }) {
           <If when={parts().more > 0}><Text testID="waiting-diff-more" class={`${T.meta} px-3 py-1`}>{`${parts().more} more rows`}</Text></If>
         </View>
       </If>
-      <If when={!busyWait()} else={<View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>sending…</Text></View>}>
+      <If when={!phone}><If when={!busyWait()} else={<View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>sending…</Text></View>}>
         <View role="list" accessibilityLabel="Choices" class="gap-0.5">
           <Each of={rows()} key={(r) => r.id}>
             {(r, i) => {
@@ -1179,7 +1184,7 @@ function ApprovalBody(p: { a: Approval }) {
           </Each>
         </View>
         <AnswerHint />
-      </If>
+      </If></If>
     </View>
   );
 }

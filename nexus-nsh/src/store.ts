@@ -5,6 +5,7 @@ import { mobileClient } from "./mobile";
 // alerts (toasts + banner history), and view state (layout, tabs, centre view, overlays).
 import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
+import { PHONE_PREVIEW } from "./gen/preview";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Message, Session, SubagentNotice } from "./core/api";
 import { ApiError, apiBase, localCore, request, setApiBase } from "./core/transport";
@@ -299,7 +300,9 @@ export const toolOutputAll = signal<Record<string, boolean>>({});
 export const native = platform.os !== "web";
 /** A phone or tablet: hover-only affordances have to stay visible, and targets stay finger-sized. */
 export const touch = platform.idiom === "phone" || platform.idiom === "pad";
-export const phone = mobileClient(native, platform.os, platform.idiom);
+/** Review builds only (`NEXUS_PHONE_PREVIEW=1 npm run gen`): a web build is the phone client, for screenshots in a browser. */
+const previewPhone = platform.os === "web" && PHONE_PREVIEW;
+export const phone = mobileClient(native, platform.os, platform.idiom) || previewPhone;
 export const phonePage = signal<import("./mobile").PhonePage>("sessions");
 /** The saved Core address; null until the Connect screen has one. */
 export const coreUrl = signal<string | null>(null);
