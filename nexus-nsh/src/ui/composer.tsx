@@ -1037,7 +1037,7 @@ const DIFF_ARGS = { edit: ["patch", "old_string", "new_string", "old", "new"], p
 export function approvalParts(a: Approval): { table: [string, string][]; diff: ToolDetailLine[]; more: number } {
   const diffAll = DIFF_ARGS[a.tool] ? diffItems(detailOf(a.tool, JSON.stringify(a.args ?? {}), undefined, false)) : [];
   const skip = diffAll.length ? DIFF_ARGS[a.tool] : [];
-  const args = a.args && typeof a.args === "object" ? Object.entries(a.args).filter(([k]) => !skip.includes(k)) : [];
+  const args = a.args && typeof a.args === "object" ? Object.entries(a.args).filter(([k]) => !skip.includes(k)).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)) : []; // sorted like the TUI (serde_json maps)
   const table = args.map(([k, v]): [string, string] => {
     const text = typeof v === "string" ? v : JSON.stringify(v);
     const lines = text.split("\n");
@@ -1138,6 +1138,8 @@ function ApprovalBody(p: { a: Approval }) {
   const a = p.a;
   const parts = () => approvalParts(a);
   const rows = () => approvalChoices(a);
+  // The label column fits the longest key (`background`), never wrapping it, up to a cap.
+  const labelRoom = () => Math.min(144, Math.max(64, Math.ceil(Math.max(0, ...parts().table.map((r) => r[0].length)) * 7.4)));
   return (
     <View class="gap-2.5">
       {/* A phone shows a compact card: the command or path, not the parameter table or the diff. */}
@@ -1147,7 +1149,7 @@ function ApprovalBody(p: { a: Approval }) {
           <Each of={parts().table} key={(r) => r[0]}>
             {(r) => (
               <View class="flex-row gap-3 min-h-5">
-                <Text class={`w-16 shrink-0 ${T.meta}`}>{r()[0]}</Text>
+                <Text class={`shrink-0 ${T.meta}`} style={{ minWidth: labelRoom() }}>{r()[0]}</Text>
                 <Text style={{ numberOfLines: 3, userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{r()[1]}</Text>
               </View>
             )}

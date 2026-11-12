@@ -78,7 +78,8 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
 export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string }) {
   const k = p.kind ?? "default";
-  const skin = k === "primary" ? "bg-primary" : k === "danger" ? "bg-secondary hover:bg-accent" : k === "ghost" ? "hover:bg-accent" : "bg-secondary hover:bg-accent";
+  // Secondary buttons carry a hairline so they read as buttons on every surface, light or dark.
+  const skin = k === "primary" ? "bg-primary border border-transparent" : k === "ghost" ? "hover:bg-accent border border-transparent" : "bg-secondary hover:bg-accent border border-border";
   const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
     <View role="button" focusable
@@ -200,11 +201,11 @@ export function StatusRail(p: { color?: string; testID?: string }) {
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
 export function Seg(p: { onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
   return (
-    <View class="flex-row rounded-none bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
+    <View class="flex-row gap-0.5 rounded-none bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <View focusable onFocus={p.onFocus} role="radio" accessibilityState={{ selected: p.value === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
-            class={`rounded-none px-3 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
+            class={`rounded-none px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
             <Text class={`${TS.base} ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
           </View>
         )}

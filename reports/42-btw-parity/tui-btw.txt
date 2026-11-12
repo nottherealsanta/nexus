@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Status and side questions ×    +                                                 □
+     │
+▏    │▏  Status and side qu… 1m
+▏ W  │▏
+▏  1 │                              System prompt ~989
+     │
+     │                              AGENTS.md  not found · /private/tmp/nexus-42.h1/workspace/AGENTS.md
+     │
+     │                              Tools [16] ~3.1K
+     │                                ● read                      ● patch
+     │                                ● grep                      ● write
+     │
+     │            Side question · Which port?
+     │
+     │            Inherited context · 1 messages · [i] expand
+     │
+     │            Read-only side question · 1/10 tool calls · Running…
+     │
+     │            •  read  · done
+     │
+     │            The
+     │
+     │            Context · [c] expand
+     │
+     │            Not added to the session's context.
+     │
+     │            ↑↓ scroll · esc close                                                                 #1 · 10:31 PM
+     │
+     │
+     │                                                                        mock/visual · 0 tools · 0.0s · 10:31 PM
+     │
+     │
+     │                             ! Interrupted by the user                                    /continue  Inspect
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Build · visual mock · default                                        continue
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nexus-42.h1/workspace
+     │                             ───────────────────────────────────────────────────────────────────────────────────

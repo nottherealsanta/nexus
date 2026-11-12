@@ -565,7 +565,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
       onPress={() => { settingsNavFocused.set(false); focusedSetting.set(r.id); }}
       class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-settings-selection focus-within:bg-settings-selection ${focusedSetting() === r.id ? "bg-settings-selection" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <If when={!settingsNavFocused() && focusedSetting() === r.id}><FocusEdge testID="settings-row-focus" /></If>
-      <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
+      <View class={isNarrow() ? "" : "w-[56%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`${TS.base} ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
           <If when={tag}><Text class={`${TS.base} text-muted-foreground rounded-none px-1.5`}>{tag}</Text></If>

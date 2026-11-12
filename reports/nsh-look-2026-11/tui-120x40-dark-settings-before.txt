@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Hello  ×    Settings      +                                                      □
+     │                            i 2 other sessions waiting for input                                              go
+▏2   │▏  Hello               2m  ▌    ● ls                        ● web_fetch
+▏ W  │▏                               ● bash                      ● ask
+▏  3 │                                ● bash_output               ● code
+     │   Streaming and tools 2m       ● bash_kill                 ● fork
+     │
+     │            Settings
+     │ ◆ Waiting
+     │            ⌕ Filter settings…
+     │            ────────────────────────────────────────────────────────────────────────────────────
+     │   Rich te  ▌ Appearance          │   Theme                                         light  dark
+     │              Providers           │   Monochrome mode                                   off  on
+     │              Agents              │   Animations                                        on  off
+     │ ◆ Waiting    Tools               │   Sidebar                                        full  rail
+     │              ZMX                 │   Timeline detail                         low  medium  high
+     │              MCP                 │   Scroll bar                                        off  on   #1 · 10:34 PM
+     │              Context             │   Details sidebar                                   off  on
+     │              Voice and speech    │   Sessions shown                 this project  all projects
+     │              Manager             │   Archived sessions                                 off  on
+     │              Keybindings         │
+     │              Notifications       │
+     │              About               │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                                                                                  0s · 10:34 PM
+     │            ↑↓ section · enter open · esc close                                      12 sections
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Build · hello mock · default                                        15 · 0.0%
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nexus-look.h1/workspace
+     │                             ───────────────────────────────────────────────────────────────────────────────────

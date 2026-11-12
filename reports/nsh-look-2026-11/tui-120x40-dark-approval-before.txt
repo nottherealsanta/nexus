@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files]        · Hello          ×    ⡿ Waiting appro… ×    +  ◆ waiting for you                   □
+     │
+▏2   │   Hello               1m   i 1 other session waiting for input                                               go
+▏ W  │
+▏  3 │                              total  ~4,099 tok
+     │   Streaming and tools 1m
+     │
+     │                            │
+     │▏◆ Waiting approval    1m   │  Run the command.                                                   #1 · 10:34 PM
+     │▏                           │
+     │
+     │   Rich text reply     1m      Starting a short background build.
+     │
+     │                               ▾ Working
+     │ ◆ Waiting question    1m      ╰─ ◆ Shell  sleep 0.2; printf BUILD-OK                                   waiting
+     │
+     │
+     │
+     │                             ┃
+     │                             ┃  ◆ Allow bash?
+     │                             ┃  waiting on you · 0:01
+     │                             ┃
+     │                             ┃  background  true
+     │                             ┃  command     sleep 0.2; printf BUILD-OK
+     │                             ┃
+     │                             ┃▸  y  Allow once
+     │                             ┃   a  Allow for session
+     │                             ┃   n  Deny
+     │                             ┃   d  Deny with a note
+     │                             ┃
+     │                             ┃  alt+w answer
+     │                             ┃
+     │
+  +  │
+     │                                Type a message…
+     │
+     │ + New session                  Build · bash_wait mock · default                                    17 · 0.0%
+  ⚙  │ ⌕ Search sessions ctrl+k    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │ ▣ Show archived             /private/tmp/nexus-look.h1/workspace                            Working · 1m 57s
+     │                             ───────────────────────────────────────────────────────────────────────────────────
