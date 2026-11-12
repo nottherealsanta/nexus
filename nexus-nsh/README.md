@@ -461,9 +461,7 @@ and worktree actions remain disabled with a reason. Kernel state is the remainin
 session-info item not reported by Core.
 
 **Keyboard flow from an empty composer (PLAN 15.4).** Only while the composer is focused and empty: Left opens the
-session sidebar and gives it the keys (the composer is blurred; Up/Down move a session cursor, Enter opens the session); Left again focuses the project list (Up/Down move a
-cursor bar among the projects, Enter opens one, restoring an inactive project first); Left again opens the **projects
-overview** (also the palette command "Projects overview"). Esc or Right steps back out in reverse order, whenever the Projects tab holds the keys (also when opened by its command). With text in the
+session sidebar and gives it the keys (the composer is blurred; Up/Down move a session cursor, Enter opens the session); Left again focuses the **project rail** (the Projects sidebar tab is gone): the focused tile gets the accent left bar and its tooltip opens with the full name and the four counts; Up/Down move between projects, Enter opens one and returns to its session list. Esc or Right steps back out. The **projects overview** is reached only by the palette command "Projects overview". With text in the
 composer Left moves the cursor as usual. On a viewed subagent's page, Left outside text fields, the composer, the editor and overlays returns to the root; the full-height back strip at the centre's left does the same. The overview (`src/ui/projects-overview.tsx`, rows from `overviewRows`) lists
 the projects in their saved order with a `├`/`└` tree of each project's active root sessions and their state (`running`, `needs input`, `failed`, `finished`, `idle`), a per-project
 `N archived` toggle (`a` or Enter; collapsed), passive projects dimmed, and inactive projects last under `Inactive`,

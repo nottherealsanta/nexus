@@ -90,13 +90,9 @@ describe("keyboard flow from an empty composer (app)", () => {
       await app.keyboard.press("left"); await app.keyboard.press("left");
       await app.waitFor("id:rail-cursor-prj_bravo");
       await app.keyboard.press(out);
-      console.log("STEP1", out, app.shows("id:rail-popup-prj_bravo"), app.shows("id:rail-cursor-prj_bravo"));
-      if (out === "escape") { await app.keyboard.press(out); console.log("STEP1c", app.shows("id:rail-popup-prj_bravo"), app.shows("id:rail-cursor-prj_bravo")); }
       await app.waitUntil(() => !app.shows("id:rail-cursor-prj_bravo"));
-      console.log("STEP1b", out);
       expect(app.shows("id:session-ses_b1")).toBe(true);
       await app.keyboard.press(out);
-      console.log("STEP2", out);
       await app.keyboard.press("x");
       await app.waitUntil(() => app.value("id:composer-input") === "x");
     }

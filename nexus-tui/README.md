@@ -194,10 +194,11 @@ marked unknown, and finish time is omitted when it was not recorded; elapsed
 time based on the last available message is prefixed `~`.
 
 **Keyboard flow from an empty composer (PLAN 15.4).** Only when the composer is empty (with text, Left moves the
-cursor as always): Left opens the session sidebar and focuses it; Left again focuses the project list (Up/Down move
-among the projects); Left again opens the **projects overview** (also the palette command `project.overview`). Esc or Right
-steps back out in reverse order: the overview closes, then the project list returns to the session list, then the
-composer takes the keys. The overview is a modal listing the projects in their saved order; under each a `├`/`└`
+cursor as always): Left opens the session sidebar and focuses it; Left again focuses the **project rail** (the Projects
+sidebar tab is gone): the focused tile gets the accent left bar and its popup opens beside it with the full project
+name and the four session counts, Up/Down move between projects, Enter opens the project and returns to its session
+list. Esc or Right steps back out: the rail returns to the session list, then the composer takes the keys. The
+projects overview is reached only by the palette command `project.overview`. The overview is a modal listing the projects in their saved order; under each a `├`/`└`
 tree of only its active root sessions with their state (`running`, `needs input`, `finished`, `idle`), and a
 `N archived` toggle (`a` or Enter; collapsed by default) that lists the archived ones. Passive projects are dimmed;
 inactive projects are grouped at the end under `Inactive` and restored with `r` (`1`/`2`/`3` set current, passive,

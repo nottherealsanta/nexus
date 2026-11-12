@@ -191,7 +191,7 @@ export function SessionRail() {
                 accessibilityLabel={`${p().name} · ${details(p().id).join(", ")}`}
                 testID={`rail-project-${p().id}`}
                 tooltip={<Tooltip placement="right" offset={8} delay={120} open={railTip() === p().id || railFocus() === p().id || keyed()}
-                  onOpenChange={({ open }) => { if (!open) railTip.set(null); else showTip(p().id); }}>
+                  onOpenChange={({ open }) => { if (!open) { railTip.set(null); if (keyed()) void run("sidebar.step_back"); } else showTip(p().id); }}>
                   <View class="gap-1 rounded-(--radius) bg-raised px-3 py-2" testID={`rail-popup-${p().id}`}>
                     <Text class={`${TS.base} font-semibold text-foreground`}>{p().name}</Text>
                     <View testID={`rail-popup-${p().id}-above`}>
