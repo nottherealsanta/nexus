@@ -37,7 +37,7 @@ from .base import (
 MAX_LINE_BYTES = 4 * 1024 * 1024
 MAX_STDOUT_BYTES = 32 * 1024 * 1024
 MAX_STEPS = 1000
-EXIT_GRACE_SECONDS = 3.0
+EXIT_GRACE_SECONDS = 10.0  # live 11-12: agy 1.5.6 took 0.6-2.2 s to exit after stdin closed; 3 s failed once
 MIN_VERSION = (1, 4, 12)
 Emit = Callable[[WorkerEvent], Awaitable[None]]
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")

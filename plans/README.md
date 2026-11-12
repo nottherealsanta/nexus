@@ -46,7 +46,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
 | 5 | [Mobile client and the NSH look](05-mobile-and-design.md) | 5.1 implemented, unverified on device; 5.2 mobile redesign and 5.3 web/macOS look **new** | Answer the open questions in 5.2; audit screenshots for 5.3 |
-| 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Offline work done 11-12**: isolation test, `/api/state` `worker` fix, docs, D2 recorded, paired captures | Confirm Z1/Z2; real end-to-end run (approval); vendor terms |
+| 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Offline work and the live end-to-end check done 11-12** (agy exit grace fixed, `reports/zmx-2026-11-12/live/`) | M0 spikes; inspector rebuilt requests; vendor terms need a written answer |
 | 10 | [Fork subagent](10-fork.md) | Implemented; NSH captures in `reports/10-fork/`; TUI child blank in the TUI (not diagnosed), so the visual item stays open | Diagnose the blank TUI child timeline, then capture the TUI pair |
 | 24 | [Harness workflow audit](24-harness-audit.md) | One observation item open | Observe larger heaps |
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
