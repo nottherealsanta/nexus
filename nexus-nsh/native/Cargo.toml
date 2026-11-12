@@ -10,10 +10,6 @@ crate-type = ["rlib"]
 
 [dependencies]
 serde_json = "1"
-futures-util = "0.3"
-tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net"] }
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "209cb8492705321315745f2745c8060816b6d378" }
 
 # Every target uses the same compiler and PNG rasterizer. Native has no text
@@ -21,6 +17,12 @@ nsh-core = { git = "https://github.com/longbridge/nsh", rev = "209cb849270532131
 # draw one artifact rather than two renderers' interpretations.
 nexus-annotate = { path = "../../nexus-annotate" }
 nexus-mermaid = { path = "../../nexus-mermaid", default-features = false, features = ["svg", "raster"] }
+
+# GPT Live's native socket (live_socket.rs); not built for the web runtime, where mio has no wasm support.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 cpal = "=0.18.2"

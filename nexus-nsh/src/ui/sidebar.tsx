@@ -16,6 +16,8 @@ import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectActivity, projectCounts, projectLabels, projectStatus, railCount, railProjects } from "../project-rail";
 import { defaultLeftSidebarWidth } from "./geometry";
+import { PhoneSessions } from "./mobile/sessions";
+import { closeDrawer } from "./mobile/state";
 
 export const leftSidebarWidth = signal(272);
 const sidebarResized = signal(false);
@@ -332,11 +334,25 @@ export function ProjectSelector() {
 }
 
 export function NewSessionButton() {
-  return <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) { drawer.set(null); phonePage.set("conversation"); } void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />;
+  return <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) { closeDrawer(); phonePage.set("conversation"); } void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />;
+}
+
+/** The phone's session list (Sessions tab, and the conversation's drawer): sectioned, shares the search field and its Core search. */
+export function PhoneSessionsPane(p: { variant: "tab" | "drawer" }) {
+  useWorktreeRefresh();
+  const matches = (s: Session) => {
+    const q = sessionQuery().trim().toLowerCase();
+    if (!q) return true;
+    const hits = searchHits();
+    return s.title.toLowerCase().includes(q) || !!(hits && hits.q === sessionQuery().trim() && hits.snippets.has(s.id));
+  };
+  return <PhoneSessions variant={p.variant} query={sessionQuery} setQuery={setSessionQuery} matches={matches} snippetOf={snippetOf}
+    attention={attention} inputRef={(n: any) => { sessionSearchInput = n; }} actions={<NewSessionButton />} />;
 }
 
 export function SessionsTab() {
   useWorktreeRefresh();
+  if (phone) return <PhoneSessionsPane variant="tab" />;
   return (
     <View class="flex-1 min-h-0">
       <View class={phone ? "flex-row items-center gap-2 px-4 pt-3 pb-2" : "gap-2 pr-2"}>

@@ -31,6 +31,7 @@ is made. Subagent selections do not change this memory.
 | `nexus daemon start` | Starts it in the background if none answers, then waits until it does (15 s at most). It does not spawn a second daemon while one is registered and still starting, and names the process when an unregistered one already holds the port. |
 | `nexus daemon stop` | Sends SIGTERM to the pid in `daemon.json`, even when the daemon no longer answers; SIGKILL follows it if a live event stream holds the process past the grace period. |
 | `nexus daemon status` | Prints the URL, pid and log path. |
+| `nexus pair` | Prints how a phone connects to the running Core: its Tailscale and LAN addresses, the token (none when Core serves the network anonymously), the `nexus://pair?url=…&token=…&name=…` link and a terminal QR code of the best address (`--no-qr`, `--json`). No relay service; it refuses a loopback-only Core and says to restart with `NEXUS_HOST=0.0.0.0`. |
 
 `nexus run`, `chat`, `project` and `session` start the daemon automatically.
 

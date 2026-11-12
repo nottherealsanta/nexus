@@ -1126,6 +1126,9 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", help="address to bind (default 0.0.0.0, or $NEXUS_HOST); serves without a token off loopback: trusted networks only; use 127.0.0.1 for local-only access")
     voice = sub.add_parser("voice", help="speech to text and text to speech")
     voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
+    pair = sub.add_parser("pair", help="print the address, token and a QR code a phone uses to connect to this Core")
+    pair.add_argument("--no-qr", action="store_true", help="print the link without the QR code")
+    pair.add_argument("--json", action="store_true", help="print the addresses and links as JSON")
     dmn = sub.add_parser("daemon", help="start, stop or check the background daemon")
     dmn.add_argument("action", choices=["start", "stop", "status"])
 
@@ -1244,6 +1247,10 @@ def main(argv: list[str] | None = None) -> int:
                   result["detail"] + (f"\n{result['url']}\nUpdate by pulling the checkout and running ./install.sh." if result["state"] == "available" else ""))
         elif args.command == "serve":
             daemon.serve(args.port, args.host)
+        elif args.command == "pair":
+            from . import pair as pairing
+            info = pairing.pairing()
+            print(json.dumps(info, indent=2) if args.json else pairing.render(info, qr=not args.no_qr))
         elif args.command == "daemon":
             _daemon(args.action)
         elif args.command == "agents":

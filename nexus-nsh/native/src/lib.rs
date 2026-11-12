@@ -5,6 +5,7 @@ use nsh_core::prelude::*;
 
 mod discovery;
 pub mod live_pcm;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod live_socket;
 #[cfg(target_os = "ios")]
 mod live_ios;

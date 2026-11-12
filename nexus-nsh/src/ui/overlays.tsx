@@ -340,10 +340,10 @@ function AddProjectBody() {
  * navigation anchors) stay visible and usable; Esc closes it through the manifest's escape chain (rule `drawer`).
  * Built from plain views because NSH's `Sheet` breaks Escape routing for dialogs opened after it (README "Gaps"),
  * and a `Dialog` would cover the header. */
-function EdgeDrawer(p: { side: "left" | "right"; width: number; label: string; children?: JSX.Element }) {
+export function EdgeDrawer(p: { side: "left" | "right"; width: number; label: string; children?: JSX.Element; onClose?: () => void; testID?: string }) {
   return (
-    <View class="absolute inset-0" testID={`drawer-${p.side}`} role="none">
-      <View onPress={() => drawer.set(null)} accessibilityLabel="Close drawer" focusable={false} class="absolute inset-0 bg-black/50" />
+    <View class="absolute inset-0" testID={p.testID ?? `drawer-${p.side}`} role="none">
+      <View onPress={() => (p.onClose ?? (() => drawer.set(null)))()} accessibilityLabel="Close drawer" focusable={false} class="absolute inset-0 bg-black/50" />
       <View class={`absolute top-0 bottom-0 ${p.side === "left" ? "left-0 border-r" : "right-0 border-l"} border-border bg-card shadow-2xl`} style={{ width: p.width, maxWidth: "92%" }} accessibilityLabel={p.label}>{p.children}</View>
     </View>
   );
