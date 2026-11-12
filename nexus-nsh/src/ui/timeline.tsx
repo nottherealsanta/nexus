@@ -15,7 +15,7 @@ import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../c
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
 import type { IconName } from "../icons";
-import { roles, statusGlyphs } from "../gen/theme";
+import { motionDurations, roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
 import { END_SLOP, followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "../scroll-follow";
@@ -87,8 +87,8 @@ const OUTPUT_TAIL = 8;
 const COMMAND_ROWS = 2;
 /** The result Core stores when the user declines a tool call. */
 const DECLINED = "the user declined this tool call";
-/** How long a finished group's chevron flashes the accent (the TUI's six animation frames). */
-const FLASH_MS = 600;
+/** How long a finished group's chevron flashes the accent (the TUI's six animation frames), from theme.toml. */
+const FLASH_MS = motionDurations.flash_ms;
 /** Verb and thought icons in an open group: quieter than the 16 px chrome icons. */
 const MEMBER_ICON = 13;
 
@@ -158,8 +158,8 @@ function flashScrollBar(y: number, contentH: number, viewH: number) {
   const top = Math.round((travel * Math.max(0, Math.min(y, contentH - viewH))) / Math.max(1, contentH - viewH));
   scrollBar.set({ top, height: thumb });
   scrollBarFading.set(false);
-  scrollBarFade = setTimeout(() => scrollBarFading.set(true), 900);
-  scrollBarHide = setTimeout(() => { scrollBar.set(null); scrollBarFading.set(false); }, 1300);
+  scrollBarFade = setTimeout(() => scrollBarFading.set(true), motionDurations.scrollbar_visible_ms);
+  scrollBarHide = setTimeout(() => { scrollBar.set(null); scrollBarFading.set(false); }, motionDurations.scrollbar_visible_ms + motionDurations.scrollbar_fade_ms);
 }
 effect(() => { if (!scrollBarOn()) hideScrollBar(); });
 

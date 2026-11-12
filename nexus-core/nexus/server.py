@@ -24,6 +24,7 @@ are in docs/api.md.
 | GET | /api/mcp | MCP servers: state, tool count, error and (no secret) settings |
 | GET | /api/mcp/{name} | one server: the same, plus its tool names once connected; never connects |
 | POST | /api/mcp/{name}/restart | close and reconnect one server |
+| GET | /api/mcp/{name}/resources, /resource?uri=, /prompts, /prompt?name=&arguments= | read-only MCP resources and prompts (connects the server; fenced untrusted text; also under `/api/project/{id}/mcp/{name}/`) |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/voice | offline voice model status |
 | GET | /api/search/service | state of the local SearXNG behind `web_search` |
@@ -36,6 +37,8 @@ are in docs/api.md.
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
 | GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
+| GET | /api/project/{id}/worktree/review | `?worktree=`, `?base=`: what integrating the worktree's branch into its base would do (commits, files, conflicts, blockers) |
+| POST | /api/project/{id}/worktree/integrate | keyed; `{worktree, expected_head, mode: ff or merge, base?, message?, remove?, confirmed_live?}`: merge the reviewed branch into its base checkout |
 | GET | /api/project/{id}/mcp | this project's MCP files (.mcp.json, .agents/mcp.json): files, duplicates, revision, error, warnings and server rows |
 | GET | /api/project/{id}/mcp/{name} | one project server, plus `tool_names` and `log`; never connects |
 | POST | /api/project/{id}/mcp/{name}/restart | close and reconnect a project server |
@@ -124,6 +127,7 @@ from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
 from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
+from .llmhub.auth.claude import cli_path as claude_cli_path
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .llmhub.types import ProviderError
@@ -705,6 +709,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         out: dict[str, Any] = {"methods": list(kind.methods)}
         if issubclass(kind, ApiKeyAuth):
             out |= {"key_hint": kind.hint, "key_env": kind.env, "key_source": kind().key_source()}
+        if provider == "claude":
+            out["note"] = ("Needs Claude Code 2.1.248 or newer." if claude_cli_path() else
+                           "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in.")
         return out
 
     async def providers(request: Request) -> Response:
@@ -997,6 +1004,44 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         except mcp_module.McpUnavailable as exc:
             raise NotFound(str(exc)) from exc
 
+    async def mcp_extra(manager: Any, request: Request, name: str, what: str) -> Response:
+        """Read-only MCP resources and prompts of one server. These connect it; nothing reaches a session."""
+        try:
+            if what == "resources":
+                return JSONResponse({"server": name, "resources": await manager.resources(name)})
+            if what == "prompts":
+                return JSONResponse({"server": name, "prompts": await manager.prompts(name)})
+            if what == "resource":
+                uri = request.query_params.get("uri", "")
+                if not uri or len(uri) > 2000:
+                    raise ValueError("uri is required (at most 2000 characters)")
+                return JSONResponse({"server": name, "uri": uri, "text": await manager.read_resource(name, uri)})
+            prompt = request.query_params.get("name", "")
+            raw = request.query_params.get("arguments", "")
+            arguments = json.loads(raw) if raw else {}
+            if not prompt or len(prompt) > 200:
+                raise ValueError("name is required (at most 200 characters)")
+            if not isinstance(arguments, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                          for k, v in arguments.items()) or len(arguments) > 50:
+                raise ValueError("arguments must be a JSON object of strings (at most 50)")
+            return JSONResponse({"server": name, "prompt": prompt,
+                                 "text": await manager.get_prompt(name, prompt, arguments)})
+        except mcp_module.McpUnavailable as exc:
+            raise NotFound(str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("arguments must be JSON") from exc
+
+    def mcp_extra_route(what: str) -> Any:
+        async def handler(request: Request) -> Response:
+            return await mcp_extra(runtime.mcp, request, p(request, "name"), what)
+        return handler
+
+    def project_mcp_extra_route(what: str) -> Any:
+        async def handler(request: Request) -> Response:
+            scope = project_mcp_scope(runtime.project(p(request, "id")))
+            return await mcp_extra(scope.manager, request, p(request, "name"), what)
+        return handler
+
     def project_mcp_scope(project: Any) -> Any:
         """The project's MCP scope, with its project-scoped event sink attached."""
         scope = runtime.project_mcp(project)
@@ -1126,6 +1171,34 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             if action in ("switch", "pull", "discard"):
                 runtime.bus.publish("files.changed", {"project_id": project.id, "worktree": str(root), "workspace": str(root), "source": "git", "all": True})
             return JSONResponse(result)
+
+    async def project_worktree_review(request: Request) -> Response:
+        project = runtime.project(p(request, "id"))
+        worktree = request.query_params.get("worktree")
+        if not worktree:
+            raise ValueError("worktree is required")
+        return JSONResponse(await runtime.review_worktree(project.id, worktree, request.query_params.get("base") or None))
+
+    async def project_worktree_integrate(request: Request) -> Response:
+        if _idempotency_key(request) is None:
+            raise ValueError("Idempotency-Key is required to integrate a worktree")
+        body = await _body(request)
+        project = runtime.project(p(request, "id"))
+        for key in ("worktree", "expected_head", "mode"):
+            if not isinstance(body.get(key), str):
+                raise TypeError(f"{key} must be a string")
+        for key in ("base", "message"):
+            if body.get(key) is not None and not isinstance(body[key], str):
+                raise TypeError(f"{key} must be a string")
+        confirmed = body.get("confirmed_live", [])
+        if not isinstance(confirmed, list) or not all(isinstance(sid, str) for sid in confirmed):
+            raise ValueError("confirmed_live must be an array of session IDs")
+        if body.get("remove", False) not in (True, False):
+            raise TypeError("remove must be true or false")
+        return JSONResponse(await runtime.integrate_worktree(
+            project.id, body["worktree"], expected_head=body["expected_head"], mode=body["mode"],
+            base=body.get("base"), message=body.get("message"), remove=bool(body.get("remove", False)),
+            confirmed_live=confirmed))
 
     async def project_worktrees(request: Request) -> Response:
         return JSONResponse(await runtime.list_project_worktrees(p(request, "id")))
@@ -1895,6 +1968,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/search/service", route(search_service_status)),
         Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
+        *(Route(f"/api/mcp/{{name}}/{what}", route(mcp_extra_route(what)))
+          for what in ("resources", "resource", "prompts", "prompt")),
+        *(Route(f"/api/project/{{id}}/mcp/{{name}}/{what}", route(project_mcp_extra_route(what)))
+          for what in ("resources", "resource", "prompts", "prompt")),
         Route("/api/mcp/{name}", route(mcp_one)),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
         Route("/api/skill", route(skill_list)),
@@ -1906,6 +1983,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}/move", route(project_move), methods=["POST"]),
         Route("/api/project/{id}/remove", route(project_remove), methods=["POST"]),
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
+        Route("/api/project/{id}/worktree/review", route(project_worktree_review)),
+        Route("/api/project/{id}/worktree/integrate", route(project_worktree_integrate), methods=["POST"]),
         Route("/api/project/{id}/git", route(project_git)),
         Route("/api/project/{id}/git/diff", route(project_git_diff)),
         Route("/api/project/{id}/git/live", route(project_git_live)),

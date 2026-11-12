@@ -1182,7 +1182,7 @@ describe("Core-backed settings values", () => {
         "GET */api/model/last*": { body: { model: "codex/gpt-5" } },
         "GET */api/config": { body: { revision: "rev1", values: { agents: { models: { plan: ["codex/gpt-5", "groq/llama"] }, fallbacks: { plan: ["codex/gpt-4"] }, efforts: { plan: { "codex/gpt-5": "low" } } }, defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
         "PATCH */api/config": { body: { revision: "rev2", values: { defaults: { effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true, verified: true, methods: ["browser", "device"] }, { id: "groq", label: "Groq", connected: false, verified: true, methods: ["api_key"], key_env: "GROQ_API_KEY", key_hint: "from console.groq.com/keys", key_source: null }, { id: "grok", label: "Grok", connected: false, verified: true, methods: ["browser", "device"] }] },
+        "GET */api/provider": { body: [{ id: "codex", label: "Codex", connected: true, verified: true, methods: ["browser", "device"] }, { id: "groq", label: "Groq", connected: false, verified: true, methods: ["api_key"], key_env: "GROQ_API_KEY", key_hint: "from console.groq.com/keys", key_source: null }, { id: "grok", label: "Grok", connected: false, verified: true, methods: ["browser", "device"] }, { id: "claude", label: "Claude", connected: false, verified: false, methods: ["browser"], note: "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in." }] },
         "GET */api/agent*": { body: { agents: [{ name: "build", mode: "all", source: "builtin", description: "Builds", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }, { name: "plan", mode: "subagent", source: "builtin", description: "Plans", subagent: { pool: [], fallbacks: [], effective: { model: "", source: "parent" } } }] } },
       },
       width: 1024, height: 768, platform: "web",
@@ -1206,6 +1206,11 @@ describe("Core-backed settings values", () => {
     await app.waitFor("id:provider-detail");
     expect(text().includes("Sign in with browser") && text().includes("Sign in with a device code")).toBe(true);
     expect(app.shows("id:provider-detail-browser") && app.shows("id:provider-detail-device")).toBe(true);
+    await app.keyboard.press("escape");
+    // Claude shows Core's note: not installed, and the required version.
+    await app.press("id:provider-open-claude");
+    await app.waitFor("id:provider-detail-note");
+    expect(text().includes("Claude Code is not installed") && text().includes("2.1.248")).toBe(true);
     await app.keyboard.press("escape");
     // On the provider page the first Esc steps back to the section rail, then closes.
     expect(app.texts().includes("esc back")).toBe(true);

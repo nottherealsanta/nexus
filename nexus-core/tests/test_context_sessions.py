@@ -297,6 +297,10 @@ async def test_draft_context_matches_the_first_request_and_stores_nothing(env):
     assert data["snapshot"]["agent"]["name"] == "build"
     assert data["parts"]["instructions"] > 0 and data["parts"]["tools"] > 0
     assert (await client.get("/api/session")).json() == before  # nothing was created
+    details = data["details"]
+    assert details["system_prompt"] and details["instruction_file"]["status"] in ("missing", "ok", "found")
+    assert set(details["tools"]) == set(data["tools"]) and details["tools"]["bash"]["parameters"]["type"] == "object"
+    assert isinstance(details["skills"], list) and isinstance(details["mcp_listing"], str)
     assert isinstance(data["skills"], list) and isinstance(data["mcp"], list)  # the clients list nothing of their own
 
     off = await client.post("/api/draft/context", json={"directory": str(workspace), "disabled_tools": ["bash"]})
@@ -307,3 +311,4 @@ async def test_draft_context_matches_the_first_request_and_stores_nothing(env):
     await _turn(rt, client, sid)
     first = provider.requests[0]
     assert first.instructions and list(data["tools"]) == [t.name for t in first.tools]
+    assert first.instructions == details["system_prompt"]

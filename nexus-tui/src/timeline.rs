@@ -153,7 +153,10 @@ enum ForkRegion {
 }
 
 /// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
-pub const FLASH_FRAMES: usize = 6;
+pub fn flash_frames() -> usize {
+    use crate::theme::{motion_durations, shimmer_motion};
+    (motion_durations().flash_ms / shimmer_motion().frame_ms.max(1)) as usize
+}
 
 /// Bound on rendered-body cache bytes per app. Long histories (1,000 messages
 /// of ~1.2 KB) fit; a much larger history evicts its oldest entries first.
@@ -3133,7 +3136,7 @@ impl Builder<'_> {
                 .ui
                 .group_flash
                 .get(&key)
-                .is_some_and(|at| self.frame.wrapping_sub(*at) < FLASH_FRAMES);
+                .is_some_and(|at| self.frame.wrapping_sub(*at) < flash_frames());
         let has_wait = activity
             .iter()
             .any(|a| matches!(a, Activity::Tool { id, .. } if waiting.contains_key(id)));

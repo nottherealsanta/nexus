@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import sys
 import time
 
 import httpx
@@ -199,3 +200,23 @@ def test_reload_stress_does_not_accumulate(tmp_path, monkeypatch):
         assert list(found.tools) == ["t"] and found.tools["t"].description == f"v{i}"
         seen.add(extensions.fingerprint([]))
     assert len(seen) > 1
+
+
+def test_memory_limit_metadata_is_validated(tmp_path):
+    def parsed(extra):
+        path = tmp_path / "m.py"
+        path.write_text(f'DESCRIPTION = "d"\n{extra}\ndef run(a):\n    return "x"\n')
+        return extensions.parse(path, "global")
+
+    assert parsed("").memory_mb == extensions.DEFAULT_MEMORY_MB
+    assert parsed("MEMORY_MB = 256").record()["extension"]["memory_mb"] == 256
+    for bad in ("MEMORY_MB = 1", "MEMORY_MB = 99999", "MEMORY_MB = '1g'", "MEMORY_MB = True", "MEMORY_MB = 1.5"):
+        with pytest.raises(ValueError, match="MEMORY_MB"):
+            parsed(bad)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="RLIMIT_AS is enforced on Linux")
+async def test_memory_limit_stops_a_runaway_allocation(tmp_path):
+    record = await _record(tmp_path, 'DESCRIPTION = "d"\nMEMORY_MB = 128\ndef run(a):\n    return str(len(b"x" * (1 << 30)))\n')
+    with pytest.raises(extensions.ToolError, match="MemoryError"):
+        await extensions.call(record, {}, tmp_path)

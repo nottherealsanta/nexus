@@ -50,6 +50,11 @@ FORMAT_VERSION = 1
 FORMATS = ("markdown", "json")
 SCOPES = ("session", "tree")
 EVENT_PAGE = 1000
+# The JSON event log is diagnostic history and may be huge. One export holds a read transaction while it streams,
+# so the events are bounded: past either limit the rest of the log is omitted and the export says so. Messages and
+# snapshots are never clipped.
+MAX_EVENT_BYTES = 256 * 1024 * 1024
+MAX_HOLD_SECONDS = 300.0
 
 MEDIA_TYPES = {"markdown": "text/markdown; charset=utf-8", "json": "application/json; charset=utf-8"}
 EXTENSIONS = {"markdown": "md", "json": "json"}
@@ -108,6 +113,9 @@ class ExportView:
         self.root_id = root_id
         self.scope = scope
         self.running = set(running or ())
+        self.event_bytes = 0  # serialized event data emitted so far, across every session of this export
+        self.opened = time.monotonic()
+        self.clipped: dict[str, dict[str, Any]] = {}
         # A separate read-only connection keeps the daemon's writer connection free.
         uri = f"file:{quote(str(Path(path)), safe='/')}?mode=ro"
         self.db = sqlite3.connect(uri, uri=True, check_same_thread=False)
@@ -294,6 +302,7 @@ class ExportView:
     def events(self, session_id: str) -> Iterator[dict[str, Any]]:
         """Every stored event, paged by row id; never truncated at the API cap."""
         after = 0
+        emitted = 0
         while True:
             rows = self.db.execute(
                 "select * from event where session_id = ? and id > ? order by id limit ?",
@@ -301,8 +310,21 @@ class ExportView:
             )
             count = 0
             for row in rows:
+                reason = None
+                if self.event_bytes >= MAX_EVENT_BYTES:
+                    reason = f"the export reached its {MAX_EVENT_BYTES} byte event budget"
+                elif time.monotonic() - self.opened > MAX_HOLD_SECONDS:
+                    reason = f"the export held its read snapshot for more than {MAX_HOLD_SECONDS:g} s"
+                if reason is not None:
+                    self.clipped[session_id] = {
+                        "reason": reason, "events_emitted": emitted, "first_omitted_event_id": row["id"],
+                        "events_stored": self.counts(session_id)["events"]}
+                    return
                 count += 1
+                emitted += 1
                 after = row["id"]
+                self.event_bytes += int(row["payload_bytes"] or 0) if payloads.has_column(row, "payload_bytes") \
+                    and row["payload_bytes"] and row["payload_bytes"] > 0 else len(row["data"] or "")
                 yield {
                     "id": row["id"],
                     "seq": row["seq"],
@@ -689,7 +711,7 @@ def _json_session(view: ExportView, row: dict[str, Any], in_export: set[str]) ->
             yield ","
         first = False
         yield _dumps(event)
-    yield "]}"
+    yield '],"events_clipped":' + _dumps(view.clipped.get(sid)) + "}"
 
 
 def json_export(view: ExportView) -> Iterator[str]:

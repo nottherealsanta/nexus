@@ -142,6 +142,8 @@ pub enum PaletteMode {
     /// Where `/learn` puts the skills: this project or every project.
     LearnScope,
     Turns,
+    /// Earlier prompts of this project (`ctrl+r`): choosing one fills the composer.
+    History,
     /// Actions on the focused sidebar row (the manifest's `row_menu` placement).
     RowMenu,
 }
@@ -162,6 +164,8 @@ pub enum PaletteKind {
     Learn(String),
     /// A timeline block to jump to (turn, notice or diagnostic).
     Block(usize),
+    /// An earlier prompt, in full.
+    History(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

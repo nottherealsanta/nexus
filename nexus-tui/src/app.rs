@@ -204,6 +204,7 @@ pub const WIRED: &[&str] = &[
     "session.resources",
     "session.worktree_info",
     "turn.go_to",
+    "composer.history_search",
     "model.change",
     "model.effort",
     "agent.change",
@@ -302,9 +303,13 @@ pub(crate) const QUESTION_LOCK: &str = "Answer the question above";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 /// The timeline scroll bar stays at full strength this long after a scroll…
-pub const SCROLLBAR_VISIBLE: std::time::Duration = std::time::Duration::from_millis(1000);
+pub fn scrollbar_visible() -> std::time::Duration {
+    std::time::Duration::from_millis(crate::theme::motion_durations().scrollbar_visible_ms)
+}
 /// …then dims for this long before it disappears.
-pub const SCROLLBAR_FADE: std::time::Duration = std::time::Duration::from_millis(400);
+pub fn scrollbar_fade() -> std::time::Duration {
+    std::time::Duration::from_millis(crate::theme::motion_durations().scrollbar_fade_ms)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitKind {
@@ -909,7 +914,7 @@ pub struct Ui {
     /// the first turn).
     pub timeline_open: HashMap<String, bool>,
     /// Keys of the activity groups that were live at the last draw, and the
-    /// frame at which a group finished (its glyph flashes for `FLASH_FRAMES`).
+    /// frame at which a group finished (its glyph flashes for `flash_frames()`).
     pub live_groups: std::collections::HashSet<String>,
     pub group_flash: HashMap<String, usize>,
     /// The block the keyboard is on, as an index into `timeline_blocks`.
@@ -4438,6 +4443,36 @@ impl App {
                     }
                 }
             }
+            PaletteMode::History => {
+                let entries = self.composer_ref().history_entries();
+                let mut seen = std::collections::HashSet::new();
+                // Newest first; the same prompt sent twice is listed once.
+                for (i, text) in entries.iter().rev().enumerate() {
+                    if text.trim().is_empty() || !seen.insert(text.as_str()) {
+                        continue;
+                    }
+                    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let Some(score) = fuzzy(&q, &flat) else {
+                        continue;
+                    };
+                    let lines = text.lines().count();
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::History(text.clone()),
+                            label: flat,
+                            hint: if lines > 1 {
+                                format!("{lines} lines")
+                            } else {
+                                String::new()
+                            },
+                            category: "prompt".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
             PaletteMode::Export => {
                 for (i, (format, scope, label)) in [
                     ("markdown", "session", "Markdown transcript"),
@@ -4534,7 +4569,7 @@ impl App {
                 }
             }
         }
-        if p.mode == PaletteMode::Models {
+        if matches!(p.mode, PaletteMode::Models | PaletteMode::History) {
             // favorites first, then newest first, as Core lists them; the
             // filter only removes rows
             scored.sort_by_key(|(_, i, _)| *i);
@@ -4743,6 +4778,14 @@ impl App {
             }
             PaletteKind::Agent(agent) => self.apply_agent(agent),
             PaletteKind::Block(i) => self.select_block(i),
+            PaletteKind::History(text) => {
+                if self.question_pending() {
+                    self.toast(Level::Info, QUESTION_LOCK);
+                } else {
+                    self.composer().set_text(&text);
+                    self.ui.focus = Focus::Composer;
+                }
+            }
             PaletteKind::Learn(scope) => {
                 if let (Some(source), Some(project)) =
                     (self.ui.learn_source.take(), self.current_project())
@@ -6680,6 +6723,7 @@ impl App {
                 "Type /learn followed by owner/repo, a GitHub URL or ./folder",
             ),
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
+            "composer.history_search" => self.open_palette(PaletteMode::History),
             // The new-session screen; the session exists once the first message is sent.
             "session.new" => {
                 if self.edit_blocks() {
@@ -9976,7 +10020,7 @@ impl App {
 
     /// Note which groups of the freshly built timeline are live. A group that
     /// was live at the last draw and now is not has just finished: its glyph
-    /// flashes the accent for `timeline::FLASH_FRAMES` (never with reduced motion).
+    /// flashes the accent for `timeline::flash_frames()` (never with reduced motion).
     pub fn note_live_groups(&mut self, timeline: &crate::timeline::Timeline) {
         let now: std::collections::HashSet<String> = timeline.live_groups.iter().cloned().collect();
         if !self.theme.opts.reduced_motion {
@@ -9990,7 +10034,7 @@ impl App {
         let frame = self.frame;
         self.ui
             .group_flash
-            .retain(|_, at| frame.wrapping_sub(*at) < crate::timeline::FLASH_FRAMES);
+            .retain(|_, at| frame.wrapping_sub(*at) < crate::timeline::flash_frames());
     }
 
     pub fn set_size(&mut self, w: u16, h: u16) {
@@ -10866,7 +10910,7 @@ impl App {
                     return;
                 }
                 "ctrl+r" => {
-                    self.run_command("app.reconnect");
+                    self.run_command("composer.history_search");
                     return;
                 }
                 "ctrl+t" => {
@@ -12724,9 +12768,9 @@ impl App {
     pub fn scrollbar_phase(&self, now: Instant) -> Option<bool> {
         let at = self.ui.scroll_mark?;
         let age = now.saturating_duration_since(at);
-        if age < SCROLLBAR_VISIBLE {
+        if age < scrollbar_visible() {
             Some(false)
-        } else if age < SCROLLBAR_VISIBLE + SCROLLBAR_FADE {
+        } else if age < scrollbar_visible() + scrollbar_fade() {
             Some(true)
         } else {
             None
@@ -14342,6 +14386,10 @@ impl App {
             .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
         let mut out = vec![PageLine::Text(self.provider_status(p), Tone::Secondary)];
+        if let Some(note) = p["note"].as_str().filter(|n| !n.is_empty()) {
+            let tone = if connected { Tone::Muted } else { Tone::Warning };
+            out.push(PageLine::Text(note.to_owned(), tone));
+        }
         if connected {
             if p["key_source"].as_str() == Some("env") {
                 out.push(PageLine::Text(

@@ -23,6 +23,14 @@ frame_ms = 125
 reach = 3.0
 crest = 0.5
 
+# One set of durations for both clients (all off with reduced motion where they
+# animate): the finished group's chevron flash (six 125 ms frames), and how long
+# the timeline scroll bar stays at full strength, then dims before it goes.
+[motion.durations]
+flash_ms = 750
+scrollbar_visible_ms = 1000
+scrollbar_fade_ms = 400
+
 [annotation]
 ink = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"]
 

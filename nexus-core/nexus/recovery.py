@@ -36,8 +36,10 @@ resumed automatically.
 """
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
+from . import bash_jobs
 from . import questions as question_contract
 from .codec import part_from_json
 from .llmhub.types import Media, Message, Text, ToolCall, ToolResult
@@ -71,6 +73,7 @@ class Recovery:
         self.store: Store = runtime.store
         self.bus: Bus = runtime.bus
         self.crash_after = crash_after
+        self.job_probes: dict[tuple[str, str], dict[str, Any]] = {}
 
     def _external(self, session_id: str) -> bool:
         from .workers.registry import external
@@ -127,6 +130,7 @@ class Recovery:
 
     def run(self) -> list[dict[str, Any]]:
         """Reconcile every unfinished turn. Returns one summary per recovered turn."""
+        self._probe_open_jobs()
         self._publish_unnannounced_messages()
         self._checkpoint("messages.reconciled")
         self._prepare_legacy()
@@ -140,6 +144,24 @@ class Recovery:
         # After the notices, so an interrupted turn still reports the jobs it lost.
         self._close_lost_bash_jobs()
         return summaries
+
+    def _probe_open_jobs(self) -> None:
+        """Read-only: is each unfinished job's process still there? Never signals anything.
+
+        `bash.started` records the pid. It counts only with a matching process group and start time
+        (`bash_jobs.probe`), because a reused pid could belong to another process; without that evidence the job is
+        `unknown`, and the notice keeps saying it may still be running.
+        """
+        self.job_probes = {}
+        for session_id, job_id in self.store.open_bash_jobs():
+            row = self.store.db.execute("select started from bash_job where session_id = ? and ident = ?",
+                                        (session_id, job_id)).fetchone()
+            try:
+                data = json.loads(row[0]) if row and row[0] else {}
+            except ValueError:
+                data = {}
+            self.job_probes[(session_id, job_id)] = {
+                "pid": data.get("pid"), "state": bash_jobs.probe(data.get("pid"), data.get("started"))}
 
     def _close_lost_bash_jobs(self) -> list[str]:
         """Publish the terminal `bash.finished` for jobs a restart discarded.
@@ -159,6 +181,7 @@ class Recovery:
             self.bus.publish("bash.finished", {
                 "id": job_id, "session_id": session_id, "root": session_id,
                 "status": "interrupted", "outcome": "lost", "reason": RECOVERY_REASON,
+                "process": self.job_probes.get((session_id, job_id)),
             }, session_id=session_id)
             closed.append(job_id)
         return closed
@@ -299,15 +322,9 @@ class Recovery:
                           requests: list[dict[str, Any]]) -> dict[str, Any] | None:
         """`{"stop", "steps"}` if the loop ended the turn before the crash, else `None`.
 
-        `turn.ended` is the record. A turn left open by a daemon from before that
-        column has `ended` null; for it the log's `turn_end` event is the evidence.
+        `turn.ended` is the only record; the legacy `turn_end` event fallback is gone.
         """
-        if turn.get("ended") is not None:
-            return turn["ended"]
-        if not requests:
-            return None
-        rows = self.store.events(session_id, after=requests[-1]["event_after"], limit=1, types=["turn_end"])
-        return rows[0]["data"] if rows else None
+        return turn.get("ended")
 
     def _restore_completed_response(self, turn: dict[str, Any], request: dict[str, Any] | None) -> StoredMessage | None:
         """Restore a durably completed response whose message was never saved.
@@ -527,10 +544,28 @@ class Recovery:
                 "Kernels do not survive a daemon restart: Monty variable and cell state is gone, and no kernel "
                 "state was invented. Any earlier `code.call` and `code.cell` events remain in the event log.")
         if losses["bash_jobs"]:
-            lines.append(
-                "Background job(s) " + ", ".join(f"`{job}`" for job in losses["bash_jobs"])
-                + " have no finished record. Their retained output is lost and the command may still be running; "
-                "it was not killed by PID because a reused pid could belong to another process.")
+            probes = self.job_probes
+            states = {job: (probes.get((turn["session_id"], job)) or {}).get("state", "unknown")
+                      for job in losses["bash_jobs"]}
+            running = [job for job, state in states.items() if state == "running"]
+            gone = [job for job, state in states.items() if state == "gone"]
+            unknown = [job for job, state in states.items() if state == "unknown"]
+            if unknown:
+                lines.append(
+                    "Background job(s) " + ", ".join(f"`{job}`" for job in unknown)
+                    + " have no finished record. Their retained output is lost and the command may still be running; "
+                    "it was not killed by PID because a reused pid could belong to another process.")
+            if running:
+                lines.append(
+                    "Background job(s) " + ", ".join(f"`{job}` (pid {probes[(turn['session_id'], job)]['pid']})"
+                                                     for job in running)
+                    + " are still running as the same process group (checked by pid, group and start time). "
+                    "Their retained output is lost, and Nexus no longer supervises them or can stop them for you; "
+                    "nothing was killed.")
+            if gone:
+                lines.append(
+                    "Background job(s) " + ", ".join(f"`{job}`" for job in gone)
+                    + " have no finished record and their process is no longer running. Their retained output is lost.")
         if self._external(turn["session_id"]):
             lines.append(
                 "This turn ran on a vendor CLI (ZMX). The CLI's own process may have outlived the daemon; Nexus never "
