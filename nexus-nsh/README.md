@@ -182,9 +182,8 @@ settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. Each project has its own open
 tabs and last viewed session or new-session screen, held locally while the client runs.
-Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, a 30-segment
-milestone bar (`daemon`, `workspace`, `providers`, `session`, `ready`), its percentage and the
-next step. It fades into the first live frame and is dismissed when a start fails.
+Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, animated from the first
+frame by a light sweep (no progress bar, percentage or step name; a quiet "Starting Nexus Core…" line after 5 s). It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
 context, Markdown (prose uses the 16/24 default in Geist; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is Monaspace at 12.5/20 on the panel), and three detail levels: finished activity groups collapse in low and medium,

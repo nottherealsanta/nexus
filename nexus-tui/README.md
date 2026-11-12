@@ -394,12 +394,13 @@ drawer). Under 100 the header keeps the two toggles, the run status and the bell
 strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`). The old subagent-tab row is gone: a viewed child keeps the root tab at the top and uses the heading rail and its timeline child cards for navigation.
 
 States (D18): launch shows the splash (`nexus-tui/src/splash.rs`): the `_/` logo in
-`text.primary` (white in the dark theme), a 30-segment milestone bar, its percentage and the
-next step. The milestones are `daemon`, `workspace`, `providers`, `session` and `ready`; the
-bar follows them, while the ambient dots and intro particles run on the clock; the logo is
-painted from the first frame, before the terminal capability probes.
+`text.primary` (white in the dark theme). There is no progress bar, percentage or step name: the
+ambient dots, intro particles and a light sweep across the logo run on the clock, so the launch
+moves from the first frame (painted before the terminal capability probes); after 5 s of waiting one
+quiet `Starting Nexus Core…` line shows. The milestones (`daemon` … `ready`) are tracked only to
+know when `ready` is reached.
 When the stream is live the logo flashes and a `▓▒░` curtain wipes into the first frame; with
-animations off the logo and bar are static and the frame follows with a cut. A failed start
+animations off the logo is static and the frame follows with a cut. A failed start
 dismisses the splash so the error is readable. After launch, the connecting screen and the
 empty workspace show the same logo (`paint::LOGO`, five rows of `_/` strokes, accent, bold in
 mono, centred as one block) over the title. An empty workspace reads `No projects yet` with

@@ -17,15 +17,29 @@ playing. Remove the progress bar: it never seems to move; it only ever shows `0%
 
 ## Plan
 
-- [ ] **Find why the animation looks stopped during daemon start.** Check `splash_animating` in `main.rs` ~661: it
+- [x] **Find why the animation looks stopped during daemon start.** Check `splash_animating` in `main.rs` ~661: it
   should be true from the first frame while Core is `Starting`, and the bootstrap (`discovery.rs`, `nexus daemon
   start`) must not block the event loop. Reproduce with a scratch `$NEXUS10_HOME` and a cold daemon.
-- [ ] **Remove the milestone bar, percentage and step label** in both clients. Keep the logo, the ambient field and
+- [x] **Remove the milestone bar, percentage and step label** in both clients. Keep the logo, the ambient field and
   intro particles, and the flash + `▓▒░` wipe into the first live frame on `ready`. Keep milestone tracking
   internally only to know when `ready` is reached.
-- [ ] If Core takes long (say > 5 s), show one quiet line under the logo ("Starting Nexus Core…"), and on failure the
+- [x] If Core takes long (say > 5 s), show one quiet line under the logo ("Starting Nexus Core…"), and on failure the
   existing error with the daemon log tail (`discovery.rs` ~118). No numbers.
-- [ ] Reduced motion / animations off: static logo, straight cut (unchanged).
-- [ ] Update the splash module docs, `interface/design-language.md` if it describes the bar, both READMEs; frame
+- [x] Reduced motion / animations off: static logo, straight cut (unchanged).
+- [x] Update the splash module docs, `interface/design-language.md` if it describes the bar, both READMEs; frame
   tests in TUI (`splash.rs` tests assert progress) and the NSH splash test.
-- [ ] Verify: cold start with a stopped daemon in Ghostty and in NSH web; record a short capture.
+- [ ] (NOT VERIFIED) Verify: cold start with a stopped daemon in Ghostty and in NSH web; record a short capture.
+
+## Findings and decisions (2026-11-12)
+
+- Cause: the event loop was not blocked (`#[tokio::main]` multi-thread, `start_core` is async `tokio::process`, and
+  `splash_animating` is true from the first frame). After the 480 ms intro the only motion was dim ambient dots, and the
+  bar sat at `0%` / `daemon` with a faint scan, so it read as stopped. Removing the bar and adding an always-moving
+  element fixes the perception.
+- Decision: while waiting, a light sweep crosses the logo (TUI: `p.peak` on a 3-column band; NSH: `text-foreground`
+  against `text-muted-foreground`, since web has no brighter-than-foreground). Same 32 ms/column clock, 30-column loop.
+- Decision: the quiet line appears after 5 s (`SLOW_FRAMES` = 625 frames / `SPLASH_SLOW_MS`), muted, centred under the logo.
+  No numbers. Failure path unchanged.
+- Decision: flash starts as soon as `ready` is reached and the 480 ms intro is done (the 200 ms bar fill is gone).
+- Tests: TUI `cargo test splash` (6) and NSH `splash.test.ts` (4) pass. Not verified: cold start in Ghostty / NSH web,
+  screenshots and a capture; the NSH sweep cost per tick (30 Text nodes at 30 Hz) is unmeasured.

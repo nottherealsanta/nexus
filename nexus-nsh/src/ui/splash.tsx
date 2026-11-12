@@ -1,6 +1,7 @@
-import { Text, View, signal } from "nsh";
+import { Text, View, effect, signal } from "nsh";
+import { config } from "../store";
 
-/** The five startup milestones, shared with the TUI (`nexus-tui/src/splash.rs`). */
+/** The five startup milestones, shared with the TUI (`nexus-tui/src/splash.rs`). Tracked only to know when `ready` is reached. */
 export const SPLASH_STEPS = ["daemon", "workspace", "providers", "session", "ready"] as const;
 /** The `_/` N mark from the TUI, one string per row. */
 export const SPLASH_LOGO = [
@@ -10,9 +11,17 @@ export const SPLASH_LOGO = [
   " _/    _/_/",
   "_/      _/",
 ] as const;
-export const SPLASH_SEGMENTS = 30;
+/** Milliseconds of waiting before one quiet "Starting Nexus Core…" line shows (TUI: `SLOW_FRAMES`). */
+export const SPLASH_SLOW_MS = 5000;
+/** Milliseconds per column step of the light sweep across the logo. */
+const SWEEP_MS = 32;
+const LOGO_WIDTH = Math.max(...SPLASH_LOGO.map((r) => r.length));
+/** Column of the light sweep `ms` into the wait, as in the TUI: a function of the clock only. */
+export function splashSweep(ms: number) {
+  return Math.floor(ms / SWEEP_MS) % (LOGO_WIDTH + 16) - 8;
+}
 
-/** Milestones reached, 0..5. The bar follows these, never the clock. */
+/** Milestones reached, 0..5. Nothing shows them; they only tell when `ready` is reached. */
 export const splashStage = signal(0);
 /** The splash is fading out: the app is live and input can reach it. */
 const splashLeaving = signal(false);
@@ -21,7 +30,7 @@ export const splashDone = signal(false);
 /** Bumped by start/dismiss so a fade timer from an earlier splash cannot hide a new one. */
 let generation = 0;
 
-/** Record a milestone; a later one never moves the bar backwards. */
+/** Record a milestone; a later one never moves backwards. */
 export function splashReach(step: number) {
   if (splashDone()) return;
   splashStage.update((s) => Math.max(s, Math.min(SPLASH_STEPS.length, step)));
@@ -52,13 +61,25 @@ export function splashStart() {
 }
 
 /**
- * The launch splash: the logo, a 30-segment milestone bar and the next step.
- * Mirrors the TUI's centred block; the animation is the bar's fill.
+ * The launch splash: the logo, animated from the first frame (a light sweeps
+ * across it while Core starts) and, after 5 s, one quiet line. No progress bar,
+ * percentage or step name. Mirrors the TUI's centred block.
  */
 export function Splash() {
-  const filled = () => Math.round((splashStage() / SPLASH_STEPS.length) * SPLASH_SEGMENTS);
-  const pct = () => Math.round((splashStage() / SPLASH_STEPS.length) * 100);
-  const step = () => SPLASH_STEPS[Math.min(splashStage(), SPLASH_STEPS.length - 1)];
+  const waited = signal(0);
+  const reduced = () => !!config()?.values?.ui?.reduced_motion;
+  effect(() => {
+    if (splashDone() || splashLeaving()) return;
+    const t0 = Date.now();
+    waited.set(0);
+    if (reduced()) {
+      const id = setTimeout(() => waited.set(Date.now() - t0), SPLASH_SLOW_MS);
+      return () => clearTimeout(id);
+    }
+    const id = setInterval(() => waited.set(Date.now() - t0), 33);
+    return () => clearInterval(id);
+  });
+  const lit = (col: number) => !reduced() && Math.abs(col - splashSweep(waited())) <= 1;
   return (
     <If when={!splashDone()}>
       <View
@@ -66,23 +87,19 @@ export function Splash() {
         class={`absolute inset-0 items-center justify-center bg-background transition-opacity motion-reduce:transition-none duration-150 ${splashLeaving() ? "opacity-0" : "opacity-100"}`}
         style={{ pointerEvents: splashLeaving() ? "none" : "auto" }}
       >
-        <View class="items-center gap-6" accessibilityLabel={`Starting Nexus Core, ${pct()}%`}>
+        <View class="items-center gap-6" accessibilityLabel="Starting Nexus Core">
           <View class="items-center" accessible={false}>
             <Each of={SPLASH_LOGO}>
-              {(row) => <Text style={{ numberOfLines: 1 }} class="font-mono text-[15px] leading-[20px] font-semibold text-foreground">{row()}</Text>}
+              {(row) => (
+                <View class="flex-row">
+                  <Each of={[...row().padEnd(LOGO_WIDTH, " ")].map((ch, col) => ({ ch, col }))}>
+                    {(c) => <Text style={{ numberOfLines: 1 }} class={`font-mono text-[15px] leading-[20px] font-semibold ${lit(c().col) ? "text-foreground" : "text-muted-foreground"}`}>{c().ch === " " ? " " : c().ch}</Text>}
+                  </Each>
+                </View>
+              )}
             </Each>
           </View>
-          <View class="items-center gap-2">
-            <View class="flex-row items-center gap-3">
-              <View class="flex-row items-center gap-[2px]" accessible={false}>
-                <Each of={[...Array(SPLASH_SEGMENTS).keys()]}>
-                  {(i) => <View class={`h-2 w-1.5 rounded-none transition-colors motion-reduce:transition-none duration-200 ${i() < filled() ? "bg-foreground" : "bg-border"}`} />}
-                </Each>
-              </View>
-              <Text class="font-mono text-[13px] leading-5 text-muted-foreground tabular-nums">{String(pct()).padStart(3, " ")}%</Text>
-            </View>
-            <Text class="font-mono text-[13px] leading-5 text-muted-foreground">{step()}</Text>
-          </View>
+          <Text testID="splash-slow" class={`font-mono text-[13px] leading-5 text-muted-foreground ${waited() >= SPLASH_SLOW_MS ? "opacity-100" : "opacity-0"}`}>Starting Nexus Core…</Text>
         </View>
       </View>
     </If>
