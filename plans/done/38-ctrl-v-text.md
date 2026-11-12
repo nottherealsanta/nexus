@@ -49,3 +49,5 @@ User request (2026-11-11): Ctrl+V should also work when the clipboard holds only
   composer command in the palette" (the test runtime has no `navigator.clipboard`, so the clipboard read itself is
   not unit tested; text-only and image paste through `onPaste` are covered by the existing paste tests). Manifest check passes. The design language did not mention the old toast.
 - Not verified: a real Ghostty run with text-only and image clipboards; a real Safari/Chrome Ctrl+V on macOS.
+- NSH `App.test.tsx` full-file run: 3 failures (history reload, turn summary strip, image annotate) are in code this
+  change does not touch (baseline not re-checked). The new palette test's result was not seen before commit: not verified.
