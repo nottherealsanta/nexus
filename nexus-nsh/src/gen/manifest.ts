@@ -68,6 +68,7 @@ export const manifest = {
    "manager.minimised",
    "manager.listening",
    "manager.speaking",
+   "manager.voice",
    "manager.field",
    "manager.card_focused",
    "manager.engaged"
@@ -3515,20 +3516,34 @@ export const manifest = {
     "header",
     "palette"
    ],
-   "note": "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen. Voice defaults on: explicitly opening Manager starts audio immediately unless Voice was switched off. Esc closes the dropdown."
+   "note": "Toggle the borderless opaque Manager dropdown. While it or a call is open, a gray braille wave field replaces the header label. An open dropdown dims the rest of the screen. Voice defaults to connected: explicitly opening Manager starts audio immediately unless it was disconnected. Esc closes the dropdown."
   },
   {
    "id": "manager.audio_toggle",
-   "title": "Toggle Manager audio",
+   "title": "Connect or disconnect Manager voice",
    "category": "manager",
    "when": [
     "always"
    ],
    "placement": [
-    "header",
+    "stage",
     "palette"
    ],
-   "note": "The dropdown Voice toggle defaults on. Switching it on starts GPT-Live immediately; switching it off stops only audio. The header indicator toggles the dropdown, or stops the live voice while it is on (hover it to see Stop). Debug session navigation remains independent."
+   "note": "One button in the Manager panel (the phone's Manager tab too), labelled by its action: Connect while the voice is off, Disconnect while it is on or connecting. Connect starts GPT-Live immediately; Disconnect stops only the audio (POST /api/manager/live/stop): the control call, the backend session and the typed field stay. Defaults to connected when Manager opens. The header indicator also disconnects the live voice (hover it to see Stop). Debug session navigation remains independent."
+  },
+  {
+   "id": "manager.mute_toggle",
+   "title": "Mute or unmute Manager microphone",
+   "category": "manager",
+   "when": [
+    "manager.voice"
+   ],
+   "unavailable_reason": "Connect the Manager's voice first.",
+   "placement": [
+    "stage",
+    "palette"
+   ],
+   "note": "The second voice button, labelled Mute or Unmute. While muted the connection stays open and the Manager still speaks, but no microphone audio is sent (the client's `mute` / `unmute` frame on the live audio socket). The wave field goes gray and still and the caption says Muted. Disconnecting clears the mute, so the next Connect has the microphone open."
   },
   {
    "id": "manager.context",

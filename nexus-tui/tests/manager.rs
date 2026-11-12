@@ -887,10 +887,40 @@ fn default_voice_starts_on_open_and_can_be_disabled_while_connecting() {
     );
     assert!(a.ui.manager.call.is_some() && !a.ui.manager.live_call);
     let shown = text(&mut a);
-    assert!(shown.contains("Voice: off"));
+    assert!(shown.contains("Connect") && !shown.contains("Disconnect"));
+    assert!(shown.contains("Mute"));
+    assert!(a.hits.rect_of(&Target::ManagerMute).is_none(), "nothing to mute until the voice is connected");
     assert!(!shown.lines().next().unwrap().contains("Manager"));
     assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
     assert!(!shown.contains('┌'));
+}
+
+#[test]
+fn voice_has_connect_and_mute_buttons() {
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));
+    a.ui.manager.silent = true;
+    a.manager_execute("manager.header");
+    let shown = text(&mut a);
+    assert!(shown.contains("Disconnect") && shown.contains("Mute"), "{shown}");
+    assert!(a.hits.rect_of(&Target::ManagerVoice).is_some());
+    // Muting needs a live voice: with none the command does nothing.
+    a.manager_execute("manager.mute_toggle");
+    assert!(!a.ui.manager.mic_muted);
+    a.ui.manager.live_call = true;
+    assert!(a.manager_term("manager.voice"));
+    let shown = text(&mut a);
+    assert!(a.hits.rect_of(&Target::ManagerMute).is_some(), "{shown}");
+    a.manager_execute("manager.mute_toggle");
+    assert!(a.ui.manager.mic_muted);
+    let shown = text(&mut a);
+    assert!(shown.contains("Unmute"), "{shown}");
+    a.manager_execute("manager.mute_toggle");
+    assert!(!a.ui.manager.mic_muted && text(&mut a).contains("Mute"));
+    // Disconnect clears the mute and swaps the button back to Connect.
+    a.manager_execute("manager.mute_toggle");
+    a.manager_execute("manager.audio_toggle");
+    assert!(!a.ui.manager.mic_muted && !a.ui.manager.live_call);
+    assert!(text(&mut a).contains("Connect"));
 }
 
 #[test]

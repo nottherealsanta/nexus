@@ -28,7 +28,7 @@ function Latency() {
   const h = () => healthSummary(latency());
   const tone = () => { const n = h().now; return n === null ? "text-error" : n < 150 ? "text-success" : n < 500 ? "text-warning" : "text-error"; };
   return <View class="items-end" testID="core-latency" accessibilityLabel={h().now === null ? "Latency: unreachable" : `Latency ${h().now} milliseconds`}>
-    <Text class={`text-[20px] leading-7 font-semibold tabular-nums ${latency().length ? tone() : "text-muted-foreground"}`}>{latency().length ? (h().now === null ? "no reply" : `${h().now} ms`) : "…"}</Text>
+    <Text class={`font-(family-name:--font-ui) text-[20px] leading-7 font-semibold tabular-nums ${latency().length ? tone() : "text-muted-foreground"}`}>{latency().length ? (h().now === null ? "no reply" : `${h().now} ms`) : "…"}</Text>
     <Text class={T.meta}>{h().median !== null ? `median ${h().median} ms` : "latency"}</Text>
   </View>;
 }
@@ -53,11 +53,11 @@ function ConnectionCard() {
   const live = () => connection().kind === "live";
   const state = () => { const k = connection().kind; return k === "live" ? "Connected" : k === "connecting" || k === "starting" ? "Connecting" : k === "reconnecting" ? "Reconnecting" : "Offline"; };
   return (
-    <View class="rounded-(--radius-card) bg-raised p-4 gap-3" testID="connection-card" accessibilityLabel="Connection">
+    <View class="rounded-2xl bg-raised p-4 gap-3" testID="connection-card" accessibilityLabel="Connection">
       <View class="flex-row items-center gap-3">
         <View class="flex-1 min-w-0 gap-0.5">
           <Text class={T.meta} testID="core-version">{info()?.version ? `Core · v${info()!.version}` : "Core"}</Text>
-          <Text style={{ numberOfLines: 1 }} class="text-[18px] leading-7 font-semibold text-foreground" testID="core-host">{addr() ? hostLabel(addr()) : "this device"}</Text>
+          <Text style={{ numberOfLines: 1 }} class="font-(family-name:--font-ui) text-[18px] leading-7 font-semibold text-foreground" testID="core-host">{addr() ? hostLabel(addr()) : "this device"}</Text>
           <Text style={{ numberOfLines: 1, userSelect: "text" }} class={`${T.mono} text-[13px] leading-5`} testID="core-address">{addr() || "same origin"}</Text>
         </View>
         <Latency />
@@ -66,10 +66,10 @@ function ConnectionCard() {
       <View class="flex-row items-center gap-2">
         <View class="flex-row items-center gap-1.5 rounded-full bg-muted px-2.5 min-h-7">
           <View class={`size-2 rounded-full ${live() ? "bg-success" : "bg-warning"}`} accessible={false} />
-          <Text class="text-[13px] leading-5 text-foreground-secondary" testID="core-state">{state()}</Text>
+          <Text class="font-(family-name:--font-ui) text-[13px] leading-5 text-foreground-secondary" testID="core-state">{state()}</Text>
         </View>
         <View class="rounded-full bg-muted px-2.5 min-h-7 justify-center">
-          <Text class="text-[13px] leading-5 text-foreground-secondary" testID="core-transport">{addr() ? transportOf(addr()) : "This device"}</Text>
+          <Text class="font-(family-name:--font-ui) text-[13px] leading-5 text-foreground-secondary" testID="core-transport">{addr() ? transportOf(addr()) : "This device"}</Text>
         </View>
         <View class="flex-1" />
         <Btn label="Change" kind="default" onPress={() => coreEditing.set(true)} testID="core-change" class="min-h-11" />
@@ -82,7 +82,7 @@ function Group(p: { title?: string; children?: JSX.Element }) {
   return (
     <View class="gap-1.5">
       {p.title ? <Text class={`${T.section} px-4`}>{p.title}</Text> : null}
-      <View class="rounded-(--radius-card) bg-raised overflow-hidden">{p.children}</View>
+      <View class="rounded-2xl bg-raised overflow-hidden">{p.children}</View>
     </View>
   );
 }

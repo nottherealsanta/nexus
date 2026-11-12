@@ -4,7 +4,7 @@ import { phoneRow } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Btn, FOCUS, Icon, IconButton, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
+import { Btn, FOCUS, Icon, IconButton, PHONE_FONT, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -963,7 +963,7 @@ function RowView(p: { r: () => Row; sid: string }) {
           </If>
         </If>
         <If when={r().kind === "assistant"}>
-          <View class={`py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
+          <View class={phone ? "py-3 px-1" : `py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
             <TextView
               selectable links="open" markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => {
@@ -973,6 +973,7 @@ function RowView(p: { r: () => Row; sid: string }) {
                   : <CodeFence block={block} />;
               }}
               classes={PROSE}
+              styles={phone ? { root: { fontFamily: "Geist", fontSize: 16, lineHeight: 25 } } : undefined}
             />
           </View>
         </If>
@@ -1242,7 +1243,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full bg-band py-3 relative ${phone ? "rounded-(--radius-card) px-4" : USER_BAND_INSET}`} testID="msg-user"
+      <View class={`group/band w-full bg-band py-3 relative ${phone ? "rounded-2xl px-4" : USER_BAND_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <If when={!phone}><View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} /></If>
@@ -1273,13 +1274,13 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...(phone ? { fontFamily: "Geist" } : {}) }} class={`${TS.body} text-foreground`}>{body()}</Text>
+            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...PHONE_FONT }} class={`${TS.body} text-foreground`}>{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
                 <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
                 <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
-                <Text class={`${META} pt-[3px]`}>{meta()}</Text>
+                <Text style={PHONE_FONT} class={`${META} pt-[3px]`}>{meta()}</Text>
               </View>
             </If>
           </View>

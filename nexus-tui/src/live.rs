@@ -335,6 +335,17 @@ pub fn levels() -> Option<Levels> {
         .and_then(|c| c.as_ref().map(|a| a.levels.clone()))
 }
 
+/// Mute or unmute the microphone for the running call (the socket stays open).
+pub fn set_muted(muted: bool) {
+    if let Some(audio) = CALL
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|a| a.muted.clone()))
+    {
+        audio.store(muted, Ordering::SeqCst);
+    }
+}
+
 pub fn interrupt() {
     if let Some(audio) = CALL
         .lock()

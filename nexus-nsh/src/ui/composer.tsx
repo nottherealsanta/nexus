@@ -1,6 +1,6 @@
 import { Image, Scroll, Text, View, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, PHONE_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
@@ -438,7 +438,7 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class="w-full rounded-(--radius-card) border border-border bg-card px-4 pb-2" testID="composer-surface">
+          <View class={`w-full border border-border bg-card pb-2 ${phone ? "rounded-3xl px-4" : "rounded-(--radius-card) px-4"}`} testID="composer-surface">
           <RetryNotices />
           <View class={phone ? "h-2" : "h-4"} testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
@@ -450,7 +450,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : busy() ? "Type a message… Enter steer · Tab queue" : "Type a message…")}
+            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue" : "Type a message…")}
             readonly={!live() || questionPending()}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
@@ -466,7 +466,7 @@ function EditableComposer() {
               if (open()) dismissed.set(text());
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
-            style={{ height: h() }}
+            style={{ height: h(), ...PHONE_FONT }}
             class={`flex-1 min-w-0 px-0 py-0 ${T.body} placeholder:text-muted-foreground`}
           />
             <View class="shrink-0 flex-row items-center gap-3 pb-1">
@@ -483,7 +483,7 @@ function EditableComposer() {
               <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
                 <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
               </If>
-              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
+              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={`${phone ? "rounded-full " : ""}${canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"}`} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
           <View class="h-2" />
@@ -587,10 +587,10 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} h-7 ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-9" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1 }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1, ...PHONE_FONT }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...PHONE_FONT }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -661,8 +661,8 @@ function WorkingRow() {
     <View class="shrink-0 flex-row items-center gap-2 h-7" testID="working-row">
       <Status kind="running" />
       <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
-      <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
-      <Text class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
+      <Text style={PHONE_FONT} class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
+      <Text style={PHONE_FONT} class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
     </View>
   );
 }
@@ -856,7 +856,7 @@ function LocationStrip(p: { working: boolean }) {
       <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5" testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
-        <View class={phone ? "flex-1 w-0 overflow-hidden opacity-0" : "flex-1 w-0 min-w-0 overflow-hidden flex-row items-center gap-2"} accessible={!phone}>
+        <View class={phone ? "size-0 overflow-hidden" : "flex-1 w-0 min-w-0 overflow-hidden flex-row items-center gap-2"} accessible={!phone}>
           <If when={!!session()}>
             <Button
               disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
@@ -895,7 +895,7 @@ function LocationStrip(p: { working: boolean }) {
         <If when={runningShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${runningShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${runningShells()} shell`}</Text></Button></If>
         <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
         </View>
-        <View class="flex-1 w-0 min-w-0 flex-row items-center justify-end overflow-hidden"><If when={p.working}><WorkingRow /></If></View>
+        <View class={`flex-1 min-w-0 flex-row items-center overflow-hidden ${phone ? "justify-start pl-1" : "w-0 justify-end"}`}><If when={p.working}><WorkingRow /></If></View>
       </View>
     </If>
   );
@@ -1093,7 +1093,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class={`relative w-full mb-2 rounded-(--radius-card) bg-raised ${phone ? "overflow-hidden" : ""}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View class={`relative w-full mb-2 bg-raised ${phone ? "rounded-3xl overflow-hidden" : "rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" /></If>
       <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
@@ -1101,7 +1101,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
             <Text class={`text-[16px] leading-6 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
-            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground" testID="waiting-title">
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground ${phone ? "font-(family-name:--font-ui)" : ""}`} testID="waiting-title">
               {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
             </Text>
             <If when={p.count > 1}>

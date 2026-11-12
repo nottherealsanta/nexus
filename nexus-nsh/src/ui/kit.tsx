@@ -6,7 +6,7 @@ import { icons, type IconName } from "../icons";
 import panelClosed from "../icons/panel-closed.svg";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
-import { config, isNarrow } from "../store";
+import { config, isNarrow, phone } from "../store";
 
 // Screen typography keeps metadata quieter.
 const typeSize = (platform.os === "web" || platform.os === "macos")
@@ -15,10 +15,12 @@ const titleSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[16px] leading-6" : typeSize;
 const metaSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[12px] leading-5" : typeSize;
+// The phone reads in Geist (a proportional face is easier on a small screen); code and mono text keep Monaspace.
+const ui = phone ? " font-(family-name:--font-ui)" : "";
 export const TS = {
-  title: titleSize,
-  body: typeSize,
-  base: typeSize,
+  title: titleSize + ui,
+  body: typeSize + ui,
+  base: typeSize + ui,
   mono: `font-mono ${typeSize}`,
 };
 // Colour roles on top of the shared sizes: a modal or settings pane picks a role, not a size.
@@ -28,10 +30,12 @@ export const T = {
   base: `${TS.base} text-foreground`,
   label: `${TS.base} font-medium text-foreground`,
   sec: `${TS.base} text-foreground-secondary`,
-  meta: `${metaSize} text-muted-foreground tabular-nums`,
-  section: `${metaSize} font-medium text-muted-foreground`,
+  meta: `${metaSize}${ui} text-muted-foreground tabular-nums`,
+  section: `${metaSize}${ui} font-medium text-muted-foreground`,
   mono: `${TS.mono} text-foreground-secondary`,
 };
+/** The phone reads in Geist, not the desktop's monospace; code keeps its own family. */
+export const PHONE_FONT: { fontFamily?: string } = phone ? { fontFamily: "Geist" } : {};
 export const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring";
 
 export const iconGlyphs: Record<IconName, string> = {
@@ -54,7 +58,7 @@ export const iconGlyphs: Record<IconName, string> = {
   edit: verbGlyphs.edit.unicode, shell: verbGlyphs.shell.unicode,
   code: verbGlyphs.code.unicode, ask: verbGlyphs.ask.unicode,
   session: verbGlyphs.session.unicode, web: verbGlyphs.web.unicode,
-  mic: controlGlyphs.mic.unicode, manager: "∿", diamond: statusGlyphs.waiting.unicode,
+  mic: controlGlyphs.mic.unicode, "mic-off": "⊘", manager: "∿", diamond: statusGlyphs.waiting.unicode,
   lock: "🔒", unlock: "🔓",
 };
 
@@ -68,7 +72,7 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
       tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
-      class={`items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
+      class={`items-center justify-center ${phone ? "rounded-full" : "rounded-(--radius)"} hover:bg-accent active:bg-selection disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
       <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>
@@ -84,7 +88,7 @@ export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void;
   return (
     <View role="button" focusable
       onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? "active:bg-primary" : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-xl" : "rounded-(--radius)"} px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? "active:bg-primary" : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`${TS.base} font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>

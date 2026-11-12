@@ -66,7 +66,7 @@ function SectionHeader(p: { id: string; title: string; count: number }) {
     <View class="flex-row items-center gap-2 px-4 pt-5 pb-1" testID={`sessions-section-${p.id}`} accessibilityLabel={`${p.title}, ${p.count}`}>
       <Text class={`${T.section} ${needs ? "text-warning" : ""}`}>{p.title}</Text>
       <View class={`rounded-full px-1.5 min-w-5 items-center ${needs ? "bg-warning" : "bg-muted"}`}>
-        <Text class={`text-[12px] leading-5 font-medium tabular-nums ${needs ? "text-on-accent" : "text-muted-foreground"}`}>{String(p.count)}</Text>
+        <Text class={`font-(family-name:--font-ui) text-[12px] leading-5 font-medium tabular-nums ${needs ? "text-on-accent" : "text-muted-foreground"}`}>{String(p.count)}</Text>
       </View>
     </View>
   );
@@ -90,11 +90,11 @@ function PhoneSessionRow(p: { s: () => Session; pane: SessionsPaneProps; section
       </View>
       <View class="flex-row items-center gap-1.5 min-h-5 pl-5" testID={`session-line-${s().id}`}>
         <If when={att() === "waiting"}>
-          <Text testID={`session-needs-${s().id}`} class="text-[14px] leading-5 font-medium text-warning">Needs your input</Text>
+          <Text testID={`session-needs-${s().id}`} class="font-(family-name:--font-ui) text-[14px] leading-5 font-medium text-warning">Needs your input</Text>
         </If>
         <If when={att() !== "waiting" && busy()}>
-          <Spinner class="text-[14px] leading-5 text-info" />
-          <Text class="text-[14px] leading-5 text-info">Working</Text>
+          <Spinner class="font-(family-name:--font-ui) text-[14px] leading-5 text-info" />
+          <Text class="font-(family-name:--font-ui) text-[14px] leading-5 text-info">Working</Text>
         </If>
         <If when={att() !== "waiting" && !busy()}>
           <Text style={{ numberOfLines: 1 }} class={`${T.meta} flex-1 min-w-0`}>{sub()}</Text>
@@ -121,7 +121,7 @@ export function PhoneSessions(p: SessionsPaneProps) {
         {p.actions}
       </View>
       <View class="px-4 pt-1 pb-1">
-        <View class="flex-row items-center gap-2 px-3 h-11 rounded-(--radius) bg-raised">
+        <View class="flex-row items-center gap-2 px-3 h-11 rounded-xl bg-raised">
           <Icon name="search" size={16} class="tint-muted-foreground" />
           <Input ref={p.inputRef} value={p.query()} placeholder="Search sessions" accessibilityLabel="Search sessions" testID="session-search"
             onChange={({ value }) => p.setQuery(value)}

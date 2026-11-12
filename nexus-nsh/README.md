@@ -864,8 +864,7 @@ drawn in `manager.listening` and speaking in `manager.speaking`, and their heigh
 Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
 dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
-The dropdown's **Voice: on/off** toggle defaults on: opening Manager or switching Voice on starts Live immediately.
-Switching Voice off stops only audio. The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with Voice off, the first typed request starts a control
+The dropdown has two voice buttons: **Connect** / **Disconnect** (connected by default: opening Manager or Connect starts Live immediately; Disconnect stops only audio) and **Mute** / **Unmute** (live voice only; keeps the connection, sends no microphone audio, wave gray and still, caption "Muted"; Disconnect clears it). The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with the voice disconnected, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal
 keyboard focus. With the dropdown closed, session keys work normally. The explicit stop shortcut or `/manager stop`
 ends the control call. The debug button reuses the current persistent Manager session and follows episode rollover;

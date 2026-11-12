@@ -182,6 +182,8 @@ pub struct ManagerUi {
     pub mic_level: f32,
     /// GPT-Live: Core holds the call and this client only carries its audio (`live.rs`).
     pub live_call: bool,
+    /// The microphone is muted for the live voice; the connection stays open. Cleared on disconnect.
+    pub mic_muted: bool,
     pub voice_ok: Option<bool>,
     pub speaking: bool,
     queue: VecDeque<Sentence>,
@@ -246,6 +248,7 @@ impl Default for ManagerUi {
             capture_seq: 0,
             mic_level: 0.0,
             live_call: false,
+            mic_muted: false,
             voice_ok: None,
             speaking: false,
             queue: VecDeque::new(),
@@ -292,6 +295,11 @@ impl ManagerUi {
                 .card
                 .as_ref()
                 .is_some_and(|c| c.focused && !c.collapsed)
+    }
+
+    /// The voice shows as connected: Disconnect is offered, not Connect.
+    pub fn voice_connected(&self) -> bool {
+        self.voice_enabled && (self.live_call || self.audio_requested)
     }
 
     pub fn listening(&self) -> bool {
@@ -407,6 +415,7 @@ impl App {
             "manager.minimised" => m.minimised_call(),
             "manager.listening" => m.listening(),
             "manager.speaking" => m.speaking,
+            "manager.voice" => m.live_call,
             "manager.field" => m.field.is_some(),
             "manager.card_focused" => m.focused_card(),
             "manager.engaged" => m.focused_call() || m.consent.is_some(),
@@ -578,6 +587,7 @@ impl App {
                 Target::ManagerSession
                     | Target::ManagerIndicator
                     | Target::ManagerVoice
+                    | Target::ManagerMute
                     | Target::ManagerDebugSession
                     | Target::ManagerInput
                     | Target::ManagerDetails
@@ -596,6 +606,7 @@ impl App {
             Target::ManagerIndicator if self.ui.manager.live_call => self.stop_manager_voice(),
             Target::ManagerIndicator => self.run_command("manager.header"),
             Target::ManagerVoice => self.run_command("manager.audio_toggle"),
+            Target::ManagerMute => self.run_command("manager.mute_toggle"),
             Target::ManagerDebugSession => self.run_command("manager.open_session"),
             Target::ManagerInput => {
                 self.ui.manager.dropdown_interactive = true;
@@ -620,6 +631,7 @@ impl App {
             "manager.start" => self.start_call(false),
             "manager.header" => self.toggle_manager_dropdown(),
             "manager.audio_toggle" => self.toggle_manager_audio(),
+            "manager.mute_toggle" => self.toggle_manager_mute(),
             "manager.context" => self.open_manager_context(),
             "manager.open_session" => self.open_manager_session(),
             "manager.stop" => self.stop_call(),
@@ -690,6 +702,7 @@ impl App {
             crate::live::close();
             let m = &mut self.ui.manager;
             m.live_call = false;
+            m.mic_muted = false;
             m.speaking = false;
             m.mic_level = 0.0;
         }
@@ -1091,6 +1104,9 @@ impl App {
                     return;
                 }
                 if done.result.is_ok() {
+                    if self.ui.manager.mic_muted {
+                        crate::live::set_muted(true);
+                    }
                     if self.ui.sound && !self.ui.manager.silent {
                         self.effects.push(Effect::Sound(Sound::LiveConnected));
                     }
@@ -1885,7 +1901,7 @@ impl App {
             if levels.as_ref().is_some_and(|l| l.speaking(now)) {
                 return Some(IndicatorState::Speaking);
             }
-            if levels.is_some() && m.phase == CallPhase::Idle {
+            if levels.is_some() && m.phase == CallPhase::Idle && !m.mic_muted {
                 return Some(IndicatorState::Listening);
             }
         }
@@ -2239,14 +2255,25 @@ impl App {
     }
 
     fn toggle_manager_audio(&mut self) {
-        self.set_manager_audio(!self.ui.manager.voice_enabled);
+        self.set_manager_audio(!self.ui.manager.voice_connected());
+    }
+
+    /// `manager.mute_toggle`: the live voice stays connected; only the microphone stops or resumes.
+    fn toggle_manager_mute(&mut self) {
+        if !self.ui.manager.live_call {
+            return;
+        }
+        let muted = !self.ui.manager.mic_muted;
+        self.ui.manager.mic_muted = muted;
+        crate::live::set_muted(muted);
+        self.ui.manager.touch(self.clock);
     }
 
     /// The Voice toggle and the indicator's **Stop** share this one path.
     fn set_manager_audio(&mut self, on: bool) {
         self.ui.manager.voice_enabled = on;
         if on {
-            if !self.ui.manager.audio_requested {
+            if !self.ui.manager.voice_connected() {
                 self.talk();
             }
         } else {
@@ -2299,6 +2326,8 @@ impl App {
             lines.push(
                 if m.speaking {
                     "Speaking"
+                } else if m.live_call && m.mic_muted {
+                    "Muted"
                 } else if m.listening() {
                     "Listening"
                 } else if m.phase != CallPhase::Idle {

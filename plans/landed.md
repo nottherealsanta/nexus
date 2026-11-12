@@ -2,6 +2,7 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Manager voice buttons (11-12, plan 28).** Connect / Disconnect and Mute / Unmute replace the Voice on/off toggle in the TUI, NSH dropdown and phone Manager tab; the phone tab has the braille wave. Offline tests pass; no device or real-audio check.
 - **GPT-Live native PCM framing, partial (11-12, plan 5).** Added tested 24 kHz mono conversion and 20 ms framing; native audio, transport and end-to-end voice are still unimplemented.
 - **GPT-Live native transport, partial (11-12, plan 5).** Added a bounded PCM WebSocket with loopback tests; it is not yet connected to iPhone audio or the Manager.
 

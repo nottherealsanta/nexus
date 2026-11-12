@@ -17,7 +17,7 @@ import {
   voiceEnabled, toggleManagerAudio, orbOn, dropdownOpen, dropdownInteractive, toggleManagerDropdown, closeManagerDropdown, audioRequested, submitField, openManagerSession, debugSessionId, backStackSize, call, callFocused, callMinimised, cancelTurn, card, cardCollapsed, cardFocused, closeField, dismissCard, engaged, fieldText, focusCard,
   handleEvent, idleCost, inCall, listening, managerContext, managerEscapeRule, managerTerm, minimise, answerConsent, consent, notice,
   openManagerContext, phase, pickRow, say, setStreamForTest, speaking, stopCall, stopSpeech, talk, minimised, managerError, modelPreview, managerDetailsText, detailsScroll, scrollDetails, connecting,
-  liveVoice, stopManagerVoice,
+  liveVoice, stopManagerVoice, micMuted, toggleManagerMute, voiceConnected,
 } from "./src/core/manager";
 import { BRAILLE_WIDTH, brailleCell, brailleField, waveBrightness, waveColor, waveSpeed } from "./src/ui/manager/braille";
 import { manifest } from "./src/gen/manifest";
@@ -263,6 +263,29 @@ describe("the controller", () => {
     expect(sent.some((r) => r.path === "/api/manager/live/stop")).toBe(true);
     expect(liveVoice()).toBe(false);
     expect(voiceEnabled()).toBe(false);
+    expect(inCall()).toBe(true);
+    await reset();
+  });
+
+  test("Mute only silences the microphone of a connected voice; Disconnect clears it", async () => {
+    const sent = await inACall();
+    toggleManagerMute();
+    expect(micMuted()).toBe(false);
+    liveVoice.set(true);
+    expect(managerTerm("manager.voice")).toBe(true);
+    toggleManagerMute();
+    expect(micMuted()).toBe(true);
+    expect(inCall()).toBe(true);
+    expect(sent.some((r) => r.path === "/api/manager/live/stop")).toBe(false);
+    toggleManagerMute();
+    expect(micMuted()).toBe(false);
+    toggleManagerMute();
+    expect(voiceConnected()).toBe(true);
+    await toggleManagerAudio();
+    await settleAsync();
+    expect(sent.some((r) => r.path === "/api/manager/live/stop")).toBe(true);
+    expect(voiceConnected()).toBe(false);
+    expect(liveVoice()).toBe(false);
     expect(inCall()).toBe(true);
     await reset();
   });

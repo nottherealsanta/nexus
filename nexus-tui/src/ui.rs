@@ -821,6 +821,7 @@ pub enum Target {
     /// The Manager's indicator: a click talks, or stops the live voice.
     ManagerIndicator,
     ManagerVoice,
+    ManagerMute,
     /// The Manager's End button: a click ends the call.
     ManagerEnd,
     ManagerDetails,

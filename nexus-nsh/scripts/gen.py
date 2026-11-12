@@ -133,6 +133,7 @@ FONTS = {
     "font-sans": "Monaspace Argon, ui-monospace, monospace",
     "font-mono": "Monaspace Argon, ui-monospace, monospace",
     "font-code": "Monaspace Argon, ui-monospace, monospace",
+    "font-ui": "Geist, system-ui, sans-serif",
 }
 cssvars = {
     "theme": {**FONTS, **RADIUS},

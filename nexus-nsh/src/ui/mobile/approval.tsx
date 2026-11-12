@@ -18,16 +18,16 @@ export function PhoneApprovalChoices(p: {
   const deny = () => { const note = instead().trim(); instead.set(""); p.onDeny(note); };
   return (
     <View class="gap-3" testID="phone-approval">
-      <View class="rounded-(--radius) bg-background px-3 py-2" testID="waiting-compact">
+      <View class="rounded-xl bg-background px-3 py-2" testID="waiting-compact">
         <Text style={{ numberOfLines: 4, userSelect: "text" }} class={`${T.mono} text-foreground`}>{p.command}</Text>
       </View>
       <View class="flex-row gap-2">
         <Button onPress={p.onAllowOnce} disabled={off()} testID="allow-once" accessibilityLabel="Allow once"
-          class={`flex-1 min-h-12 items-center justify-center rounded-(--radius) bg-primary active:opacity-80 disabled:opacity-50 ${FOCUS}`}>
+          class={`flex-1 min-h-12 items-center justify-center rounded-xl bg-primary active:opacity-80 disabled:opacity-50 ${FOCUS}`}>
           <Text class={`${TS.body} font-semibold text-on-accent`}>Allow once</Text>
         </Button>
         <Button onPress={p.onAllowSession} disabled={off()} testID="allow-session" accessibilityLabel="Always allow, for this session"
-          class={`flex-1 min-h-12 items-center justify-center rounded-(--radius) border border-border-strong bg-secondary active:bg-selection disabled:opacity-50 ${FOCUS}`}>
+          class={`flex-1 min-h-12 items-center justify-center rounded-xl border border-border-strong bg-secondary active:bg-selection disabled:opacity-50 ${FOCUS}`}>
           <Text class={`${TS.body} font-semibold text-foreground`}>Always allow</Text>
         </Button>
       </View>
@@ -35,9 +35,9 @@ export function PhoneApprovalChoices(p: {
       <View class="flex-row items-center gap-2">
         <Input value={instead()} onChange={({ value }) => instead.set(value)} onSubmit={deny} submitBehavior="submit"
           placeholder="Tell it what to do instead" accessibilityLabel="Tell it what to do instead" testID="deny-note"
-          class={`h-12 flex-1 min-w-0 rounded-(--radius) bg-background px-3 text-[15px] text-foreground placeholder:text-muted-foreground`} />
+          class={`h-12 flex-1 min-w-0 rounded-xl bg-background px-3 text-[16px] font-(family-name:--font-ui) text-foreground placeholder:text-muted-foreground`} />
         <Button onPress={deny} disabled={off()} testID="deny" accessibilityLabel={instead().trim() ? "Deny with your note" : "Deny"}
-          class={`min-h-12 px-4 items-center justify-center rounded-(--radius) border border-border-strong bg-secondary active:bg-selection disabled:opacity-50 ${FOCUS}`}>
+          class={`min-h-12 px-4 items-center justify-center rounded-xl border border-border-strong bg-secondary active:bg-selection disabled:opacity-50 ${FOCUS}`}>
           <Text class={`${TS.body} font-semibold text-error`}>Deny</Text>
         </Button>
       </View>

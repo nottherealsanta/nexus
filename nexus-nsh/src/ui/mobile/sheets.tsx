@@ -27,7 +27,7 @@ function RowSheet(p: { id: string; renaming: boolean }) {
       </>}>
         <Input autoFocus value={draft()} onChange={({ value }) => draft.set(value)} onSubmit={save} submitBehavior="submit"
           accessibilityLabel="Session title" testID="row-rename-input"
-          class={`h-12 rounded-(--radius) bg-raised px-3 ${TS.body} text-foreground`} />
+          class={`h-12 rounded-xl bg-raised px-3 ${TS.body} text-foreground`} />
         <View class="flex-row gap-2 pt-2">
           <Btn label="Cancel" onPress={close} class="flex-1 min-h-12" testID="row-rename-cancel" />
           <Btn label="Save" kind="primary" onPress={save} disabled={!draft().trim()} class="flex-1 min-h-12" testID="row-rename-save" />

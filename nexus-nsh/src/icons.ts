@@ -37,6 +37,7 @@ import ask from "./icons/ask.svg";
 import session from "./icons/session.svg";
 import web from "./icons/web.svg";
 import mic from "./icons/mic.svg";
+import micOff from "./icons/mic-off.svg";
 import manager from "./icons/manager.svg";
 import lock from "./icons/lock.svg";
 import unlock from "./icons/unlock.svg";
@@ -79,6 +80,7 @@ export const icons = {
   "session": session,
   "web": web,
   "mic": mic,
+  "mic-off": micOff,
   "manager": manager,
   "lock": lock,
   "unlock": unlock,

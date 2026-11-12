@@ -7,7 +7,7 @@ import { brailleField, waveColor, waveOpacity } from "./braille";
 import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
 import {
   dropdownOpen, dropdownInteractive, closeManagerDropdown, voiceEnabled, audioRequested, callMinimised, card, consent, cardCollapsed,
-  detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, notice,
+  detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, micMuted, notice, voiceConnected,
   phase, reducedMotion, connecting, speaking, stopManagerVoice, submitField, transcribing, userCaption, visual,
 } from "../../core/manager";
 import { isNarrow, live, phone } from "../../store";
@@ -24,9 +24,9 @@ export const stageVisible = () => consent() !== null || dropdownOpen();
 export const managerHeaderIndicatorVisible = () => dropdownOpen() || inCall() || connecting();
 
 /** The header indicator's state, from the same signals as the call. */
-const waveMode = (): OrbMode => connecting() ? "thinking" : listening() ? "listening" : speaking() ? "speaking" : phase() !== "idle" || transcribing() ? "thinking" : "settling";
+const waveMode = (): OrbMode => connecting() ? "thinking" : listening() && !micMuted() ? "listening" : speaking() ? "speaking" : phase() !== "idle" || transcribing() ? "thinking" : "settling";
 /** A call left idle in the background is still; the dropdown being open means the user is looking. */
-const waveMoving = () => dropdownOpen() || connecting() || listening() || speaking() || phase() !== "idle" || transcribing();
+const waveMoving = () => dropdownOpen() || connecting() || (listening() && !micMuted()) || speaking() || phase() !== "idle" || transcribing();
 
 const waveFrame = signal(0);
 let waveTimer: ReturnType<typeof setInterval> | undefined;
@@ -43,11 +43,10 @@ function holdWave() {
   };
 }
 
-export function ManagerHeaderIndicator() {
+/** The braille wave field: the header indicator on a desktop, the title of the phone's Manager tab. */
+export function ManagerWave() {
   const animated = () => !reducedMotion() && (waveMoving() || liveVoice());
-  const hovered = signal(false);
   effect(() => { if (!animated()) return; return holdWave(); });
-  const stopping = () => liveVoice() && hovered();
   // Read on every waveFrame tick (and whenever the call's signals change): `visual` is plain data the call's frame loop
   // updates, so the colour blend and the measured level are current at each 33 ms render. Without the loop (reduced
   // motion, or before it starts) the mode comes straight from the signals and the field is still.
@@ -59,16 +58,22 @@ export function ManagerHeaderIndicator() {
     const from = eased ? visual.from : mode, blend = eased ? visual.blend : 1, to = eased ? visual.mode : mode;
     return { mode: to, level: eased ? visual.level : 0.5, color: waveColor(from, to, blend, scheme), opacity: reducedMotion() ? 0.7 : waveOpacity(from, to, blend) };
   };
+  return <Text class="font-mono text-[13px] leading-[18px]" testID="manager-indicator-wave"
+    style={{ color: wave().color, opacity: wave().opacity, numberOfLines: 1 }}>
+    {brailleField(animated() ? waveFrame() : 0, wave().mode, wave().level)}
+  </Text>;
+}
+
+export function ManagerHeaderIndicator() {
+  const hovered = signal(false);
+  const stopping = () => liveVoice() && hovered();
   return <If when={managerHeaderIndicatorVisible()}>{() => <View onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}
     style={{ width: 100, height: 20 }}>
     <Button
       onPress={() => { if (liveVoice()) void stopManagerVoice(); else void run("manager.header"); }}
       testID="manager-indicator" accessibilityLabel={liveVoice() ? "Stop Manager voice" : "Manager"} class={`w-full h-full ${FOCUS}`}>
       <If when={stopping()}>{() => <Text class={`${TS.base} font-medium text-foreground`} testID="manager-indicator-stop">Stop</Text>}</If>
-      <If when={!stopping()}>{() => <Text class="font-mono text-[13px] leading-[18px]" testID="manager-indicator-wave"
-        style={{ color: wave().color, opacity: wave().opacity, numberOfLines: 1 }}>
-        {brailleField(animated() ? waveFrame() : 0, wave().mode, wave().level)}
-      </Text>}</If>
+      <If when={!stopping()}>{() => <ManagerWave />}</If>
     </Button>
   </View>}</If>;
 }
@@ -94,7 +99,7 @@ function caption(): { text: string; dim: boolean } | null {
 
 /** The Manager's caption, card, typed field and voice controls: the header dropdown on a desktop, the whole Manager tab on a phone. */
 /** Talk opens the microphone; while it listens the same button sends; a live call stops. */
-const talkLabel = () => listening() ? "Send" : liveVoice() ? "Stop" : "Talk";
+const talkLabel = () => listening() ? "Send" : "Talk";
 
 export function ManagerPanel(p: { full?: boolean }) {
   let scroll: any = null, offset = 0, limit = Infinity, lastRequest = detailsScroll();
@@ -112,18 +117,30 @@ export function ManagerPanel(p: { full?: boolean }) {
         <Scroll ref={(node: any) => { scroll = node; }} onScroll={(event) => { offset = event.offset.y; limit = Math.max(0, event.contentSize.height - event.size.height); }} class={p.full ? "flex-1 min-h-0" : ""} style={p.full ? {} : { maxHeight: Math.max(100, windowSize().height - 230) }}>
           <View class="gap-3">
             {/* The Manager's model context is not shown here: it is the debug session view (Open Manager session). */}
-            <Text class={T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
+            <Text class={T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : liveVoice() && micMuted() ? WORDS.muted : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
             <If when={card() != null}>{() => <View testID="manager-card" class="gap-3"><Text class={T.section}>{cardTitle(card()!)}</Text><CardBody card={() => card()!} interactive maxHeight={Math.max(100, windowSize().height - 320)} /></View>}</If>
           </View>
         </Scroll>
         <Input value={fieldText() ?? ""} autoFocus={!phone && dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
           onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
-        <View class="flex-row justify-between items-center gap-3">
-        <Button onPress={() => void run("manager.audio_toggle")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-voice-toggle" accessibilityLabel={voiceEnabled() ? "Voice on" : "Voice off"}><Icon name="mic" size={14} /><Text class={T.body}>{voiceEnabled() ? "Voice: on" : "Voice: off"}</Text></Button>
-        <If when={phone}><Button onPress={() => void (liveVoice() ? stopManagerVoice() : run("manager.talk"))} class={`flex-row items-center gap-2 rounded-(--radius) bg-primary px-4 min-h-11 ${FOCUS}`} testID="manager-talk" accessibilityLabel={talkLabel()}><Icon name={listening() ? "arrow-up" : liveVoice() ? "stop" : "mic"} size={16} class="tint-on-accent" /><Text class={`${TS.body} text-on-accent font-semibold`}>{talkLabel()}</Text></Button></If>
-        <If when={!phone}><Button onPress={() => void run("manager.open_session")}  class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button></If>
-        </View>
+        <VoiceButtons />
   </>;
+}
+
+/** Two buttons, each labelled by its action: Connect / Disconnect the voice, and Mute / Unmute the microphone. */
+function VoiceButtons() {
+  const size = phone ? "min-h-11 flex-1 justify-center" : "px-2 py-2";
+  const look = phone ? "bg-raised" : "hover:bg-accent active:bg-selection";
+  const button = (p: { id: string; label: () => string; icon: () => any; command: string; disabled?: () => boolean }) =>
+    <Button onPress={() => void run(p.command)} disabled={p.disabled?.()} class={`flex-row items-center gap-2 rounded-(--radius) px-3 ${size} ${look} disabled:opacity-50 ${FOCUS}`} testID={p.id} accessibilityLabel={p.label()}>
+      <Icon name={p.icon()} size={14} /><Text class={T.body}>{p.label()}</Text>
+    </Button>;
+  return <View class="flex-row items-center gap-2 flex-wrap">
+    {button({ id: "manager-voice-connect", label: () => voiceConnected() ? "Disconnect" : "Connect", icon: () => voiceConnected() ? "stop" : "play", command: "manager.audio_toggle" })}
+    {button({ id: "manager-voice-mute", label: () => micMuted() ? "Unmute" : "Mute", icon: () => micMuted() ? "mic-off" : "mic", command: "manager.mute_toggle", disabled: () => !liveVoice() })}
+    <If when={phone && voiceConnected() && !liveVoice()}><Button onPress={() => void run("manager.talk")} class={`flex-row items-center gap-2 rounded-(--radius) bg-primary px-4 min-h-11 ${FOCUS}`} testID="manager-talk" accessibilityLabel={talkLabel()}><Icon name={listening() ? "arrow-up" : "mic"} size={16} class="tint-on-accent" /><Text class={`${TS.body} text-on-accent font-semibold`}>{talkLabel()}</Text></Button></If>
+    <If when={!phone}><View class="flex-1" /><Button onPress={() => void run("manager.open_session")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button></If>
+  </View>;
 }
 
 /** The phone's Manager tab (AGENTS.md: mobile talks and types to the Manager here; there is no header indicator). */

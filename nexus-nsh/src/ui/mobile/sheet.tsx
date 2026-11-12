@@ -24,7 +24,7 @@ export function BottomSheet(p: { label: string; testID: string; onClose: () => v
 export function SheetRow(p: { label: string; onPress: () => void; testID: string; tone?: "danger"; detail?: string; selected?: boolean; leading?: JSX.Element }) {
   return (
     <Button onPress={p.onPress} testID={p.testID} accessibilityLabel={p.label} selected={p.selected}
-      class={`flex-row items-center gap-3 rounded-(--radius) px-2 min-h-12 active:bg-selection ${FOCUS}`}>
+      class={`flex-row items-center gap-3 rounded-xl px-2 min-h-12 active:bg-selection ${FOCUS}`}>
       {p.leading}
       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.body} ${p.tone === "danger" ? "text-error" : "text-foreground"}`}>{p.label}</Text>
       {p.detail ? <Text class={T.meta}>{p.detail}</Text> : null}

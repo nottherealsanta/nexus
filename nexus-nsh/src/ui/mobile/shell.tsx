@@ -5,7 +5,7 @@ import { Button } from "nsh/base";
 import { Icon, IconButton, FOCUS, T, TS, Spinner } from "../kit";
 import { Centre } from "../centre";
 import { PhoneSessionsPane } from "../sidebar";
-import { ManagerTab } from "../manager/stage";
+import { ManagerTab, ManagerWave, managerHeaderIndicatorVisible } from "../manager/stage";
 import { Drawers, EdgeDrawer } from "../overlays";
 import { card, closeManagerDropdown, consent, dropdownOpen, toggleManagerDropdown } from "../../core/manager";
 import { PHONE_TABS, phoneStatus } from "../../mobile";
@@ -19,7 +19,10 @@ import { closeDrawer, openDrawer, phoneDrawer, rowSheet, settingsDrill } from ".
 function TabTitle(p: { title: string }) {
   return (
     <View class="px-4 pb-2 bg-sidebar" style={{ paddingTop: safeArea().top + 6 }} testID="phone-top-bar">
-      <Text style={{ numberOfLines: 1 }} testID="phone-tab-title" class="text-[22px] leading-8 font-semibold text-foreground">{p.title}</Text>
+      <View class="flex-row items-center justify-between gap-3">
+        <Text style={{ numberOfLines: 1 }} testID="phone-tab-title" class="font-(family-name:--font-ui) text-[22px] leading-8 font-semibold text-foreground">{p.title}</Text>
+        <If when={p.title === "Manager" && managerHeaderIndicatorVisible()}>{() => <View style={{ width: 100, height: 20 }} testID="manager-tab-wave" accessible={false}><ManagerWave /></View>}</If>
+      </View>
     </View>
   );
 }
@@ -29,7 +32,7 @@ function StatusRing(p: { tone: "warning" | "info" | "muted" }) {
   return (
     <View class="size-6 items-center justify-center" testID="phone-status-ring" accessible={false}>
       <If when={p.tone === "info"} else={<View class={`size-3.5 rounded-full border-2 ${p.tone === "warning" ? "border-warning bg-warning/30" : "border-border-strong"}`} />}>
-        <Spinner class="text-[16px] leading-6 text-info" />
+        <Spinner class="font-(family-name:--font-ui) text-[16px] leading-6 text-info" />
       </If>
     </View>
   );
@@ -52,7 +55,7 @@ function ConversationHeader() {
         <View class="flex-row items-center gap-1 min-w-0">
           <If when={!!project()}><Text style={{ numberOfLines: 1 }} class={`${T.meta} shrink min-w-0`} testID="phone-session-project">{project()}</Text></If>
           <If when={!!project() && !!status()}><Text class={T.meta}>·</Text></If>
-          <If when={status()}>{() => <Text testID="phone-session-status" style={{ numberOfLines: 1 }} class={`text-[12px] leading-5 ${status()!.tone === "warning" ? "text-warning font-medium" : status()!.tone === "info" ? "text-info" : "text-muted-foreground"}`}>{status()!.word}</Text>}</If>
+          <If when={status()}>{() => <Text testID="phone-session-status" style={{ numberOfLines: 1 }} class={`font-(family-name:--font-ui) text-[12px] leading-5 ${status()!.tone === "warning" ? "text-warning font-medium" : status()!.tone === "info" ? "text-info" : "text-muted-foreground"}`}>{status()!.word}</Text>}</If>
         </View>
       </View>
       <If when={status()}>{() => <StatusRing tone={status()!.tone} />}</If>

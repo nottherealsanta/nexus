@@ -21,7 +21,7 @@ import type { ClientView } from "./view";
 import { playbackLevel, speakText, stopSpeaking } from "../speech";
 import { dictationLevel, dictationPhase } from "../voice-state";
 import { playNotificationCue } from "../cues";
-import { gptLiveLevels, gptLiveOpen, gptLiveSupported, interruptGptLive, startGptLive, stopGptLive } from "./gptlive";
+import { gptLiveLevels, gptLiveOpen, gptLiveSupported, interruptGptLive, setGptLiveMuted, startGptLive, stopGptLive } from "./gptlive";
 
 /**
  * The microphone path (the client's dictation): injected by the app, so this module loads without the
@@ -52,6 +52,10 @@ export const audioRequested = signal(false);
 export const voiceEnabled = signal(true);
 /** The GPT-Live voice is opening or open. Its indicator hover offers Stop; the call itself stays. */
 export const liveVoice = signal(false);
+/** The microphone is muted for the live voice: the connection stays open, nothing is sent. Cleared on disconnect. */
+export const micMuted = signal(false);
+/** Whether the voice shows as connected: the Connect / Disconnect button reads this. */
+export const voiceConnected = () => voiceEnabled() && (liveVoice() || audioRequested());
 export const debugSessionId = signal<string | null>(null);
 export function toggleManagerDropdown() {
   if (dropdownOpen()) { closeManagerDropdown(); return; }
@@ -65,15 +69,22 @@ export function closeManagerDropdown() {
   if (!call() && !connecting()) { orbOn.set(false); exchange.set(false); stopLoop(); }
 }
 export async function toggleManagerAudio() {
-  await setManagerAudio(!voiceEnabled());
+  await setManagerAudio(!voiceConnected());
 }
+/** `manager.mute_toggle`: the live voice stays connected; only the microphone stops or resumes. */
+export function setManagerMuted(muted: boolean) {
+  if (!liveVoice()) return;
+  micMuted.set(muted);
+  setGptLiveMuted(muted);
+}
+export function toggleManagerMute() { setManagerMuted(!micMuted()); }
 /** The Voice toggle and the indicator's Stop share this one path. */
 export async function setManagerAudio(on: boolean) {
   voiceEnabled.set(on);
   if (!on) {
     audioRequested.set(false); hangUpLive(); skipSpeech(); cancelListening();
     if (call()) await request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {});
-  } else if (!audioRequested()) { await talk(); }
+  } else if (!voiceConnected()) { await talk(); }
 }
 /** Stop the live voice from its header indicator: the control call and typed field stay. */
 export async function stopManagerVoice() {
@@ -150,6 +161,7 @@ export function managerTerm(name: string): boolean {
     case "manager.minimised": return callMinimised();
     case "manager.listening": return listening();
     case "manager.speaking": return speaking();
+    case "manager.voice": return liveVoice();
     case "manager.field": return fieldOpen();
     case "manager.card_focused": return cardFocused();
     case "manager.engaged": return engaged();
@@ -180,7 +192,7 @@ function targetLevel(mode: OrbMode, ts: number): number {
 function currentMode(): OrbMode {
   if (connecting()) return "thinking";
   const settling = !orbOn() && visual.presence > 0;
-  return orbMode({ listening: listening(), speaking: speaking(), phase: phase() !== "idle" || transcribing() ? "thinking" : "idle", settling }) ?? "settling";
+  return orbMode({ listening: listening() && !micMuted(), speaking: speaking(), phase: phase() !== "idle" || transcribing() ? "thinking" : "idle", settling }) ?? "settling";
 }
 
 function tick(ts: number) {
@@ -377,6 +389,7 @@ async function openLive(callId: string) {
     return;
   }
   if (call()?.id !== callId || !audioRequested()) { hangUpLive(); return; }
+  if (micMuted()) setGptLiveMuted(true);
   if (notificationSoundsOn()) playNotificationCue("live_connected");
   listening.set(true);
   let lastSpeechAt = 0;
@@ -391,6 +404,7 @@ async function openLive(callId: string) {
 function hangUpLive() {
   if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
   liveVoice.set(false);
+  micMuted.set(false);
   stopGptLive();
   speaking.set(false); listening.set(false);
 }
@@ -762,7 +776,7 @@ function reportActivity() {
   if (activityTimer) clearTimeout(activityTimer);
   activityTimer = setTimeout(() => {
     activityTimer = null;
-    const next = { listening: listening(), speaking: speaking() };
+    const next = { listening: listening() && !micMuted(), speaking: speaking() };
     if (!call() || !streamId || (next.listening === reported.listening && next.speaking === reported.speaking)) return;
     reported = next;
     void request("POST", "/api/manager/activity", { body: { stream_id: streamId, ...next } }).catch(() => {});
@@ -997,7 +1011,7 @@ export function installManager(voice?: VoiceIn) {
     if (!consentOpen()) return;
     try { const off = keymap.bind("enter", () => void answerConsent(true), { when: "always" }); return off; } catch { return; }
   });
-  effect(() => { listening(); speaking(); call(); reportActivity(); });
+  effect(() => { listening(); speaking(); micMuted(); call(); reportActivity(); });
   effect(() => { if (orbOn() && !reducedMotion()) startLoop(); });
   effect(() => { if (!orbOn()) exchangeOwned = false; });
   void connection;

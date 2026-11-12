@@ -280,24 +280,46 @@ fn draw_dropdown(
         )));
     }
     let footer = Rect::new(inner.x, r.bottom() - 2, inner.width, 1);
-    let voice = Rect::new(footer.x, footer.y, 13.min(footer.width), 1);
+    // Two voice buttons, each named by its action: Connect / Disconnect and Mute / Unmute.
+    let voice = Rect::new(footer.x, footer.y, 12.min(footer.width), 1);
     put(
         buf,
         voice.x,
         voice.y,
-        if m.voice_enabled {
-            "Voice: on"
+        if m.voice_connected() {
+            "Disconnect"
         } else {
-            "Voice: off"
+            "Connect"
         },
         look.bold(PRIMARY),
         voice.width,
     );
     hits.add(voice, Target::ManagerVoice);
-    let button = Rect::new(
-        footer.right().saturating_sub(20).max(voice.right()),
+    let mute = Rect::new(
+        voice.right(),
         footer.y,
-        20.min(footer.width.saturating_sub(voice.width)),
+        8.min(footer.right().saturating_sub(voice.right())),
+        1,
+    );
+    put(
+        buf,
+        mute.x,
+        mute.y,
+        if m.mic_muted { "Unmute" } else { "Mute" },
+        if m.live_call {
+            look.bold(PRIMARY)
+        } else {
+            look.t.style(SECONDARY, PANEL)
+        },
+        mute.width,
+    );
+    if m.live_call {
+        hits.add(mute, Target::ManagerMute);
+    }
+    let button = Rect::new(
+        footer.right().saturating_sub(20).max(mute.right()),
+        footer.y,
+        20.min(footer.width.saturating_sub(voice.width + mute.width)),
         1,
     );
     put(

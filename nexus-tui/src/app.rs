@@ -176,6 +176,7 @@ pub const WIRED: &[&str] = &[
     "manager.start",
     "manager.header",
     "manager.audio_toggle",
+    "manager.mute_toggle",
     "manager.context",
     "manager.open_session",
     "manager.stop",
@@ -15548,6 +15549,7 @@ impl App {
             // The Manager's own targets are taken by `manager_mouse` before a click gets here.
             Target::ManagerInput
             | Target::ManagerVoice
+            | Target::ManagerMute
             | Target::ManagerDebugSession
             | Target::ManagerDetails
             | Target::ManagerIndicator
