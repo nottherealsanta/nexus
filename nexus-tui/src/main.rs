@@ -43,8 +43,8 @@ flags and the environment override it for the run.
 Other:
   --once                 print connection state and sessions once live, then exit
   --dump-frame W,HxW,H   render the shell as text at these sizes, then exit
-                         (e.g. 80x24,120x36); add --open first to select the
-                         most recent session, --out DIR to write files
+                         (e.g. 80x24,120x36); add --open first (or --open SESSION_ID) to
+                         select the most recent (or that) session, --out DIR to write files
   --keys \"SPEC\"         with --dump-frame: press keys before rendering, space
                          separated: ctrl+p esc down enter alt+2; any other
                          token is typed as text (\"/mo\")
@@ -67,6 +67,7 @@ struct Args {
     dump: Vec<(u16, u16)>,
     out: Option<PathBuf>,
     open_first: bool,
+    open_id: Option<String>,
     svg: bool,
     keys: Vec<Vec<KeyEvent>>,
     name: Option<String>,
@@ -83,6 +84,7 @@ fn parse_args() -> Result<Args, String> {
         dump: Vec::new(),
         out: None,
         open_first: false,
+        open_id: None,
         svg: false,
         keys: Vec::new(),
         name: None,
@@ -120,10 +122,11 @@ fn parse_args() -> Result<Args, String> {
             "--reduced-motion" => opts.reduced_motion = true,
             "--once" => a.once = true,
             "--open" => {
-                if it.next().as_deref() != Some("first") {
-                    return Err("--open takes: first".into());
+                match it.next().as_deref() {
+                    Some("first") => a.open_first = true,
+                    Some(id) if !id.starts_with('-') => a.open_id = Some(id.to_owned()),
+                    _ => return Err("--open takes: first or a session id".into()),
                 }
-                a.open_first = true;
             }
             "--svg" => a.svg = true,
             "--keys" => a.keys = keys::parse_spec(&it.next().ok_or("--keys needs a spec")?)?,
@@ -933,13 +936,16 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
             app.state.connection.detail()
         );
     }
-    if args.open_first {
-        let first = app
-            .state
-            .model
-            .sessions_recent()
-            .first()
-            .map(|s| s.id.clone());
+    if args.open_first || args.open_id.is_some() {
+        let first = match &args.open_id {
+            Some(id) => app.state.model.sessions.contains_key(id).then(|| id.clone()),
+            None => app
+                .state
+                .model
+                .sessions_recent()
+                .first()
+                .map(|s| s.id.clone()),
+        };
         if let Some(id) = first {
             app.open_session(&id);
             for e in std::mem::take(&mut app.effects) {
