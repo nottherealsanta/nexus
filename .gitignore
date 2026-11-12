@@ -11,3 +11,4 @@ node_modules/
 .DS_Store
 nexus-gpui/build/
 nexus-gpui/target/
+!nexus-core/tests/fixtures/**/*.jsonl
