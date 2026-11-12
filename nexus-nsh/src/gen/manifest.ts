@@ -841,6 +841,13 @@ export const manifest = {
    }
   ]
  },
+ "strings": {
+  "git.empty": "No changes",
+  "git.summary.one": "{files} file changed \u00b7 +{added} \u2212{removed}",
+  "git.summary.many": "{files} files changed \u00b7 +{added} \u2212{removed}",
+  "git.groups": "{staged} staged \u00b7 {unstaged} unstaged \u00b7 {untracked} untracked",
+  "git.folder": "{name}  {count}"
+ },
  "command": [
   {
    "id": "palette.open",
@@ -4292,3 +4299,9 @@ export const manifest = {
   }
  ]
 } as const;
+/** Shared UI text from `[strings]`; `{name}` placeholders are filled from `args`. */
+export function uiText(key: keyof typeof manifest.strings, args: Record<string, string | number> = {}): string {
+  let text: string = manifest.strings[key];
+  for (const [name, value] of Object.entries(args)) text = text.split(`{${name}}`).join(String(value));
+  return text;
+}

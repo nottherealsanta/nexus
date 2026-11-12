@@ -2304,19 +2304,20 @@ fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mu
     y += 1;
     let rows = app.project_git_rows();
     if rows.is_empty() {
-        line(buf, y, "No changes", MUTED);
+        line(buf, y, &app.manifest.ui_text("git.empty", &[]), MUTED);
         return;
     }
     let sum = app.project_git_summary();
     line(
         buf,
         y,
-        &format!(
-            "{} {} changed · +{} −{}",
-            sum.files,
-            if sum.files == 1 { "file" } else { "files" },
-            sum.added,
-            sum.removed
+        &app.manifest.ui_text(
+            if sum.files == 1 { "git.summary.one" } else { "git.summary.many" },
+            &[
+                ("files", &sum.files.to_string()),
+                ("added", &sum.added.to_string()),
+                ("removed", &sum.removed.to_string()),
+            ],
         ),
         PRIMARY,
     );
@@ -2324,9 +2325,13 @@ fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mu
     line(
         buf,
         y,
-        &format!(
-            "{} staged · {} unstaged · {} untracked",
-            sum.staged, sum.unstaged, sum.untracked
+        &app.manifest.ui_text(
+            "git.groups",
+            &[
+                ("staged", &sum.staged.to_string()),
+                ("unstaged", &sum.unstaged.to_string()),
+                ("untracked", &sum.untracked.to_string()),
+            ],
         ),
         MUTED,
     );
@@ -2341,7 +2346,14 @@ fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mu
         clear(buf, rect, style);
         let text = match entry {
             GitSideRow::Folder { name, count, open } => {
-                format!("{} {name}  {count}", if *open { "▾" } else { "▸" })
+                format!(
+                    "{} {}",
+                    if *open { "▾" } else { "▸" },
+                    app.manifest.ui_text(
+                        "git.folder",
+                        &[("name", name), ("count", &count.to_string())]
+                    )
+                )
             }
             GitSideRow::File(row) => {
                 let mark = match row.group {

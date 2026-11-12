@@ -201,5 +201,4 @@ captured evidence and open review items.
 The left Git tab (both clients, desktop and web only) shows the active worktree's changes as a summary:
 `folder · branch`, `N files changed · +A −D`, `S staged · U unstaged · T untracked`, then one collapsed row per
 top-level folder with a file count (`▸ src/  2`; `./` holds root files); expanding shows the file rows. Empty state
-is one muted `No changes` line. No branch list. The strings are in both clients' code (the manifest has no string
-table).
+is one muted `No changes` line. No branch list. The strings come from the manifest's `[strings]` table (`git.*` keys).

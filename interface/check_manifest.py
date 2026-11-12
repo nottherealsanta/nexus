@@ -21,6 +21,43 @@ CLIENTS = {"both", "tui", "nsh"}
 MODS = ["cmd", "ctrl", "alt", "shift"]
 
 
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+PLACEHOLDER_RE = re.compile(r"\{([a-z][a-z0-9_]*)\}")
+# Where clients read a string: ui_text("key", ...) in Rust, uiText("key", ...) in TypeScript.
+USE_RE = re.compile(r"\b(?:ui_text|uiText)\(\s*\"([^\"]+)\"")
+USE_COND_RE = re.compile(r"\b(?:ui_text|uiText)\(\s*[^\"\n]*?\"([a-z][a-z0-9_.]*)\"\s*:\s*\"([a-z][a-z0-9_.]*)\"")
+
+
+def check_strings(m: dict, path: Path, err) -> None:
+    """[strings]: dotted lower-case keys, well-formed placeholders, every key a client uses defined."""
+    strings = m.get("strings", {})
+    for key, text in strings.items():
+        if not KEY_RE.match(key):
+            err(f"strings.{key}: key must be dotted lower case")
+        if not isinstance(text, str) or not text:
+            err(f"strings.{key}: text must be a non-empty string")
+            continue
+        stripped = PLACEHOLDER_RE.sub("", text)
+        if "{" in stripped or "}" in stripped:
+            err(f"strings.{key}: malformed placeholder in {text!r}")
+    root = path.resolve().parent.parent
+    used: set[str] = set()
+    literals: set[str] = set()
+    for base, exts in (("nexus-tui/src", {".rs"}), ("nexus-nsh/src", {".ts", ".tsx"})):
+        for f in (root / base).rglob("*") if (root / base).is_dir() else []:
+            if f.suffix in exts and "gen" not in f.relative_to(root / base).parts:
+                src = f.read_text()
+                used.update(USE_RE.findall(src))
+                literals.update(k for k in strings if f'"{k}"' in src)
+                for pair in USE_COND_RE.findall(src):
+                    used.update(pair)
+    for key in sorted(used):
+        if key not in strings:
+            err(f"strings: key {key!r} is used by a client but not defined")
+    for key in sorted(set(strings) - literals):
+        err(f"strings.{key}: defined but no client uses it")
+
+
 def main() -> int:
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("manifest.toml")
     with path.open("rb") as f:
@@ -234,6 +271,8 @@ def main() -> int:
             err(f"navigation references unknown command {r!r}")
     if nav.get("waiting_card", {}).get("position") != "above_composer":
         err("navigation.waiting_card.position must be above_composer")
+
+    check_strings(m, path, err)
 
     if errs:
         print(f"{path}: {len(errs)} problem(s)")

@@ -136,6 +136,14 @@ Every command bound to `esc` has `key_context = "escape_chain"` and must be the
 - **NSH:** `nexus-nsh/scripts/gen.py` converts this file and `theme.toml` into
   `src/gen/manifest.ts`, `src/gen/theme.ts` and `gen/theme.json` at build time.
   The app imports those; ids and labels are never copied by hand.
+- **Strings.** `[strings]` holds shared UI text as `"dotted.key" = "text"` with
+  `{name}` placeholders (plurals are separate `.one` / `.many` keys). The TUI reads
+  it with `Manifest::ui_text(key, &[("name", value)])`, NSH with
+  `uiText(key, { name: value })` (generated into `src/gen/manifest.ts`). The check
+  validates key shape, placeholder syntax, that every `ui_text("...")` /
+  `uiText("...")` key is defined and that every defined key appears in a client.
+  Only the Git tab labels (`git.*`) are migrated; move further strings here when
+  you touch them.
 - **Renderers stay uncoupled.** Only data is shared: ids, labels, order,
   placement, defaults, availability terms and reasons. Each client evaluates the
   `when` terms itself.

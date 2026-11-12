@@ -673,6 +673,18 @@ scope = "client"
 clients = "both"
 command = "app.open_inspector"
 
+# --- Strings ------------------------------------------------------------------
+# Shared UI text. `key = "text"`; `{name}` placeholders are filled by the client
+# (`ui_text` in the TUI, `uiText` in NSH). Keys are dotted and lower case. Plurals
+# are separate keys (`.one`, `.many`). Only migrated strings live here.
+
+[strings]
+"git.empty" = "No changes"
+"git.summary.one" = "{files} file changed · +{added} −{removed}"
+"git.summary.many" = "{files} files changed · +{added} −{removed}"
+"git.groups" = "{staged} staged · {unstaged} unstaged · {untracked} untracked"
+"git.folder" = "{name}  {count}"
+
 # --- Commands -----------------------------------------------------------------
 # `leader` is the Ctrl+X leader sequence old Nexus bound in the TUI. NSH's keymap
 # takes one keystroke per binding, so commands.ts arms these for three seconds

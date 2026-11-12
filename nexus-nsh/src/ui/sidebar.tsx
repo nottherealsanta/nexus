@@ -3,7 +3,7 @@ import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
 import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
 import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
-import { manifest } from "../gen/manifest";
+import { manifest, uiText } from "../gen/manifest";
 import { desktopOnly, phoneSessionGroups } from "../mobile";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
 import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
@@ -84,12 +84,12 @@ function GitTab() {
     <If when={!!gitPage()?.error}><Text class={`${T.sec} px-2`}>{gitPage()?.error}</Text></If>
     <If when={!!data()}>
       <Text class={`${TS.base} px-2 pb-2`} testID="git-branch">{`${folderName()} · ${data()?.branch ?? ""}`}</Text>
-      <If when={changes().length === 0}><Text class={`${T.meta} px-2`} testID="git-empty">No changes</Text></If>
+      <If when={changes().length === 0}><Text class={`${T.meta} px-2`} testID="git-empty">{uiText("git.empty")}</Text></If>
       <If when={changes().length > 0}>
-        <Text class={`${TS.base} px-2`} testID="git-summary">{`${summary().files} ${summary().files === 1 ? "file" : "files"} changed · +${summary().added} −${summary().removed}`}</Text>
-        <Text class={`${T.meta} px-2 pb-2`} testID="git-groups">{`${summary().staged} staged · ${summary().unstaged} unstaged · ${summary().untracked} untracked`}</Text>
+        <Text class={`${TS.base} px-2`} testID="git-summary">{uiText(summary().files === 1 ? "git.summary.one" : "git.summary.many", { files: summary().files, added: summary().added, removed: summary().removed })}</Text>
+        <Text class={`${T.meta} px-2 pb-2`} testID="git-groups">{uiText("git.groups", { staged: summary().staged, unstaged: summary().unstaged, untracked: summary().untracked })}</Text>
         <Each of={gitFolders(changes())} key={(f) => f.name}>{(folder) => <View>
-          <Button testID={`git-folder-${folder().name}`} onPress={() => toggleGitFolder(folder().name)} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{gitOpen().has(folder().name) ? "▾" : "▸"}</Text><Text class={TS.base}>{folder().name}</Text><Text class={T.meta}>{`${folder().files.length}`}</Text></Button>
+          <Button testID={`git-folder-${folder().name}`} accessibilityLabel={uiText("git.folder", { name: folder().name, count: folder().files.length })} onPress={() => toggleGitFolder(folder().name)} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{gitOpen().has(folder().name) ? "▾" : "▸"}</Text><Text class={TS.base}>{folder().name}</Text><Text class={T.meta}>{`${folder().files.length}`}</Text></Button>
           <If when={gitOpen().has(folder().name)}>
             <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); void openGitDiff(); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
               <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>

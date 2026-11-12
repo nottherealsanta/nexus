@@ -43,7 +43,7 @@ branch list fills the tab and is the only thing on it.
 - [x] TUI: rewrite the tab body as summary + folder rows; keyboard cursor and `SideRow` hits over folder rows (and
   file rows when expanded); Enter/click expands a folder, Enter on a file opens the diff as today.
 - [x] NSH: the same in `GitTab`; the row context menu moves to file rows inside an expanded folder.
-- [~] Shared manifest/strings for the labels (`No changes`, the summary format) so both clients read the same text. Not done: the manifest has no string table; the strings are duplicated in both clients and noted in design-language.md.
+- [x] Shared manifest/strings for the labels (decided 2026-11-12): `[strings]` table in `interface/manifest.toml` (`git.*` keys), `Manifest::ui_text` in the TUI, `uiText` in NSH, validated by `check_manifest.py`; documented in `interface/README.md`. Other strings are not migrated.
 - [x] Tests: TUI render/behaviour tests (no changes, mixed changes, many files in one folder, expand/collapse); NSH
   browser test the same; paired screenshots of the Git tab (not verified: no screenshots taken; the tests assert the branch list is gone).
 - [x] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`, the Git page notes in
