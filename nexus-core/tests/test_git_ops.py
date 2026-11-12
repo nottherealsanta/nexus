@@ -135,7 +135,7 @@ async def test_status_preserves_rename_paths_with_newlines(repo):
     git(repo, "add", "-A")
     changes = (await git_ops.status(repo, repo))["changes"]
     assert changes == [{"path": "new\nname", "old_path": "tracked", "status": "R ",
-                        "staged": True, "unstaged": False}]
+                        "staged": True, "unstaged": False, "added": 0, "removed": 0}]
 
 
 async def test_default_worktree_accepts_project_subdirectory(repo):
@@ -202,3 +202,13 @@ async def test_status_announces_omitted_rows(repo, monkeypatch):
     monkeypatch.setattr(worktrees, "_git", many)
     result = await git_ops.status(repo, repo)
     assert len(result["changes"]) == 10000 and result["changes_omitted"] == 2
+
+
+async def test_status_reports_line_counts_for_staged_and_unstaged(repo):
+    (repo / "tracked").write_text("changed\nmore\n")
+    git(repo, "add", "tracked")
+    (repo / "tracked").write_text("changed\nmore\nthird\n")
+    (repo / "new.txt").write_text("x\n")
+    by_path = {c["path"]: c for c in (await git_ops.status(repo, repo))["changes"]}
+    assert (by_path["tracked"]["added"], by_path["tracked"]["removed"]) == (3, 1)
+    assert (by_path["new.txt"]["added"], by_path["new.txt"]["removed"]) == (0, 0)

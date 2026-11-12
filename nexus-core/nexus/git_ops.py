@@ -59,6 +59,22 @@ async def status(project: str | Path, target: str | Path) -> dict[str, Any]:
         old = next(records, None) if "R" in code or "C" in code else None
         changes.append({"path": path, "status": code, "old_path": old,
                         "staged": code[0] not in (" ", "?"), "unstaged": code[1] != " "})
+    stats: dict[str, list[int]] = {}
+    for args in (("diff", "--numstat", "-z"), ("diff", "--cached", "--numstat", "-z")):
+        entries = iter((await worktrees._git(*args, "--no-ext-diff", "--no-textconv", cwd=root)).split("\0"))
+        for entry in entries:
+            fields = entry.split("\t", 2)
+            if len(fields) != 3:
+                continue
+            added, removed, path = fields
+            if not path:  # A rename's old and new paths follow separately.
+                next(entries, None)
+                path = next(entries, "")
+            total = stats.setdefault(path, [0, 0])
+            total[0] += int(added) if added.isdigit() else 0
+            total[1] += int(removed) if removed.isdigit() else 0
+    for change in changes:
+        change["added"], change["removed"] = stats.get(change["path"], (0, 0))
     refs = await worktrees._git("for-each-ref", "--format=%(refname)%00%(upstream:short)%00%(HEAD)",
                                "refs/heads", "refs/remotes", cwd=root)
     branches = []

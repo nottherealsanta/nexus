@@ -471,6 +471,12 @@ opens a find bar (plain text, a case toggle, previous/next and the match count) 
 Esc closes the bar before the panel. Links in assistant prose, Markdown previews,
 new-session prose and context details open in the browser.
 
+The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a
+`folder · branch` line, then `N files changed · +A −D` and `S staged · U unstaged · T untracked`, then the changes
+grouped by top-level folder (`src/  2`, `./` for root files), collapsed by default; A click expands a folder
+to its file rows, which keep stage/unstage/discard and open the diff. With nothing changed it reads `No changes`.
+There is no branch list (switch from the worktree picker). Line counts come from Core's per-change `added`/`removed`.
+
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the file actions and live watcher, the Git workflow, worktree controls,
 steering/queueing, handoff and one-turn sessions, inspector wire controls,

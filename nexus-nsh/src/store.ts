@@ -884,9 +884,25 @@ export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.t
 export const markdownFile = () => isMarkdownPath(openFile()?.path);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
 export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
-export type GitChange = { path: string; status: string; old_path?: string; staged: boolean; unstaged: boolean };
+export type GitChange = { path: string; status: string; old_path?: string; staged: boolean; unstaged: boolean; added?: number; removed?: number };
 export type GitPageData = { worktree: string; branch: string; changes: GitChange[]; branches: { name: string; local: boolean; current: boolean; upstream?: string }[] };
 export const gitPage = signal<{ project: string; worktree?: string; data?: GitPageData; error?: string } | null>(null);
+export const gitOpen = signal<ReadonlySet<string>>(new Set());
+export function toggleGitFolder(name: string) { const open = gitOpen(); gitOpen.set(open.has(name) ? new Set([...open].filter((n) => n !== name)) : new Set([...open, name])); }
+export type GitGroupName = "Staged" | "Unstaged" | "Untracked";
+export const gitGroups: readonly GitGroupName[] = ["Staged", "Unstaged", "Untracked"];
+export const inGitGroup = (c: GitChange, group: GitGroupName) => group === "Staged" ? c.staged : group === "Untracked" ? c.status === "??" : c.status !== "??" && c.unstaged;
+/** The Git tab's summary: files changed, lines, and the per-group counts. */
+export function gitSummary(changes: GitChange[]) {
+  const count = (group: GitGroupName) => changes.filter((c) => inGitGroup(c, group)).length;
+  return { files: changes.length, added: changes.reduce((n, c) => n + (c.added ?? 0), 0), removed: changes.reduce((n, c) => n + (c.removed ?? 0), 0), staged: count("Staged"), unstaged: count("Unstaged"), untracked: count("Untracked") };
+}
+/** Changes grouped by top-level folder (`./` for files at the root), sorted by name. */
+export function gitFolders(changes: GitChange[]) {
+  const folders = new Map<string, GitChange[]>();
+  for (const c of changes) { const i = c.path.indexOf("/"), name = i < 0 ? "./" : c.path.slice(0, i + 1); folders.set(name, [...(folders.get(name) ?? []), c]); }
+  return [...folders].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, files]) => ({ name, files }));
+}
 export const selectedGitFile = signal<{ path: string; group: "Staged" | "Unstaged" | "Untracked" } | null>(null);
 export const gitDiff = signal<{ path: string; group: string; text?: string; clipped?: boolean; error?: string } | null>(null);
 export async function openGitDiff() {

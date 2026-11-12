@@ -35,7 +35,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | --- | --- | --- | --- |
 | 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |
 | 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
-| 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **new** | Confirm summary shape and per-file actions, then Core line counts |
+| 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **mostly landed** | Open: shared string table, paired screenshots |
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 36 | [Shared Rust build folder for worktrees of any project](36-shared-rust-builds.md) | **new**; this repo done | Decide cleanup, then Core env helper |
 | 38 | [Ctrl+V pastes text too](38-ctrl-v-text.md) | **new**; TUI Ctrl+V reads images only | Fall back to clipboard text in the TUI |

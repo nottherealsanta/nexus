@@ -1399,7 +1399,7 @@ the confirmed push must pass that remote as `value`. Safe branch deletion uses
 `-d`, force deletion requires separate confirmation, and Git hooks run on commit. An in-progress merge, rebase or other sequencer operation blocks
 mutations. Local commands have a 120-second timeout; network commands get 300
 seconds. Git stdout is capped at 16 MiB and stderr at 64 KiB; exceeding either
-returns an error. Status exposes at most 10,000 changes and 10,000 branches, with
+returns an error. Each change carries `added` and `removed` line counts (staged plus unstaged `git diff --numstat`; 0 for untracked files). Status exposes at most 10,000 changes and 10,000 branches, with
 `changes_omitted` and `branches_omitted` counts. Mutations publish global
 `git.changed`; switch, pull and discard also publish
 `files.changed`. These events do not enter a session timeline. The desktop Git
