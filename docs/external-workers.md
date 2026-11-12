@@ -10,7 +10,7 @@ prompt**: trust, sign-in and permission prompts end the turn as `needs_attention
 Design, milestones and open questions: [plans/zmx-design.md](../plans/zmx-design.md), status in
 [plans/06-zmx.md](../plans/06-zmx.md).
 
-**Vendor terms are not verified.** This plan has not established that driving a subscription CLI this way is permitted
+**Vendor terms are not verified** (text read 11-12, see [plans/06-zmx.md](../plans/06-zmx.md)). This plan has not established that driving a subscription CLI this way is permitted
 by Anthropic's or Google's terms. The Settings note says so; the switch stays off until the user turns it on.
 
 ## Switching it on
