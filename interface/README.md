@@ -72,7 +72,7 @@ never reorganizing the section.
 
 Header anchors (left toggle leading, title/breadcrumbs centre, right toggle
 trailing), the project rail, left tabs (Sessions, Files; Settings fixed at the bottom),
-right sections (Session info, Git status), centre views (`session`,
+right section (Session info), centre views (`session`,
 `new_session`, `editor`, `settings`), the waiting card (above the composer) and
 narrow-layout drawer behavior.
 

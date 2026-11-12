@@ -3977,7 +3977,6 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
         let label = match sec.id.as_str() {
             "session_info" => "Session",
-            "git_status" => "Git",
             _ => sec.label.as_str(),
         };
         section_label(cx, buf, r, y, label);
@@ -3985,7 +3984,6 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         y += 1;
         match sec.id.as_str() {
             "session_info" => session_info(cx, buf, r, &mut y),
-            "git_status" => git_status(cx, buf, r, &mut y, hits),
             _ => {
                 let reason = sec
                     .unavailable_reason
@@ -4011,184 +4009,6 @@ fn note(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, msg: &str) {
             break;
         }
         put(buf, r.x + 1, *y, &line, cx.st(MUTED, SIDEBAR), r.width - 2);
-        *y += 1;
-    }
-}
-
-fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap) {
-    let Some(id) = cx.app.viewed_id() else {
-        return note(cx, buf, r, y, "Open a session");
-    };
-    let Some((_, result)) = cx
-        .app
-        .state
-        .git
-        .as_ref()
-        .filter(|(session, _)| session == id)
-    else {
-        let msg = if cx.t.opts.ascii {
-            "Loading Git status..."
-        } else {
-            "Loading Git status…"
-        };
-        return note(cx, buf, r, y, msg);
-    };
-    let data = match result {
-        Err(error) => {
-            let message = if error.contains("workspace is not a Git repository") {
-                "No Git repository"
-            } else {
-                error.as_str()
-            };
-            return note(cx, buf, r, y, message);
-        }
-        Ok(data) => data,
-    };
-    // `⌥ main  ↑1`: the branch, then what is ahead or behind when it is not 0.
-    let branch = data["branch"].as_str().unwrap_or("—");
-    let (up, down) = if cx.t.opts.ascii {
-        ("+", "-")
-    } else {
-        ("↑", "↓")
-    };
-    let mark = if cx.t.opts.ascii { "~" } else { "⌥" };
-    let mut header = format!("{mark} {branch}");
-    for (glyph, key) in [(up, "ahead"), (down, "behind")] {
-        let n = data[key].as_u64().unwrap_or(0);
-        if n > 0 {
-            header.push_str(&format!("  {glyph}{n}"));
-        }
-    }
-    put(
-        buf,
-        r.x + 1,
-        *y,
-        &truncate(&header, r.width.saturating_sub(2) as usize, cx.ell()),
-        cx.st(PRIMARY, SIDEBAR),
-        r.width.saturating_sub(2),
-    );
-    *y += 1;
-    let rows = cx.app.git_rows();
-    if rows.is_empty() && *y < r.bottom() {
-        put(
-            buf,
-            r.x + 1,
-            *y,
-            "Clean",
-            cx.st(MUTED, SIDEBAR),
-            r.width - 2,
-        );
-        *y += 1;
-    }
-    let focused = cx.app.ui.focus == Focus::Right;
-    let right = r.right().saturating_sub(1);
-    let minus = if cx.t.opts.ascii { "-" } else { "−" };
-    let mut group = None;
-    for (index, row) in rows.iter().enumerate() {
-        if group != Some(row.group) {
-            group = Some(row.group);
-            // A blank row, then `Unstaged` with its count on the right.
-            *y += 1;
-            if *y >= r.bottom() {
-                break;
-            }
-            let count = rows
-                .iter()
-                .filter(|other| other.group == row.group)
-                .count()
-                .to_string();
-            put(
-                buf,
-                r.x + 1,
-                *y,
-                row.group.label(),
-                cx.st(SECONDARY, SIDEBAR),
-                r.width.saturating_sub(2),
-            );
-            put(
-                buf,
-                right.saturating_sub(width(&count) as u16),
-                *y,
-                &count,
-                cx.st(MUTED, SIDEBAR),
-                width(&count) as u16,
-            );
-            *y += 1;
-        }
-        if *y >= r.bottom() {
-            break;
-        }
-        let line = Rect::new(r.x, *y, r.width, 1);
-        let selected = index == cx.app.ui.git_cursor;
-        let style = cx.st(SECONDARY, SIDEBAR);
-        let bg = Style::default();
-        clear(buf, line, style);
-        if selected && focused {
-            put(
-                buf,
-                r.x,
-                *y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", SIDEBAR).patch(bg),
-                1,
-            );
-        }
-        // Staged rows read the index column, the others the worktree one.
-        let code: String = match row.group {
-            GitGroup::Staged => row.status.chars().take(1).collect(),
-            GitGroup::Unstaged => row.status.chars().skip(1).take(1).collect(),
-            GitGroup::Untracked => "?".into(),
-        };
-        if let Some((glyph, token)) = git_marker(&code) {
-            put(
-                buf,
-                r.x + 1,
-                *y,
-                &glyph.to_string(),
-                cx.st(token, SIDEBAR).patch(bg),
-                1,
-            );
-        }
-        // `+N −M` right-aligned; a side that is 0 is left out.
-        let mut stats: Vec<(String, &str)> = Vec::new();
-        if row.group != GitGroup::Untracked {
-            if row.added > 0 {
-                stats.push((format!("+{}", row.added), "status.success"));
-            }
-            if row.removed > 0 {
-                stats.push((format!("{minus}{}", row.removed), "status.error"));
-            }
-        }
-        let sw: usize =
-            stats.iter().map(|(t, _)| width(t)).sum::<usize>() + stats.len().saturating_sub(1);
-        let room = (right.saturating_sub(r.x + 3) as usize).saturating_sub(if sw > 0 {
-            sw + 1
-        } else {
-            0
-        });
-        put(
-            buf,
-            r.x + 3,
-            *y,
-            &truncate_middle(&row.path, room, cx.ell()),
-            style,
-            room as u16,
-        );
-        let mut x = right.saturating_sub(sw as u16);
-        for (i, (t, token)) in stats.iter().enumerate() {
-            if i > 0 {
-                x += 1;
-            }
-            x = put(
-                buf,
-                x,
-                *y,
-                t,
-                cx.st(token, SIDEBAR).patch(bg),
-                width(t) as u16,
-            );
-        }
-        hits.add(line, Target::GitRow(index));
         *y += 1;
     }
 }

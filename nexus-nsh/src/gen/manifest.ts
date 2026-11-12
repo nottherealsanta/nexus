@@ -296,11 +296,6 @@ export const manifest = {
      "id": "session_info",
      "label": "Session info",
      "order": 1
-    },
-    {
-     "id": "git_status",
-     "label": "Git status",
-     "order": 2
     }
    ]
   },

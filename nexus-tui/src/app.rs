@@ -855,7 +855,6 @@ pub struct Ui {
     pub diff_open: Option<(String, GitGroup)>,
     pub diff_scroll: usize,
     /// Cursor among the right sidebar's changed-file rows.
-    pub git_cursor: usize,
     pub file_search: Option<FileSearch>,
     /// Files tree: expanded relative directories, ignored visibility, and
     /// whether to browse the project checkout instead of the session directory.
@@ -1316,7 +1315,6 @@ impl App {
                 file_source: false,
                 diff_open: None,
                 diff_scroll: 0,
-                git_cursor: 0,
                 file_search: None,
                 files_expanded: std::collections::BTreeSet::new(),
                 files_hide_ignored: false,
@@ -3359,11 +3357,9 @@ impl App {
                         .is_some_and(|row| row.kind != "directory" && row.kind != "error")
             }
             "focus.git_file" => {
-                (self.ui.tab == Tab::Git
+                self.ui.tab == Tab::Git
                     && self.ui.focus == Focus::Sidebar
-                    && self.project_git_file(self.cursor(Tab::Git)).is_some())
-                    || (self.ui.focus == Focus::Right
-                        && self.git_rows().get(self.ui.git_cursor).is_some())
+                    && self.project_git_file(self.cursor(Tab::Git)).is_some()
             }
             "focus.turn" | "focus.tool" | "focus.user_message" | "focus.child_card" => {
                 use crate::timeline::BlockKind as K;
@@ -4052,46 +4048,6 @@ impl App {
         }
     }
 
-    pub fn git_rows(&self) -> Vec<GitRow> {
-        let Some(id) = self.viewed_id() else {
-            return Vec::new();
-        };
-        let Some(Ok(data)) = self
-            .state
-            .git
-            .as_ref()
-            .filter(|(session, _)| session == id)
-            .map(|(_, result)| result)
-        else {
-            return Vec::new();
-        };
-        let changes = data["changes"].as_array().map_or(&[][..], Vec::as_slice);
-        let mut rows = Vec::new();
-        for group in [GitGroup::Staged, GitGroup::Unstaged, GitGroup::Untracked] {
-            for change in changes {
-                let status = change["status"].as_str().unwrap_or("");
-                let untracked = status == "??";
-                let member = match group {
-                    GitGroup::Staged => change["staged"].as_bool().unwrap_or(false),
-                    GitGroup::Unstaged => {
-                        !untracked && change["unstaged"].as_bool().unwrap_or(false)
-                    }
-                    GitGroup::Untracked => untracked,
-                };
-                if member {
-                    rows.push(GitRow {
-                        group,
-                        path: change["path"].as_str().unwrap_or("").to_owned(),
-                        status: status.to_owned(),
-                        added: change["added"].as_u64().unwrap_or(0),
-                        removed: change["removed"].as_u64().unwrap_or(0),
-                    });
-                }
-            }
-        }
-        rows
-    }
-
     /// Open the diff of a changed-file row in the centre column.
     fn open_project_git_diff(&mut self, index: usize) {
         if let Some(GitSideRow::Folder { name, open, .. }) =
@@ -4125,35 +4081,6 @@ impl App {
             });
         }
         self.ui.diff_open = Some((row.path, row.group));
-        self.ui.focus = Focus::Timeline;
-    }
-
-    fn open_git_diff(&mut self, index: usize) {
-        let Some(row) = self.git_rows().get(index).cloned() else {
-            return;
-        };
-        let Some(session) = self.viewed_id().map(str::to_owned) else {
-            return;
-        };
-        if self.edit_blocks() {
-            return;
-        }
-        self.ui.git_cursor = index;
-        self.ui.file_open = false;
-        self.ui.file_edit = None;
-        self.ui.diff_scroll = 0;
-        self.state.diff = None;
-        // Core's diff has no untracked contents, so there is nothing to ask.
-        if row.group != GitGroup::Untracked {
-            self.effects.push(Effect::Sync(SyncCommand::GitDiff {
-                session,
-                path: row.path.clone(),
-            }));
-        }
-        self.ui.diff_open = Some((row.path, row.group));
-        if self.narrow() {
-            self.ui.drawer = None;
-        }
         self.ui.focus = Focus::Timeline;
     }
 
@@ -4201,7 +4128,6 @@ impl App {
         self.ui.file_edit = None;
         self.ui.file_scroll = 0;
         self.ui.diff_open = None;
-        self.ui.git_cursor = 0;
         self.ui.cursor.insert(Tab::Files, 0);
         if self.ui.tab == Tab::Files {
             self.request_files(String::new(), false);
@@ -5963,8 +5889,6 @@ impl App {
         self.ui.view = View::Session;
         self.effects
             .push(Effect::Sync(SyncCommand::Worktrees(id.to_owned())));
-        self.effects
-            .push(Effect::Sync(SyncCommand::Git(id.to_owned())));
         if self.state.models.is_empty() {
             self.effects
                 .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
@@ -6787,8 +6711,6 @@ impl App {
             "git.open_diff" => {
                 if self.ui.tab == Tab::Git && self.ui.focus == Focus::Sidebar {
                     self.open_project_git_diff(self.cursor(Tab::Git));
-                } else {
-                    self.open_git_diff(self.ui.git_cursor);
                 }
             }
             "sidebar.focus" => {
@@ -10162,7 +10084,7 @@ impl App {
                 }
             }
             Focus::Timeline => vec!["timeline".into()],
-            Focus::Right => vec!["sidebar.git".into()],
+            Focus::Right => Vec::new(),
             Focus::Waiting => vec!["waiting".into()],
             Focus::Sidebar => vec![format!("sidebar.{}", self.ui.tab.id()), "sidebar".into()],
             Focus::Rail => vec!["sidebar.projects".into(), "sidebar".into()],
@@ -12979,15 +12901,9 @@ impl App {
         }
     }
 
-    /// Keys in the right sidebar: move among changed files, Enter opens a diff.
+    /// Keys in the right sidebar (Session info only): Tab cycles focus.
     fn right_key(&mut self, name: &str) {
-        let n = self.git_rows().len();
-        let c = self.ui.git_cursor;
         match name {
-            "up" | "k" => self.ui.git_cursor = c.saturating_sub(1),
-            "down" | "j" => self.ui.git_cursor = (c + 1).min(n.saturating_sub(1)),
-            "home" => self.ui.git_cursor = 0,
-            "end" => self.ui.git_cursor = n.saturating_sub(1),
             "tab" => self.cycle_focus(false),
             "shift+tab" => self.cycle_focus(true),
             _ => {
@@ -15813,10 +15729,6 @@ impl App {
             Target::NewSession => self.run_command("session.new"),
             Target::AddProject => self.run_command("project.add"),
             Target::RightSection(_) => self.ui.focus = Focus::Right,
-            Target::GitRow(i) => {
-                self.ui.focus = Focus::Right;
-                self.open_git_diff(i);
-            }
             Target::Timeline => self.ui.focus = Focus::Timeline,
             Target::ContextPreview { title, text } => {
                 self.open_context_section(&title, None, Some(text));

@@ -21,7 +21,7 @@ branch list fills the tab and is the only thing on it.
   (`git.stage`, `git.unstage`, `git.discard`) and open the diff on press. Fed by `loadGitPage` / `gitPage` in
   `store.ts` for `currentWorktree()`.
 - Core: the Git page route returns `worktree`, `branch`, `changes` and `branches`.
-- Background: [09-backlog.md](09-backlog.md) 9.2 (the whole Git page); [33](33-remove-git-from-right-sidebar.md)
+- Background: [09-backlog.md](09-backlog.md) 9.2 (the whole Git page); [33](done/33-remove-git-from-right-sidebar.md)
   removes the right sidebar's Git status, so this tab becomes the only Git view besides the diff modal.
 
 ## Plan

@@ -308,8 +308,7 @@ The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sideb
 (the chrome surface); a `border.default` hairline runs under the band and between each
 sidebar (or its rail) and the page. The centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
-sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
-count) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
+sidebar is open). Below the band the 44 px right rail (Session) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
 the current-project selection, session rows, search fields, prose tables and modals are all
 square, like the TUI's cell grid; only circular status dots, spinners, image remove controls
 and meters keep their shape. A box rule runs a hairline along a box's straight

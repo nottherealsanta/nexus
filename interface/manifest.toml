@@ -199,10 +199,6 @@ remember_focus = true
 id = "session_info"
 label = "Session info"
 order = 1
-[[navigation.right_sidebar.section]]
-id = "git_status"
-label = "Git status"
-order = 2
 
 [navigation.centre]
 # Exactly one centre view at a time.

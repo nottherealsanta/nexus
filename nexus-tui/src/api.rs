@@ -1463,22 +1463,6 @@ impl CoreApi {
             .await
     }
 
-    pub async fn git_status(&self, session: &str) -> Result<Value, Error> {
-        self.http
-            .get(&format!("/api/session/{session}/git"), &[])
-            .await
-    }
-
-    /// Staged and unstaged diffs of one changed path.
-    pub async fn git_diff(&self, session: &str, path: &str) -> Result<Value, Error> {
-        self.http
-            .get(
-                &format!("/api/session/{session}/git/diff"),
-                &[("path", path.to_owned())],
-            )
-            .await
-    }
-
     /// List worktrees for a session's directory. Outside Git Core returns an error.
     pub async fn worktrees(&self, session: &str) -> Result<Value, Error> {
         self.http

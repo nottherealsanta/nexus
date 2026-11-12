@@ -23,14 +23,14 @@ describe("chrome polish", () => {
     expect(app.shows("id:header-status")).toBe(false);
   });
 
-  test("one details toggle opens Session and Git without a separate right rail", async () => {
+  test("one details toggle opens Session info without a separate right rail", async () => {
     const app = await open("./App.tsx", { network, width: 1440, height: 900, platform: "web" });
     await app.waitFor("id:session-ses_1");
     await app.press("id:session-ses_1");
     expect(app.shows("id:right-rail")).toBe(false);
     await app.press("id:toggle-right");
     await app.waitFor("id:right-sidebar");
-    expect(app.shows("id:right-section-git-status")).toBe(true);
-    expect(app.texts().includes("17")).toBe(true);
+    expect(app.shows("id:right-section-git-status")).toBe(false);
+    expect(app.texts().includes("Session info")).toBe(true);
   });
 });
