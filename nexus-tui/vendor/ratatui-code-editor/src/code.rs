@@ -200,9 +200,9 @@ impl Code {
 
                     injection_parsers.insert(lang.to_string(), Rc::new(RefCell::new(parser)));
                     injection_queries.insert(lang.to_string(), inj_query);
-                } else {
-                    eprintln!("Unknown injection language: {}", lang);
                 }
+                // Nexus: a language without a bundled grammar stays plain text.
+                // (Upstream printed to stderr, which lands on the TUI's screen.)
             }
         }
 

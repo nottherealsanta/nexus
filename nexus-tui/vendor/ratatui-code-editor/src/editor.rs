@@ -146,7 +146,7 @@ impl Editor {
         if self.show_line_numbers {
             let total_lines = self.code.len_lines();
             let max_line_number = total_lines.max(1);
-            let line_number_digits = max_line_number.to_string().len().max(5);
+            let line_number_digits = max_line_number.to_string().len().max(3);
             line_number_digits + self.left_code_padding + fold_gutter_width
         } else {
             self.left_code_padding + fold_gutter_width
@@ -309,7 +309,11 @@ impl Editor {
 
         let line_number_width = self.get_line_number_width();
         let fold_gutter_width = self.fold_gutter_width();
-        let Some(fold_gutter_start) = line_number_width.checked_sub(fold_gutter_width) else {
+        // Nexus: the glyph sits one cell before the text; the cell after it is a gap.
+        let Some(fold_gutter_start) = line_number_width
+            .checked_sub(fold_gutter_width)
+            .map(|start| start.saturating_sub(1))
+        else {
             return false;
         };
 

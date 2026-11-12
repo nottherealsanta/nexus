@@ -59,6 +59,18 @@ The desktop session-search button, `/search` and `/search <text>` open the sessi
 search field focused and the argument prefilled; on a phone `/search` opens the Sessions list with its
 inline field focused and filled, and `/search` without text clears it. Phone segmented controls and tool
 toggles use 44 px touch targets; mobile navigation remains unchanged.
+The mobile Sessions list groups waiting sessions under Needs you, followed by Running and Recent;
+waiting takes priority over running, and rows show an attention or running indicator and relative time.
+In a phone conversation, Sessions opens a drawer with that list and the project selector; choosing a
+session closes the drawer, while All sessions returns to the full Sessions tab. The phone project
+picker offers All projects as well as individual projects; an individual selection sets the new-session project.
+Phone approval cards use a compact command preview and larger two-column choices while retaining allow once,
+allow for the session, deny, and deny with a note.
+Phone Settings groups its mobile sections into drill-in pages and shows the saved Core address and current
+connection state. The connection card opens manual setup, which includes LAN/Tailscale and trusted-network guidance;
+QR pairing and latency monitoring are not yet available.
+On phones the shell reserves space for the software keyboard, and the conversation header offers Back to
+Sessions and, while the keyboard is visible, Dismiss keyboard. Returning to a conversation keeps its draft.
 Narrow desktop/web headers show one flexible title instead of a fixed-width tab
 strip and add button, matching the Rust TUI's narrow header. Session switching and
 creation remain available through the sidebar and shortcuts.
@@ -424,8 +436,8 @@ every project, inactive ones marked, and choosing an inactive one restores it, a
 The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
 with the shared fold glyphs and two cells of indent per depth, `.git` is never listed, and a file's Git letter sits at
 the row's end. Expanded folders keep their state across tab switches and reset when the project changes; the pane's
-header names the project and the checkout branch. Files open in a centred modal over the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
-below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose, and the header's
+header names the project and the checkout branch. Files open in a full-height modal, centred across the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
+below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose (Mermaid fences drawn as in the timeline), and the header's
 Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
 Esc closes the bar before the panel. Links in assistant prose, Markdown previews,
@@ -529,7 +541,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, direct keys, the three-second Ctrl+X leader and Esc chain. |
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
-| `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). |
+| `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (reopened from the mobile Settings connection card). |
 | `src/ui/splash.tsx` | The launch splash: logo, five milestone stages, 30-segment bar and the fade into the first live frame. |
 | `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
@@ -684,7 +696,7 @@ local-network keys must be in `Info.plist` *before* that, so package without
 
 7. **Connect.** Enter `http://<mac-ip>:4747` (not `localhost`; that is the phone)
    on the Connect screen and tap **Connect**. Allow **Local Network** when iOS
-   asks. The address is stored; the header's **Core** button reopens the screen.
+   asks. The address is stored; the **Core connection** card in Settings reopens the screen.
 
    If it says Core is not reachable: check the Safari test from step 1, the
    Local Network switch for Nexus, and that Core is still bound to `0.0.0.0`

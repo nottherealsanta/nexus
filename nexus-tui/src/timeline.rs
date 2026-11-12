@@ -307,7 +307,15 @@ enum CacheEntry {
     Markdown(CachedMarkdown),
     Wrap(Vec<String>),
     Detail(ToolDetail),
-    Document(std::rc::Rc<Vec<ratatui::text::Line<'static>>>),
+    Document(std::rc::Rc<Document>),
+}
+
+/// A rendered Markdown document: its rows, and the diagrams painted over the
+/// blank rows reserved for them.
+#[derive(Default)]
+pub struct Document {
+    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub images: Vec<crate::images::Preview>,
 }
 
 impl CacheEntry {
@@ -329,8 +337,14 @@ impl CacheEntry {
                         })
                         .sum::<usize>()
             }
-            Self::Document(lines) => {
-                std::mem::size_of_val(lines.as_slice())
+            Self::Document(document) => {
+                let lines = &document.lines;
+                document
+                    .images
+                    .iter()
+                    .map(|image| image.data_url.len())
+                    .sum::<usize>()
+                    + std::mem::size_of_val(lines.as_slice())
                     + lines
                         .iter()
                         .map(|line| {
@@ -461,7 +475,7 @@ impl LayoutCache {
         text: &str,
         width: usize,
         palette: &crate::markdown::Palette,
-    ) -> std::rc::Rc<Vec<ratatui::text::Line<'static>>> {
+    ) -> std::rc::Rc<Document> {
         let width = width.max(1);
         let key = DocumentKey {
             text: hash_str(text),
@@ -475,12 +489,27 @@ impl LayoutCache {
         }
         self.misses += 1;
         let mut lines = Vec::new();
+        let mut images = Vec::new();
         for row in crate::markdown::lines(text, palette, width) {
             if row.blank {
                 lines.push(ratatui::text::Line::default());
                 continue;
             }
-            if let Some((_, _, rows)) = row.image {
+            if let Some((data_url, columns, rows)) = row.image {
+                let column: usize = row
+                    .prefix
+                    .iter()
+                    .map(|span| crate::text::width(&span.content))
+                    .sum();
+                images.push(crate::images::Preview {
+                    start: lines.len(),
+                    column,
+                    width: columns.min(width.saturating_sub(column)),
+                    rows,
+                    key: format!("document:{}", row.fence.unwrap_or(lines.len())),
+                    name: "mermaid diagram".into(),
+                    data_url,
+                });
                 for _ in 0..rows {
                     lines.push(ratatui::text::Line::default());
                 }
@@ -509,9 +538,12 @@ impl LayoutCache {
                 lines.push(line);
             }
         }
-        let lines = std::rc::Rc::new(lines);
-        self.insert(CacheKey::Document(key), CacheEntry::Document(lines.clone()));
-        lines
+        let document = std::rc::Rc::new(Document { lines, images });
+        self.insert(
+            CacheKey::Document(key),
+            CacheEntry::Document(document.clone()),
+        );
+        document
     }
 
     fn insert(&mut self, key: CacheKey, entry: CacheEntry) {

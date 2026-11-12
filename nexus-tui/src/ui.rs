@@ -352,6 +352,8 @@ pub struct FileEdit {
     pub reloading: bool,
     /// The file changed on disk under unsaved text, or a save was refused.
     pub stale: bool,
+    /// A left-button drag that began in the text is selecting.
+    pub dragging: bool,
 }
 
 impl FileEdit {

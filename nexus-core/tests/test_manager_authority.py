@@ -256,6 +256,55 @@ async def test_a_question_answer_follows_the_same_shown_first_rule(desk):
     assert replied[-1]["data"]["origin"] == "manager"
 
 
+async def test_a_question_is_answered_by_label_number_or_text_as_the_manager_reads_it(desk):
+    """The real failure (2026-11-12): the Manager saw only the request id and option labels, so it passed the
+    request id or the question's text as ``question_id`` and a label as ``selected``; all three were refused."""
+    from nexus.questions import PendingQuestion, normalize_request
+
+    def pending(session, questions):
+        qid = new_id("qst")
+        future = asyncio.get_running_loop().create_future()
+        desk.h.rt.questions[qid] = PendingQuestion(qid, session.id, "c1", normalize_request({"questions": questions}),
+                                                   time.time(), future)
+        return qid, future
+
+    text = "Please reopen Nexus, go to Manager. Say \u201chello\u201d once, then select Ready."
+    one = [{"id": "ready", "question": text, "options": [
+        {"id": "ready", "label": "Ready \u2014 Manager is open and Voice is on"},
+        {"id": "error", "label": "An error appears again"}]}]
+    session = desk.session("Mobile enhancement plan")
+    handle = desk.handle(session)
+
+    qid, future = pending(session, one)
+    desk.turn("is it waiting", index=1)
+    line = await desk.call("read_session", handle=handle, what="question")
+    assert qid in line and '1. "Ready' in line and '2. "An error' in line
+    desk.turn("mark it ready", index=2)
+    out = await desk.call("answer_question", handle=handle, question=qid,
+                          answers=[{"question_id": qid, "selected": ["Ready \u2014 Manager is open and Voice is on"]}])
+    assert "Answered" in out and future.result()[0]["selected"] == ["ready"]
+
+    qid, future = pending(session, one)
+    desk.turn("is it waiting", index=3)
+    await desk.call("session_status", handle=handle)
+    desk.turn("say an error came back", index=4)
+    await desk.call("answer_question", handle=handle, question=text,
+                    answers=[{"question_id": text, "selected": ["2"], "text": "volume is very low"}])
+    assert future.result()[0] == {"question_id": "ready", "selected": ["error"], "text": "volume is very low"}
+
+    two = [{"id": "db", "question": "Which database?", "options": [{"id": "pg", "label": "PostgreSQL"},
+                                                                     {"id": "lite", "label": "SQLite"}]},
+           {"id": "why", "question": "Why?"}]
+    qid, future = pending(session, two)
+    desk.turn("what does it ask", index=5)
+    line = await desk.call("read_session", handle=handle, what="question")
+    assert "[db]" in line and "[why]" in line and "Free-text answer" in line
+    desk.turn("sqlite, it is simpler", index=6)
+    await desk.call("answer_question", handle=handle,
+                    answers=[{"question_id": "db", "selected": ["sqlite"]}, {"question_id": "why", "text": "simpler"}])
+    assert [a["selected"] for a in future.result()] == [["lite"], []]
+
+
 # -- honesty ------------------------------------------------------------------------------------
 
 async def test_a_failed_act_is_never_reported_as_done(h):

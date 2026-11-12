@@ -5,9 +5,9 @@ import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./moda
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, copyText, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen } from "../store";
+import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen, phone, phonePage } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
-import { LeftSidebar } from "./sidebar";
+import { LeftSidebar, NewSessionButton, ProjectSelector, SessionsTab } from "./sidebar";
 import { RightSidebar } from "./right";
 import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
 import { structure } from "../gen/theme";
@@ -352,7 +352,13 @@ export function Drawers() {
   const side = (s: "left" | "right" | "notifications") => drawer() === s;
   return (
     <View class="absolute inset-0" style={{ pointerEvents: "box-none" }}>
-      <If when={isNarrow() && side("left")}><EdgeDrawer side="left" width={320} label="Left sidebar drawer"><LeftSidebar drawer /></EdgeDrawer></If>
+      <If when={(phone || isNarrow()) && side("left")}><EdgeDrawer side="left" width={320} label={phone ? "Sessions drawer" : "Left sidebar drawer"}>
+        <If when={phone} else={<LeftSidebar drawer />}><View class="flex-1 min-h-0 bg-sidebar" testID="phone-sessions-drawer">
+          <View class="flex-row items-center gap-2 px-3 pt-3"><ProjectSelector /><NewSessionButton /></View>
+          <SessionsTab />
+          <Button onPress={() => { drawer.set(null); phonePage.set("sessions"); }} testID="phone-all-sessions" accessibilityLabel="Show Sessions tab" class={`min-h-11 justify-center px-4 border-t border-border ${FOCUS}`}><Text class="text-foreground">All sessions</Text></Button>
+        </View></If>
+      </EdgeDrawer></If>
       <If when={isNarrow() && side("right")}><EdgeDrawer side="right" width={340} label="Right sidebar drawer"><RightSidebar drawer /></EdgeDrawer></If>
       <If when={side("notifications")}><EdgeDrawer side="right" width={isNarrow() ? 340 : 380} label="Notifications drawer"><NotificationList /></EdgeDrawer></If>
     </View>

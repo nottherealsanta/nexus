@@ -10096,11 +10096,9 @@ impl App {
         self.ui.file_open && !self.ui.file_source && self.file_is_markdown()
     }
 
-    /// The preview's rows at `width`, cached until the text, width or theme changes.
-    pub fn file_preview_rows(
-        &self,
-        width: usize,
-    ) -> std::rc::Rc<Vec<ratatui::text::Line<'static>>> {
+    /// The preview's rows and diagrams at `width`, cached until the text, width
+    /// or theme changes.
+    pub fn file_preview_rows(&self, width: usize) -> std::rc::Rc<crate::timeline::Document> {
         let content = self
             .ui
             .file_edit
@@ -10217,6 +10215,7 @@ impl App {
             saving: false,
             reloading: false,
             stale: false,
+            dragging: false,
         });
         self.ui.file_source = true;
     }
@@ -10477,6 +10476,7 @@ impl App {
         if self.file_preview() {
             return self
                 .file_preview_rows(rect.width.saturating_sub(2) as usize)
+                .lines
                 .len()
                 .saturating_sub(page);
         }
@@ -15117,6 +15117,9 @@ impl App {
                 }
             }
         }
+        if self.file_edit_mouse(&ev) {
+            return;
+        }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.terminal_open
@@ -15425,6 +15428,55 @@ impl App {
             MouseEventKind::ScrollUp => self.wheel(ev.column, ev.row, -3),
             MouseEventKind::ScrollDown => self.wheel(ev.column, ev.row, 3),
             _ => {}
+        }
+    }
+
+    /// Clicks, drags and the wheel over the editor's text go to the editor.
+    /// A drag that began there keeps selecting outside it until the release.
+    fn file_edit_mouse(&mut self, ev: &MouseEvent) -> bool {
+        if !self.ui.file_open
+            || self.file_preview()
+            || self.ui.diff_open.is_some()
+            || self.ui.overlay.is_some()
+            || self.ui.dialog.is_some()
+            || self.blocking().is_some()
+        {
+            return false;
+        }
+        let Some(panel) = self.regions.panel else {
+            return false;
+        };
+        let area = crate::render::file_editor_area(panel, self.ui.file_search.is_some());
+        let Some(edit) = self.ui.file_edit.as_mut() else {
+            return false;
+        };
+        let inside = contains(area, ev.column, ev.row);
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside => {
+                edit.dragging = true;
+                edit.buf.mouse(*ev, area);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) if edit.dragging => {
+                let clamped = MouseEvent {
+                    column: ev.column.clamp(area.x, area.right().saturating_sub(1)),
+                    row: ev.row.clamp(area.y, area.bottom().saturating_sub(1)),
+                    ..*ev
+                };
+                edit.buf.mouse(clamped, area);
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if edit.dragging => {
+                edit.dragging = false;
+                true
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if contains(panel, ev.column, ev.row) =>
+            {
+                edit.buf.mouse(*ev, area);
+                true
+            }
+            _ => false,
         }
     }
 

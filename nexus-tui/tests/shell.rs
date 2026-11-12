@@ -4930,7 +4930,8 @@ fn the_file_view_is_a_modal_at_every_width() {
         let (_, rows) = draw(&mut app, w, h);
         let panel = app.regions.panel.expect("the file panel");
         assert_eq!(panel, nexus_tui::layout::panel_rect(app.regions.area));
-        assert!(panel.x > 0 && panel.right() < w && panel.y > 0, "{w}");
+        assert!(panel.x > 0 && panel.right() < w, "{w}");
+        assert_eq!((panel.y, panel.height), (0, h), "full height at {w}");
         assert!(rows[panel.y as usize].contains("Back"), "{w}");
         assert!(rows[panel.y as usize].contains("hello.txt"), "{w}");
         // The page keeps its place underneath and outside clicks close the modal.
@@ -5226,6 +5227,62 @@ fn editor_parity_shots() {
             std::fs::write(format!("{shared_dir}/{name}.txt"), joined(&rows)).unwrap();
         }
     }
+}
+
+#[test]
+fn the_wheel_scrolls_the_editor_and_a_click_places_the_cursor() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let body: String = (1..=120).map(|n| format!("line {n:03}\n")).collect();
+    let mut app = open_named_file_view("long.txt", &body);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("line 001"));
+    let panel = app.regions.panel.expect("the file panel");
+    let mouse = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let (cx, cy) = (panel.x + panel.width / 2, panel.y + panel.height / 2);
+    for _ in 0..10 {
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, cx, cy));
+        draw(&mut app, 120, 36);
+    }
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("line 040"), "scrolled down: {all}");
+    assert!(!all.contains("line 002"), "{all}");
+    // A click in the text moves the cursor there, and typing lands at it.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), cx, cy));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), cx, cy));
+    typing(&mut app, "!");
+    let text = app.ui.file_edit.as_ref().unwrap().buf.text();
+    assert!(
+        text.contains('!') && !text.starts_with('!'),
+        "typed at the click"
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains('!'), "the view stays on the click: {all}");
+}
+
+#[test]
+fn the_file_modal_is_full_height() {
+    let mut app = open_named_file_view("hello.md", "# Title\n");
+    draw(&mut app, 160, 40);
+    let panel = app.regions.panel.expect("the file panel");
+    assert_eq!((panel.y, panel.height), (0, 40));
+}
+
+#[test]
+fn the_markdown_preview_draws_mermaid_diagrams() {
+    let content = "# Plan\n\n```mermaid\ngraph TD\n  A[Org] --> B[Team]\n```\n\nAfter.\n";
+    let mut app = open_named_file_view("plan.md", content);
+    press(&mut app, &["ctrl+shift+p"]);
+    assert!(app.file_preview());
+    let document = app.file_preview_rows(100);
+    assert_eq!(document.images.len(), 1, "the diagram is an image");
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(!all.contains("graph TD"), "not the source: {all}");
+    assert!(all.contains("After."), "{all}");
 }
 
 #[test]

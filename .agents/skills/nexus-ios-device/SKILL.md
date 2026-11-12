@@ -169,7 +169,7 @@ Notes:
 - `:4747` is required; the app assumes port 80 when it is omitted.
 - `localhost` is the phone itself. Use the Mac's LAN or tailnet address.
 - The app adds `http://` when the scheme is missing and stores the address in NSH Storage under `nexus.core`.
-- The header's **Core** button reopens the Connect screen while the app is running.
+- The **Core connection** card in Settings reopens the Connect screen while the app is running.
 - `connectCore()` probes `GET /api/info` with an 8 s timeout before saving. Failures stay on the Connect screen with the actual reason, so the offline shell does not hide a setup mistake.
 - Allow **Local Network** when iOS asks. If denied: **Settings → Privacy & Security → Local Network → Nexus**.
 
@@ -231,7 +231,7 @@ Work from the Mac outward; each step rules out one layer.
    ```
    200 with JSON and no token is the target. 401 means token mode (loopback bind). Connection refused/timeout means the address/interface is wrong.
 3. **Does the phone reach it?** Open the same URL in the iPhone's Safari. Safari failing means a network problem (Wi-Fi, Tailscale, firewall), not the app. Safari succeeding but the app failing means ATS or Local Network permission.
-4. **Read the app's own probe error.** Tap **Core**, re-enter the address, tap **Connect**. The screen prints:
+4. **Read the app's own probe error.** In Settings, tap **Core connection**, re-enter the address, tap **Connect**. The screen prints:
    - `App Transport Security policy requires the use of a secure connection` → the build was patched after signing, or only `NSAllowsLocalNetworking` was used. Redo steps 3–4 in order with `NSAllowsArbitraryLoads`.
    - `The request timed out` / `could not connect to the server` → routing, Local Network permission, or Core not bound.
    - `This Core asks for a token` → restart Core with `NEXUS_HOST=0.0.0.0`.

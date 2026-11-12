@@ -1,5 +1,5 @@
 import { describe, expect, test } from "nsh/test";
-import { PHONE_TABS, compactApproval, desktopOnly, mobileSettings, phoneRow, phoneStatus, mobileClient } from "./src/mobile";
+import { PHONE_TABS, compactApproval, desktopOnly, mobileSettings, phoneRow, phoneStatus, mobileClient, phoneSessionGroups } from "./src/mobile";
 import { manifest } from "./src/gen/manifest";
 
 describe("mobile client rules", () => {
@@ -28,5 +28,17 @@ describe("mobile client rules", () => {
     expect(compactApproval({ tool: "patch", args: { patch: "*** Update File: a.txt\n@@" } })).toBe("a.txt");
     expect(phoneStatus({ waiting: true, running: true }).word).toBe("Waiting on you");
     expect(phoneStatus({ waiting: false, running: true }).word).toBe("Working");
+  });
+  test("groups sessions by urgency while preserving recent order", () => {
+    const sessions = [
+      { id: "recent", waiting: false, running: false },
+      { id: "both", waiting: true, running: true },
+      { id: "running", waiting: false, running: true },
+      { id: "waiting", waiting: true, running: false },
+    ];
+    expect(phoneSessionGroups(sessions, (s) => s).map((g) => [g.title, g.sessions.map((s) => s.id)])).toEqual([
+      ["Needs you", ["both", "waiting"]], ["Running", ["running"]], ["Recent", ["recent"]],
+    ]);
+    expect(phoneSessionGroups([], (s: typeof sessions[number]) => s)).toEqual([]);
   });
 });

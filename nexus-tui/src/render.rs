@@ -530,12 +530,15 @@ pub fn buffer_rows(buf: &Buffer) -> Vec<String> {
 }
 
 /// The editor uses the modal body, leaving its header and footer visible.
+/// The editor's text area: below the title row and, as in the read-only view,
+/// a blank row when the panel has room; the find bar takes the last two rows.
 pub(crate) fn file_editor_area(r: Rect, finding: bool) -> Rect {
+    let top = if r.height >= 8 { 2 } else { 1 };
     Rect::new(
         r.x.saturating_add(1),
-        r.y.saturating_add(1),
+        r.y.saturating_add(top),
         r.width.saturating_sub(2),
-        r.height.saturating_sub(if finding { 4 } else { 2 }),
+        r.height.saturating_sub(top + if finding { 3 } else { 1 }),
     )
 }
 
@@ -3115,11 +3118,43 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     match result {
         Ok(_) => {
             if preview {
-                let rows = cx.app.file_preview_rows(r.width.saturating_sub(2) as usize);
+                let document = cx.app.file_preview_rows(r.width.saturating_sub(2) as usize);
                 let top = r.y + if r.height >= 8 { 2 } else { 1 };
-                let scroll = scroll.min(rows.len().saturating_sub(page));
-                for (i, line) in rows.iter().skip(scroll).take(page).enumerate() {
+                let scroll = scroll.min(document.lines.len().saturating_sub(page));
+                for (i, line) in document.lines.iter().skip(scroll).take(page).enumerate() {
                     buf.set_line(r.x + 1, top + i as u16, line, r.width.saturating_sub(2));
+                }
+                // Diagrams paint over the blank rows reserved for them; one cut
+                // by the top or bottom edge shows its visible part.
+                let bottom = top + page as u16;
+                let mut viewer = cx.app.image_viewer.borrow_mut();
+                for image in &document.images {
+                    if image.start + image.rows <= scroll || image.start >= scroll + page {
+                        continue;
+                    }
+                    let x = r.x + 1 + image.column as u16;
+                    let w = (image.width as u16).min(r.right().saturating_sub(x + 1));
+                    let y0 = top + image.start.saturating_sub(scroll) as u16;
+                    let y1 = (top as usize + (image.start + image.rows).saturating_sub(scroll))
+                        .min(bottom as usize) as u16;
+                    if w == 0 || y1 <= y0 {
+                        continue;
+                    }
+                    let rect = Rect::new(x, y0, w, y1 - y0);
+                    if let Some(state) = viewer.protocol(&image.key, &image.data_url) {
+                        let widget = ratatui_image::StatefulImage::<
+                            ratatui_image::protocol::StatefulProtocol,
+                        >::new()
+                        .resize(ratatui_image::Resize::Fit(None));
+                        ratatui::widgets::StatefulWidget::render(widget, rect, buf, state);
+                    }
+                    hits.add(
+                        rect,
+                        Target::ImagePreview {
+                            name: image.name.clone(),
+                            data_url: image.data_url.clone(),
+                        },
+                    );
                 }
                 return;
             }

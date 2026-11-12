@@ -24,13 +24,17 @@ impl Widget for &Editor {
         let code = self.code_ref();
         let total_lines = code.len_lines();
         let max_line_number = total_lines.max(1);
-        let line_number_digits = max_line_number.to_string().len().max(5);
+        let line_number_digits = max_line_number.to_string().len().max(3);
         let line_number_width = self.get_line_number_width();
         let fold_gutter_width = self.fold_gutter_width();
         let total_visual_lines = self.visual_len_lines();
         let mut draw_y = area.top();
 
         let line_number_style = self.themed("line_number", Style::default().fg(Color::DarkGray));
+        // Nexus: the cursor's line number stands out, and fold glyphs stay quiet.
+        let active_line_number_style = self.themed("line_number_active", line_number_style);
+        let fold_indicator_style = self.themed("fold_indicator", line_number_style);
+        let cursor_line = code.char_to_line(self.cursor.min(code.len_chars()));
         let default_text_style = self.themed("default_text", Style::default().fg(Color::White));
 
         let diff_added_bg = self
@@ -119,7 +123,12 @@ impl Widget for &Editor {
                     } else {
                         format!("{:>width$}", line_idx + 1, width = line_number_digits)
                     };
-                    buf.set_string(area.left(), draw_y, &line_number, line_number_style);
+                    let style = if !is_ghost && line_idx == cursor_line {
+                        active_line_number_style
+                    } else {
+                        line_number_style
+                    };
+                    buf.set_string(area.left(), draw_y, &line_number, style);
                 }
                 if !is_ghost {
                     if let Some(collapsed) = self.code_fold_indicator(line_idx) {
@@ -129,10 +138,11 @@ impl Widget for &Editor {
                             &self.code_folding_options.indicators.expanded
                         };
                         buf.set_string(
-                            area.left() + (line_number_width - fold_gutter_width) as u16,
+                            area.left()
+                                + (line_number_width - fold_gutter_width).saturating_sub(1) as u16,
                             draw_y,
                             indicator,
-                            line_number_style,
+                            fold_indicator_style,
                         );
                     }
                 }

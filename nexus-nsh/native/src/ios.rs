@@ -42,6 +42,10 @@ struct Active {
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 static STARTING: AtomicBool = AtomicBool::new(false);
 static CAPTURE_EPOCH: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "ios")]
+pub(crate) fn capture_busy() -> bool {
+    STARTING.load(Ordering::Acquire) || ACTIVE.lock().map_or(true, |active| active.is_some())
+}
 struct StartGuard;
 impl Drop for StartGuard {
     fn drop(&mut self) {
@@ -62,6 +66,10 @@ impl Microphone {
 
     /// Starts recording after asking for microphone permission.
     pub async fn start() -> Result<(), String> {
+        #[cfg(target_os = "ios")]
+        if crate::live_ios::is_busy() {
+            return Err("Stop the Manager voice call before starting dictation".into());
+        }
         if STARTING.swap(true, Ordering::AcqRel) {
             return Err("A dictation recording is already starting".into());
         }
@@ -193,7 +201,7 @@ impl Microphone {
 /// Asks for the microphone once, resolving when the system answers.
 #[cfg(target_os = "ios")]
 #[allow(deprecated)]
-async fn ensure_permission(session: &AVAudioSession) -> Result<(), String> {
+pub(crate) async fn ensure_permission(session: &AVAudioSession) -> Result<(), String> {
     // SAFETY: reading the app's permission is the session's API.
     let status = unsafe { session.recordPermission() };
     if status == AVAudioSessionRecordPermission::Granted {

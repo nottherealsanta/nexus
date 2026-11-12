@@ -5,11 +5,13 @@ import { Btn, FOCUS, IconButton, PROSE, T } from "./kit";
 import { availability, byId, escape, keyLabel, run, waitItems } from "../commands";
 import { config, fileDirty, fileFindOpen, fileSource, isNarrow, markdownFile, openFile, setDraft, width } from "../store";
 import { SCRIM } from "./modal";
+import { CodeFence, MermaidFence } from "./timeline";
+import { closedFenceSources } from "../mermaid";
 
 const hint = (id: string) => { const c = byId.get(id); return c ? keyLabel(c) : null; };
 /** The built-in code editor's font. It measures its text in this family, so set it here. */
 const FONT = "Monaspace Argon";
-/** The modal is this wide at most, and keeps this margin from the window. */
+/** The modal is the window's full height, this wide at most, and keeps this margin either side. */
 const MODAL_MAX = 1100;
 const MODAL_MARGIN = 32;
 /** One editable project-file modal; Markdown preview and diff retain the same draft. */
@@ -38,13 +40,20 @@ export function FilePanel() {
   // Below this the modal takes the whole window, traffic lights included: its header makes room
   // for them and drags the window, as the app's own band does.
   const full = () => isNarrow();
-  const lights = () => (full() && platform.os === "macos" ? titleBar().left : 0);
+  const modalWidth = () => Math.min(MODAL_MAX, width() - 2 * MODAL_MARGIN);
+  // Full height, the header shares the top band with the traffic lights when
+  // they reach into it: it makes room for them and drags the window.
+  const lights = () => {
+    if (platform.os !== "macos") return 0;
+    const left = full() ? 0 : (width() - modalWidth()) / 2;
+    return Math.max(0, titleBar().left - left);
+  };
   const headerStyle = () => (lights() ? { paddingLeft: lights() + 8 } : {});
   return (
     <Dialog open closeOnEscape={false} onCancel={() => escape()} onOpenChange={({ open }) => { if (!open) void run("editor.close"); }}
       animation={config()?.values?.ui?.reduced_motion ? "none" : "fade"} backdropClass={SCRIM} testID="file-panel-shell"
-      style={full() ? {} : { width: Math.min(MODAL_MAX, width() - 2 * MODAL_MARGIN), boxShadow: "0 12px 40px rgb(0 0 0 / 0.4)" }}
-      class={full() ? "absolute inset-0 bg-background" : "absolute left-0 right-0 top-[5%] bottom-[5%] mx-auto rounded-(--radius-card) border border-border bg-background overflow-hidden"}>
+      style={full() ? {} : { width: modalWidth(), boxShadow: "0 12px 40px rgb(0 0 0 / 0.4)" }}
+      class={full() ? "absolute inset-0 bg-background" : "absolute left-0 right-0 top-0 bottom-0 mx-auto border-x border-border bg-background overflow-hidden"}>
     <View class="flex-1 min-h-0 flex-col" testID="file-panel">
       <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar" style={headerStyle()}
         {...(lights() ? { desktop: { windowDrag: true } } : {})}>
@@ -103,7 +112,10 @@ export function FilePanel() {
               </If>
             }>
               <Scroll class="flex-1"><View class="px-6 py-4" testID="file-markdown">
-                <TextView selectable links="open" markdown={f()?.draft ?? f()?.content ?? ""} classes={PROSE} />
+                <TextView selectable links="open" markdown={f()?.draft ?? f()?.content ?? ""} classes={PROSE}
+                  renderCodeBlock={(block) => block.language === "mermaid" && closedFenceSources(f()?.draft ?? f()?.content ?? "").includes(block.code.trimEnd())
+                    ? <MermaidFence block={block} />
+                    : <CodeFence block={block} />} />
               </View></Scroll>
             </If>
           }>

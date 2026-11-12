@@ -2,6 +2,16 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **GPT-Live native PCM framing, partial (11-12, plan 5).** Added tested 24 kHz mono conversion and 20 ms framing; native audio, transport and end-to-end voice are still unimplemented.
+- **GPT-Live native transport, partial (11-12, plan 5).** Added a bounded PCM WebSocket with loopback tests; it is not yet connected to iPhone audio or the Manager.
+
+- **Mobile session list, partial (11-12, plan 5.2).** Grouped waiting, running and recent sessions, with waiting/running indicators and corrected all-projects filtering; five mobile rule tests pass. Device verification and the rest of the redesign remain open.
+- **Mobile session drawer, partial (11-12, plan 5.2).** Header opens a reusable Sessions drawer, session selection closes it, and All sessions returns to the tab; phone-idiom route test passes. Edge swipe and device verification remain open.
+- **Mobile device smoke check (11-12, plan 5.2).** Signed and installed the partial redesign over the existing iPhone app; it launched and displayed live sessions grouped under Running and Recent. Other tabs, the drawer and touch interactions remain unverified on-device.
+- **Mobile visual pass, partial (11-12, plan 5.2).** Refined session list, navigation typography and compact approval choice layout; six phone-idiom tests pass and the signed build launched on iPhone. Approval and populated-list visuals still need device checks.
+- **Mobile Settings and Connect, partial (11-12, plan 5.2).** Added a connection-status card, grouped section drill-ins and provider detail host, and clarified manual connection setup; phone-idiom navigation tests pass. Pairing and connection telemetry remain open.
+- **Mobile keyboard and conversation, partial (11-12, plan 5).** Reserve the keyboard inset, offer a direct back action and keyboard dismiss, preserve drafts on return, and refine the user-message card and composer; phone-route tests pass. Physical keyboard verification remains open.
+
 - **Core backlog pass (11-11, plan 9).** Removed the `stream_summary`/`turn_end` recovery fallbacks; `SessionEnd` also fires on archive; hook matcher and denied-approval tests; user-tool `MEMORY_MB`; `[tools] disabled` accepts project-only names without dropping the rest; read-only MCP resources and prompts API; per-section `details` in `/api/draft/context`; worktree review and keyed integrate (Git merge, optional remove) as control-plane API; recovery probes surviving background jobs without killing; export clips the event log with `events_clipped`; inspector paging tests under writes and retention. Ticks with evidence in 9.2, 9.3, 9.5, 9.13, 9.19, 9.20. Client UI for these stays open.
 
 - **Backlog audit notes (11-11, plan 09).** NSH handoff open-original test, project-rail boundary tests, `nsh-syntaxes.bin` served, split-diff and scroll coverage located; see 9.2, 9.5, 9.7, 9.11.

@@ -355,7 +355,7 @@ let liveTimer: ReturnType<typeof setInterval> | null = null;
  */
 async function openLive(callId: string) {
   begin({ orb: true });
-  // A client that cannot capture and play the call's audio (NSH on iOS and desktop today) never opens Core's half:
+  // A client that cannot capture and play the call's audio never opens Core's half:
   // it would stay open with nobody on it, and every retry would be refused as busy.
   if (!gptLiveSupported()) {
     managerError.set({ code: "live_unsupported", message: WORDS.liveUnsupported, fix: WORDS.liveUnsupportedFix });

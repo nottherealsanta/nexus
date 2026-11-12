@@ -54,7 +54,7 @@ export const iconGlyphs: Record<IconName, string> = {
   edit: verbGlyphs.edit.unicode, shell: verbGlyphs.shell.unicode,
   code: verbGlyphs.code.unicode, ask: verbGlyphs.ask.unicode,
   session: verbGlyphs.session.unicode, web: verbGlyphs.web.unicode,
-  mic: controlGlyphs.mic.unicode, diamond: statusGlyphs.waiting.unicode,
+  mic: controlGlyphs.mic.unicode, manager: "∿", diamond: statusGlyphs.waiting.unicode,
   lock: "🔒", unlock: "🔓",
 };
 

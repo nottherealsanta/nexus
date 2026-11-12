@@ -5,6 +5,23 @@
 // WebRTC, so the same protocol serves the TUI and iOS. The browser's echo cancellation stays on. Not verified against
 // the real service. Browsers allow the microphone on HTTPS or localhost only.
 import { socketUrl } from "./transport";
+import { nativeModule, platform } from "nsh";
+
+type NativeLive = {
+  available(): boolean;
+  start(url: string): Promise<void>;
+  stop(): void;
+  interrupt(): void;
+  setMuted(muted: boolean): void;
+  levels(): { local: number; remote: number; lost?: string | null };
+};
+function nativeLive(): NativeLive | null {
+  if (platform.os !== "ios") return null;
+  try { return nativeModule<{ LiveAudio?: NativeLive }>("nexus/native").LiveAudio ?? null; } catch { return null; }
+}
+let nativeActive = false;
+let nativeTimer: ReturnType<typeof setInterval> | null = null;
+let generation = 0;
 
 // The NSH host's shared TS environment has no lib.dom: keep the narrow surface used here explicit.
 type TrackLike = { stop(): void };
@@ -73,11 +90,12 @@ interface Call {
 let call: Call | null = null;
 
 export const gptLiveSupported = () => {
+  if (nativeLive()?.available()) return true;
   const e = env();
   return !!(e.AudioContext ?? e.webkitAudioContext) && !!e.AudioWorkletNode && !!e.WebSocket && !!e.Blob && !!e.URL
     && typeof e.navigator?.mediaDevices?.getUserMedia === "function";
 };
-export const gptLiveOpen = () => call !== null;
+export const gptLiveOpen = () => call !== null || nativeActive;
 
 function rms(node: AnalyserLike, buffer: Float32Array): number {
   node.getFloatTimeDomainData(buffer);
@@ -88,6 +106,7 @@ function rms(node: AnalyserLike, buffer: Float32Array): number {
 
 /** Input (microphone) and output (speech) levels, 0 to 1; read here by the orb, never sent anywhere. */
 export function gptLiveLevels(): { local: number; remote: number } {
+  if (nativeActive) { const levels = nativeLive()?.levels(); return { local: levels?.local ?? 0, remote: levels?.remote ?? 0 }; }
   return call ? { local: call.muted ? 0 : rms(call.inLevel, call.samples.in), remote: rms(call.outLevel, call.samples.out) } : { local: 0, remote: 0 };
 }
 
@@ -143,7 +162,21 @@ function play(c: Call, data: ArrayBuffer) {
  * closes after it opened. Throws a message fit for a toast; everything is released on failure.
  */
 export async function startGptLive(streamId: string, onLost: (why: string) => void): Promise<void> {
-  if (call) return;
+  if (call || nativeActive) return;
+  const native = nativeLive();
+  if (native?.available()) {
+    const current = ++generation;
+    const url = await socketUrl("/api/manager/live/audio", { stream_id: streamId });
+    if (current !== generation) throw new Error("Voice call cancelled.");
+    await native.start(url);
+    if (current !== generation) { native.stop(); throw new Error("Voice call cancelled."); }
+    nativeActive = true;
+    nativeTimer = setInterval(() => {
+      const why = native.levels().lost;
+      if (why) { stopGptLive(); onLost(why); }
+    }, 100);
+    return;
+  }
   if (!gptLiveSupported()) throw new Error("This client cannot capture audio for a voice call.");
   const e = env();
   let stream: StreamLike;
@@ -195,6 +228,7 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
 
 /** Mute or unmute the microphone for the call (the socket stays open). */
 export function setGptLiveMuted(muted: boolean) {
+  if (nativeActive) { nativeLive()?.setMuted(muted); return; }
   if (!call) return;
   call.muted = muted;
   if (call.socket.readyState === 1) call.socket.send(muted ? "mute" : "unmute");
@@ -202,6 +236,7 @@ export function setGptLiveMuted(muted: boolean) {
 
 /** Drop whatever speech is queued on the speaker (barge-in). */
 export function interruptGptLive() {
+  if (nativeActive) { nativeLive()?.interrupt(); return; }
   if (!call) return;
   for (const source of call.sources) { source.onended = null; try { source.stop(); } catch {} }
   call.sources.clear();
@@ -210,6 +245,10 @@ export function interruptGptLive() {
 
 /** Hang up this client's side. Idempotent; Core ends its half when the Manager call stops. */
 export function stopGptLive() {
+  generation++;
+  if (nativeTimer) { clearInterval(nativeTimer); nativeTimer = null; }
+  if (nativeActive || platform.os === "ios") nativeLive()?.stop();
+  nativeActive = false;
   const c = call;
   call = null;
   if (!c) return;

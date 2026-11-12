@@ -68,13 +68,18 @@ export function ConnectScreen() {
       contentStyle={{ paddingTop: safeArea().top + 24, paddingBottom: safeArea().bottom + 24 + keyboardFrame().height }}>
       <View class="grow justify-center px-6">
       <View class="w-full max-w-[420px] gap-4">
-        <View class="gap-1.5">
-          <Text class="text-[20px] leading-7 font-semibold text-foreground">Connect to Core</Text>
+        <View class="gap-2">
+          <Text style={platform.os === "macos" ? {} : { fontFamily: "Geist" }} class="text-[24px] leading-8 font-semibold text-foreground">Connect to Core</Text>
           <If when={platform.os === "macos"} else={
-            <Text class={`${T.sec} text-muted-foreground`}>
-              This app talks to Core directly over your network. Enter the address Core serves on — for example
-              http://192.168.1.20:4747 — with Core started as NEXUS_HOST=0.0.0.0 nexus serve.
-            </Text>
+            <View class="gap-3">
+              <Text style={{ fontFamily: "Geist" }} class="text-[16px] leading-6 text-foreground-secondary">Connect this phone to Nexus running on your computer.</Text>
+              <View class="gap-2 rounded-(--radius-card) bg-raised p-4">
+                <Text style={{ fontFamily: "Geist" }} class="text-[15px] leading-6 text-foreground">1. Start Core on your computer:</Text>
+                <Text style={{ userSelect: "text" }} class={`${T.mono} text-foreground`}>NEXUS_HOST=0.0.0.0 nexus serve</Text>
+                <Text style={{ fontFamily: "Geist" }} class="text-[15px] leading-6 text-foreground">2. Enter its LAN or Tailscale address below, including port 4747.</Text>
+                <Text style={{ fontFamily: "Geist" }} class="text-[13px] leading-5 text-muted-foreground">Use a trusted network: this Core accepts connections without a token.</Text>
+              </View>
+            </View>
           }>
             <Text class={`${T.sec} text-muted-foreground`}>
               A local Core is found automatically from ~/.nexus/daemon.json. To use a Core on another machine,
@@ -90,10 +95,10 @@ export function ConnectScreen() {
             placeholder="http://192.168.1.20:4747" autoCapitalize="none" autoCorrect={false}
             submitBehavior="submit" onSubmit={() => void submit()}
             onChange={({ value }) => { error.set(null); address.set(value); }}
-            class={`h-11 rounded-(--radius) px-3 text-[15px] text-foreground placeholder:text-muted-foreground ${FOCUS} ${error() ? "bg-error/10" : "bg-card"}`}
+            class={`h-11 rounded-(--radius) px-3 text-[16px] text-foreground placeholder:text-muted-foreground ${FOCUS} ${error() ? "bg-error/10" : "bg-card"}`}
           />
           <If when={!!error()}>
-            <Text testID="connect-error" class="text-[13px] leading-5 text-error">{error()!}</Text>
+            <View class="gap-1"><Text testID="connect-error" class="text-[13px] leading-5 text-error">{error()!}</Text><If when={platform.os !== "macos"}><Text style={{ fontFamily: "Geist" }} class="text-[13px] leading-5 text-muted-foreground">Check the address, network and Local Network permission, then try again.</Text></If></View>
           </If>
         </View>
         <View class="flex-row items-center gap-2">

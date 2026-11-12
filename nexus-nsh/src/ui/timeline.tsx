@@ -1110,7 +1110,7 @@ export function SubagentDoneModal() {
 }
 
 /** A fenced code block (DESIGN_PLAN D08): a panel card with the language and a Copy button over the code. */
-function CodeFence(p: { block: TextViewCodeBlock }) {
+export function CodeFence(p: { block: TextViewCodeBlock }) {
   const code = () => p.block.code;
   return (
     <View class="w-full my-1 bg-card overflow-hidden" testID="code-fence">
@@ -1221,10 +1221,10 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full bg-band py-3 relative ${USER_BAND_INSET}`} testID="msg-user"
+      <View class={`group/band w-full bg-band py-3 relative ${phone ? "rounded-(--radius-card) px-4" : USER_BAND_INSET}`} testID="msg-user"
         onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
-        <View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} />
+        <If when={!phone}><View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} /></If>
         <If when={!!r().images?.length}>
           <View class="flex-row flex-wrap gap-2 pb-2" testID="user-images">
             <Each of={r().images ?? []} key={(i) => i.data_url}>
@@ -1252,7 +1252,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={big() && !full() ? { userSelect: "text", numberOfLines: 6 } : { userSelect: "text" }} class={`${TS.body} text-foreground`}>{body()}</Text>
+            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...(phone ? { fontFamily: "Geist" } : {}) }} class={`${TS.body} text-foreground`}>{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">

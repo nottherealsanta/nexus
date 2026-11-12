@@ -348,12 +348,13 @@ and a click or `files.root_toggle` switches between the project and the open ses
 worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
 folders are bold, ignored entries are muted and can be hidden, and Git status letters are
 right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens the
-editable, syntax-highlighted source in a centred modal over the dimmed page. The header has
+editable, syntax-highlighted source in a full-height modal, centred across the dimmed page. The header has
 `‹ Back`, the path (basename bold), and `editing`, `● modified` or `changed on disk · reload`.
-The vendored editor supplies line numbers, folding and horizontal scrolling for long lines;
+The vendored editor supplies line numbers (the cursor's line bright), quiet `▾`/`▸` fold marks and horizontal
+scrolling for long lines; the wheel scrolls the text without moving the cursor, and a click or drag places it or selects;
 NSH currently soft-wraps, so long-line wrapping parity remains an unresolved verification gate,
 not an approved client difference. End reaches the insertion point after the final character. Markdown files (`.md`, `.markdown`)
-open as source; `ctrl+shift+p` toggles rendered prose and Find returns to the source first.
+open as source; `ctrl+shift+p` toggles rendered prose (Mermaid fences drawn as in the timeline) and Find returns to the source first.
 When a session needs approval or an answer, its header shows `⚠ N waiting`.
 The selected file can be copied as an absolute path, inserted as `@path`, or opened in
 `$VISUAL`/`$EDITOR` with the terminal suspended. Core serves whole files up to 1 MiB.

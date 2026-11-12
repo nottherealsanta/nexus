@@ -33,6 +33,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
+| 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |
 | 41 | [Terminal is the user's; the bash tool is separate](41-terminal-user-only.md) | **landed 2026-11-11**; dock is user-only, bash is pipe-only, `N shell` opens the jobs list in both clients | Inspector `job` lane (follow-up); paired TUI/NSH screenshots not verified |
 | 42 | [`/btw` modal parity](42-btw-modal-parity.md) | **new**; found in 23's captures: NSH extra buttons, no footer | Decide the shared shape |
 | 40 | [Git tab: active worktree only, change summary, no branch list](40-git-tab-summary.md) | **new** | Confirm summary shape and per-file actions, then Core line counts |

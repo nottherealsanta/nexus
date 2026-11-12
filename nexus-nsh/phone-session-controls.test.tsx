@@ -12,7 +12,7 @@ const session = {
 const second = { ...session, id: "ses_2", directory: "/work/demo", title: "Chores", created: 2, updated: 3 };
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 
-interface Flags { archive?: boolean; questions?: unknown[] }
+interface Flags { archive?: boolean; questions?: unknown[]; approvals?: unknown[] }
 function network(flags: Flags = {}) {
   const frames = () => flags.archive
     ? `event: message\ndata: ${JSON.stringify({ id: 2, time: 2, type: "session.archived", session_id: "ses_1", data: { root: "ses_1", sessions: ["ses_1"], archived: true, revisions: { ses_1: 2 } } })}\n\n`
@@ -23,7 +23,7 @@ function network(flags: Flags = {}) {
     "GET */api/config": { body: { revision: "test", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
     "GET */api/snapshot*": { body: {
       watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" },
-      projects: [project], sessions: [session, second], running: [], approvals: [], questions: flags.questions ?? [], selected: null,
+      projects: [project], sessions: [session, second], running: [], approvals: flags.approvals ?? [], questions: flags.questions ?? [], selected: null,
     } },
     "GET */api/event*": () => ({ body: connected + frames(), headers: { "content-type": "text/event-stream" } }),
     "GET */api/provider": { body: [] },
@@ -70,6 +70,60 @@ async function openConversation(app: any) {
 }
 
 describe("phone routes (plans 29 and 30)", () => {
+  test("opens the sessions drawer and switches conversations", async () => {
+    const app = await openPhone();
+    await openConversation(app);
+    await app.press("id:phone-open-sessions");
+    await app.waitFor("id:phone-sessions-drawer");
+    await app.press("id:session-ses_2");
+    await app.waitFor("id:phone-sessions-drawer", { state: "gone" });
+    expect(app.shows("id:composer-input")).toBe(true);
+    await app.press("id:phone-open-sessions");
+    await app.press("id:phone-all-sessions");
+    await app.waitFor("id:phone-tab-sessions");
+  });
+  test("back leaves a focused conversation without losing its draft", async () => {
+    const app = await openPhone();
+    await openConversation(app);
+    await app.type("id:composer-input", "unfinished message");
+    await app.press("id:phone-back");
+    await app.waitFor("id:phone-tab-sessions");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:composer-input");
+    expect(app.value("id:composer-input")).toBe("unfinished message");
+  });
+  test("the project switcher changes scope without leaving the Sessions tab", async () => {
+    const app = await openPhone();
+    await app.waitFor("id:project-selector");
+    await app.press("id:project-selector");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-0");
+    await app.waitFor("text:All projects");
+    await app.press("id:project-selector");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-1");
+    await app.waitFor("id:phone-tab-sessions");
+    expect(app.shows("id:session-ses_1")).toBe(true);
+  });
+  test("phone settings opens a section and returns to the grouped list", async () => {
+    const app = await openPhone();
+    await app.press("id:phone-tab-settings");
+    await app.waitFor("id:phone-core-card");
+    await app.press("id:section-appearance");
+    await app.waitFor("id:settings-page-appearance");
+    expect(app.shows("id:setting-appearance.theme")).toBe(true);
+    await app.press("id:phone-settings-back");
+    expect(app.shows("id:phone-core-card")).toBe(true);
+    await app.press("id:section-providers");
+    await app.waitFor("id:settings-page-providers");
+    await app.press("id:phone-settings-back");
+    expect(app.shows("id:phone-core-card")).toBe(true);
+    await app.press("id:phone-core-card");
+    await app.waitFor("id:connect-address");
+    expect(app.value("id:connect-address")).toBe("http://nexus.invalid:4747");
+    await app.press("id:connect-cancel");
+    await app.waitFor("id:phone-core-card");
+  });
   test("/search opens Sessions with its search field focused", async () => {
     const app = await openPhone();
     await openConversation(app);
@@ -109,5 +163,13 @@ describe("phone routes (plans 29 and 30)", () => {
     const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
     expect(body.answers[0].selected).toEqual(["safe"]);
     expect(body.answers[0].text).toBe("z");
+  });
+  test("the compact approval keeps every decision available", async () => {
+    const app = await openPhone({ approvals: [{ id: "apr_1", session_id: "ses_1", tool: "bash", call_id: "c1", args: { command: "pytest -q" } }] });
+    await openConversation(app);
+    await app.waitFor("id:waiting-compact");
+    expect(app.texts().includes("pytest -q")).toBe(true);
+    for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
+    expect(app.shows("id:waiting-table")).toBe(false);
   });
 });

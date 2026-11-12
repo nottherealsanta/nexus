@@ -1,4 +1,4 @@
-import { Image, Scroll, Text, View, effect, keymap, safeArea, signal, untracked, windowSize } from "nsh";
+import { Image, Scroll, Text, View, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
@@ -385,7 +385,7 @@ function EditableComposer() {
         </If>
       </View>
     </TimelineColumn>
-    <View class="w-full bg-background" style={{ paddingBottom: safeArea().bottom }} testID="composer-dock"
+    <View class="w-full bg-background" style={{ paddingBottom: phone && keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="composer-dock"
       onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
         <View
@@ -439,7 +439,7 @@ function EditableComposer() {
           <DictationStatus />
           <View class="w-full rounded-(--radius-card) border border-border bg-card px-4 pb-2" testID="composer-surface">
           <RetryNotices />
-          <View class="h-4" testID="composer-top-padding" />
+          <View class={phone ? "h-2" : "h-4"} testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
@@ -1091,8 +1091,8 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class="relative w-full mb-2 rounded-(--radius-card) bg-raised" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
-      <StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" />
+    <View class={`relative w-full mb-2 rounded-(--radius-card) bg-raised ${phone ? "overflow-hidden" : ""}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+      <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" /></If>
       <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class="pl-4 pr-4 py-3 gap-2.5">
@@ -1141,7 +1141,7 @@ function ApprovalBody(p: { a: Approval }) {
   return (
     <View class="gap-2.5">
       {/* A phone shows a compact card: the command or path, not the parameter table or the diff. */}
-      <If when={phone}><View class="rounded-(--radius) bg-background px-3 py-2" testID="waiting-compact"><Text style={{ numberOfLines: 4, userSelect: "text" }} class={`${T.mono} text-foreground`}>{compactApproval(a)}</Text></View></If>
+      <If when={phone}><View class="rounded-(--radius-card) bg-background px-3 py-3" testID="waiting-compact"><Text style={{ numberOfLines: 4, userSelect: "text" }} class={`${T.mono} text-foreground`}>{compactApproval(a)}</Text></View></If>
       <If when={!phone && parts().table.length > 0}>
         <View class="rounded-(--radius) bg-background px-3 py-2 gap-0.5" testID="waiting-table">
           <Each of={parts().table} key={(r) => r[0]}>
@@ -1161,7 +1161,7 @@ function ApprovalBody(p: { a: Approval }) {
         </View>
       </If>
       <If when={!busyWait()} else={<View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>sending…</Text></View>}>
-        <View role="list" accessibilityLabel="Choices" class="gap-0.5">
+        <View role="list" accessibilityLabel="Choices" class={phone ? "flex-row flex-wrap gap-2" : "gap-0.5"}>
           <Each of={rows()} key={(r) => r.id}>
             {(r, i) => {
               const off = () => !!r().why || (!!r().run && !live());
@@ -1169,9 +1169,10 @@ function ApprovalBody(p: { a: Approval }) {
               return (
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
-                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
+                  style={phone ? { width: "48%" } : {}}
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${phone ? "min-h-11 justify-center bg-background" : isNarrow() ? "min-h-11" : "min-h-8"} ${!phone && i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
                   <If when={!phone}><Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text></If>
-                  <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
+                  <Text style={{ numberOfLines: 1, ...(phone ? { fontFamily: "Geist" } : {}) }} class={`${phone ? "text-center text-[14px] font-semibold" : "flex-1 text-[16px]"} min-w-0 leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
                 </Button>
               );

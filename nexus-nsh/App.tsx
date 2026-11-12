@@ -1,5 +1,5 @@
 import { installFileWatch } from "./src/file-watch";
-import { mount, View, Text, platform, safeArea, windowSize, effect, colorScheme, untracked } from "nsh";
+import { mount, View, Text, Keyboard, keyboardFrame, platform, safeArea, windowSize, effect, colorScheme, untracked } from "nsh";
 import { Tray, Window } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { Header } from "./src/ui/header";
@@ -54,16 +54,17 @@ function PhoneTopBar() {
       <NewSessionButton />
     </If>
     <If when={page() === "conversation"}>
-      <Button onPress={() => phonePage.set("sessions")} accessibilityLabel="Back to sessions" testID="phone-back" class={`min-h-11 justify-center px-2 ${FOCUS}`}><Text class="text-foreground">‹ Sessions</Text></Button>
+      <IconButton icon="arrow-left" onPress={() => { Keyboard.dismiss(); drawer.set(null); phonePage.set("sessions"); }} label="Back to sessions" testID="phone-back" />
       <View class="flex-1 min-w-0">
-        <Text style={{ numberOfLines: 1 }} class={T.title}>{viewed()?.title || "New session"}</Text>
-        <If when={status()}>{() => <Text testID="phone-session-status" style={{ numberOfLines: 1 }} class={`${TS.base} ${status()!.tone === "warning" ? "text-warning" : status()!.tone === "info" ? "text-info" : "text-muted-foreground"}`}>{status()!.word}</Text>}</If>
+        <Text style={{ numberOfLines: 1, fontFamily: "Geist" }} class="text-[17px] leading-6 font-semibold text-foreground">{viewed()?.title || "New session"}</Text>
+        <If when={status()}>{() => <Text testID="phone-session-status" style={{ numberOfLines: 1, fontFamily: "Geist" }} class={`text-[13px] leading-5 ${status()!.tone === "warning" ? "text-warning" : status()!.tone === "info" ? "text-info" : "text-muted-foreground"}`}>{`${viewed() ? model.projects.get(viewed()!.project_id)?.name ?? "Project" : "Project"} · ${status()!.word}`}</Text>}</If>
       </View>
+      <If when={keyboardFrame().height > 0}><IconButton icon="chevron-down" onPress={() => Keyboard.dismiss()} label="Dismiss keyboard" testID="phone-dismiss-keyboard" /></If>
+      <IconButton icon="panel-left" onPress={() => { Keyboard.dismiss(); drawer.set(drawer() === "left" ? null : "left"); }} label="Open sessions" testID="phone-open-sessions" />
     </If>
     <If when={page() === "manager" || page() === "settings"}>
       <Text style={{ numberOfLines: 1 }} class={`flex-1 ${T.title} px-2`}>{page() === "manager" ? "Manager" : "Settings"}</Text>
     </If>
-    <If when={page() === "settings"}><Button onPress={() => coreEditing.set(true)} accessibilityLabel="Change Core address" class={`min-h-11 justify-center px-3 ${FOCUS}`}><Text class="text-foreground">Core</Text></Button></If>
   </View>;
 }
 
@@ -76,7 +77,7 @@ function PhoneShell() {
     if (!onManager && untracked(dropdownOpen)) closeManagerDropdown();
   });
   const managerDot = () => phonePage() !== "manager" && (card() !== null || consent() !== null);
-  return <View class="flex-1 min-h-0" testID="phone-shell">
+  return <View class="flex-1 min-h-0" style={{ paddingBottom: "env(keyboard-inset-height)" }} testID="phone-shell">
     <PhoneTopBar />
     <View class="flex-1 min-h-0">
       <If when={phonePage() === "sessions"}><SessionsTab /></If>
@@ -86,11 +87,11 @@ function PhoneShell() {
       <Drawers />
     </View>
     <If when={phonePage() !== "conversation"}>
-      <View class="flex-row border-t border-border bg-sidebar" style={{ paddingBottom: safeArea().bottom }} testID="phone-tabs">
+      <View class="flex-row border-t border-border bg-sidebar" style={{ paddingBottom: keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="phone-tabs">
         <Each of={PHONE_TABS} key={(tab) => tab.id}>
           {(tab) => <Button onPress={() => phonePage.set(tab().id)} selected={phonePage() === tab().id} accessibilityLabel={tab().label} testID={`phone-tab-${tab().id}`} class={`relative flex-1 items-center justify-center gap-1 min-h-14 ${FOCUS}`}>
             <Icon name={tab().icon} class={phonePage() === tab().id ? "tint-foreground" : "tint-muted-foreground"} />
-            <Text class={`${TS.base} ${phonePage() === tab().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{tab().label}</Text>
+            <Text style={{ fontFamily: "Geist" }} class={`text-[12px] leading-4 ${phonePage() === tab().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{tab().label}</Text>
             <If when={tab().id === "manager" && managerDot()}><View testID="phone-tab-manager-dot" class="absolute top-2 size-2 rounded-full bg-warning" style={{ marginLeft: 22 }} /></If>
           </Button>}
         </Each>

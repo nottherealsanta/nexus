@@ -8,7 +8,7 @@ import { OrbMode, WORDS, cardCaption, cardTitle } from "../../manager";
 import {
   dropdownOpen, dropdownInteractive, closeManagerDropdown, voiceEnabled, audioRequested, callMinimised, card, consent, cardCollapsed,
   detailsScroll, scrollDetails, fieldText, inCall, listening, liveVoice, managerCaption, managerError, notice,
-  phase, reducedMotion, modelPreview, connecting, speaking, stopManagerVoice, submitField, transcribing, userCaption, visual,
+  phase, reducedMotion, connecting, speaking, stopManagerVoice, submitField, transcribing, userCaption, visual,
 } from "../../core/manager";
 import { isNarrow, live, phone } from "../../store";
 import { run } from "../../commands";
@@ -80,8 +80,10 @@ function caption(): { text: string; dim: boolean } | null {
   if (error) return { text: [error.message, error.fix].filter(Boolean).join(" "), dim: false };
   if (inCall() && !live()) return { text: WORDS.reconnecting, dim: false };
   if (notice()) return { text: notice(), dim: false };
-  if (managerCaption()) return { text: managerCaption(), dim: false };
-  if (userCaption()) return { text: userCaption(), dim: true };
+  // A phone's Manager tab does not show the voice conversation: while voice is on it shows the call's state only.
+  const spoken = phone && (audioRequested() || liveVoice());
+  if (!spoken && managerCaption()) return { text: managerCaption(), dim: false };
+  if (!spoken && userCaption()) return { text: userCaption(), dim: true };
   // Reduced motion has no animation to say what is happening, so the state is a word.
   if (reducedMotion() && listening()) return { text: WORDS.listening, dim: false };
   if (reducedMotion() && (phase() !== "idle" || transcribing())) return { text: WORDS.thinking, dim: false };
@@ -109,13 +111,12 @@ export function ManagerPanel(p: { full?: boolean }) {
   return <>
         <Scroll ref={(node: any) => { scroll = node; }} onScroll={(event) => { offset = event.offset.y; limit = Math.max(0, event.contentSize.height - event.size.height); }} class={p.full ? "flex-1 min-h-0" : ""} style={p.full ? {} : { maxHeight: Math.max(100, windowSize().height - 230) }}>
           <View class="gap-3">
+            {/* The Manager's model context is not shown here: it is the debug session view (Open Manager session). */}
             <Text class={T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
-            <If when={!!modelPreview()?.lines?.length}>{() => <Text class={T.meta} style={{ userSelect: "text" }}>{`Model context · excerpt\n${modelPreview()?.lines.join("\n")}`}</Text>}</If>
-            <If when={modelPreview()?.tool != null}>{() => <Text class={T.meta}>{`Tool · ${modelPreview()?.tool?.name} · ${modelPreview()?.tool?.status}`}</Text>}</If>
             <If when={card() != null}>{() => <View testID="manager-card" class="gap-3"><Text class={T.section}>{cardTitle(card()!)}</Text><CardBody card={() => card()!} interactive maxHeight={Math.max(100, windowSize().height - 320)} /></View>}</If>
           </View>
         </Scroll>
-        <Input value={fieldText() ?? ""} autoFocus={dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
+        <Input value={fieldText() ?? ""} autoFocus={!phone && dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
           onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
         <View class="flex-row justify-between items-center gap-3">
         <Button onPress={() => void run("manager.audio_toggle")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-voice-toggle" accessibilityLabel={voiceEnabled() ? "Voice on" : "Voice off"}><Icon name="mic" size={14} /><Text class={T.body}>{voiceEnabled() ? "Voice: on" : "Voice: off"}</Text></Button>

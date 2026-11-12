@@ -4,6 +4,10 @@
 use nsh_core::prelude::*;
 
 mod discovery;
+pub mod live_pcm;
+pub mod live_socket;
+#[cfg(target_os = "ios")]
+mod live_ios;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod ios;
@@ -284,6 +288,8 @@ impl Annotate {
 #[native_module("nexus/native")]
 fn native(registry: &mut Registry) {
     registry.module::<Microphone>();
+    #[cfg(target_os = "ios")]
+    registry.module::<live_ios::LiveAudio>();
     registry.module::<discovery::Discovery>();
     registry.module::<Mermaid>();
     registry.module::<Annotate>();

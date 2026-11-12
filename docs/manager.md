@@ -80,7 +80,7 @@ and the response says so.
 When Manager is off in Settings, its header button and indicator are hidden. Turn it on in Settings to show them.
 
 The header shows **Manager** at rest; a one-row field of gray braille cells replaces that label while the dropdown or a call is active. The field is ten cells wide and three sine-like waves travel across it, lighting only a few of the eight dots in each cell. Idle, thinking, listening and speaking change the waves' speed and brightness (idle slowest and dimmest, speaking fastest and brightest). Idle, thinking and settling stay gray (`text.muted`); while the user speaks the waves are drawn in `manager.listening` (sky) and while the Manager speaks in `manager.speaking` (accent), blended across the 200 ms state change. For listening and speaking the wave height follows the measured voice level (`amp = 0.12 + 0.88 * level`: silence is nearly a flat line, loud is tall); other states keep a fixed height. Reduced motion freezes the field but it still takes the speaker colour; the TUI's ASCII glyph takes it too, and indexed and monochrome tiers use the theme's fallback for the role token. ASCII terminals show one state glyph (`·`, `○`, `◉`). Clicking the label or indicator opens a notification-style dropdown below the first row,
-with the current caption, the last three model-context lines, the active tool/status, the Manager's card,
+with the current caption, the Manager's card,
 a **Tell the Manager…** input, a **Voice: on/off** toggle and **Open Manager session**. The dropdown is borderless and fully opaque; a solid inset input surface makes its focus clear. Everything outside it — the header indicator included — is dimmed by a 40% scrim (NSH: a semi-transparent backdrop over the full viewport), so the panel owns the screen.
 
 While the GPT-Live voice is on, resting the pointer on the header indicator shows **Stop**; clicking it stops the voice through `POST /api/manager/live/stop`, the same path as switching **Voice** off. The control call, the backend session and the typed field stay open. Both clients replace the field with that label while the pointer rests on it (the TUI uses terminal mouse-move events; NSH uses its hover state). A separate **Voice: on/off** button controls audio. Voice defaults on, so explicitly opening Manager starts Live immediately; switching Voice on starts it immediately too. Switching it off stops audio while preserving typing and the backend session.
@@ -99,6 +99,11 @@ the current episode. Canonical context is reloaded on public Manager updates wit
 to the normal global stream. Normal session discovery still excludes Manager sessions. Prompting directly into
 this debug session is rejected; use the dropdown to address the Manager. This explicit debug view supersedes the
 earlier inspector-only decision; it is not a separate Manager conversation implementation.
+
+The dropdown does not show the Manager's model context or its tools: that is the debug view above, which holds
+both spoken and typed turns (each user turn is tagged `speech` or `typed`). On a phone the Manager tab has no
+debug view; while voice is on it shows the call's state rather than the spoken transcript, its field never raises
+the keyboard by itself, and the tab's icon is a waveform.
 
 The palette's **Manager context** command still opens Core's bounded formatted context (`GET /api/manager/context`)
 with episodes, recap, state snapshots/deltas and the recent log. The full raw wire log remains in the inspector.
@@ -151,6 +156,11 @@ There is no tool for files, shell, web, MCP, settings, models, permissions, dele
   negation; and when another approval of the same kind that was shown is still waiting, the words name the
   session (a bare "yes" gets "which one?"). One decision per turn; `scope` is always `once`; there is no
   "all".
+* **Answers as the Manager reads them.** A question line lists each question's `[id]` (when there are several) and
+  numbered options. `answer_question` accepts an option's label, number or id, leaves out `question_id` for a
+  one-question request, and leaves out `question` when one is waiting on the session; Core maps them onto the
+  `ask` reply contract (`tools._resolve_answers`). A 2026-11-12 episode failed three times passing labels and the
+  request id where option and question ids were required.
 * **Every act is on the record.** One `manager_audit` row (heard words, tool, target, result, ok), a
   `manager.acted` event in the target's own timeline, and `origin = "manager"` on the message or the reply.
 * **Rate caps** per turn (starts 2, sends 5, interrupts 3, archives 3, one decision, 8 acts) and 12 acts a minute.
@@ -346,7 +356,7 @@ answer, and returns `{call_id, audio}` (the audio format). The client then opens
 /api/manager/live/audio?stream_id=&token=` (close codes 4401 bad token, 4403 not the holder, 4404 no call, 4409 replaced
 by another client): **binary frames are raw PCM16 little-endian mono at 24 kHz, 20 ms or any length, both ways**; text frames `mute`
 and `unmute` (client to Core) silence the microphone. A client that drops its socket does not end the call. Errors from
-`live/start` are 409: `live_mode_off`, `consent_required` (a separate notice for `codex`, `POST /api/manager/consent
+`live/start` are 409: `live_unavailable` (ChatGPT's call endpoint answered 404/410, so GPT-Live is not offered to this sign-in now), `live_mode_off`, `consent_required` (a separate notice for `codex`, `POST /api/manager/consent
 {accept, version, provider: "codex"}`), `live_busy`, `live_cancelled` (the call ended while the voice was
 starting), `live_unsupported`, or a `live_*` code from the service. Core does not hold the Manager lock while the
 voice opens (a WebRTC offer can take seconds), so `stop`/Esc still ends the call at once.
@@ -377,6 +387,9 @@ token. TUI: `nexus-tui/src/live.rs` (cpal in, rodio out, `tokio-tungstenite`). B
 open call and keep the typed field. The talk shortcut only interrupts. iOS needs only the same mic and speaker loop over this
 socket (not built). Tested with fake transports and peers, plus two real `aiortc` peers exchanging audio through Opus
 in-process (that test skips where aiortc/PyAV lacks Opus); never with a real call, real devices or real echo.
+
+The native client has tested PCM framing (`native/src/live_pcm.rs`) and a bounded WebSocket transport
+(`native/src/live_socket.rs`). Neither is wired to the microphone, Manager or playback; they do not enable iOS GPT-Live yet.
 
 Live calls never use the Dictation setup path, including after a voice connection failure. The call keeps its Live error and accepts typed input; end it and start again to retry audio. `nexus voice init` installs the pipeline STT/TTS runtime only.
 

@@ -11,11 +11,23 @@ export function mobileClient(native: boolean, os: string, idiom: string): boolea
 /** The phone's tabs, in order. A session opens full screen above the Sessions tab. */
 export const PHONE_TABS = [
   { id: "sessions", label: "Sessions", icon: "sessions" },
-  { id: "manager", label: "Manager", icon: "mic" },
+  { id: "manager", label: "Manager", icon: "manager" },
   { id: "settings", label: "Settings", icon: "settings" },
 ] as const;
 export type PhoneTab = (typeof PHONE_TABS)[number]["id"];
 export type PhonePage = PhoneTab | "conversation";
+
+/** Partition an already recent-first session list without losing its order. */
+export function phoneSessionGroups<S>(sessions: readonly S[], status: (session: S) => { waiting: boolean; running: boolean }): { title: string; sessions: S[] }[] {
+  const groups: { title: string; sessions: S[] }[] = [
+    { title: "Needs you", sessions: [] }, { title: "Running", sessions: [] }, { title: "Recent", sessions: [] },
+  ];
+  for (const session of sessions) {
+    const state = status(session);
+    groups[state.waiting ? 0 : state.running ? 1 : 2].sessions.push(session);
+  }
+  return groups.filter((group) => group.sessions.length > 0);
+}
 
 const mobile = (manifest.settings as unknown as { mobile?: { sections?: string[]; rows?: string[] } }).mobile ?? {};
 const mobileSections = new Set(mobile.sections ?? []);

@@ -94,6 +94,29 @@ describe("Built-in editor (K10)", () => {
     expect(app.shows("text:# Title")).toBe(true);
   });
 
+  test("the preview draws Mermaid diagrams", async () => {
+    const md = "# Plan\n\n```mermaid\ngraph TD\n  A[Org] --> B[Team]\n```\n\nAfter.\n";
+    const app = await open("./App.tsx", {
+      storage: core,
+      network: {
+        ...network,
+        "GET */api/project/prj_1/files*": { body: { path: "", entries: [{ name: "plan.md", kind: "file", ignored: false }] } },
+        "GET */api/project/prj_1/file*": { body: { path: "plan.md", content: md, revision: "rev1", language: "markdown" } },
+      },
+      width: 1500, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:tab-files");
+    await app.waitFor("id:file-entry-plan.md");
+    await app.press("id:file-entry-plan.md");
+    await app.waitFor("id:file-editor");
+    await app.keyboard.press("mod+shift+p");
+    await app.waitFor("id:file-markdown");
+    await app.waitFor("id:mermaid-fence");
+    expect(app.shows("text:graph TD")).toBe(false);
+  });
+
   test("a file opens editable and saves against the revision it was read at", async () => {
     const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");

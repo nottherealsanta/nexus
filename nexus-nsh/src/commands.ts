@@ -730,10 +730,13 @@ on("project.switch", () => {
     run: async () => {
       picker.set(null);
       if (projectStatus(p) === PROJECT_STATUS.inactive) await setProjectStatus(p.id, PROJECT_STATUS.current);
+      const wasSessions = phone && phonePage() === "sessions";
+      if (phone) scopeAll.set(false);
       selectProject(p.id);
+      if (wasSessions) phonePage.set("sessions");
     },
   }));
-  picker.set({ title: "Switch project", items, note: items.length ? undefined : "No projects yet." });
+  picker.set({ title: "Switch project", items: phone ? [{ id: "all-projects", label: "All projects", hint: "", run: async () => { picker.set(null); scopeAll.set(true); } }, ...items] : items, note: items.length ? undefined : "No projects yet." });
 });
 on("project.overview", () => openProjectsOverview());
 on("sidebar.step_back", () => flowBack());

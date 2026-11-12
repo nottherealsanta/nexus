@@ -2309,29 +2309,8 @@ impl App {
                 .into(),
             );
         }
-        if let Some(preview) = &m.preview {
-            if let Some(excerpt) = preview["lines"].as_array() {
-                if !excerpt.is_empty() {
-                    lines.push("Model context · excerpt".into());
-                }
-                lines.extend(
-                    excerpt
-                        .iter()
-                        .filter_map(|line| line.as_str().map(str::to_owned)),
-                );
-            }
-            if let Some(name) = preview["tool"]["name"].as_str() {
-                lines.push(format!(
-                    "Tool · {name} · {}",
-                    preview["tool"]["status"].as_str().unwrap_or("")
-                ));
-            }
-        }
-        if lines.is_empty() {
-            "Ready".into()
-        } else {
-            lines.join("\n")
-        }
+        // The Manager's model context is not shown here: it is the debug session view (Open Manager session).
+        lines.join("\n")
     }
 
     pub fn manager_details_text(&self) -> String {

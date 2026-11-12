@@ -60,6 +60,8 @@ pub fn styles_from_theme(theme: &Theme) -> HashMap<String, Style> {
         ("comment", "text.muted", Modifier::ITALIC),
         ("error", "status.error", Modifier::BOLD),
         ("line_number", "text.muted", Modifier::empty()),
+        ("line_number_active", "text.primary", Modifier::empty()),
+        ("fold_indicator", "border.default", Modifier::empty()),
         ("fold_separator", "text.muted", Modifier::empty()),
     ] {
         styles.insert(name.to_string(), fg(token, modifiers));
@@ -101,6 +103,9 @@ pub struct CodeEditor {
     editor: Editor,
     path: String,
     language: &'static str,
+    /// The next draw scrolls the cursor into view. Typing and selecting set it;
+    /// the wheel does not, so a scrolled view stays where the user left it.
+    follow: bool,
 }
 
 impl CodeEditor {
@@ -121,16 +126,22 @@ impl CodeEditor {
             None => Editor::new(language, text, editor_theme::vesper()),
         }
         .map_err(|error| error.to_string())?;
-        if ascii {
-            editor.set_code_folding_options(CodeFoldingOptions {
-                enabled: true,
-                indicators: FoldIndicators::ascii(),
-            });
-        }
+        editor.set_code_folding_options(CodeFoldingOptions {
+            enabled: true,
+            indicators: if ascii {
+                FoldIndicators::ascii()
+            } else {
+                FoldIndicators {
+                    expanded: "\u{25be}".into(),
+                    collapsed: "\u{25b8}".into(),
+                }
+            },
+        });
         Ok(Self {
             editor,
             path: path.to_string(),
             language,
+            follow: true,
         })
     }
 
@@ -152,6 +163,7 @@ impl CodeEditor {
 
     pub fn set_text(&mut self, text: &str) {
         self.editor.set_content(text);
+        self.follow = true;
     }
 
     /// Draw the editor and place the terminal cursor.
@@ -164,9 +176,24 @@ impl CodeEditor {
     }
 
     /// Draw into a buffer at `area`; `cursor` places the terminal cursor later.
+    /// The view follows the cursor only after an edit or a move, never after
+    /// the wheel scrolled it.
     pub fn render_buffer(&mut self, buf: &mut Buffer, area: Rect) {
-        self.editor.focus(&area);
+        if std::mem::take(&mut self.follow) {
+            self.editor.focus(&area);
+        }
         Widget::render(&self.editor, area, buf);
+    }
+
+    /// Scroll the view by `lines` (negative is up) without moving the cursor.
+    pub fn scroll(&mut self, lines: isize, area: Rect) {
+        for _ in 0..lines.unsigned_abs() {
+            if lines < 0 {
+                self.editor.scroll_up();
+            } else {
+                self.editor.scroll_down(area.height as usize);
+            }
+        }
     }
 
     pub fn cursor(&self, area: Rect) -> Option<(u16, u16)> {
@@ -211,17 +238,18 @@ impl CodeEditor {
             _ => return false,
         }
         self.editor.focus(&area);
+        self.follow = true;
         true
     }
 
     pub fn mouse(&mut self, mouse: MouseEvent, area: Rect) -> bool {
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.editor.scroll_up();
+                self.scroll(-3, area);
                 true
             }
             MouseEventKind::ScrollDown => {
-                self.editor.scroll_down(area.height as usize);
+                self.scroll(3, area);
                 true
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -343,6 +371,7 @@ impl CodeEditor {
         self.editor
             .set_selection(Some(Selection::from_anchor_and_cursor(start, end)));
         self.editor.set_cursor(end);
+        self.follow = true;
     }
 }
 
@@ -371,9 +400,11 @@ impl CodeBuffer {
         self.0.borrow_mut().set_text(text);
     }
     pub fn insert_str(&self, text: &str) {
-        self.0.borrow_mut().editor.apply(InsertText {
+        let mut editor = self.0.borrow_mut();
+        editor.editor.apply(InsertText {
             text: text.to_owned(),
         });
+        editor.follow = true;
     }
     pub fn key(&self, key: KeyEvent, area: Rect) -> bool {
         self.0.borrow_mut().key(key, area)

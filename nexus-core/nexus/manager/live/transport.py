@@ -95,9 +95,15 @@ def error_for_status(status: int, detail: str = "", *, sideband: bool = False) -
                              "GPT-Live is not available on this ChatGPT plan, or the voice allowance is used up")
     if status == 429:
         return LiveHTTPError(status, "live_rate_limited", "The GPT-Live usage limit was reached; try again later")
+    if status in (404, 410) and not sideband:
+        # Seen 2026-11-12: every realtime route answered 404 for a sign-in whose ordinary Codex requests still
+        # worked, minutes after a successful call. Nothing on this side can fix it, so say so plainly.
+        return LiveHTTPError(status, "live_unavailable",
+                             f"ChatGPT does not offer GPT-Live voice to this sign-in right now (HTTP {status} from its "
+                             "call endpoint). Typing to the Manager still works; try the voice again later")
     text = f"sideband upgrade rejected ({status})" if sideband else f"call creation failed ({status})"
     if status in (404, 410):
-        text += "; the call or endpoint is unavailable, or the protocol changed; not retrying"
+        text += "; the call is unavailable; not retrying"
     return LiveHTTPError(status, "live_sideband" if sideband else "live_signaling",
                          f"{text}: {safe_detail(detail)}" if detail.strip() else text)
 

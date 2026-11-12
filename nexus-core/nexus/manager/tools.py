@@ -107,12 +107,19 @@ def definitions() -> list[dict[str, Any]]:
               "mode": {"type": "string", "enum": ["steer", "queue"],
                        "description": "steer: now, between its steps; queue: after its turn. Ignored when it is idle."}},
              ["text"]),
-        _def("answer_question", "Answer a question a session asked the user. Only after the user answered it.",
-             {"handle": _HANDLE, "row": _ROW, "question": {"type": "string", "description": "the pending question id"},
+        _def("answer_question", "Answer a question a session asked the user. Only after the user answered it. "
+             "Give one answer per question in the request: pick options by their label or number as shown, and/or "
+             "give the user's own words as text.",
+             {"handle": _HANDLE, "row": _ROW,
+              "question": {"type": "string", "description": "the pending request id (qst_...); may be left out when "
+                           "only one question is waiting on that session"},
               "answers": {"type": "array", "items": {"type": "object", "properties": {
-                  "question_id": {"type": "string"}, "selected": {"type": "array", "items": {"type": "string"}},
-                  "text": {"type": "string"}}, "required": ["question_id"]}}},
-             ["question", "answers"]),
+                  "question_id": {"type": "string", "description": "the [id] shown before each question; may be "
+                                  "left out when the request has one question"},
+                  "selected": {"type": "array", "items": {"type": "string"},
+                               "description": "option labels or numbers, as shown"},
+                  "text": {"type": "string", "description": "free-text answer or extra context"}}}}},
+             ["answers"]),
         _def("decide_approval", "Allow or deny one pending approval, once. The user must have been told what it is and "
              "must have said yes or no since. If several are waiting, ask which one.",
              {"handle": _HANDLE, "row": _ROW, "approval": {"type": "string", "description": "the pending approval id"},
@@ -166,6 +173,74 @@ def parse_since(value: Any, now: float) -> float | None:
         return datetime.fromisoformat(value.strip()).timestamp()
     except ValueError:
         raise ToolError("since must look like 2d, 12h or 2026-11-01") from None
+
+
+def _loose(text: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", text.casefold()).split())
+
+
+def _resolve_answers(request: dict[str, Any], raw: Any) -> Any:
+    """Map the Manager's answers onto the ``ask`` reply contract.
+
+    The Manager reads labels and numbers, not option ids, so a selection may be an option id, its label (case and
+    punctuation ignored, or a unique prefix of it) or its 1-based number; ``question_id`` may be left out, or be the
+    question's text, when the request holds one question. Anything that still does not fit is passed through
+    unchanged for ``validate_answers`` to reject with its own reason.
+    """
+    questions = [q for q in request.get("questions", []) if isinstance(q, dict)]
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return raw
+    by_id = {q.get("id"): q for q in questions}
+    by_text = {_loose(str(q.get("question") or "")): q for q in questions}
+    out = []
+    for index, answer in enumerate(raw):
+        if not isinstance(answer, dict):
+            out.append(answer)
+            continue
+        answer = {k: v for k, v in answer.items() if k in ("question_id", "selected", "text")}
+        qid = answer.get("question_id")
+        question = by_id.get(qid) or (by_text.get(_loose(qid)) if isinstance(qid, str) else None)
+        if question is None and len(questions) == 1:
+            question = questions[0]
+        if question is None and qid is None and len(raw) == len(questions):
+            question = questions[index]
+        if question is None:
+            out.append(answer)
+            continue
+        answer["question_id"] = question.get("id")
+        selected = answer.get("selected")
+        if isinstance(selected, str):
+            selected = [selected]
+        if isinstance(selected, list):
+            options = [o for o in question.get("options", []) if isinstance(o, dict)]
+            resolved = []
+            for item in selected:
+                resolved.append(_option_id(options, item))
+            answer["selected"] = resolved
+        out.append(answer)
+    return out
+
+
+def _option_id(options: list[dict[str, Any]], item: Any) -> Any:
+    if isinstance(item, int) and not isinstance(item, bool):
+        item = str(item)
+    if not isinstance(item, str):
+        return item
+    ids = [o.get("id") for o in options]
+    if item in ids:
+        return item
+    key = _loose(item)
+    if key.isdigit() and 1 <= int(key) <= len(options):
+        return options[int(key) - 1].get("id")
+    labels = [_loose(str(o.get("label") or "")) for o in options]
+    exact = [o.get("id") for o, label in zip(options, labels, strict=True) if label == key or _loose(str(o.get("id"))) == key]
+    if len(exact) == 1:
+        return exact[0]
+    near = [o.get("id") for o, label in zip(options, labels, strict=True)
+            if key and label and (label.startswith(key) or key.startswith(label))]
+    return near[0] if len(near) == 1 else item
 
 
 def _age(seconds: float) -> str:
@@ -283,10 +358,24 @@ class ManagerTools:
         return f"approval {request['id']} for {handle}: wants to {redact(card['summary'])}"
 
     def _question_line(self, request: dict[str, Any], handle: str) -> str:
+        """One pending ``ask``: every question it holds, with the [id] and numbered options answer_question takes."""
         self._present(request["id"], request)
-        card = cards.question(session_id=request["session_id"], handle=handle, request=request)
-        options = f" Options: {'; '.join(card['options'])}." if card["options"] else ""
-        return f"question {request['id']} for {handle}: {ctx.quoted(card['question'], 300)}.{options}"
+        items = [q for q in request.get("questions", []) if isinstance(q, dict)]
+        if not items:
+            cards.question(session_id=request["session_id"], handle=handle, request=request)  # raises CardError
+        many = len(items) > 1
+        parts = []
+        for item in items:
+            labels = [str(o.get("label") or o.get("id") or "") for o in item.get("options", []) if isinstance(o, dict)]
+            options = (f" Options{' (any number)' if item.get('multiple') else ''}: "
+                       + "; ".join(f"{n}. {ctx.quoted(label, 100)}" for n, label in enumerate(labels, 1)) + "."
+                       if labels else " Free-text answer.")
+            tag = f"[{item.get('id')}] " if many else ""
+            parts.append(f"{tag}{ctx.quoted(str(item.get('question') or ''), 300)}.{options}")
+        head = f"question {request['id']} for {handle}"
+        if many:
+            return head + f" ({len(items)} questions, answer each):\n" + "\n".join(f"  {p}" for p in parts)
+        return f"{head}: {parts[0]}"
 
     def _context(self) -> RankingContext:
         svc = self.svc
@@ -655,11 +744,17 @@ class ManagerTools:
             question_id = args.get("question")
             _, questions = self._pending(session)
             request = next((q for q in questions if q["id"] == question_id), None)
+            if request is None and len(questions) == 1:
+                # Models pass the question's text, or nothing; with one waiting there is no ambiguity.
+                request = questions[0]
             if request is None:
-                raise ToolError("no question with that id is waiting on that session (it may be answered already)")
+                raise ToolError("no question with that id is waiting on that session (it may be answered already)"
+                                if questions or question_id else "no question is waiting on that session")
+            question_id = request["id"]
             self._check_presented(question_id, request, turn, session, tool="question")
+            answers = _resolve_answers(request, args.get("answers"))
             try:
-                svc.runtime.reply_question(request["session_id"], question_id, args.get("answers"),
+                svc.runtime.reply_question(request["session_id"], question_id, answers,
                                            via="manager", heard=turn.heard)
             except QuestionError as exc:
                 raise ToolError(f"that answer does not fit the question: {exc}") from exc

@@ -15,11 +15,11 @@ use crate::ui::{Side, Target};
 pub const NARROW_BELOW: u16 = 100;
 /// The medium breakpoint of D17. The right sidebar starts closed at every width.
 pub const RIGHT_OPEN_FROM: u16 = 120;
-/// The file and diff modal: at most this many columns of content, a cell of
-/// frame and these margins around it when the window has room.
+/// The file and diff modal: the window's full height, at most this many
+/// columns of content, and a cell of frame and this margin either side when
+/// the window has room.
 pub const PANEL_MAX_WIDTH: u16 = 120;
 pub const PANEL_MARGIN_X: u16 = 4;
-pub const PANEL_MARGIN_Y: u16 = 2;
 /// From this width the sidebars are 34 / 36 cells and the reading column is
 /// centred (D17); below it they are 28 / 30.
 pub const WIDE_FROM: u16 = 160;
@@ -180,17 +180,11 @@ pub fn panel_rect(area: Rect) -> Rect {
     } else {
         area.width
     };
-    let frame_y = 2 * (PANEL_MARGIN_Y + 1);
-    let height = if area.height > frame_y + 8 {
-        area.height - frame_y
-    } else {
-        area.height
-    };
     r(
         area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
+        area.y,
         width,
-        height,
+        area.height,
     )
 }
 
@@ -454,8 +448,8 @@ mod tests {
         let panel = g.panel.unwrap();
         assert_eq!(panel.width, PANEL_MAX_WIDTH);
         assert_eq!(panel.x, (160 - PANEL_MAX_WIDTH) / 2);
-        assert_eq!(panel.y, PANEL_MARGIN_Y + 1);
-        assert_eq!(panel.height, 40 - 2 * (PANEL_MARGIN_Y + 1));
+        assert_eq!(panel.y, 0, "the modal is full height");
+        assert_eq!(panel.height, 40);
     }
 
     #[test]
