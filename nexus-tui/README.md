@@ -844,9 +844,14 @@ TUI can be driven by hand in a browser.
   turn. One completion shows `$` in place of the fold and drops the `→` prefix;
   consecutive completions stay one group with `▸`, and expanding shows the full
   context in order, including any output clipping notice.
-- Clipboard images: **Ctrl+V** in the composer in a local macOS or Linux
-  terminal (macOS reads PNG/TIFF through AppKit; Linux uses `wl-paste` or
-  `xclip`; SSH clipboard reads are refused). Pasting inserts `[Image A]`,
+- Clipboard paste: **Ctrl+V** in the composer in a local macOS or Linux
+  terminal reads the clipboard once: an image if present (it wins when the
+  clipboard holds both), otherwise text, otherwise the toast "The clipboard is
+  empty". Text takes the bracketed-paste path, so long text collapses into the
+  paste preview and a pending question card keeps its lock (up to 1 MiB; macOS
+  uses AppKit for images and `pbpaste` for text, Linux uses `wl-paste` or
+  `xclip`, and a missing tool is named in the error; over SSH the read is
+  refused: use the terminal's paste shortcut). An image paste inserts `[Image A]`,
   `[Image B]`, … at the cursor. The composer shows a square thumbnail for each
   attachment above its input, with the muted name above the thumbnail; deleting
   a marker removes its attachment. Clicking a thumbnail opens the drawing modal:

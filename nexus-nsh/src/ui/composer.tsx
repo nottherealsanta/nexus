@@ -2,7 +2,7 @@ import { Image, Scroll, Text, View, effect, keyboardFrame, keymap, safeArea, sig
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, PHONE_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import { compactApproval } from "../mobile";
@@ -288,6 +288,26 @@ function EditableComposer() {
     const entry = makePaste(clean, pasteDrafts()[target] ?? [], text());
     pasteDrafts.update((d) => ({ ...d, [target]: [...(d[target] ?? []), entry] }));
     insertAtCaret(entry.marker);
+  };
+  // Ctrl+V (and the palette's "Paste"): image if the clipboard has one, else text, else a toast.
+  pasteClipboard.fn = async () => {
+    if (reason()) return;
+    const empty = () => toast("info", "The clipboard is empty");
+    try {
+      const items = (await navigator.clipboard.read?.()) ?? [];
+      for (const item of items) {
+        const type = item.types.find((t: string) => t.startsWith("image/"));
+        if (type) { const blob = await item.getType(type); void pasteImages([new File([blob], "clipboard.png", { type })]); return; }
+      }
+      for (const item of items) {
+        if (item.types.includes("text/plain")) { const t = await (await item.getType("text/plain")).text(); if (t) { pasteText(t); return; } }
+      }
+      if (items.length) { empty(); return; }
+    } catch { /* read() may be refused or missing; readText is the fallback */ }
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) pasteText(t); else empty();
+    } catch { toast("error", "Could not read the clipboard; use the platform paste shortcut"); }
   };
   // `viewed()` changes on every model bump; reload only when the project or the viewed session changes.
   let historyKey = "";

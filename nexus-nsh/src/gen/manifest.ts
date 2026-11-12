@@ -1958,6 +1958,23 @@ export const manifest = {
    "note": "Opens a filterable list of this project's earlier prompts, newest first (Core's per-project prompt history, so it survives a restart and is shared by both clients). Enter puts the chosen prompt in the composer, replacing the draft; Up/Down recall in the composer is unchanged. Reconnect to Core stays on its leader key and banner button."
   },
   {
+   "id": "composer.paste",
+   "title": "Paste (image or text)",
+   "category": "composer",
+   "keys": {
+    "tui": "ctrl+v",
+    "nsh": "ctrl+v"
+   },
+   "key_context": "composer",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Pastes the local clipboard into the composer: an image if there is one (it wins when the clipboard holds both), otherwise text, which follows the normal paste path (long text collapses into a paste preview). An empty clipboard shows a toast. Over SSH the TUI cannot read the clipboard and says to use the terminal's paste shortcut. The platform paste key (Cmd+V on macOS, Ctrl+V elsewhere in NSH web) works as before."
+  },
+  {
    "id": "composer.undo",
    "title": "Undo composer edit",
    "category": "composer",

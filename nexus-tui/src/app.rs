@@ -144,6 +144,7 @@ pub const WIRED: &[&str] = &[
     "sidebar.focus",
     "git.open_diff",
     "composer.focus",
+    "composer.paste",
     "composer.undo",
     "composer.redo",
     "timeline.focus",
@@ -6906,6 +6907,12 @@ impl App {
             "session.send" | "composer.steer" => self.send(),
             "composer.queue" => self.send_mode(Some("queue")),
             "composer.newline" => self.composer().newline(),
+            "composer.paste" => {
+                let key = self.draft_key();
+                if self.ui.image_pasting.insert(key.clone()) {
+                    self.effects.push(Effect::PasteImage(key));
+                }
+            }
             "composer.undo" => self.composer().undo(),
             "composer.redo" => self.composer().redo(),
             "session.jump_latest" => {
@@ -15982,9 +15989,28 @@ impl App {
             }
             Ok(None) => self.toast(
                 Level::Info,
-                "No image on the clipboard; use your terminal's paste shortcut for text",
+                "The clipboard is empty",
             ),
             Err(e) => self.toast(Level::Error, e),
+        }
+    }
+
+    /// The result of one Ctrl+V: an image becomes a marker, text goes through
+    /// the bracketed-paste path, an empty clipboard toasts.
+    pub fn apply_clipboard_paste(
+        &mut self,
+        key: String,
+        result: Result<crate::images::Clip, String>,
+    ) {
+        use crate::images::Clip;
+        match result {
+            Ok(Clip::Image(image)) => self.apply_image_paste(key, Ok(Some(image))),
+            Ok(Clip::Empty) => self.apply_image_paste(key, Ok(None)),
+            Ok(Clip::Text(text)) => {
+                self.ui.image_pasting.remove(&key);
+                self.handle_paste(&text);
+            }
+            Err(e) => self.apply_image_paste(key, Err(e)),
         }
     }
 
