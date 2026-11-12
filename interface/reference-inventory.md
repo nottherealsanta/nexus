@@ -145,7 +145,7 @@ Inventory of public pieces: `button`, `icon_button`, `toggle`, `checkbox`, `radi
 ### details_sidebar.rs (1,355)
 - **What it does.** Right sidebar with tabs Session, Changes, MCP, Jobs, Logs; docked from 100 columns, otherwise a drawer; width 24..60 (default 40); `geometry()` is a pure function from which paint and hit-testing both derive; copy-id row; scrolling; file rows expand to diffs.
 - **Retain.** Pure `geometry` function; drawer below 100; labelled metadata with an explicit unavailable state; empty status stated.
-- **Improve.** Only two sections now: Session info and Git status. Session info content is listed in INTERFACE_PLAN and mapped in the matrix (R1-R12). No tab strip is needed for two sections, so use headed sections.
+- **Improve.** Only Session info now (Git status left the right sidebar, plan 33). Session info content is listed in INTERFACE_PLAN and mapped in the matrix (R1-R12). A single headed section.
 - **Omit.** MCP, Jobs, Logs tabs for now (INTERFACE_PLAN defers them), polling gates, `details_visible` reporting.
 - **Copy.** `geometry`, width logic, copy-id hit.
 

@@ -70,6 +70,14 @@ describe("manager keys and clicks", () => {
     expect(app.shows("id:manager-indicator")).toBe(false);
   });
 
+  test("the open panel's scrim leaves the header indicator undimmed", async () => {
+    const app = await withCard(board);
+    await app.waitFor("id:manager-indicator");
+    await app.wait(100);
+    // The scrim is cut around the indicator's measured box (a full-window scrim is the fallback).
+    expect(app.count("id:manager-backdrop-hole")).toBe(1);
+  });
+
   test("cards appear over a dimmed app and Escape closes only the dropdown", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-card");

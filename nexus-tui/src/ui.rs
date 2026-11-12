@@ -702,7 +702,6 @@ pub enum Target {
     AddProject,
     RightSection(usize),
     /// One changed file in the right sidebar's Git status, by row index.
-    GitRow(usize),
     Timeline,
     ContextSection(String),
     /// One switch row in the starting-context inventory.

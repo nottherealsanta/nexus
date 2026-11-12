@@ -280,10 +280,6 @@ fn every_other_message_and_unknown_kind_is_conservative() {
         "wire_event",
         json!({"type": "wire_event"})
     ))));
-    assert!(sync_msg_affects_view(&SyncMsg::Git {
-        session: SESSION.into(),
-        data: Ok(json!({})),
-    }));
     assert!(sync_msg_affects_view(&SyncMsg::Connection(
         nexus_tui::state::ConnectionState::Live
     )));

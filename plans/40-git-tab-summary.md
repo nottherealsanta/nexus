@@ -21,7 +21,7 @@ branch list fills the tab and is the only thing on it.
   (`git.stage`, `git.unstage`, `git.discard`) and open the diff on press. Fed by `loadGitPage` / `gitPage` in
   `store.ts` for `currentWorktree()`.
 - Core: the Git page route returns `worktree`, `branch`, `changes` and `branches`.
-- Background: [09-backlog.md](09-backlog.md) 9.2 (the whole Git page); [33](33-remove-git-from-right-sidebar.md)
+- Background: [09-backlog.md](09-backlog.md) 9.2 (the whole Git page); [33](done/33-remove-git-from-right-sidebar.md)
   removes the right sidebar's Git status, so this tab becomes the only Git view besides the diff modal.
 
 ## Plan
@@ -43,7 +43,7 @@ branch list fills the tab and is the only thing on it.
 - [x] TUI: rewrite the tab body as summary + folder rows; keyboard cursor and `SideRow` hits over folder rows (and
   file rows when expanded); Enter/click expands a folder, Enter on a file opens the diff as today.
 - [x] NSH: the same in `GitTab`; the row context menu moves to file rows inside an expanded folder.
-- [~] Shared manifest/strings for the labels (`No changes`, the summary format) so both clients read the same text. Not done: the manifest has no string table; the strings are duplicated in both clients and noted in design-language.md.
+- [x] Shared manifest/strings for the labels (decided 2026-11-12): `[strings]` table in `interface/manifest.toml` (`git.*` keys), `Manifest::ui_text` in the TUI, `uiText` in NSH, validated by `check_manifest.py`; documented in `interface/README.md`. Other strings are not migrated.
 - [x] Tests: TUI render/behaviour tests (no changes, mixed changes, many files in one folder, expand/collapse); NSH
   browser test the same; paired screenshots of the Git tab (not verified: no screenshots taken; the tests assert the branch list is gone).
 - [x] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`, the Git page notes in

@@ -180,6 +180,8 @@ flag), serve `dist/Nexus`, and run `reports/mobile-2026-11-11/shots.mjs`. Headle
 `phone-redesign.test.tsx`, `phone-session-controls.test.tsx` and `mobile.test.ts` (`nsh test <file>` without
 `--target`). Simulator and signed device builds, and everything on a physical iPhone, are still unverified.
 
+Idiom: only `platform.idiom === "phone"` is the cut-down client; an iPad shows the desktop/web layout (no iPad app, user 2026-11-12). On the phone, long-pressing Send while a turn runs offers Queue / Interrupt and send.
+
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
 workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
@@ -308,8 +310,7 @@ The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sideb
 (the chrome surface); a `border.default` hairline runs under the band and between each
 sidebar (or its rail) and the page. The centre is `bg-background` (the canvas). The
 header is three slots that match the sidebars (the resizable left sidebar, the centre, 300 px when the right
-sidebar is open). Below the band the 44 px right rail (Session, and Git with its changed-file
-count) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
+sidebar is open). Below the band the 44 px right rail (Session) opens the panel on demand and pushes the page; the panel starts closed. Controls, cards,
 the current-project selection, session rows, search fields, prose tables and modals are all
 square, like the TUI's cell grid; only circular status dots, spinners, image remove controls
 and meters keep their shape. A box rule runs a hairline along a box's straight
@@ -652,7 +653,7 @@ No global shortcut is registered.
 - **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
-  never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
+  never cover chrome. Phone and tablet idioms (`platform.idiom`, as `touch`) keep hover-only
   actions visible (the user card's Copy/Fold, tab close, session row menu) and
   use finger-sized targets; session rows are at least 72 px and icon buttons 44 px below
   820 px. `nsh.json` grants every network host, since the address is the user's,
@@ -875,10 +876,10 @@ estimate.
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
 current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
 call is open, a one-row field of braille cells replaces the label: three slow sine waves travel across ten cells,
-lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
+lighting only a few dots. Waves travel only while the voice is connected (disconnected: a frozen quiet wave; muted microphone: a frozen flat line; no animation frames). Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
 drawn in `manager.listening` and speaking in `manager.speaking`, and their height follows the measured voice level.
 Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
-dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
+dropdown dims everything outside it except the indicator. With the live voice connected, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown has two voice buttons: **Connect** / **Disconnect** (connected by default: opening Manager or Connect starts Live immediately; Disconnect stops only audio) and **Mute** / **Unmute** (live voice only; keeps the connection, sends no microphone audio, wave gray and still, caption "Muted"; Disconnect clears it). The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with the voice disconnected, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal

@@ -11,6 +11,8 @@ import { m } from "../../store";
 export const phoneDrawer = signal(false);
 /** The row menu (long press, or the header's overflow): the session it is for, and whether it is renaming. */
 export const rowSheet = signal<{ id: string; renaming: boolean } | null>(null);
+/** Long-press Send while a turn runs (user, 2026-11-12): the chosen mode is handed to the composer's send. */
+export const sendChoice = signal<{ choose: (mode: "queue" | "interrupt") => void } | null>(null);
 /** The project switcher sheet. */
 export const projectSheet = signal(false);
 

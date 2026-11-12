@@ -167,6 +167,13 @@ out += "export const diagramPalettes = " + json.dumps({"light": diagram("light")
 
 out = hdr.format("manifest.toml")
 out += "export const manifest = " + json.dumps(manifest, indent=1) + " as const;\n"
+out += """/** Shared UI text from `[strings]`; `{name}` placeholders are filled from `args`. */
+export function uiText(key: keyof typeof manifest.strings, args: Record<string, string | number> = {}): string {
+  let text: string = manifest.strings[key];
+  for (const [name, value] of Object.entries(args)) text = text.split(`{${name}}`).join(String(value));
+  return text;
+}
+"""
 (ROOT / "src" / "gen" / "manifest.ts").write_text(out)
 page = (ROOT / "src" / "terminal-page.html").read_text()
 licenses = "\n".join((ROOT / "node_modules" / asset / "LICENSE").read_text() for asset in ("@xterm/xterm", "@xterm/addon-fit"))

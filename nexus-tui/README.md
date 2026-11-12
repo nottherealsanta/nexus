@@ -428,18 +428,10 @@ view never notifies. Settings › Notifications › Notification sounds (on by
 default) plays a rising cue when a root session and all its subagents have finished, and
 a higher cue when one needs input; `NEXUS_COMPLETION_SOUNDS=off` silences both.
 
-The right sidebar (D12) has SESSION, CONTEXT and GIT sections: UPPERCASE bold muted
+The right sidebar (D12) has SESSION and CONTEXT sections: UPPERCASE bold muted
 labels, a 9-cell key column and values truncated in the middle. CONTEXT shows the
 `╱` meter with its percentage, `82k of 200k`, `12k in · 2k out` and Cost, each
-reading `not reported` where Core gives nothing (PLAN.md Step 12a). The GIT section groups changed files into Staged, Unstaged and
-Untracked from Core's `/api/session/{id}/git` (`staged`, `unstaged` and the
-porcelain `status` code). A file changed in both the index and the worktree
-appears in both groups. Click a row, or press Enter with the right sidebar
-focused (`up`/`down` move), to open its diff from `/git/diff` in the centre
-column, drawn by `diff.rs` (D09, see Markdown and diffs below): split at 110
-cells and wider, unified below. A Staged row shows the staged diff, an Unstaged
-row the unstaged one; Untracked rows show a notice because Core's diff has no
-untracked contents. Esc returns to the timeline.
+reading `not reported` where Core gives nothing (PLAN.md Step 12a).
 
 Timeline rhythm (DESIGN_PLAN.md D04-D07): the user message is a band across the
 whole page width on the raised surface (rail `▌` at its edge, muted or the focus
@@ -740,8 +732,8 @@ shapes from the docs.
 Anchors (INTERFACE_PLAN.md): left sidebar toggle at the header's leading edge,
 title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files
-with Settings fixed at the bottom; right sidebar SESSION, CONTEXT and GIT
-(the Git section shows its manifest reason when unavailable). Below 100 columns the sidebars become drawers
+with Settings fixed at the bottom; right sidebar SESSION and CONTEXT
+(Git lives in the left sidebar's Git tab only). Below 100 columns the sidebars become drawers
 opened from the same toggles. The waiting card sits directly above the composer
 (DESIGN_PLAN D14): a heavy accent rail, `Allow bash?`, `waiting on you · 0:42`, the
 parameters (and, for edit, write and patch, the diff capped at 12 rows), and a choice
@@ -939,10 +931,10 @@ The session context meter reads Core's context budget; `~` marks estimates.
 The header's **Manager** label toggles a borderless, fully opaque notification dropdown: caption, recent model-context lines,
 current tool/status, the Manager's card, **Tell the Manager…** input and **Open Manager session**. While it or a
 call is open, a one-row field of braille cells replaces the label: three slow sine waves travel across ten cells,
-lighting only a few dots. Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
+lighting only a few dots. Waves travel only while the voice is connected (disconnected: a frozen quiet wave; muted microphone: a frozen flat line; no animation frames). Idle, thinking, listening and speaking change the speed and brightness; idle and thinking are gray, listening is
 drawn in `manager.listening` and speaking in `manager.speaking`, and their height follows the measured voice level.
 Reduced motion freezes the field (still in the speaker colour) and ASCII terminals get one state glyph. Click the field to toggle the dropdown; an open
-dropdown dims everything outside it. With the live voice on, hovering the field shows **Stop** and clicking it stops the
+dropdown dims everything outside it except the indicator. With the live voice connected, hovering the field shows **Stop** and clicking it stops the
 voice (`/api/manager/live/stop`) while the control call, backend session and typed field stay.
 The dropdown has two voice buttons: **Connect** / **Disconnect** (connected by default: opening Manager or Connect starts Live immediately; Disconnect stops only audio) and **Mute** / **Unmute** (live voice only; keeps the connection, sends no microphone audio, wave gray and still, caption "Muted"; Disconnect clears it). The input has a solid inset surface; debug navigation does not start audio. Enter sends text; with the voice disconnected, the first typed request starts a control
 call with audio disabled. Esc/outside click closes the dropdown while audio continues. Automatic cards do not steal

@@ -4,7 +4,7 @@ import { Button } from "nsh/base";
 import { Icon, Status, T, relTime, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { run } from "../commands";
-import { contextBudget, gitStatus, info, m, model, modelCatalog, userHome, viewed, width } from "../store";
+import { contextBudget, info, m, model, modelCatalog, userHome, viewed, width } from "../store";
 import { rightSidebarWidth } from "./geometry";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
@@ -109,53 +109,6 @@ function ContextBar(p: { used: number; window: number }) {
     </View>
   );
 }
-type Change = { path: string; status?: string; staged?: boolean; unstaged?: boolean; added?: number; removed?: number };
-const LETTER_TONE: Record<string, string> = { M: "text-warning", A: "text-success", "?": "text-success", D: "text-error", R: "text-info" };
-function GitGroup(p: { title: string; rows: Change[]; letter: (c: Change) => string }) {
-  return (
-    <If when={p.rows.length > 0}>
-      <View class="pt-3" testID={`git-group-${p.title.toLowerCase()}`}>
-        <View class="flex-row items-center min-h-6"><Text class={`${T.sec} flex-1`}>{p.title}</Text><Text class={T.meta}>{String(p.rows.length)}</Text></View>
-        <Each of={p.rows} key={(c) => c.path}>
-          {(row) => {
-            const c = row();
-            const l = p.letter(c);
-            return (
-              <View class="flex-row items-center gap-2 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent" testID="git-row">
-                <Text class={`w-3.5 text-center text-xs leading-5 font-semibold ${LETTER_TONE[l] ?? "text-muted-foreground"}`}>{l}</Text>
-                <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">{c.path}</Text>
-                <Text class={`${T.meta} text-diff-add`}>{`+${c.added ?? 0}`}</Text>
-                <Text class={`${T.meta} text-diff-del`}>{`−${c.removed ?? 0}`}</Text>
-              </View>
-            );
-          }}
-        </Each>
-      </View>
-    </If>
-  );
-}
-function GitRows(p: { data: () => any }) {
-  const d = () => p.data();
-  const changes = (): Change[] => d().changes ?? [];
-  const untracked = () => changes().filter((c) => c.status === "??");
-  const staged = () => changes().filter((c) => c.staged);
-  const unstaged = () => changes().filter((c) => c.unstaged && c.status !== "??");
-  const ahead = () => Number(d().ahead) || 0, behind = () => Number(d().behind) || 0;
-  return (
-    <View>
-      <View class="flex-row items-center gap-2 min-h-6">
-        <Text class="text-[13px] leading-5 font-medium text-foreground">{`⌥ ${d().branch ?? "—"}`}</Text>
-        <If when={ahead() > 0}><Text class={T.meta}>{`↑${ahead()}`}</Text></If>
-        <If when={behind() > 0}><Text class={T.meta}>{`↓${behind()}`}</Text></If>
-      </View>
-      <If when={changes().length === 0}><Text class={`${T.sec} pt-2`}>Working tree clean.</Text></If>
-      <GitGroup title="Staged" rows={staged()} letter={(c) => (c.status ?? "M")[0]} />
-      <GitGroup title="Unstaged" rows={unstaged()} letter={(c) => (c.status ?? " M")[1] || "M"} />
-      <GitGroup title="Untracked" rows={untracked()} letter={() => "?"} />
-    </View>
-  );
-}
-
 export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
@@ -236,17 +189,6 @@ export function RightSidebar(p: { drawer?: boolean }) {
                 </View>
               );
             }}
-          </If>
-        </Section>
-        <View class="mx-4 h-px bg-border" />
-        <Section title={sections[1].label}>
-          <If when={s()} else={<Text class={T.sec}>Select a session to see Git status.</Text>}>
-            <If when={gitStatus()} else={<Text class={T.sec}>Loading Git status…</Text>}>
-              <If when={gitStatus()?.error}>
-                <Text class={T.sec}>{/not a git repository/i.test(gitStatus()?.error ?? "") ? "Not a Git repository" : gitStatus()?.error}</Text>
-              </If>
-              <If when={gitStatus()?.data}><GitRows data={() => gitStatus()!.data} /></If>
-            </If>
           </If>
         </Section>
       </Scroll>

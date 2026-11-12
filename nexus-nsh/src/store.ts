@@ -885,7 +885,6 @@ export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.t
 /** The open file is Markdown, so it can be read as prose. */
 export const markdownFile = () => isMarkdownPath(openFile()?.path);
 export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
-export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
 export type GitChange = { path: string; status: string; old_path?: string; staged: boolean; unstaged: boolean; added?: number; removed?: number };
 export type GitPageData = { worktree: string; branch: string; changes: GitChange[]; branches: { name: string; local: boolean; current: boolean; upstream?: string }[] };
 export const gitPage = signal<{ project: string; worktree?: string; data?: GitPageData; error?: string } | null>(null);
@@ -1015,11 +1014,6 @@ export async function saveFile() {
     if (cur?.path === f.path) openFile.set({ ...cur, saving: false, stale: stale || cur.stale });
     toast(stale ? "warning" : "error", stale ? "The file changed on disk. Reload it; your text stays." : `Save failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-}
-export async function loadGit(session: string) {
-  gitStatus.set(null);
-  try { const data = await request("GET", `/api/session/${session}/git`); if (viewed()?.id === session) gitStatus.set({ session, data }); }
-  catch (e) { if (viewed()?.id === session) gitStatus.set({ session, error: String(e) }); }
 }
 
 // --- derived ------------------------------------------------------------------------------
@@ -1151,7 +1145,6 @@ export async function selectSession(id: string) {
   centre.set("session");
   scrolledUp.set(false);
   bump();
-  void loadGit(id);
   loadSessionWorktrees(id);
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {

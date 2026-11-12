@@ -1,0 +1,56 @@
+[2mtokens  in 7331 (cached 0) · out 6 (reasoning 0)[0m
+[1m▸ session[0m [2mcall_5c9a9adb3c99445cb54c4d79[0m
+  [2magent:[0m agyhelper
+  [2mtitle:[0m Read a.txt (agyhelper)
+  [2mprompt:[0m Read the file a.txt in the workspace directory /Users/santa/repos/.nexus-zmx-scratch using a file-reading tool. Reply with its exact content and nothing else.
+  [2mwait:[0m true
+[36m✉ message_session exposed[0m
+[36m── child ses_1a1cf2fa3d26c6f7671 · agent agyhelper · agy/gemini-3.8-flash-low ──[0m
+[1m▸ read_file[0m [2mtrn_1a1cf2fa3d78c0b9049:agy:2[0m
+  [2mPath:[0m /Users/santa/repos/.nexus-zmx-scratch/a.txt
+  ↳ result [2m(1 lines, 17 chars)[0m
+    [2m1 lines, 10 bytes[0m
+[36m── back to the parent session ──[0m
+[36m── child ses_1a1cf2fa3d26c6f7671 · agent agyhelper · agy/gemini-3.8-flash-low ──[0m
+[2m— step 2 —[0m
+hello-zmx
+[0m
+[2mtokens  in 20181 (cached 0) · out 36 (reasoning 0)[0m
+[31magy did not close its process/stream after the terminal result; descendants may still be running[0m
+[36m── back to the parent session ──[0m
+  ↳ result [2m(4 lines, 738 chars)[0m
+    [2mSub agent ses_1a1cf2fa3d26c6f7671 (agent agyhelper) failed: agy did not close its process/stream after the terminal result; descendants may still be running. It is idle and keeps its conversation. To resume or redirect this work, send it a message with `message_session` (session ses_1a1cf2fa3d26c6f7671) instead of starting a new sub agent; drop the work only if the user says so.[0m
+    [2m[0m
+    [2m[Nexus notice: `message_session` is now available][0m
+    [2mSend a message to a sub agent you launched with `session` or `fork`. If the child is working, the message reaches it before its next model call (a steer). If it is idle, the message starts a new turn on its existing conversation. Returns at once; the child's answer arrives as a message when it finishes.[0m
+[2m— step 2 —[0m
+[2mtokens  in 8031 (cached 0) · out 3 (reasoning 0)[0m
+[1m▸ session[0m [2mcall_fb27849503ab424eb33b3a2b[0m
+  [2magent:[0m claudehelper
+  [2mtitle:[0m Read a.txt (claudehelper)
+  [2mprompt:[0m Read the file a.txt in the workspace directory /Users/santa/repos/.nexus-zmx-scratch using a file-reading tool. Reply with its exact content and nothing else.
+  [2mwait:[0m true
+[36m── child ses_1a1cf302aa192e5427e · agent claudehelper · claude-code/claude-haiku-4-5 ──[0m
+[2mthinking: [0m
+[2mtokens  in 10 (cached 0) · out 132 (reasoning 0)[0m
+[1m▸ Read[0m [2mtoolu_01QtjxpYDUfqHTquZJjQM8XJ[0m
+  [2mfile_path:[0m /Users/santa/repos/.nexus-zmx-scratch/a.txt
+  ↳ result [2m(2 lines, 14 chars)[0m
+    [2m1	hello-zmx[0m
+    [2m2	[0m
+[2m— step 2 —[0m
+[2mthinking: [0m
+hello-zmx[0m
+[2mtokens  in 8 (cached 22300) · out 60 (reasoning 0)[0m
+[36m── back to the parent session ──[0m
+  ↳ result [2m(3 lines, 75 chars)[0m
+    [2mSub agent ses_1a1cf302aa192e5427e (agent claudehelper) finished.[0m
+    [2m[0m
+    [2mhello-zmx[0m
+[2m— step 3 —[0m
+Only one of the two answers came back.
+
+- **claudehelper:** finished and returned the exact content of a.txt: `hello-zmx`
+- **agyhelper:** failed. It reported that agy did not close its process/stream after the terminal result, so I got no content from a.txt. The child (ses_1a1cf2fa3d26c6f7671) is idle and still has its conversation, and descendant processes may still be running. I did not start a replacement or message it again, since you asked for exactly two children and nothing else. If you want a retry, I can send a message to that existing session.[0m
+[2mtokens  in 8300 (cached 6796) · out 772 (reasoning 0)[0m
+[2msession ses_1a1cf2f708dabd85210[0m

@@ -563,9 +563,8 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     .expect("rail Settings");
                 assert_eq!(settings.x, app.regions.rail.unwrap().x);
                 assert!(settings.y > h.saturating_sub(6));
-                // right sidebar: session info and the Git status reason from the manifest
-                assert!(all.contains("SESSION") && all.contains("GIT"));
-                assert!(all.contains("Loading Git status") || all.contains("Open a session"));
+                // right sidebar: session info only (Git status left it, plan 33)
+                assert!(all.contains("SESSION") && !all.contains("GIT"));
             } else {
                 assert!(!all.contains("SESSION"), "narrow shows one pane");
             }
@@ -1630,28 +1629,6 @@ fn editor_find_reveals_matches_outside_the_initial_viewport() {
 }
 
 #[test]
-fn git_sidebar_shows_status_from_the_selected_session() {
-    use nexus_tui::sync::SyncMsg;
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.apply_sync(SyncMsg::Git {
-        session: SESSION.into(),
-        data: Ok(serde_json::json!({
-            "branch": "main", "ahead": 2, "behind": 1,
-            "changes": [{"path": "example.rs", "added": 3, "removed": 2,
-                         "staged": false, "unstaged": true, "status": " M"}]
-        })),
-    });
-    let (_, rows) = draw(&mut app, 120, 36);
-    let text = joined(&rows);
-    assert!(text.contains("⌥ main  ↑2  ↓1"), "{text}");
-    let row = rows.iter().find(|l| l.contains("example.rs")).unwrap();
-    assert!(
-        row.contains("+3") && row.trim_end().ends_with("−2"),
-        "{row:?}"
-    );
-}
-
-#[test]
 fn old_nexus_shimmer_keeps_graphemes_and_reduced_motion_static() {
     use nexus_tui::theme::shimmer;
     use ratatui::style::Style;
@@ -2071,136 +2048,6 @@ fn preferences_are_restored_and_saved_when_a_setting_changes() {
     assert_eq!(p.theme.mode.as_deref(), Some("light"));
     assert_eq!(p.theme.monochrome, Some(true));
     let _ = std::fs::remove_dir_all(home);
-}
-
-fn git_fixture(app: &mut nexus_tui::app::App) {
-    use nexus_tui::sync::SyncMsg;
-    app.apply_sync(SyncMsg::Git {
-        session: SESSION.into(),
-        data: Ok(serde_json::json!({
-            "branch": "main", "ahead": 0, "behind": 0,
-            "changes": [
-                {"path": "both.rs", "added": 2, "removed": 1,
-                 "staged": true, "unstaged": true, "status": "MM", "old_path": null},
-                {"path": "idx.rs", "added": 4, "removed": 0,
-                 "staged": true, "unstaged": false, "status": "A ", "old_path": null},
-                {"path": "new.txt", "added": 0, "removed": 0,
-                 "staged": false, "unstaged": true, "status": "??", "old_path": null}
-            ]
-        })),
-    });
-}
-
-#[test]
-fn git_status_splits_staged_unstaged_and_untracked() {
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    git_fixture(&mut app);
-    let rows: Vec<_> = app
-        .git_rows()
-        .iter()
-        .map(|r| (r.group.label(), r.path.clone()))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Staged", "both.rs".to_owned()),
-            ("Staged", "idx.rs".to_owned()),
-            ("Unstaged", "both.rs".to_owned()),
-            ("Untracked", "new.txt".to_owned()),
-        ]
-    );
-    let (_, lines) = draw(&mut app, 120, 36);
-    let text = joined(&lines);
-    // D12: the group label with its count right-aligned on the same row.
-    for (heading, count) in [("Staged", "2"), ("Unstaged", "1"), ("Untracked", "1")] {
-        assert!(
-            lines.iter().any(|l| {
-                let l = l.trim_end();
-                l.contains(heading) && l.ends_with(&format!(" {count}"))
-            }),
-            "{heading} {count}: {text}"
-        );
-    }
-    let both = lines.iter().find(|l| l.contains("both.rs")).unwrap();
-    assert!(both.contains("+2") && both.contains("−1"), "{both:?}");
-    assert!(text.contains("new.txt"));
-    let row = lines.iter().position(|l| l.contains("idx.rs")).unwrap();
-    let x = col_of(&lines[row], "idx.rs") as u16;
-    assert_eq!(app.hits.at(x, row as u16), Some(&Target::GitRow(1)));
-}
-
-#[test]
-fn clicking_a_changed_file_opens_its_diff_and_esc_returns() {
-    use nexus_tui::app::Effect;
-    use nexus_tui::sync::{Command, SyncMsg};
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    git_fixture(&mut app);
-    draw(&mut app, 120, 36);
-    app.effects.clear();
-    app.click(Target::GitRow(2));
-    assert!(app.ui.diff_open.is_some());
-    assert!(app.effects.iter().any(|e| matches!(
-        e,
-        Effect::Sync(Command::GitDiff { session, path }) if session == SESSION && path == "both.rs"
-    )));
-    let (_, lines) = draw(&mut app, 120, 36);
-    assert!(joined(&lines).contains("Loading diff"));
-    app.apply_sync(SyncMsg::Diff {
-        session: SESSION.into(),
-        path: "both.rs".into(),
-        data: Ok(serde_json::json!({
-            "path": "both.rs",
-            "staged": "+staged only\n",
-            "unstaged": "diff --git a/both.rs b/both.rs\n@@ -1,2 +7,2 @@\n keep\n-old line\n+new line\n",
-        })),
-    });
-    let (buf, lines) = draw(&mut app, 120, 36);
-    let text = joined(&lines);
-    assert!(text.contains("both.rs") && text.contains("Unstaged"));
-    assert!(text.contains("new line") && text.contains("old line"));
-    assert!(!text.contains("staged only"));
-    let add = lines.iter().position(|l| l.contains("new line")).unwrap();
-    let del = lines.iter().position(|l| l.contains("old line")).unwrap();
-    assert!(lines[add].contains(" 8 + new line"), "{}", lines[add]);
-    let x = col_of(&lines[add], "new line") as u16;
-    let dx = col_of(&lines[del], "old line") as u16;
-    let add_bg = buf[(x, add as u16)].bg;
-    let del_bg = buf[(dx, del as u16)].bg;
-    assert_ne!(add_bg, del_bg);
-    assert_ne!(add_bg, Color::Reset);
-    press(&mut app, &["esc"]);
-    assert!(app.ui.diff_open.is_none());
-    let (_, lines) = draw(&mut app, 120, 36);
-    assert!(joined(&lines).contains("Hello"));
-}
-
-#[test]
-fn enter_in_the_right_sidebar_opens_the_selected_diff() {
-    use nexus_tui::app::{Effect, GitGroup};
-    use nexus_tui::sync::Command;
-    use nexus_tui::ui::Focus;
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    git_fixture(&mut app);
-    draw(&mut app, 120, 36);
-    app.ui.focus = Focus::Right;
-    app.effects.clear();
-    press(&mut app, &["down", "enter"]);
-    assert_eq!(
-        app.ui.diff_open,
-        Some(("idx.rs".to_owned(), GitGroup::Staged))
-    );
-    assert!(app.effects.iter().any(|e| matches!(
-        e,
-        Effect::Sync(Command::GitDiff { path, .. }) if path == "idx.rs"
-    )));
-    // Untracked files have no Core diff: no request, a notice instead.
-    press(&mut app, &["esc"]);
-    app.ui.focus = Focus::Right;
-    app.effects.clear();
-    press(&mut app, &["end", "enter"]);
-    assert!(app.effects.is_empty());
-    let (_, lines) = draw(&mut app, 120, 36);
-    assert!(joined(&lines).contains("Untracked file"));
 }
 
 const GEN: &str = "log_c915bfc9b6d826c4";
@@ -4074,7 +3921,7 @@ fn right_sidebar_uses_uppercase_labels_a_nine_cell_key_column_and_middle_truncat
     let right = app.regions.right.expect("right sidebar");
     let col = |row: &String| -> String { row.chars().skip(right.x as usize + 2).collect() };
     let lines: Vec<String> = rows.iter().map(col).collect();
-    for label in ["SESSION", "CONTEXT", "GIT"] {
+    for label in ["SESSION", "CONTEXT"] {
         assert!(
             lines.iter().any(|l| l.trim_end() == label),
             "{label}: {lines:#?}"

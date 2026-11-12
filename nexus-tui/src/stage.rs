@@ -146,7 +146,15 @@ pub fn draw(
     }
     if m.dropdown_open {
         // Everything outside the panel recedes; the header indicator stays clickable.
+        // The indicator is never dimmed: its cells keep their colours through the scrim.
+        let keep: Vec<_> = (strip.x..strip.right())
+            .flat_map(|x| (strip.y..strip.bottom()).map(move |y| (x, y)))
+            .map(|(x, y)| ((x, y), buf[(x, y)].clone()))
+            .collect();
         paint::scrim_by(t, buf, area, DROPDOWN_SCRIM_PERCENT);
+        for ((x, y), cell) in keep {
+            buf[(x, y)] = cell;
+        }
     }
     // A hovered indicator that can stop the live voice says so, over the scrim.
     if strip.width > 0 && enabled && m.live_call && hovered(app, strip) {
