@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
-from . import artifacts, oneshot, permissions, worktrees
+from . import artifacts, cargo_env, oneshot, permissions, worktrees
 from . import extensions as extension_files
 from . import mcp as mcp_files
 from . import questions as question_contract
@@ -1480,7 +1480,7 @@ class Runtime:
         if not command.strip():
             raise ValueError("Type a command after ! to run it with bash")
         proc = await asyncio.create_subprocess_exec(
-            "/bin/bash", "-c", command, cwd=session.directory, stdin=asyncio.subprocess.DEVNULL,
+            "/bin/bash", "-c", command, cwd=session.directory, env=cargo_env.process_env(session.directory), stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)

@@ -6,6 +6,7 @@ is missing. Checks never start the daemon, load a model or download anything.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import shutil
 import time
@@ -160,10 +161,27 @@ def check_zmx() -> list[Row]:
     return rows
 
 
+def check_rust_builds() -> list[Row]:
+    """Size of the shared Rust build folders (plan 36); nothing removes them automatically."""
+    from . import cargo_env
+    found = cargo_env.folders()
+    if not found:
+        return []
+    total = 0
+    for folder in found:
+        for path in folder.rglob("*"):
+            with contextlib.suppress(OSError):
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+    size = f"{total / 2**30:.1f} GiB" if total >= 2**30 else f"{total / 2**20:.0f} MiB"
+    return [_row("rust builds", "ok", f"{len(found)} shared build folder(s) under {cargo_env.cargo_home() / 'build'}, {size}; "
+                 f"remove with `rm -rf {cargo_env.cargo_home() / 'build'}/{cargo_env.PREFIX}*` (rebuilt on the next cargo build)")]
+
+
 def run() -> list[Row]:
     found = daemon.discover()
     return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_search(),
-            check_mcp(found), *check_voice(), check_rg(), *check_zmx()]
+            check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
 
 
 RELEASES_URL = "https://api.github.com/repos/nottherealsanta/nexus/releases/latest"

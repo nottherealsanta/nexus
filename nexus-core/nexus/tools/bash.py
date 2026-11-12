@@ -16,6 +16,7 @@ import os
 import signal
 from typing import Any
 
+from .. import cargo_env
 from ..llmhub.types import ToolSpec
 from .base import Tool, ToolContext, ToolError, clip
 
@@ -54,7 +55,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     timeout = timeout_value(args.get("timeout"), foreground=True)
     proc = await asyncio.create_subprocess_exec(
         "/bin/bash", "-c", command,
-        cwd=ctx.workspace, stdin=asyncio.subprocess.DEVNULL,
+        cwd=ctx.workspace, env=cargo_env.process_env(ctx.workspace), stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )

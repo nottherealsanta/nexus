@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import cargo_env
 from .store import new_id
 from .tools.base import ToolError
 
@@ -187,7 +188,7 @@ class Jobs:
             raise ToolError(f"live background bash job limit ({MAX_LIVE}) reached; kill one first")
         self._trim()
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-            "/bin/bash", "-c", command, cwd=directory, stdin=asyncio.subprocess.DEVNULL,
+            "/bin/bash", "-c", command, cwd=directory, env=cargo_env.process_env(directory), stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True,
         ))
         try:
