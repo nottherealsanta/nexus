@@ -5,7 +5,7 @@ import { archivedFilter, currentProject, m, model, scopeAll } from "../../store"
 import { orderedProjects } from "../../project-rail";
 import { projectDot } from "../../mobile";
 import { BottomSheet, SheetRow } from "./sheet";
-import { archiveById, chooseProject, projectSheet, renameById, rowSheet } from "./state";
+import { archiveById, chooseProject, projectSheet, renameById, rowSheet, sendChoice } from "./state";
 import { resumeArchived } from "../../commands";
 
 const draft = signal("");
@@ -56,10 +56,22 @@ function ProjectSheet() {
   );
 }
 
+/** Long-press Send during a running turn: Queue or Interrupt and send (44 px rows). */
+function SendChoiceSheet(p: { choose: (mode: "queue" | "interrupt") => void }) {
+  const pick = (mode: "queue" | "interrupt") => { const choose = p.choose; sendChoice.set(null); choose(mode); };
+  return (
+    <BottomSheet label="Send options" testID="send-sheet" onClose={() => sendChoice.set(null)}>
+      <SheetRow label="Queue" detail="after the turn" testID="send-queue" onPress={() => pick("queue")} />
+      <SheetRow label="Interrupt and send" testID="send-interrupt" onPress={() => pick("interrupt")} />
+    </BottomSheet>
+  );
+}
+
 /** The phone shell's sheets: the row menu and the project switcher. */
 export function PhoneSheets() {
   return <>
     <If when={rowSheet()}>{(r) => <RowSheet id={r().id} renaming={r().renaming} />}</If>
+    <If when={sendChoice()}>{(c) => <SendChoiceSheet choose={c().choose} />}</If>
     <If when={projectSheet()}><ProjectSheet /></If>
   </>;
 }

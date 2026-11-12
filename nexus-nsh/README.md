@@ -180,6 +180,8 @@ flag), serve `dist/Nexus`, and run `reports/mobile-2026-11-11/shots.mjs`. Headle
 `phone-redesign.test.tsx`, `phone-session-controls.test.tsx` and `mobile.test.ts` (`nsh test <file>` without
 `--target`). Simulator and signed device builds, and everything on a physical iPhone, are still unverified.
 
+Idiom: only `platform.idiom === "phone"` is the cut-down client; an iPad shows the desktop/web layout (no iPad app, user 2026-11-12). On the phone, long-pressing Send while a turn runs offers Queue / Interrupt and send.
+
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
 workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
@@ -653,7 +655,7 @@ No global shortcut is registered.
 - **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
-  never cover chrome. Phone and tablet idioms (`platform.idiom`) keep hover-only
+  never cover chrome. Phone and tablet idioms (`platform.idiom`, as `touch`) keep hover-only
   actions visible (the user card's Copy/Fold, tab close, session row menu) and
   use finger-sized targets; session rows are at least 72 px and icon buttons 44 px below
   820 px. `nsh.json` grants every network host, since the address is the user's,

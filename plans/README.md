@@ -40,9 +40,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
 | 37 | [`/continue`: show it at once](37-continue-feedback.md) | **new**; Core is fast, the wait is the model/network and the clients show nothing until `busy` | Measure the client path, then the pending row |
 | 34 | [Network errors: subagents wait, never fall back](34-network-errors-no-fallback.md) | **new** | Classify network errors; wait on the same model |
-| 25 | [Alt+Enter: interrupt and send](25-interrupt-and-send.md) | **partly landed** (2026-11-12) | Desktop done; mobile control (long-press on Send) needs user approval |
 | 26 | [Launch: animate from the first frame, no progress bar](26-launch-splash.md) | **landed 2026-11-12 (code)** | Cold-start capture in Ghostty / NSH web not verified |
-| 28 | [Manager indicator and voice control](28-manager-indicator.md) | **new** | Confirm "voice on" means a live call |
+| 28 | [Manager indicator and voice control](28-manager-indicator.md) | **in progress**; "voice on" removed (user, 11-12): connect/disconnect and mute/unmute only | Indicator states, no dimming, colour by speaker |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
 | 5 | [Mobile client and the NSH look](05-mobile-and-design.md) | 5.1 implemented, unverified on device; 5.2 mobile redesign and 5.3 web/macOS look **new** | Answer the open questions in 5.2; audit screenshots for 5.3 |
 | 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Offline work and the live end-to-end check done 11-12** (agy exit grace fixed, `reports/zmx-2026-11-12/live/`) | M0 spikes; inspector rebuilt requests; vendor terms need a written answer |
@@ -51,7 +50,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
 Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
-[22 remove `/continuation`](done/22-remove-continuation.md), [29 session commands](done/29-session-commands.md),
+[22 remove `/continuation`](done/22-remove-continuation.md), [25 interrupt and send](done/25-interrupt-and-send.md), [33 right-sidebar Git removed](done/33-remove-git-from-right-sidebar.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md),
 [32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md),
 [1 release](done/01-release.md), [2 terminal](done/02-terminal.md), [3 Manager](done/03-manager.md),

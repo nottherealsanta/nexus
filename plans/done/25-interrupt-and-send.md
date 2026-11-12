@@ -26,7 +26,7 @@ So the meaning is **interrupt and send this message**, not a second Esc.
 - Queue: existing queued messages and pending steers are kept; the interrupt message runs first (priority), the queue runs after it, as old Nexus did. Nothing returns to the composer.
 - Idle: `interrupt` behaves like `send`. A waiting approval or question is cancelled as Esc does.
 - NSH `waiting.allow_session` moved from `alt+enter` to `cmd+shift+enter` (the contexts were not proven disjoint: the approval card and a busy composer are both live).
-- Mobile: no long-press added (out of scope, needs user approval). Open.
+- Mobile (user, 2026-11-12, approved): on the phone, long-pressing Send while a turn runs and the composer has text opens a compact sheet with "Queue" and "Interrupt and send" (44 px rows). Idle: long-press does nothing special. Implemented in `composer.tsx` + `ui/mobile/sheets.tsx`; test in `phone-redesign.test.tsx`.
 
 ## Plan
 
@@ -42,8 +42,8 @@ So the meaning is **interrupt and send this message**, not a second Esc.
   `check_manifest.py`.
 - [x] **TUI:** detect Alt+Enter in `composer.rs`/`keys.rs` (Ghostty sends `ESC CR`; with the kitty keyboard
   protocol it is a modified Enter); route to the new command. Composer hint line shows it while busy.
-- [ ] **NSH:** (desktop/web done; mobile long-press NOT added, awaiting approval; real-browser Alt+Enter unchecked, only the nsh web test)  the same key in `composer.tsx`; on web check the browser does not eat Alt+Enter; macOS Option+Enter.
-  Mobile gets it as a long-press on Send (or a menu item), since there is no Alt key: ask before adding.
+- [x] **NSH:** (desktop/web and mobile long-press done; real-browser Alt+Enter unchecked, only the nsh web test)  the same key in `composer.tsx`; on web check the browser does not eat Alt+Enter; macOS Option+Enter.
+  Mobile gets it as a long-press on Send (approved 2026-11-12).
 - [x] Timeline: the interrupted turn shows its normal interrupted state, then the user message; nothing hidden.
 - [x] Docs: `docs/loop.md` (interrupt), `docs/api.md`, both READMEs, ledger row ("ported from old Nexus").
 - [x] Tests: Core API tests; TUI behaviour test (Alt+Enter while busy sends and interrupts); NSH browser test.

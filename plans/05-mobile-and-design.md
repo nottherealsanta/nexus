@@ -13,7 +13,9 @@ approval. `AGENTS.md` is updated with this change.
 
 Decision (user, 2026-11-09): **mobile gets all slash commands** in its composer (for example `/btw`, section 23).
 
-Implemented in the working tree for iPhone and iPad: three tabs, reduced timeline, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
+Decision (user, 2026-11-12): **the iPad shows the desktop/web client, not the phone layout.** There is no iPad app and none is planned. Only `platform.idiom === "phone"` selects the cut-down client (`mobileClient` in `nexus-nsh/src/mobile.ts`); iPad and iPad-in-browser get the desktop layout with every desktop surface. A browser on an iPad is just the web build. If an iOS build ever runs on an iPad it is the desktop client too, so the iPhone-only guards (`desktopOnly`, Settings scope) do not apply to it. Touch targets still follow `touch` (phone or pad idiom).
+
+Implemented in the working tree for iPhone: three tabs, reduced timeline, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
 
 - [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
@@ -25,9 +27,9 @@ Implemented in the working tree for iPhone and iPad: three tabs, reduced timelin
   and test it at 390 px. Allowed, since an answer is part of "status"; the other tool detail stays out.
 - [x] **Settings:** mobile scope in the manifest selects the sections/rows that apply (Providers sign-in, Appearance, Notifications, Voice, About; hide Agents,
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
-- [x] **Remove** desktop capabilities from the iPhone/iPad build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
+- [x] **Remove** desktop capabilities from the iPhone build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
   management, row menus that reach them. Make them unreachable from the palette and shortcuts too.
-- [~] Phone polish on the three tabs (2026-11-11): keyboard avoidance (shell pads by `keyboardFrame()`), 44 px targets, safe areas on bars, sheets and drawer, gestures (long press, pull to refresh, edge swipe), Settings as pushed pages and the Connect copy are done and verified headless and in a 390 px browser. Open: the iPad decision, composer-selector targets under 44 px (the desktop composer row is hidden on a phone but not audited), landscape insets, Dynamic Type, and everything on a device.
+- [~] Phone polish on the three tabs (2026-11-11): keyboard avoidance (shell pads by `keyboardFrame()`), 44 px targets, safe areas on bars, sheets and drawer, gestures (long press, pull to refresh, edge swipe), Settings as pushed pages and the Connect copy are done and verified headless and in a 390 px browser. Decided 2026-11-12: iPad is desktop/web. Open: composer-selector targets under 44 px (the desktop composer row is hidden on a phone but not audited), landscape insets, Dynamic Type, and everything on a device.
 - [ ] Native mic for the Manager (section 3) so the Manager tab can talk.
   Partial 2026-11-12: native PCM conversion and 20 ms framing for GPT Live has unit tests in
   `nexus-nsh/native/src/live_pcm.rs`. A bounded native WebSocket transport in `live_socket.rs` has loopback tests for

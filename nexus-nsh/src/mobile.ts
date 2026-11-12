@@ -3,9 +3,12 @@
 // desktop surfaces. The UI reads these; tests check them without a device.
 import { manifest } from "./gen/manifest";
 
-/** All iOS devices use the cut-down client; Mac Catalyst reports macOS. */
+/**
+ * Only the phone idiom is the cut-down client (user, 2026-11-12). An iPad shows the desktop/web layout; there is no
+ * iPad app. Mac Catalyst reports macOS.
+ */
 export function mobileClient(native: boolean, os: string, idiom: string): boolean {
-  return native && (os === "ios" || idiom === "phone");
+  return native && idiom === "phone";
 }
 
 /** The phone's tabs, in order. A session opens full screen above the Sessions tab. */
