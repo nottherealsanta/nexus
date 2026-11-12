@@ -24,9 +24,13 @@ timeout_s = 10                  # default 10, at most 600
 | `PreToolUse` | before a known tool call runs | `block` (error result), `modify` (new input), add context |
 | `PostToolUse` | after the call, with `tool_result` and `is_error` | add context |
 | `TurnEnd` | when the model gives a final answer | add context |
-| `SessionEnd` | when a session is deleted | side effects only |
+| `SessionEnd` | when a session tree is deleted (before the log goes) or archived (after the transition; unarchive does not fire it); the payload has `reason`: `deleted` or `archived` | side effects only |
 
-`matcher` works for `PreToolUse` and `PostToolUse` only.
+`matcher` works for `PreToolUse` and `PostToolUse` only. A `bash(...)` matcher
+matches the whole command or, for a compound command (`a && b`, `a; b`, pipes), any
+of its parts, as a deny rule does. `PostToolUse` also runs when the call was refused
+(a denied approval, a block) with `is_error` true. An archive hook runs in the
+background and never delays or undoes the archive.
 Both events apply to nested task-tool calls inside `code`, not only the outer
 cell. Modified nested arguments are approved after modification; blocks and
 context notices follow the same rules as direct calls. Nested hook events keep

@@ -1998,7 +1998,7 @@ fn the_sticky_header_pins_the_band_and_the_next_band_pushes_it_up() {
 
 #[test]
 fn a_finished_group_flashes_its_glyph_for_six_frames_unless_motion_is_reduced() {
-    use nexus_tui::timeline::{build, BlockKind, FLASH_FRAMES};
+    use nexus_tui::timeline::{build, BlockKind, flash_frames};
     for reduced in [false, true] {
         let mut a = app();
         let mut options = a.theme.opts;
@@ -2037,9 +2037,9 @@ fn a_finished_group_flashes_its_glyph_for_six_frames_unless_motion_is_reduced() 
             assert_ne!(marker_fg(&a, 100), accent);
         } else {
             assert_eq!(marker_fg(&a, 100), accent, "flash starts");
-            assert_eq!(marker_fg(&a, 100 + FLASH_FRAMES - 1), accent);
-            assert_ne!(marker_fg(&a, 100 + FLASH_FRAMES), accent, "and ends");
-            a.frame = 100 + FLASH_FRAMES;
+            assert_eq!(marker_fg(&a, 100 + flash_frames() - 1), accent);
+            assert_ne!(marker_fg(&a, 100 + flash_frames()), accent, "and ends");
+            a.frame = 100 + flash_frames();
             let t = build(&a, &a.theme, a.frame, 100);
             a.note_live_groups(&t);
             assert!(a.ui.group_flash.is_empty(), "expired entries are dropped");

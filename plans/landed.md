@@ -2,6 +2,18 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Core backlog pass (11-11, plan 9).** Removed the `stream_summary`/`turn_end` recovery fallbacks; `SessionEnd` also fires on archive; hook matcher and denied-approval tests; user-tool `MEMORY_MB`; `[tools] disabled` accepts project-only names without dropping the rest; read-only MCP resources and prompts API; per-section `details` in `/api/draft/context`; worktree review and keyed integrate (Git merge, optional remove) as control-plane API; recovery probes surviving background jobs without killing; export clips the event log with `events_clipped`; inspector paging tests under writes and retention. Ticks with evidence in 9.2, 9.3, 9.5, 9.13, 9.19, 9.20. Client UI for these stays open.
+
+- **Backlog audit notes (11-11, plan 09).** NSH handoff open-original test, project-rail boundary tests, `nsh-syntaxes.bin` served, split-diff and scroll coverage located; see 9.2, 9.5, 9.7, 9.11.
+
+- **Ctrl+R prompt history search (11-11, plan 09 9.7).** Shared `composer.history_search` in both clients; Ctrl+R no longer reconnects in the TUI. TUI shell test and NSH `prompt-history.test.tsx` pass; paired captures in [reports](../reports/ui-backlog-2026-11-11/). Dump-frame runs now load prompt history for `--open first`.
+
+- **Shared motion durations (11-11, plan 09 9.6).** `[motion.durations]` in theme.toml (flash, scroll bar visible/fade) drives both clients; NSH's 600 ms flash and 900/1300 ms scroll-bar timing now match the TUI. Draw-cost bench re-run: paced 1.4–1.5 ms, chrome 0.38 ms, so the 11-04 regression does not reproduce.
+
+- **TUI Git tab at the default sidebar (11-11, plan 09 9.2).** Tab strip widths follow labels, so `[Git]` shows at 28 cells; click test at 28 and 40. [Captures](../reports/ui-backlog-2026-11-11/).
+
+- **Claude Code install note on Providers (11-11, plan 09 9.9).** Core's `claude` provider row carries `note` (required version 2.1.248, or not installed); both provider-detail views show it. Core 15/15, TUI shell test, NSH Providers test pass; NSH README session-row height corrected.
+
 - **Plans 01–23 audit (11-11).** 1, 2, 3, 21 and 23 moved to done/: their remaining boxes need hardware, a paid call or branch-deletion approval. Retook the 21/23 paired captures from current code (TUI 170×50, NSH 1440×900 and 390×844); status strips match, and the `/btw` modal divergence is now plan 42. ZMX isolation test fixed (77/77). 5, 6, 9 and 10 stay open with real offline work. [Captures](../reports/sections21-23/).
 
 - **Search startup with an existing Apple container (11-11).** Recheck for the container after starting its system and serialize concurrent Core start requests; regression tests cover both cases.

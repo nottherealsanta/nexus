@@ -1940,6 +1940,23 @@ export const manifest = {
    "note": "TUI falls back to ctrl+j where the terminal cannot report shift+enter."
   },
   {
+   "id": "composer.history_search",
+   "title": "Search prompt history",
+   "category": "composer",
+   "keys": {
+    "tui": "ctrl+r",
+    "nsh": "ctrl+r"
+   },
+   "key_context": "global",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Opens a filterable list of this project's earlier prompts, newest first (Core's per-project prompt history, so it survives a restart and is shared by both clients). Enter puts the chosen prompt in the composer, replacing the draft; Up/Down recall in the composer is unchanged. Reconnect to Core stays on its leader key and banner button."
+  },
+  {
    "id": "composer.undo",
    "title": "Undo composer edit",
    "category": "composer",

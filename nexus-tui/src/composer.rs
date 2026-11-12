@@ -271,6 +271,10 @@ impl Composer {
     pub fn set_history(&mut self, entries: Vec<String>) {
         self.editor.set_history(entries);
     }
+    /// The recall list, oldest first.
+    pub fn history_entries(&self) -> &[String] {
+        &self.editor.history
+    }
     pub fn in_history(&self) -> bool {
         self.editor.history_index < self.editor.history.len()
     }

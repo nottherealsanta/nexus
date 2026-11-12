@@ -602,6 +602,10 @@ chmod 700 $NEXUS10_HOME          # Core requires a private home
 NEXUS_TUI_CORE_CMD="uv run --project ../nexus-core nexus" cargo run
 ```
 
+## Prompt history search
+
+`Ctrl+R` (`composer.history_search`, the same command and key as NSH) opens the palette in a prompt-history mode: this project's earlier prompts from Core (the list Up/Down recall walks), newest first and each once, filtered as you type. Enter replaces the draft with the chosen prompt and focuses the composer; Esc leaves the draft alone. Reconnect to Core is on its leader key (`Ctrl+X` then `r`), the banner button and the palette; `Ctrl+R` no longer reconnects. Images appear as `[N images]` text, as they do in Up/Down recall.
+
 ## Voice dictation
 
 `/voice`, `ctrl+d`, or the TUI's `ctrl+x v` shortcut starts dictation. The TUI
@@ -899,7 +903,7 @@ TUI can be driven by hand in a browser.
   groups do not (so there is no "Thought for Ns", although turn summaries carry
   `reasoning_seconds`).
 - Old Nexus shortcuts: Ctrl+N (new session), Ctrl+G (agent), Ctrl+O/Ctrl+S
-  (sessions), Ctrl+L (right sidebar), Ctrl+T (cycle effort), Ctrl+R (reconnect);
+  (sessions), Ctrl+L (right sidebar), Ctrl+T (cycle effort), Ctrl+R (prompt history search);
   Ctrl+X then M, N, O/B, G, S, L, T, R or ? opens model, new session, sessions,
   agent, settings, sidebar, effort, reconnect or shortcuts, and Ctrl+X Shift+N
   notifications. Shortcuts for capabilities Core lacks are omitted.

@@ -78,6 +78,25 @@ pub fn shimmer_motion() -> &'static ShimmerMotion {
     })
 }
 
+#[derive(Deserialize)]
+pub struct MotionDurations {
+    pub flash_ms: u64,
+    pub scrollbar_visible_ms: u64,
+    pub scrollbar_fade_ms: u64,
+}
+
+/// Shared durations from `[motion.durations]` in theme.toml.
+pub fn motion_durations() -> &'static MotionDurations {
+    static DURATIONS: std::sync::OnceLock<MotionDurations> = std::sync::OnceLock::new();
+    DURATIONS.get_or_init(|| {
+        let table: toml::Value = toml::from_str(SOURCE).expect("interface/theme.toml is invalid");
+        table["motion"]["durations"]
+            .clone()
+            .try_into()
+            .expect("motion.durations")
+    })
+}
+
 /// The pen colours of the drawing modal. They end up in the image, so they do
 /// not change with the theme.
 pub fn annotation_inks() -> &'static [[u8; 3]] {

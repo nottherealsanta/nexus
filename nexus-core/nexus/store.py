@@ -2754,8 +2754,7 @@ class Store:
     def partial_summary(self, request: dict[str, Any]) -> dict[str, Any]:
         from .live import partial_summary
         partial = request.get("partial")
-        return partial_summary(partial) if partial is not None else self.stream_summary(
-            request["session_id"], request["event_after"])
+        return partial_summary(partial) if partial is not None else {"counts": {}, "parts": {}, "tool_calls": []}
 
     def record_usage(self, request_id: str, attempt_id: str | None, usage: Usage) -> None:
         """Store one attempt's reported usage, re-sum its request and update the ledger.
@@ -3227,36 +3226,3 @@ class Store:
                 "requests": turn_requests, "tools": tools[row["id"]],
             })
         return out
-
-    def stream_summary(self, session_id: str, after: int) -> dict[str, Any]:
-        """What one interrupted provider request left in the durable event log.
-
-        Counts only: recovery must not reconstruct a response from deltas. They stay
-        diagnostic history, not replayable model context.
-        """
-        rows = self.db.execute(
-            "select type, count(*) n,"
-            " sum(case when type in ('text_delta', 'reasoning_delta')"
-            "     then coalesce(length(json_extract(data, '$.text')), 0) else 0 end) chars,"
-            " sum(case when type = 'tool_args_delta'"
-            "     then coalesce(length(json_extract(data, '$.delta')), 0) else 0 end) arg_chars"
-            " from event where session_id = ? and id > ? group by type",
-            (session_id, after),
-        )
-        counts = {row["type"]: {"count": row["n"], "chars": row["chars"], "arg_chars": row["arg_chars"]} for row in rows}
-        parts = {
-            row["part_type"]: row["n"] for row in self.db.execute(
-                "select json_extract(data, '$.part.type') part_type, count(*) n from event"
-                " where session_id = ? and id > ? and type = 'part_done' group by part_type",
-                (session_id, after),
-            ) if row["part_type"]
-        }
-        calls = []
-        for row in self.db.execute(
-            "select data from event where session_id = ? and id > ? and type = 'tool_call_started'"
-            " order by id limit 50",
-            (session_id, after),
-        ):
-            data = json.loads(row["data"])
-            calls.append({"id": data.get("id"), "name": data.get("name")})
-        return {"counts": counts, "parts": parts, "tool_calls": calls}

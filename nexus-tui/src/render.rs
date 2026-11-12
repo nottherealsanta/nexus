@@ -1894,21 +1894,15 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
             Tab::Git => "tab_files",
             Tab::Projects => "tab_projects",
         };
+        // Sessions is 10 cells; the rest take their bracketed label's width after an
+        // 8-cell stride, so Files keeps its place and Git fits the 28-cell sidebar.
         let i = i as u16;
-        let rect = if rail {
-            Rect::new(r.x, r.y + 1 + i, r.width, 1)
+        let w = if i == 0 { 10 } else { t.label.chars().count() as u16 + 2 };
+        let off = if i == 0 { 0 } else { 11 + (i - 1) * 8 };
+        let rect = if cx.app.narrow() {
+            Rect::new(r.x + 3 + off, r.y, w, 1)
         } else {
-            Rect::new(
-                r.x + 4 + i * 11,
-                r.y.saturating_sub(1),
-                if i == 0 { 10 } else { 7 },
-                1,
-            )
-        };
-        let rect = if !rail && cx.app.narrow() {
-            Rect::new(r.x + 3 + i * 11, r.y, if i == 0 { 10 } else { 7 }, 1)
-        } else {
-            rect
+            Rect::new(r.x + 4 + off, r.y.saturating_sub(1), w, 1)
         };
         if rect.right() <= r.right() && rect.bottom() <= r.bottom() {
             out.push((tab, rect, t.label.clone(), glyph));
@@ -9567,6 +9561,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Export => "Export session",
         PaletteMode::LearnScope => "Install skills for",
         PaletteMode::Turns => "Go to turn",
+        PaletteMode::History => "Prompt history",
         PaletteMode::RowMenu => "Actions",
     };
     let m = modal(cx, buf, area, b, title, hits);
@@ -9587,6 +9582,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::Export => "choose a format and scope",
             PaletteMode::LearnScope => "choose where the skills go",
             PaletteMode::Turns => "type to find a turn",
+            PaletteMode::History => "type to find an earlier prompt",
             PaletteMode::RowMenu => "choose an action",
         };
         put(
