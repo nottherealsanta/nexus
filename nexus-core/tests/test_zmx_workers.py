@@ -54,7 +54,7 @@ async def run(worker: AntigravityWorker, tmp_path: Path, **kwargs):
 
 def test_no_import_or_registry_coupling():
     root = Path(__file__).parents[1] / "nexus"
-    allowed = {"runtime.py", "config.py", "server.py", "llmhub/hub.py", "llmhub/catalog.py"}
+    allowed = {"runtime.py", "config.py", "server.py", "recovery.py", "doctor.py", "cli.py", "provider_usage.py", "llmhub/hub.py", "llmhub/catalog.py"}
     for path in root.rglob("*.py"):
         relative = path.relative_to(root)
         if "workers" not in relative.parts and relative.as_posix() not in allowed:
@@ -555,3 +555,84 @@ async def test_unexpected_prompt_writer_failure_propagates_and_cleans_up(tmp_pat
         await run(worker, tmp_path)
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "pid").read_text()), 0)
+
+
+async def test_daemon_with_zmx_off_probes_no_cli_reads_no_credentials_and_registers_no_provider(tmp_path, monkeypatch):
+    """ZMX off (the default): building the daemon app and listing providers/models touch no vendor CLI or credential."""
+    import builtins
+    import shutil
+
+    import httpx
+
+    from nexus import server
+    from nexus.store import Store
+    from nexus.workers import registry
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    probed = []
+    real_which, real_run, real_popen, real_exec = shutil.which, subprocess.run, subprocess.Popen, asyncio.create_subprocess_exec
+
+    def vendor(*parts):
+        return any(w in str(p) for p in parts for w in ("claude", "agy", "antigravity"))
+
+    def which(name, *a, **k):
+        probed.append(name) if vendor(name) else None
+        return real_which(name, *a, **k)
+
+    def run(args, *a, **k):
+        probed.append(args) if vendor(args) else None
+        return real_run(args, *a, **k)
+
+    def popen(args, *a, **k):
+        probed.append(args) if vendor(args) else None
+        return real_popen(args, *a, **k)
+
+    async def execute(*args, **k):
+        probed.append(args) if vendor(*args) else None
+        return await real_exec(*args, **k)
+    monkeypatch.setattr(shutil, "which", which)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", execute)
+    opened = []
+    real_open = builtins.open
+    monkeypatch.setattr(builtins, "open", lambda f, *a, **k: (opened.append(str(f)), real_open(f, *a, **k))[1])
+    runtime = server.make_runtime(Store(tmp_path / "nexus.db"))
+    app = server.build_app(runtime, token="t", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer t"}) as client:
+        providers = (await client.get("/api/provider")).json()
+    assert not any(p.get("zmx") or p["id"] in ("claude-code", "agy") for p in providers)
+    assert registry.visible() == {} and registry.connected_ids() == []
+    # The pre-existing `claude` SDK provider checks its own sign-in (`claude auth status`); that is not ZMX.
+    # ZMX probes would be `--version`/`--help`/`models` on claude, or anything at all on agy.
+    flat = [" ".join(map(str, p)) if isinstance(p, (list, tuple)) else str(p) for p in probed]
+    assert not [x for x in flat if "agy" in x or "antigravity" in x or "--version" in x or "--help" in x or " models" in x], flat
+    assert not any(path.endswith("auth.json") and "claude-code" in path for path in opened)
+    assert not [p for p in opened if "oauth_creds" in p or ".claude/.credentials" in p]
+
+
+async def test_config_api_reports_why_zmx_is_unavailable_on_a_non_posix_platform(tmp_path, monkeypatch):
+    """The registry's reason reaches both clients' Settings through GET /api/config (`zmx_unavailable`)."""
+    import types
+
+    import httpx
+
+    from nexus import server
+    from nexus.store import Store
+    from nexus.workers import registry
+
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    assert registry.unavailable() is None
+    monkeypatch.setattr(registry, "os", types.SimpleNamespace(name="nt", environ=os.environ, getuid=os.getuid))
+    reason = registry.unavailable()
+    assert reason and "unavailable on this platform" in reason
+    with pytest.raises(ValueError, match="unavailable on this platform"):
+        registry.require("agy")
+    monkeypatch.undo()
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(server, "zmx_unavailable", lambda: reason)
+    app = server.build_app(server.make_runtime(Store(tmp_path / "nexus.db")), token="t", url="http://test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                 headers={"authorization": "Bearer t"}) as client:
+        assert (await client.get("/api/config")).json()["zmx_unavailable"] == reason

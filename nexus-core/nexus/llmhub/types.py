@@ -67,6 +67,7 @@ class ToolResult:
     output: str
     is_error: bool = False
     media: tuple[Media, ...] = ()  # images that come after `output`, in order
+    raw: dict[str, Any] | None = None  # source facts; a ZMX Agent call carries Claude's own `sidechain` here
 
 
 @dataclass(frozen=True, slots=True)

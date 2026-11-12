@@ -27,8 +27,9 @@ from ..llmhub.types import (
 )
 from ..loop import MessageAdded, NoUserMessage, StepStart, ToolEnd, ToolStart, TurnEnd
 from ..paths import home
+from . import records
 from .antigravity import AntigravityWorker
-from .base import WorkerPolicy, WorkerResult, protected_cleanup
+from .base import WorkerError, WorkerPolicy, WorkerResult, protected_cleanup
 from .claude_code import ClaudeCodeWorker, ClaudePolicy
 from .registry import DISCLOSURE, ExternalProvider, cli_path, facts, require
 
@@ -57,6 +58,16 @@ class ExternalAgent:
         self.worker = {**facts(self.pid), **(worker or {})}
         self.turn_id = ""
         self.render = None
+
+    def _record(self, data: dict) -> None:
+        """Durable pid + start time + CLI session for recovery and orphan offers; a failure never fails the turn."""
+        try:
+            records.write(self.turn_id, {"pid": data["pid"], "started": records.process_start(data["pid"]),
+                                         "provider": self.pid, "directory": str(self.workspace),
+                                         "cli_session": data.get("session_id") or self.worker.get("session_id"),
+                                         "transcript_path": data.get("transcript_path")})
+        except (OSError, WorkerError):
+            self.worker.setdefault("notes", []).append("worker record could not be written; orphan cleanup cannot be offered")
 
     def request(self) -> Request:
         return Request(self.model, self.instructions, tuple(self.messages), reasoning_effort=self.reasoning_effort)
@@ -117,6 +128,7 @@ class ExternalAgent:
         results: dict[str, ToolResult] = {}
         response_calls: list[str] = []
         seen_parts: set[str] = set()
+        sidechains: dict[str, dict] = {}
 
         async def begin():
             nonlocal step, active
@@ -155,7 +167,8 @@ class ExternalAgent:
         async def finish_result(cid, output, is_error):
             if cid not in calls or cid in results:
                 return
-            result = ToolResult(cid, output, is_error=is_error)
+            side = sidechains.get(cid)
+            result = ToolResult(cid, output, is_error=is_error, raw={"sidechain": side} if side else None)
             results[cid] = result
             yield ToolEnd(calls[cid], result)
             if response_calls and all(c in results for c in response_calls):
@@ -181,6 +194,7 @@ class ExternalAgent:
                         reported_usage = event.usage if self.pid == "agy" else None
                         async for item in flush():
                             yield item
+                    records.clear(self.turn_id)
                     self.worker.update(status=event.status, session_id=event.session_id or resume,
                                        transcript_path=event.transcript_path, policy_fingerprint=event.policy_fingerprint,
                                        usage=event.usage, error=event.error, diagnostics=event.diagnostics,
@@ -195,11 +209,19 @@ class ExternalAgent:
                 if event.kind == "wire":
                     raw = event.raw.decode("utf-8", "replace") if event.raw else data
                     yield WireEvent(self.pid, {"raw": raw, "context_complete": False})
-                elif event.kind == "launch":
+                elif event.kind == "init" and data.get("conversation_id"):
+                    # An interrupted turn returns no result, so the CLI session id is stored as soon as it is known.
+                    self.worker.update(session_id=data["conversation_id"])
+                    yield WorkerState(dict(self.worker))
+                elif event.kind in ("launch", "process"):
                     self.worker.update(data)
+                    if isinstance(data.get("pid"), int):
+                        self._record(data)
                     yield WorkerState(dict(self.worker))
                 elif event.kind == "notice":
                     self.worker.setdefault("notes", []).append(data["text"])
+                elif event.kind == "subagent":
+                    sidechains[str(data["tool_use_id"])] = {k: v for k, v in data.items() if k != "tool_use_id"}
                 elif event.kind == "context":
                     async for item in flush():
                         yield item
@@ -278,6 +300,7 @@ class ExternalAgent:
                     task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             await protected_cleanup(cleanup())
+            records.clear(self.turn_id)  # the process is stopped here; only a daemon crash leaves a record behind
 
 
 def display_tool(name: str) -> str:

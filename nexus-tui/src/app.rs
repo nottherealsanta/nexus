@@ -13485,6 +13485,17 @@ impl App {
         if let Some(reason) = row.unavailable_reason.as_deref().or(section_reason) {
             return Some(reason.to_owned());
         }
+        // ZMX needs POSIX PTYs; Core says why when it cannot run here (NSH shows the same reason).
+        if row.id.starts_with("zmx.") {
+            if let Some(reason) = self
+                .state
+                .config
+                .as_ref()
+                .and_then(|c| c["zmx_unavailable"].as_str())
+            {
+                return Some(reason.to_owned());
+            }
+        }
         if !Self::settings_wired(&row.id) {
             return Some(NOT_WIRED.into());
         }

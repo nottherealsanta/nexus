@@ -470,7 +470,28 @@ function commandRows(name: string, args: string | undefined): ToolDetailLine[] {
     tone: "command" as const,
   }));
 }
-export function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean, failed = false, error?: string, finished = output !== undefined): ToolDetailLine[] {
+/** Claude's own subagent nested in its calling tool's card (ZMX), read-only. The TUI `sidechain_lines` writes the same words. */
+export function sidechainLines(side: any): ToolDetailLine[] {
+  if (!side || !Array.isArray(side.entries)) return [];
+  const clip = (text: unknown, limit: number) => {
+    const line = String(text ?? "").split("\n")[0].trim();
+    const chars = Array.from(line);
+    return chars.length > limit ? `${chars.slice(0, limit - 1).join("")}…` : line;
+  };
+  const head = ["Claude subagent", side.agent_type ? clip(side.agent_type, 60) : "", side.description ? clip(side.description, 60) : "", side.finished === true ? "" : "not finished when the turn ended"].filter(Boolean);
+  const out: string[] = [`╭ ${head.join(" · ")}`];
+  for (const e of side.entries) {
+    if (e.kind === "prompt") out.push(`│ prompt: ${clip(e.text, 110)}`);
+    else if (e.kind === "text") out.push(`│ ${clip(e.text, 120)}`);
+    else if (e.kind === "tool") out.push(`│ ${e.name ?? ""} ${clip(e.input, 100)}`);
+    else if (e.kind === "result") out.push(`│ → ${e.error === true ? "error: " : ""}${clip(e.output, 110)}`);
+  }
+  if (side.clipped === true) out.push("│ … later entries were not recorded");
+  out.push("╰ read-only; Nexus did not run these tools");
+  return out.map((text) => ({ text, tone: "muted" as const }));
+}
+
+export function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean, failed = false, error?: string, finished = output !== undefined, side?: unknown): ToolDetailLine[] {
   const outputTone = "plain" as const;
   if (raw) {
     const lines = detailLines(args ?? "").map((l) => ({ text: l, tone: "plain" as const }));
@@ -500,7 +521,7 @@ export function detailOf(name: string, args: string | undefined, output: string 
     } catch { /* fall through */ }
   }
   const head = commandRows(name, args);
-  if (finished) return [...head, ...detailLines(output ?? "").map((l) => ({ text: l, tone: outputTone }))];
+  if (finished) return [...head, ...detailLines(output ?? "").map((l) => ({ text: l, tone: outputTone })), ...sidechainLines(side)];
   return [...head, error ? { text: error, tone: "plain" as const } : { text: "no output", tone: "muted" as const }];
 }
 
@@ -643,7 +664,7 @@ function buildStableRows(): Row[] {
             const head = detailLevel === "high" ? HIGH_HEAD : DETAIL_HEAD;
             const tail = detailLevel === "high" ? HIGH_TAIL : DETAIL_TAIL;
             const failed = state === "error";
-            const allDetail = detailOf(name, p.arguments, res?.output, rawOpen, failed, tr?.error, !!res);
+            const allDetail = detailOf(name, p.arguments, res?.output, rawOpen, failed, tr?.error, !!res, (res as any)?.raw?.sidechain);
             // Output keeps its command rows and last rows; a diff or the raw view keeps a head and a tail.
             const tailCap = !rawOpen && !isEdit;
             const commandHead = tailCap ? commandRows(name, p.arguments).length : 0;

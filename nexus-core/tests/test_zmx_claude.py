@@ -57,7 +57,23 @@ if mode == "success":
     write(entry("user", [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "print(1)"}]}], mid=None))
     write(entry("assistant", [{"type": "text", "text": "All done for " + args[-1][-5:]}], mid="msg_2"))
     hook("Stop", transcript_path=tpath, last_assistant_message="All done")
+    if cfg.get("duplicate_stop"): hook("Stop", transcript_path=tpath, last_assistant_message="All done again")
     time.sleep(cfg.get("sleep", 30))
+elif mode == "subagent":
+    start()
+    write(entry("assistant", [{"type": "tool_use", "id": "ta", "name": "Agent", "input": {"description": "look", "prompt": "read a"}}]))
+    side = os.path.join(tpath[:-6], "subagents"); os.makedirs(side, exist_ok=True)
+    sub = lambda kind, content, **x: {"type": kind, "isSidechain": True, "agentId": "ab12", "sessionId": session, "uuid": "s-%%s" %% content.__repr__()[:20], "message": {"role": kind, "content": content}}
+    with open(os.path.join(side, "agent-ab12.jsonl"), "w") as f:
+        for e in (sub("user", "read a please"), sub("assistant", [{"type": "tool_use", "id": "tb", "name": "Read", "input": {"file_path": "a"}}]),
+                  sub("user", [{"type": "tool_result", "tool_use_id": "tb", "content": "print(1)"}]), sub("assistant", [{"type": "text", "text": "a prints 1"}]),
+                  {"type": "attachment", "isSidechain": True, "agentId": "ab12", "sessionId": session, "uuid": "att", "attachment": {"type": "date"}}):
+            f.write(json.dumps(e) + "\n")
+    json.dump({"agentType": "general-purpose", "description": "look", "toolUseId": "ta", "finished": True}, open(os.path.join(side, "agent-ab12.meta.json"), "w"))
+    write(entry("user", [{"type": "tool_result", "tool_use_id": "ta", "content": "a prints 1"}], mid=None))
+    write(entry("assistant", [{"type": "text", "text": "done"}], mid="msg_2"))
+    hook("Stop", transcript_path=tpath, last_assistant_message="done")
+    time.sleep(30)
 elif mode == "late":
     start(); write(entry("assistant", [{"type": "text", "text": "first"}]), partial='{"type": "assistant", "sessionId": "' + session + '", "mess')
     hook("Stop", transcript_path=tpath, last_assistant_message="late")
@@ -282,3 +298,48 @@ def test_transcript_reader_raw_first_dedup_sidechain_and_rewrites(tmp_path, monk
 def test_attention_detection_removes_prompt_echo(terminal, expected):
     got = attention_for(terminal, "quoted: Do you want to proceed? 1. Yes", [])
     assert (expected is None and got is None) or (expected and expected in got)
+
+
+async def test_claude_own_subagent_is_read_only_and_linked_to_the_calling_tool(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    configure, workspace, *_ = fake
+    result, events = await run(configure(mode="subagent"), workspace)
+    assert result.status == "completed"
+    side = [e for e in events if e.kind == "subagent"]
+    assert side and side[-1].data["tool_use_id"] == "ta" and side[-1].data["finished"] is True
+    kinds = [(x["kind"], x.get("name") or x.get("text") or x.get("output")) for x in side[-1].data["entries"]]
+    assert kinds == [("prompt", "read a please"), ("tool", "Read"), ("result", "print(1)"), ("text", "a prints 1")]
+    # The sidechain never leaks into the main transcript's events as assistant text.
+    assert not any(e.kind == "assistant" and "a prints 1" in json.dumps(e.data["parts"]) for e in events)
+
+
+async def test_external_agent_attaches_the_sidechain_to_the_agent_call_result(tmp_path, monkeypatch):
+    from nexus.loop import ToolEnd
+    from nexus.workers import agent as agent_module
+    from nexus.workers.base import WorkerEvent, WorkerResult
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    from nexus.config import ConfigFile
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"zmx.claude_backend": "zmx"}, [])
+    monkeypatch.setattr(agent_module, "cli_path", lambda pid: "/bin/true")
+
+    class Stub:
+        def __init__(self, *a, **k): ...
+
+        async def run(self, *, emit, **k):
+            await emit(WorkerEvent("assistant", {"message_id": "m1", "parts": [
+                {"type": "tool_use", "id": "ta", "name": "Agent", "input": {"description": "d"}}], "usage": None, "raw": {}}))
+            await emit(WorkerEvent("subagent", {"tool_use_id": "ta", "agent_id": "x", "agent_type": "general-purpose",
+                                                "description": "d", "finished": True, "clipped": False,
+                                                "entries": [{"kind": "text", "text": "inner"}]}))
+            await emit(WorkerEvent("tool.result", {"id": "ta", "output": "inner", "is_error": False, "raw": {}}))
+            await emit(WorkerEvent("assistant", {"message_id": "m2", "parts": [{"type": "text", "text": "ok"}], "usage": None, "raw": {}}))
+            return WorkerResult("completed", "ok", "x", session_id="s")
+
+    monkeypatch.setattr(agent_module, "ClaudeCodeWorker", Stub)
+    agent = agent_module.ExternalAgent(ref="claude-code/claude-haiku-5-5", workspace=tmp_path, messages=[], instructions="",
+                                       permission="allow", effort=None)
+    ends = [e async for e in agent.turn("go") if isinstance(e, ToolEnd)]
+    assert len(ends) == 1 and ends[0].result.raw == {"sidechain": {
+        "agent_id": "x", "agent_type": "general-purpose", "description": "d", "finished": True, "clipped": False,
+        "entries": [{"kind": "text", "text": "inner"}]}}

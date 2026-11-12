@@ -147,6 +147,7 @@ from .voice.audio import MAX_WAV_BYTES, VoiceAudioError, parse_wav
 from .voice.manager import VoiceManager
 from .voice.model import VoiceError
 from .voice.speech import SpeechError, SpeechService, final_answer
+from .workers.registry import unavailable as zmx_unavailable
 from .workers.registry import visible as zmx_visible
 
 VERSION = version("nexus10")
@@ -438,7 +439,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         nonlocal config_revision
         async with config_lock:
             if request.method == "GET":
-                return JSONResponse(config.read())
+                # `zmx_unavailable` is the registry's reason when ZMX cannot run here (Windows); clients show it on the ZMX rows.
+                return JSONResponse({**config.read(), "zmx_unavailable": zmx_unavailable()})
             body = await _body(request)
             revision = body.get("expected_revision")
             set_values = body.get("set", {})

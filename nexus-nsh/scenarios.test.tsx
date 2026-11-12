@@ -4,6 +4,11 @@ import activityGroup from "../interface/scenarios/activity-group.json";
 import collapsedPaste from "../interface/scenarios/collapsed-paste.json";
 import mermaid from "../interface/scenarios/mermaid.json";
 import subagentDoneScenario from "../interface/scenarios/subagent-done.json";
+import zmxDenial from "../interface/scenarios/zmx-denial.json";
+import zmxInterrupt from "../interface/scenarios/zmx-interrupt.json";
+import zmxNeedsAttention from "../interface/scenarios/zmx-needs-attention.json";
+import zmxParallel from "../interface/scenarios/zmx-parallel-tools.json";
+import zmxRecovered from "../interface/scenarios/zmx-recovered.json";
 import { subagentDone } from "./src/store";
 
 const session = {
@@ -13,8 +18,8 @@ const session = {
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 const emptyTurns = { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } };
 const connected = 'event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n';
-const network = (messages: unknown[], sessions: any[] = []) => {
-  const all = [session, ...sessions];
+const network = (messages: unknown[], sessions: any[] = [], primary: any = session) => {
+  const all = [primary, ...sessions];
   const routes: Record<string, any> = {
     "GET */__nexus/host": { body: { host: "test", canStart: false } },
     "GET */api/info": { body: { name: "nexus", version: "0.10.0.dev0", pid: 1 } },
@@ -34,7 +39,7 @@ const network = (messages: unknown[], sessions: any[] = []) => {
     routes[`GET */api/session/${s.id}/worktrees`] = { body: { worktrees: [] } };
     routes[`GET */api/session/${s.id}`] = { body: s };
   }
-  routes["GET */api/session/*"] = { body: session };
+  routes["GET */api/session/*"] = { body: primary };
   return routes;
 };
 
@@ -86,6 +91,32 @@ describe("shared scenarios", () => {
     // The child session is now the view (it has no messages in this stub).
     await app.waitFor("text:No messages yet");
   });
+
+  // A ZMX child (Claude Code or Antigravity): the shared scenario sets the session's `worker`, the card says what is not known.
+  const zmx = (name: string, scenario: any) => test(name, async () => {
+    const primary = { ...session, ...scenario.session, permission: scenario.session.permission ?? "ask", parent_id: null };
+    const routes = network(scenario.messages, [], primary);
+    routes["GET */api/session/ses_1/snapshot"] = { body: scenario.starting }; // the frozen starting context; a ZMX child replaces it with the CLI card
+    const app = await open("./App.tsx", { network: routes, width: 1280, height: 900, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:msg-user");
+    const visible = () => app.texts().filter((t) => !t.includes("Disconnected") && !t.includes("event stream closed")).join("\n");
+    for (const fact of scenario.expect) expect(visible()).toContain(fact);
+    for (const fact of scenario.absent) expect(visible().includes(fact)).toBe(false);
+    if (scenario.expect_open) {
+      // Open the group, then every tool card in it (the TUI test uses high detail, which opens them all).
+      const calls: string[] = scenario.messages.flatMap((m: any) => m.parts.filter((p: any) => p.type === "tool_call").map((p: any) => p.id));
+      await app.press(`id:activity-group-tool-${calls[0]}`);
+      for (const id of calls) { await app.waitFor(`id:tool-row-${id}`); await app.press(`id:tool-row-${id}`); }
+      for (const fact of scenario.expect_open) expect(visible()).toContain(fact);
+    }
+  });
+  zmx("zmx parallel tools and Claude's own subagent nested in its call", zmxParallel);
+  zmx("zmx denied action shows what the CLI refused", zmxDenial);
+  zmx("zmx needs attention names the manual step", zmxNeedsAttention);
+  zmx("zmx interrupted turn keeps the unknown tool outcome", zmxInterrupt);
+  zmx("zmx recovered turn says the CLI ran the tool", zmxRecovered);
 
   test("mermaid", async () => {
     const scenario = mermaid;

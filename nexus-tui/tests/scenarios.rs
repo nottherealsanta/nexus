@@ -135,3 +135,61 @@ fn zmx_models_never_reach_the_root_model_picker() {
         .join("\n")
         .contains("agy/gemini-3.8-flash-high"));
 }
+
+/// A shared ZMX child scenario: the session's `worker`, the frozen starting context, what shows and what must not.
+fn zmx_scenario(data: &str) {
+    let (scenario, mut app) = open(data);
+    let session = app.state.model.sessions.get_mut(SESSION).unwrap();
+    for (key, value) in scenario["session"].as_object().unwrap() {
+        session.extra.insert(key.clone(), value.clone());
+    }
+    app.state.model.selected.as_mut().unwrap().starting = Some(scenario["starting"].clone());
+    let shown = draw(&mut app, 160, 50).1.join("\n");
+    for fact in strings(&scenario["expect"]) {
+        assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
+    }
+    for fact in strings(&scenario["absent"]) {
+        assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
+    }
+    if scenario.get("expect_open").is_some() {
+        // High detail opens every tool card, so the nested subagent and the tool outputs show.
+        app.set_detail(nexus_tui::ui::Detail::High);
+        app.execute("turn.unfold_all");
+        let shown = draw(&mut app, 160, 50).1.join("\n");
+        for fact in strings(&scenario["expect_open"]) {
+            assert!(
+                shown.contains(fact),
+                "missing {fact:?} when open in:\n{shown}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zmx_parallel_tools_and_claudes_own_subagent_nested_in_its_call() {
+    zmx_scenario(include_str!(
+        "../../interface/scenarios/zmx-parallel-tools.json"
+    ));
+}
+
+#[test]
+fn zmx_denied_action_shows_what_the_cli_refused() {
+    zmx_scenario(include_str!("../../interface/scenarios/zmx-denial.json"));
+}
+
+#[test]
+fn zmx_needs_attention_names_the_manual_step() {
+    zmx_scenario(include_str!(
+        "../../interface/scenarios/zmx-needs-attention.json"
+    ));
+}
+
+#[test]
+fn zmx_interrupted_turn_keeps_the_unknown_tool_outcome() {
+    zmx_scenario(include_str!("../../interface/scenarios/zmx-interrupt.json"));
+}
+
+#[test]
+fn zmx_recovered_turn_says_the_cli_may_still_be_running() {
+    zmx_scenario(include_str!("../../interface/scenarios/zmx-recovered.json"));
+}

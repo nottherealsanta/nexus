@@ -614,6 +614,56 @@ struct Done {
     is_error: bool,
     /// Images the tool returned (K8), one label each; a terminal cannot show them inline.
     media: Vec<String>,
+    /// Claude's own subagent for this call (ZMX), as read-only nested rows; empty for every other tool.
+    side: Vec<String>,
+}
+
+/// The rows of a Claude subagent nested in its calling tool's card. NSH `sidechainLines` writes the same words.
+fn sidechain_lines(side: &Value) -> Vec<String> {
+    let Some(entries) = side["entries"].as_array() else {
+        return Vec::new();
+    };
+    let clip = |text: &str, limit: usize| {
+        let line = text.lines().next().unwrap_or("").trim();
+        if line.chars().count() > limit {
+            format!("{}…", line.chars().take(limit - 1).collect::<String>())
+        } else {
+            line.to_owned()
+        }
+    };
+    let mut head = vec!["Claude subagent".to_owned()];
+    for key in ["agent_type", "description"] {
+        if let Some(text) = side[key].as_str().filter(|t| !t.is_empty()) {
+            head.push(clip(text, 60));
+        }
+    }
+    if side["finished"].as_bool() != Some(true) {
+        head.push("not finished when the turn ended".into());
+    }
+    let mut out = vec![format!("╭ {}", head.join(" · "))];
+    for entry in entries {
+        let text = |name: &str| entry[name].as_str().unwrap_or("");
+        out.push(match entry["kind"].as_str() {
+            Some("prompt") => format!("│ prompt: {}", clip(text("text"), 110)),
+            Some("text") => format!("│ {}", clip(text("text"), 120)),
+            Some("tool") => format!("│ {} {}", text("name"), clip(text("input"), 100)),
+            Some("result") => format!(
+                "│ → {}{}",
+                if entry["error"].as_bool() == Some(true) {
+                    "error: "
+                } else {
+                    ""
+                },
+                clip(text("output"), 110)
+            ),
+            _ => continue,
+        });
+    }
+    if side["clipped"].as_bool() == Some(true) {
+        out.push("│ … later entries were not recorded".into());
+    }
+    out.push("╰ read-only; Nexus did not run these tools".into());
+    out
 }
 
 enum Activity<'a> {
@@ -1396,6 +1446,7 @@ impl Builder<'_> {
                         Done {
                             output: json_str(&p["output"]),
                             is_error: p["is_error"].as_bool().unwrap_or(false),
+                            side: sidechain_lines(&p["raw"]["sidechain"]),
                             media: p["media"]
                                 .as_array()
                                 .map(|list| {
@@ -1930,9 +1981,24 @@ impl Builder<'_> {
     // -- context ---------------------------------------------------------------
 
     fn context_section(&mut self, view: &crate::reduce::SelectedView) {
-        use crate::paint::{CtxBody, CtxLayout, CtxRole, CtxSection};
+        use crate::paint::{CtxBody, CtxSection};
         let Some(s) = &view.starting else { return };
         let key = format!("context:{}", view.session_id);
+        // A ZMX child's starting context is what Nexus knows about the CLI run, never a complete prompt
+        // (same sections and wording as NSH `zmxSections`).
+        let worker = self
+            .app
+            .state
+            .model
+            .sessions
+            .get(&view.session_id)
+            .and_then(|session| session.extra.get("worker"))
+            .filter(|w| w.is_object())
+            .cloned();
+        if let Some(worker) = worker {
+            self.zmx_context_section(key, &worker);
+            return;
+        }
         let sys = s["system_prompt"].as_str().unwrap_or("");
         let schemas = &s["tool_definitions"];
         let file = &s["instruction_file"];
@@ -2010,6 +2076,92 @@ impl Builder<'_> {
             });
         }
         let reconstructed = s["origin"].as_str() == Some("reconstructed");
+        self.paint_context(key, sections, total, window, reconstructed, true);
+    }
+
+    /// The ZMX child's context header: Nexus never claims a complete context for a CLI-owned loop.
+    fn zmx_context_section(&mut self, key: String, worker: &serde_json::Value) {
+        use crate::paint::{CtxBody, CtxSection};
+        let text = |name: &str| worker[name].as_str().unwrap_or("");
+        let label = if text("label").is_empty() {
+            "ZMX"
+        } else {
+            text("label")
+        };
+        let sep = self.sep();
+        let facts = [
+            (!text("model").is_empty()).then(|| format!("model {}", text("model"))),
+            (!text("permission_mode").is_empty())
+                .then(|| format!("permission {}", text("permission_mode"))),
+            (!text("directory").is_empty()).then(|| format!("cwd {}", text("directory"))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(&sep);
+        let not_applied = worker["not_applied"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let section = |title: &str, meta: String| CtxSection {
+            title: title.into(),
+            tokens: None,
+            meta,
+            body: CtxBody::None,
+        };
+        let denied = worker["denied_actions"].as_array().map_or(0, Vec::len);
+        let mut attention = Vec::new();
+        // The CLI stopped for a prompt it cannot answer here; Nexus approved nothing and says what to do by hand.
+        if text("status") == "needs_attention" {
+            let error = text("error");
+            attention.push(section(
+                "Needs attention",
+                if error.is_empty() {
+                    "Run the CLI interactively to continue.".into()
+                } else {
+                    error.into()
+                },
+            ));
+        }
+        if denied > 0 {
+            attention.push(section(
+                "Denied by the CLI",
+                format!("{denied} action{}", if denied == 1 { "" } else { "s" }),
+            ));
+        }
+        let mut sections = vec![section(label, "context incomplete".into())];
+        sections.extend(attention);
+        sections.extend([
+            section(
+                "Run",
+                if facts.is_empty() {
+                    "not started".into()
+                } else {
+                    facts
+                },
+            ),
+            section("Settings", "CLI inherited".into()),
+            section("Not applied", not_applied),
+        ]);
+        self.paint_context(key, sections, 0, None, false, true);
+    }
+
+    fn paint_context(
+        &mut self,
+        key: String,
+        sections: Vec<crate::paint::CtxSection>,
+        total: u64,
+        window: Option<u64>,
+        reconstructed: bool,
+        estimated: bool,
+    ) {
+        use crate::paint::{CtxLayout, CtxRole};
+        let sep = self.sep();
         let warn = self.st("status.warning", CANVAS);
         self.block(key.clone(), BlockKind::Context, None, false, |b| {
             if reconstructed {
@@ -2020,7 +2172,7 @@ impl Builder<'_> {
                 sep: &sep,
                 ell: b.ell(),
                 ascii: b.t.opts.ascii,
-                estimated: true,
+                estimated,
                 preview: false,
                 window,
                 columns: true,
@@ -3663,6 +3815,7 @@ impl Builder<'_> {
         let media = done.map_or(0, |d| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             d.media.hash(&mut h);
+            d.side.hash(&mut h);
             std::hash::Hasher::finish(&h)
         });
         let key = DetailKey {
@@ -3756,6 +3909,9 @@ impl Builder<'_> {
                     }
                     for label in &d.media {
                         out.push((format!("▣ {label}"), self.meta()));
+                    }
+                    for line in &d.side {
+                        out.push((line.clone(), self.meta()));
                     }
                 } else if let Some(err) = trace.and_then(|t| t.error.clone()) {
                     out.push((err, self.secondary()));

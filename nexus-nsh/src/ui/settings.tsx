@@ -551,7 +551,8 @@ function control(r: Row): JSX.Element {
 
 function SettingRow(p: { r: Row; sec: Section }) {
   const r = p.r;
-  const reason = r.unavailable_reason ?? p.sec.unavailable_reason;
+  // ZMX needs POSIX PTYs; on another platform Core says why and both ZMX rows read as unavailable with that reason.
+  const reason = r.unavailable_reason ?? p.sec.unavailable_reason ?? (r.id.startsWith("zmx.") ? (config() as any)?.zmx_unavailable ?? undefined : undefined);
   const wired = WIRED.has(r.id);
   const modelReason = voiceSettingReason(r.id);
   const disabled = !!reason || !wired || !!modelReason;

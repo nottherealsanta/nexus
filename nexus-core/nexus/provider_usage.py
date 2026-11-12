@@ -52,13 +52,14 @@ COPILOT_URL = "https://api.github.com/copilot_internal/user"
 OPENCODE_URL = "https://opencode.ai/zen/go/v1/usage"
 XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 XAI_SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
-LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"}
+LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"} | {"agy": "ZMX · Antigravity"}
 SOURCES = {
     "codex": "chatgpt.com · wham/usage",
     "claude": "Claude OAuth · api/oauth/usage (CLI fallback)",
     "grok": "cli-chat-proxy.grok.com · v1/billing",
     "copilot": "api.github.com · copilot_internal/user",
     "opencode": "opencode.ai · zen/go/v1/usage",
+    "agy": "agy · /usage (ZMX, off by default)",
 }
 NO_LIMITS_NOTE = "Plan limits are not exposed here; token usage is in the session totals."
 MAX_BODY = 512 * 1024
@@ -570,7 +571,61 @@ async def _claude(client: httpx.AsyncClient) -> dict[str, Any]:
     return result
 
 
+def parse_agy(data: Mapping[str, Any]) -> dict[str, Any]:
+    """`agy --print /usage --output-format json`: `command.data.groups[].buckets[]` with `remaining_fraction`."""
+    result = data.get("command") if isinstance(data.get("command"), Mapping) else {}
+    groups = (result.get("data") or {}).get("groups") if isinstance(result.get("data"), Mapping) else None
+    windows: list[dict[str, Any]] = []
+    for group in groups if isinstance(groups, list) else ():
+        for bucket in group.get("buckets", ()) if isinstance(group, Mapping) else ():
+            if not isinstance(bucket, Mapping):
+                continue
+            remaining = _number(bucket.get("remaining_fraction"))
+            used = None if remaining is None else round(min(max(1 - remaining, 0.0), 1.0) * 100, 1)
+            period = {"5h": FIVE_HOURS, "weekly": WEEK}.get(str(bucket.get("window")))
+            reset = bucket.get("reset_time")
+            try:
+                resets_at = int(datetime.fromisoformat(reset).timestamp()) if isinstance(reset, str) else None
+            except ValueError:
+                resets_at = None
+            windows.append(_window(f"{group.get('name', 'Models')} · {str(bucket.get('name', 'Limit')).replace(' Remaining', '')}",
+                                   used, resets_at, period=period, detail=bucket.get("description") or ""))
+    if not windows:
+        raise UsageError("Antigravity /usage returned no limit windows")
+    return {"plan": "", "windows": windows[:MAX_WINDOWS], "notes": []}
+
+
+AGY_USAGE_TIMEOUT = 20.0
+
+
+async def _agy(_client: httpx.AsyncClient) -> dict[str, Any]:
+    """ZMX Antigravity usage from the CLI's own `/usage` command; no model turn, no credential read by Nexus."""
+    from .workers.base import child_env as worker_env
+    from .workers.registry import cli_path as zmx_cli
+
+    executable = zmx_cli("agy")
+    if not executable:
+        raise UsageError("Antigravity CLI is not installed")
+    process = await asyncio.create_subprocess_exec(
+        executable, "--print", "/usage", "--output-format", "json", env=worker_env(), cwd="/tmp",
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+    try:
+        raw = await asyncio.wait_for(process.stdout.read(MAX_BODY), AGY_USAGE_TIMEOUT)
+    except TimeoutError:
+        raise UsageError("Antigravity /usage timed out; run `agy` and check sign-in") from None
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise UsageError("Antigravity /usage was not readable; run `agy` and check sign-in") from None
+    return parse_agy(data if isinstance(data, Mapping) else {})
+
+
 _LIMIT_SOURCES = {
+    "agy": _agy,
     "codex": _codex,
     "claude": _claude,
     "grok": _grok,
@@ -583,7 +638,7 @@ def connected_providers() -> list[str]:
     """Every signed-in provider, in the provider table's order."""
     out: list[str] = []
     for pid in LABELS:
-        if pid not in SIGN_INS:
+        if pid not in SIGN_INS or pid == "agy":
             continue
         try:
             logged_in = SIGN_INS[pid]().logged_in()
@@ -591,6 +646,11 @@ def connected_providers() -> list[str]:
             logged_in = False
         if logged_in:
             out.append(pid)
+    from .workers.registry import cli_path as zmx_cli
+    from .workers.registry import enabled as zmx_enabled
+
+    if zmx_enabled("agy") and zmx_cli("agy"):  # ZMX off (the default) asks for nothing and probes nothing
+        out.append("agy")
     return out
 
 

@@ -1,0 +1,106 @@
+{
+  "session": {
+    "title": "ZMX recovered",
+    "agent": "scout",
+    "model": "claude-code/claude-haiku-5-5",
+    "permission": "allow",
+    "worker": {
+      "label": "ZMX · Claude Code",
+      "provider": "claude-code",
+      "model": "claude-code/claude-haiku-5-5",
+      "permission_mode": "auto",
+      "context_complete": false,
+      "status": "failed",
+      "usage": null,
+      "disclosure": "The CLI runs its own tools, permissions, settings, MCP servers and plugins. Nexus tool restrictions, permission rules and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.",
+      "not_applied": [
+        "Nexus permission rules",
+        "disabled tools",
+        "step limits"
+      ],
+      "directory": "/work/demo",
+      "error": "the daemon restarted while the turn was running"
+    }
+  },
+  "starting": {
+    "system_prompt": "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "tools": [
+      "read"
+    ],
+    "tool_definitions": {
+      "read": {
+        "description": "TOOL MUST NOT APPEAR",
+        "parameters": {}
+      }
+    },
+    "instruction_file": {
+      "status": "missing"
+    }
+  },
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "created": 1,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Refactor the parser"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "seq": 2,
+      "created": 2,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool_call",
+          "id": "tc",
+          "name": "Bash",
+          "arguments": "{\"command\": \"touch changed\"}"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "seq": 3,
+      "created": 3,
+      "role": "tool",
+      "parts": [
+        {
+          "type": "tool_result",
+          "call_id": "tc",
+          "output": "interrupted by a daemon restart; the CLI ran this tool itself, so it may have finished or may still be running. Nexus did not retry it and its result is unknown",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "id": "m4",
+      "seq": 4,
+      "created": 4,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "[Nexus recovery: interrupted turn]\nSession ses_1 · turn turn_1 was interrupted by a daemon restart. Nothing was retried or resumed automatically.\nThis turn ran on a vendor CLI (ZMX). The CLI's own process may have outlived the daemon; Nexus never kills a process by a stored PID. The CLI session id is kept, so the next prompt resumes it.\nRecovered from the CLI's transcript after the crash (the CLI's last answer, not verified by Nexus):\nParser refactor finished after the daemon died."
+        }
+      ]
+    }
+  ],
+  "expect": [
+    "ZMX · Claude Code",
+    "Refactor the parser",
+    "Nexus recovery"
+  ],
+  "absent": [
+    "NEXUS SYSTEM PROMPT MUST NOT APPEAR"
+  ],
+  "expect_open": [
+    "Bash",
+    "the CLI ran this tool itself"
+  ]
+}

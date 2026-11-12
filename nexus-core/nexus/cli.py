@@ -1117,6 +1117,8 @@ def main(argv: list[str] | None = None) -> int:
 
     doctor = sub.add_parser("doctor", help="check the install: daemon code, sign-ins, catalog, config, search, MCP, voice, rg")
     doctor.add_argument("--json", action="store_true", help="print the rows as JSON")
+    workers = sub.add_parser("workers", help="ZMX vendor-CLI processes that outlived Nexus")
+    workers.add_argument("action", choices=["list", "clean"], help="`clean` stops listed processes whose pid and start time still match")
     update = sub.add_parser("update", help="check for a newer release (never installs anything)")
     update.add_argument("--json", action="store_true", help="print the result as JSON")
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
@@ -1223,6 +1225,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
         elif args.command == "doctor":
             return _doctor(args.json)
+        elif args.command == "workers":
+            from .workers import records
+            found = records.orphans()
+            for record in found:
+                stopped = records.terminate(record) if args.action == "clean" else None
+                print(f"{record['provider']} pid {record['pid']} started {record['started']} in {record.get('directory', '?')}"
+                      + ("" if stopped is None else " stopped" if stopped else " not stopped (identity changed)"))
+                if stopped:
+                    records.clear(record["session_id"])
+            if not found:
+                print("no ZMX worker processes are running outside Nexus")
         elif args.command == "update":
             from . import doctor
             from .server import VERSION
