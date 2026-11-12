@@ -1801,7 +1801,7 @@ fn reasoning_rows_follow_d07() {
         .find(|b| b.key == "reason:a:0")
         .unwrap()
         .start;
-    assert_eq!(line_text(&t.lines[at]), "   ▾ Thought");
+    assert_eq!(line_text(&t.lines[at]), "   ◇ Thought");
     assert_eq!(
         line_text(&t.lines[at + 1]),
         "     │ Looking for where the manifest is parsed."
