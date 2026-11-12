@@ -943,8 +943,15 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
         if let Some(id) = first {
             app.open_session(&id);
             for e in std::mem::take(&mut app.effects) {
-                if let Effect::Sync(c) = e {
-                    let _ = handle.commands.send(c);
+                match e {
+                    Effect::Sync(c) => {
+                        let _ = handle.commands.send(c);
+                    }
+                    // The prompt history is the one Core read a frame (Ctrl+R) needs.
+                    Effect::Api(call @ nexus_tui::actions::ApiCall::Prompts { .. }) => {
+                        app.effects.push(Effect::Api(call));
+                    }
+                    _ => {}
                 }
             }
             let before = app.state.snapshots_applied;

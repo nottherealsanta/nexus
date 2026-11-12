@@ -123,6 +123,7 @@ function PickerBody() {
     if (p().title === "Change model") return "Type to filter models…";
     if (p().title === "Change agent") return "Type to filter agents…";
     if (p().title === "Reasoning effort") return "Type to filter efforts…";
+    if (p().title === "Prompt history") return "Type to find an earlier prompt…";
     return "Type to filter…";
   };
   const keys = [

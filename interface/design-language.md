@@ -108,6 +108,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   child session (`enter open session` and `esc close` in the TUI; an
   `Open session` button and `esc close` in NSH). Other context notices keep
   `context · … · show details`.
+- Turn history floor: where a session's older turns have no stored turn records (pruned by retention or
+  older than turn records), one muted row at the start of the loaded history says `the turns above have no
+  recorded details (tokens, models, timings): pruned, or older than turn records` (TUI `…` prefix, NSH the
+  same text). It replaces per-turn footers; no event log is read to rebuild them.
 - The header row is a band on the chrome surface. The left toggle is at x=1,
   then the Sessions / Files / Projects icons in the band over the left sidebar
   (the active icon bold primary, the others muted; label on hover). Session

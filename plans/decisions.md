@@ -44,6 +44,9 @@ Open (each has a default that holds unless the user objects):
 | Turn summaries: show "Thought for Ns"; the 140-column footer; store `max_attempts`? | Not shown / accept / today's wording |
 | Fold the starting context after the first message; underline prose links? | Leave open / underline in prose |
 | Project order in the Projects list and picker (rail only today) | Rail only |
+| **Worktree integration for agents (plan 9.15).** Review and integrate exist as user control-plane API only. Should an agent be able to call them, and with what approval? The `worktree` control tool is ungated today. | Not exposed; the user integrates from a client |
+| **MCP resources and prompts for the model (plan 9.13).** Core serves them read-only to the user API. Should the model read resources or prompts, through `mcp_call`-like tools or `@` mentions? | Not exposed to the model |
+| **Durable pending directory moves (plan 9.16).** A move queued during a turn is memory only and is lost with the daemon. Persist and apply it at recovery, or drop it with a notice? | Drop; a model-requested move is not replayed after a crash |
 
 - **No blaze (user, 2026-11-11).** blaze (indexable-inc/blaze, in-memory Rust build daemon) was tried and dropped:
   stable 0.20261027.0 refused any `std::thread` program (all test binaries, the TUI, a 3-line repro); canary

@@ -9,6 +9,9 @@ offline (largest: 9.6 interface polish, 9.11, 9.13 hooks, 9.14 Anthropic/Gemini 
 legacy fallback removal now that 0.12.0 shipped), and about 68 need a device, a paid call, a decision or are deferred.
 Confirm each "done" against the code before ticking it.
 
+**Core backlog pass 2026-11-11 (branch `plans/core-backlog`):** the offline Core items below were verified or done; each box says what
+was checked. What remains needs a client UI, a device, a paid call or a user decision.
+
 Everything else open in the previous plan is in the sections below, in full.
 The areas, at a glance:
 
@@ -66,12 +69,12 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   layout as NSH's find bar (`cmd+f`, next/previous, count, Esc closes it before the modal).
 - [~] Both clients now open files in one editable mode; the shared `editor.edit` command was removed. TUI behavior verification remains incomplete. A
   clean file reloads when it changes on disk; a modified one shows "changed on disk".
-- [ ] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then).
+- [x] Check the web bundle serves `nsh-syntaxes.bin` (syntaxes load on first use; plain text until then). Verified 2026-11-11: the built bundle serves `nsh-syntaxes.<hash>.bin` (200, 921,717 bytes) from the static host.
 - [ ] Measure the TUI binary before and after each language beyond the starting 13 (Rust, Python, JavaScript,
   TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
 - [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
   `--bench` typing on a 1 MiB file; NSH save and stale-file paths in the browser harness.
-- [ ] Sidebar tabs: Git is implemented and present in the shared manifest, but the TUI's full Git tab needs a sidebar at least 33 cells wide and is omitted at the default 28-cell width. Resolve narrow-sidebar access/parity in both clients. Automated coverage checks the width-dependent layout and clicks every manifest tab with a 40-cell sidebar; passing tests do not mark this UI limitation complete.
+- [x] Sidebar tabs: the TUI tab strip now sizes each tab by its label (Sessions 10 cells, then 8-cell strides), so `[Git]` fits the default 28-cell sidebar; NSH already shows all three icons. Test `every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar` (28 and 40) passes; paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Plans [33](33-remove-git-from-right-sidebar.md) and [40](40-git-tab-summary.md) change the tab's body, not its tab; untouched here.
 - [~] New file, new folder, rename and delete are implemented in both clients through shared commands, row menus and prompts. Core confinement/count and focused client tests pass; new-file/delete dialog screenshots compared in `reports/files-operations/`. Broader rename/folder interaction coverage remains. Delete asks first,
   gives the item count for a folder, and is permanent.
 - [x] Core file mutations and folder counting implemented with confinement, symlink/race checks, shared tool/API file lock, global workspace events and focused tests: `POST /api/project/{id}/files?session=` with
@@ -86,11 +89,11 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   `worktrees.ENV` already sets `GIT_TERMINAL_PROMPT=0`. `worktree` must be a registered worktree of the project's
   repo; one lock per repo, as `worktree_lock`. Timeouts 120 s, 300 s for network actions; clients show progress and
   never give up first.
-- [ ] Add the route to the mutation matrix in `docs/api.md`: an external effect, so a crash leaves 409
+- [x] (verified 11-11: `docs/api.md` mutation matrix row, keyed `required`, `mutation_outcome_unknown`; no task or control tool reaches it) Add the route to the mutation matrix in `docs/api.md`: an external effect, so a crash leaves 409
   `mutation_outcome_unknown` and it is never retried blindly. Control-plane only: no task or control tool reaches it.
-- [ ] Events `git.changed` and `files.changed` carry no `session_id`, so nothing enters a session's log or
+- [x] (verified 11-11: `test_project_git_live_guard_and_keyed_action` asserts every `git.changed` has `session_id` null; `file_watch` and the action route publish through `bus.publish` with no session) Events `git.changed` and `files.changed` carry no `session_id`, so nothing enters a session's log or
   timeline; confirm against `bus.py`.
-- [ ] Safe defaults: pull is `--ff-only` (a diverged branch shows Git's error); push never forces and says when it
+- [~] (Core verified 11-11: pull `--ff-only`, push never forces and proposes an upstream, switch never stashes, `branch -d` local only, `-D` needs `force_confirmed`, no amend, discard only regular files, in-progress operations block; the second `-D` warning, the banner and "never delete a branch checked out elsewhere" UI are client work) Safe defaults: pull is `--ff-only` (a diverged branch shows Git's error); push never forces and says when it
   will set an upstream; switch never stashes and shows Git's refusal, switching to a remote branch creates the
   tracking branch; branch delete is `git branch -d`, local only, with a second warning before `-D`, and refuses a
   branch checked out in a worktree; discard is `git restore` or deleting an untracked file, and says it cannot be
@@ -102,30 +105,24 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   lists **working** sessions (an active turn, pending approval/question or running background job in this worktree
   or a child of one; warning, danger button) and **idle** ones (non-archived, directory in this worktree), from a
   fresh `git/live` read.
-- [ ] Race protection: the request carries `confirmed_live`; if another session started working, Core returns 409
+- [x] (verified 11-11: same test, 409 `worktree_live` with the fresh list, then success once confirmed) Race protection: the request carries `confirmed_live`; if another session started working, Core returns 409
   `worktree_live` with the new list and the dialog reopens.
-- [ ] Credentials: fetch/pull/push run as Core with Core's environment; without an SSH agent they fail and show
+- [x] (verified 11-11: `worktrees.ENV` sets `GIT_TERMINAL_PROMPT=0`, every Git call uses it; no credential UI exists) Credentials: fetch/pull/push run as Core with Core's environment; without an SSH agent they fail and show
   Git's message. No credential UI.
-- [ ] Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
+- [x] (verified 11-11: `tests/test_git_ops.py` 12 tests incl. `--ff-only` on a diverged branch with a bare remote, unmerged `branch -d` refusal, path confinement; `test_server.py` `worktree_live`; dirty-worktree refusal in the worktree tests) Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
   unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
-- [ ] NSH `desktopTools = !(native && touch)` in `store.ts` (absent today; `store.ts:249–252` has only `native`,
-  `touch` and `phone`): hides Files and Git and makes `editor.*`, `files.*`
-  and `git.*` unavailable. This removes today's Files tab and read-only file view from iPhone and iPad. Check the
-  idiom Mac Catalyst reports (it should keep the tools). Core routes are not gated.
+- [x] NSH `desktopTools` gating: superseded 2026-11-11 by the mobile cut-down client in AGENTS.md (mobile has only Sessions, Manager and Settings, so Files, Git and the editor are desktop/web only and need no per-tool gate; a ledger row is not needed for mobile omissions). Mac Catalyst idiom check goes with the mobile redesign.
 - [ ] Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
   `docs/daemon.md`, `docs/development.md` (vendored crate), `interface/manifest.toml`,
   `interface/design-language.md`, `interface/capability-matrix.md`, `nexus-tui/NOTICE`, `nexus-nsh/README.md`.
-- [ ] Ledger rows: NSH has several carets, more languages and indentation folds, the TUI Tree-sitter folds; syntax
-  colours map to the same tokens but tokenise differently (syntect vs Tree-sitter); no Files or Git tab on iOS; Git
-  actions are silent to the model, so a mid-turn branch switch is caught by the re-read check but the model may
-  still believe it is on the old branch (an accepted exception to the one-timeline rule).
+- [x] Ledger rows: editor differences were already in the ledger (the `ratatui-code-editor` row); no Files or Git on iOS needs no row (AGENTS.md); silent Git actions row added 2026-11-11.
 
 ## 9.3 Turn summaries (old 5)
 
 - [ ] **Real-daemon checks:** a real session (`nexus chat`) shows usage and model on every `turn_request` row, and
   `curl` on a real session returns the documented `/turn` shape. The step 1 migration and backfill run once at the
   next daemon start (0.4 s on a copy; usage for 578 of 587 requests).
-- [ ] **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
+- [x] (11-11: `docs/development.md` has no stale event-history text left; the floor row is now documented in `interface/design-language.md`; NSH and the TUI use the same words) **Step 7 remainder:** `docs/development.md` where it mentions event history; `interface/design-language.md`
   for the floor row ("the turns above have no recorded details…").
 
 ## 9.4 TUI performance and launch time (old 6)
@@ -142,10 +139,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **Per-dependency invalidation.** Events from non-selected sessions still rebuild the viewed timeline
   (correct but conservative); replace the single `timeline_revision` with explicit dependencies if profiling shows
   it matters.
-- [ ] **Draw cost has grown.** The 2026-11-04 replay (200 messages, 160×48, release) measured paced draws at 4.09 ms
-  mean and chrome-only frames at 1.73 ms, against 1.13–1.17 ms and 0.36 ms on 10-31 (the timeline build 2.77 ms vs
-  1.46–1.58 ms). Re-run on an idle machine; if it holds, bisect the 11-01 to 11-03 UI commits (fixed tab widths,
-  rail, sticky header, Manager stage) and restore the budget.
+- [x] **Draw cost has grown.** Re-run 2026-11-11 (release, `--bench 160x48 --replay`, 200 messages, three runs, machine busy with load average ~7): paced draws 1.40, 1.42 and 1.53 ms mean (p95 1.7–2.1), chrome-only frames 0.37–0.39 ms, burst 1.39–1.49 ms. The 11-04 figures (4.09 ms and 1.73 ms) do not reproduce and are within ~25% of 10-31 (1.13–1.17 and 0.36), so no bisect. Rebuild and compare again before a release.
 - [ ] Keep a scratch-Core PTY run for end-to-end terminal behavior and input latency; the replay bench
   (`nexus-tui --bench WxH --replay`) measures scheduling, layout and paint only.
 
@@ -167,7 +161,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **A lighter context endpoint** (budget only) if `GET …/context` cost shows up again; Core rebuilds the whole
   request body per call (5–12 ms warm, 30–130 ms first read). No Core-side cache: a stale one would show context
   the model does not have.
-- [ ] Return per-section starting-context detail text from Core for session drafts.
+- [x] (11-11: `POST /api/draft/context` returns `details`: system prompt, AGENTS.md record, full tool schemas, skills, MCP listing; the system prompt equals the first request's; clients can drop their own text) Return per-section starting-context detail text from Core for session drafts.
 - [x] Allow `/btw` during a running turn in both clients (implemented in working tree; section 23 tracks remaining verification).
 - [ ] NSH browser coverage for opening the original session from a handoff.
 - [ ] Decide whether to persist session grants; expose grant listing and clearing in the clients.
@@ -228,8 +222,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Empty, loading, error and offline states on every surface (sessions, files, settings panes, pickers,
   new-session view).
 - [ ] Keyboard-only paths and focus visibility in both; decide the focus-ring colour.
-- [ ] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
-  reduced motion.
+- [~] Motion: one set of durations (flash, fold, spinner, modal open) shared through `theme.toml`, all off with
+  reduced motion. Done 2026-11-11 for what exists: `[motion.durations]` (`flash_ms` 750, `scrollbar_visible_ms` 1000, `scrollbar_fade_ms` 400) is read by both clients (TUI `theme::motion_durations()`, NSH generated `motionDurations`); this also fixed a drift (NSH flashed 600 ms and faded its scroll bar at 900/1300 ms, the TUI 750 and 1000/1400). Fold, spinner and modal-open durations wait for those features.
 - [ ] Copy pass: sentence case, one verb per meaning (close / back / cancel), no developer notes in the UI.
 - [~] (phone shell now pads by `keyboardFrame()`; desktop/touch modals still open) **Keyboard avoidance.** `keyboardFrame()` is used only by Connect (`connect.tsx:68`); the composer dock
   (`composer.tsx:364`) pads only `safeArea().bottom`, so the keyboard can cover the composer; rename, new-session,
@@ -260,8 +254,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   modals, Dynamic Type / text scaling (fixed `text-[16px]`).
 - [ ] **iPad:** `touch` is true but `phone` is false, so it gets the desktop layout with hover affordances; decide
   the iPad design.
-- [ ] **Docs:** `nexus-nsh/README.md` says session rows are 56 px (code: 72 px) and its Connect text omits the Local
-  Network permission.
+- [~] **Docs:** `nexus-nsh/README.md` said session rows are 56 px (code: 72 px); fixed 2026-11-11. Its Connect text still omits the Local
+  Network permission (mobile redesign agent's area).
 - [ ] **Tests:** Playwright tests at a 390 px viewport with `platform.idiom` stubbed to phone, once NSH is back in CI.
   Then review on a real device with screenshots before and after.
 
@@ -269,11 +263,9 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 - [ ] **Audit navigation, pickers and panel interactions** across the clients (the 11-02 audit covered tool
   groups, palette, child rows, banners, rail, footer, composer, starting context, waiting cards and notices).
-- [ ] **Ctrl+R prompt history search** in both clients (in the TUI `ctrl+r` is bound to `app.reconnect`,
-  `app.rs:8162`, so pick the binding first; Up/Down recall exists in `composer.rs:69`); verify cross-client per-project recall after restarting
-  both, including multiline drafts and images.
-- [ ] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
-  completion from the start result.
+- [~] **Ctrl+R prompt history search** in both clients: new shared command `composer.history_search`, bound to `ctrl+r` in both (TUI reconnect keeps its leader key `r`, banner and palette). TUI palette mode and NSH picker list Core's per-project history newest first, each once, filtered live; Enter replaces the draft. Verified 2026-11-11: TUI `shell` test `ctrl_r_searches_the_prompt_history_and_fills_the_composer`, NSH `prompt-history.test.tsx` 1/1, `check_manifest.py` ok, paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Not verified: recall after restarting both clients, multiline drafts and images end to end (images are `[N images]` text in both).
+- [~] **Subagent parent card:** model/effort, elapsed time and completed token count; distinguish background
+  completion from the start result. 2026-11-11 audit: both clients already show model/effort, elapsed time and a `Background` tag on the card. Still open: the completed token count (needs per-child usage, `GET /api/session/{id}/usage`) and telling a background completion from the start result.
 - [x] **Background shells and archive** (was TODO 3). Manual archive now refuses a tree with a live background job before changing state. Both clients show the Core error. A real background-job regression test passes (2026-11-07).
 - [ ] Review both clients side by side in light and dark; establish large-session performance budgets; test
   keyboard-only paths; decide the focus-ring colour.
@@ -297,8 +289,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
 - [ ] Complete NSH suite coverage after the mock-stream/toolchain fixes, real PTY screenshots,
   and provider sign-in/detail and tool-grid verification.
-- [ ] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
-  Providers page when `cli_path()` is empty.
+- [x] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
+  Providers page when `cli_path()` is empty. Core adds `note` to the `claude` provider row; both provider-detail views show it (2026-11-11: `test_config.py` 15 passed, TUI `shell` test, NSH `App.test.tsx` Providers test).
 - [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
 
 ## 9.10 NSH Void design leftovers (old 8.4)
@@ -313,10 +305,10 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 - [ ] `path:line` and OSC 8 link hit regions in the timeline (NSH already opens prose links). Checked 2026-11-04:
   no OSC 8 output and no link `Target`; Markdown links render as plain text with the URL (`markdown.rs:947–965`); choose a
   syntax-highlighting library for the file view (or reuse the vendored editor's Tree-sitter).
-- [ ] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
-  lacks them.
-- [ ] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
-  (`interface/review.md`).
+- [~] Split-diff continuation alignment (`nexus-tui/src/diff.rs`); line numbers for edit/patch diffs whose input
+  lacks them. Continuation alignment is covered by `diff::tests::split_continuation_rows_start_at_the_text_column` and the CJK wrap test (8/8 diff tests pass, 2026-11-11). Line numbers for edit/patch diffs whose input lacks them are still open: `Diff::from_replace` carries no position and Core does not send one.
+- [~] PTY tests at 80×24 and 160×48 for anchor, follow and jump-to-latest; a fixed-fixture review gallery
+  (`interface/review.md`). Frame-level (not PTY) coverage exists: `timeline.rs::following_anchors_and_jump_to_latest_hold_at_every_size`, `alerts.rs` jump pill at 80x24, `first_prompt.rs` pin; NSH `timeline-scroll.test.tsx` covers stream-while-scrolled-up, session switch restore, older-page prepend and the pin. A real PTY run and the fixed-fixture gallery are not done.
 - [ ] Timeline mouse selection: selection across scrolling, copying the underlying unwrapped text, OSC 52 in real
   terminals.
 - [ ] Session info: failed child count, enabled/disabled tools and kernels.
@@ -329,45 +321,46 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 The feature landed on 2026-11-06 (Core order, move API, drag and menu in both clients). The old plan said not to mark it landed until verified; this is that verification.
 
-- [ ] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
+- [x] **Core order and synchronization.** Persist a user-defined ordering of visible project IDs in Core, initially
   equivalent to creation time then ID. Append new projects; remove deleted projects; never expose the Manager's
   hidden project. Preserve existing project `created`/`updated` and revision semantics. Include the order in the
   consistent `/api/snapshot` and publish a durable global event on changes, with reducers in both clients; ensure
   snapshot watermark and event ordering cannot lose a move. Keep older snapshots/servers usable with the existing
-  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded.
-- [ ] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
+  creation-order fallback, and surface unsupported or failed mutations rather than pretending they succeeded. Verified 2026-11-11: `uv run pytest -q tests -k "move or order"` 53 passed; documented in `docs/api.md`.
+- [x] **Move API.** Define and document an atomic, idempotency-keyed move by project ID and intended neighbor
   (including an explicit end position), applied against Core's current order rather than replacing a stale whole
   list. Specify validation, no-op/self moves, concurrent moves, deleted or hidden IDs, retries, and how clients
   reconcile failures or a disconnected/reconnecting Core. Make ordering and event publication follow the existing
-  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them.
-- [ ] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
+  mutation/snapshot consistency guarantees; test restart and replay rather than assuming them. Verified 2026-11-11 with the same 53 tests; request shape in `docs/api.md` (`before`/`after`, null = end/start).
+- [~] **Shared interaction.** In both clients, drag a tile and display the insertion position; release commits,
   while Escape or dropping outside the valid rail cancels. A click without a drag still selects/toggles the
   project. Support moving to either end and through a scrollable/overflowing rail, without confusing the add or
   Settings buttons for projects. Support touch in NSH without interfering with scrolling or accidental selection.
   Add accessible **Move up** / **Move down** project-menu actions in both clients (including disabled boundary and
   offline states), with shared manifest commands and keyboard access. Keep initials assigned in creation order,
-  independently of display order. Handle resize, project deletion and incoming reorder during an active drag.
-- [ ] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
+  independently of display order. Handle resize, project deletion and incoming reorder during an active drag. 2026-11-11: both clients' tests cover drag with a live insertion position, click versus drag, Esc and outside-rail cancel, Move up/down commands and (new) the first/last boundaries with their reasons (TUI `project_rail` 7/7, NSH `project-rail-order.test.tsx` 10/10). Not verified: touch, a scrolling or overflowing rail, resize/deletion/incoming reorder during a drag.
+- [~] **Verification and docs.** Add Core store/API/event tests for migration/default order, create/delete, hidden
   projects, restart, snapshots, replay, concurrency, idempotency and failure handling; add shared scenarios and
   interaction tests for both clients (click vs drag, cancel, boundaries, menus, scrolling and sync between clients).
   Run Core tests, TUI tests, NSH web tests and manifest checks; capture and compare matching TUI/NSH screenshots,
   including a drag target. Update both READMEs, `docs/api.md`, `docs/daemon.md`, and the porting ledger if old
   Nexus behavior changes. Do not mark the work landed until it is verified.
+  2026-11-11: Core, TUI and NSH suites above pass; READMEs/docs not re-audited and paired drag-target screenshots not captured.
 
 ## 9.13 Extensions, skills, MCP and hooks (old 9)
 
-- [ ] Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
+- [~] (Core 11-11: `/api/agent`, `/api/extension` and `/api/skill` already return `problems` rows for the clients to show, display still open; the changed-file notice is in the tool result and tested (`changed on disk`); user tools get `MEMORY_MB` (default 2048, `RLIMIT_AS`, Linux-enforced, not verified on macOS); `[tools] disabled` accepts project-only names and a session skips names its project lacks, instead of dropping every entry; `test_reload_stress_does_not_accumulate` passes. Open: the client display, a real-model session) Show agent and user-tool errors in client pickers and Settings; a visible changed-file notice for a running
   tool; process memory limits; validate project-only names in `[tools] disabled`. Exercise a user tool in a real
   session and run the reload stress test.
 - [ ] Default-on settings for skills; exercise skills with a real model; decide whether and how `allowed-tools` is
   enforced without changing a cached prompt or granting permissions.
-- [ ] MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
+- [~] (Core 11-11: read-only `GET /api/mcp/{name}/resources|resource|prompts|prompt` and the project-scoped twins, fenced, bounded, tested against the stdio fixture; no model tool and no client UI yet, those need a decision on how a model should reach them) MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
   untrusted and visible as received.
 - [ ] Exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server
   failure, screenshots and its LLM-backed tools.
-- [ ] Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
+- [x] (verified 11-11: `test_a_disabled_global_name_does_not_hide_an_enabled_project_server` and `test_enabling_a_global_server_after_a_project_entry_takes_the_name_back` pass) Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
   (the `browser-use` case).
-- [ ] Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
+- [~] (Core 11-11: `SessionEnd` fires on archive (background, payload `reason`), `bash(...)` matchers see every part of a compound command, `PostToolUse` fires with `is_error` after a denied approval, all tested; open: Settings editing, timeline rows, a real-model blocking hook) Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
   `bash(...)` matchers on compound commands and `PostToolUse` after a denied approval; a blocking hook with a real
   model.
 
@@ -398,22 +391,22 @@ The ZMX item is section 6.
 
 ## 9.15 Worktrees (old 11)
 
-- [ ] Port worktree review and integration as control commands: review against the base, merge by fast-forward or
+- [~] (Core and API 11-11: `GET /api/project/{id}/worktree/review`, keyed `POST .../worktree/integrate` (ff or `--no-ff`, pinned to the reviewed head, optional removal and `branch -d`), 9 tests, ledger row, redesigned on Git rather than the old file journal; open: client commands and dialogs in both clients, and agent exposure (the `worktree` control tool is ungated today, so an integrate action there needs an approval design first, see decisions)) Port worktree review and integration as control commands: review against the base, merge by fast-forward or
   merge commit with confirmation, remove the worktree and branch after merge. Commands in both clients; agents get
   them only when granted. Reference: old `nexus/agents/worktree_review.py`, `worktree_integrate.py`,
   `nexus/worktree_cleanup.py`, `tests/test_worktree_merge_permission.py` (in `~/repos/nexus-old`).
-- [ ] Decide cleanup on archive/delete (archive must never implicitly delete a worktree) and how to leave one.
+- [~] (11-11: archive and session delete never touch a worktree, documented and unchanged; what to offer when leaving one stays open) Decide cleanup on archive/delete (archive must never implicitly delete a worktree) and how to leave one.
 
 ## 9.16 Reliability and safety (old 12)
 
 - [ ] Monty: an OS-level sandbox if wanted; checkpoint recovery; forced worker crashes; cold-start latency; the
   Linux `/usr/bin/env` path. (Workers already start through a launcher with an empty environment.)
-- [ ] Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID
+- [~] (11-11: `bash.started` records the pid; startup recovery probes each unfinished job read-only by pid, group leader and start time, and says running, gone or unknown in the notice and the closing `bash.finished`; it never signals; 3 real-process tests. Not done: re-adopting a surviving job so Nexus can stop it, which would need a durable output spool) Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID
   alone.
 - [ ] Durable pending directory moves and worktree-in-use checks for external processes; archive transitions
   appear only in the root log today.
 - [ ] Archive: bulk/project operations or timestamps, if needed.
-- [ ] Export holds a long SQLite read snapshot for very large sessions; consider general artifacts and export
+- [~] (11-11: the JSON event log stops at 256 MiB of event data or 300 s of held snapshot with `events_clipped` per session; messages and snapshots are never clipped; tested. General artifacts not done) Export holds a long SQLite read snapshot for very large sessions; consider general artifacts and export
   clipping.
 - [ ] Whether read-only agents need sandboxing or restricted command execution beyond the file tools, including
   races with external writers.
@@ -428,7 +421,7 @@ Decided 2026-11-04: finished sessions' events are compacted, announced by a `ses
   runs the in-place migrations: 0.3 s on the copy). Done when `nexus doctor` no longer reports different code and
   `/api/info` `retention_status` shows wire payloads expiring. Restarting also rotates the daemon token, which was
   printed into a tool log during this investigation.
-- [ ] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. Legacy `stream_summary` and `turn_end` recovery fallbacks remain for pre-checkpoint requests during the transition; remove after one release. Full NSH visual verification remains blocked by the native dependency mismatch.
+- [~] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. The legacy `stream_summary` and `turn_end` recovery fallbacks were removed 11-11 (0.12.0 shipped; recovery reads `turn.ended` and the `partial` checkpoint only; the recovery suites and the full Core suite pass). The `grep "from event"` done-test was not re-run. Full NSH visual verification remains blocked by the native dependency mismatch.
   Original scope: Question/permission asked/replied into a small
   `wait` table (also serving the inspector's Questions card); background jobs into a `bash_job` table, replacing
   `open_bash_jobs` / `unfinished_bash_jobs` (which also removes the cold-start full scan in section 6); `code_used`
@@ -453,7 +446,7 @@ The native inspector first pass landed 11-06; these are the remaining gates.
   explicit snapshot resync on overflow/retention changes. No second unbounded event log, no repeated
   full-tree fetch per token, and no background refresh while the inspector is closed. Keep a visible
   paused/live/disconnected state and manual Refresh; an offline view must not look current.
-- [ ] **Stable, bounded loading.** (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`. Clients landed: cursor stack paging, `omitted` and notes shown, at most 60 rows drawn around the selection. Client memory/render-latency regression checks still pending.) Replace offset-only paging with documented stable boundaries/cursors
+- [ ] **Stable, bounded loading.** (11-11 Core tests added: Questions paging under new writes, Raw paging while retention deletes rows between pages; the existing test covers the other views. Remaining: client memory/render checks.) (Core landed: inspect API v2 with opaque cursors, byte/lane/tree bounds, `omitted`, `/inspect/record`, `/inspect/head`. Clients landed: cursor stack paging, `omitted` and notes shown, at most 60 rows drawn around the selection. Client memory/render-latency regression checks still pending.) Replace offset-only paging with documented stable boundaries/cursors
   so new turns cannot duplicate or skip older pages. Bound server queries and response bytes, avoid
   loading every message to show one page, virtualize long client lists and load large JSON on demand.
   Announce omitted sessions/lanes/bytes and expired diagnostics; provide a way to inspect the omitted
@@ -481,32 +474,34 @@ The native inspector first pass landed 11-06; these are the remaining gates.
 
 Supports section 2 (terminal). The browser parts are deferred.
 
-- [ ] **Resource model and authority.** Define Core-owned terminal/browser resources with opaque IDs,
+**Verified 11-11:** every item below is ticked on the evidence in [02](done/02-terminal.md) (its boxes are ticked) plus a re-run of the six terminal suites (46 passed). The Linux/other-platform, native AppKit and remote reconnect matrix stays open in 02.
+
+- [x] **Resource model and authority.** Define Core-owned terminal/browser resources with opaque IDs,
   project/workspace identity, creator, optional session association, status, timestamps and explicit
   create/attach/detach/close actions. Clients are viewers/controllers, not process owners. A session
   changing directory must not silently move an existing shell or browser; new resources use the chosen
   workspace and existing ones show their actual location/association.
-- [ ] **API and streaming design.** Specify authenticated resource metadata/control endpoints and a
+- [x] **API and streaming design.** Specify authenticated resource metadata/control endpoints and a
   versioned data stream, separately from the conversation SSE log. Include sequence numbers, bounded
   replay/checkpoints, explicit gap/resync messages, backpressure and read-only attachment. Keep raw
   PTY output and browser frames out of durable session-event rows. Input actions need IDs/acknowledgments
   so reconnect/retry never repeats a command, click or form submission.
-- [ ] **One active writer.** Allow multiple viewers but give only one user/client/agent explicit control
+- [x] **One active writer.** Allow multiple viewers but give only one user/client/agent explicit control
   at a time. Show who owns control; handoff/revocation is explicit and auditable. Reject stale resize,
   pointer and keyboard input from an old attachment. A disconnect releases control according to the
   documented lease policy; it never silently transfers control to an agent.
-- [ ] **Lifecycle, limits and security.** Decide idle limits, concurrent-resource limits, archive/delete
+- [x] **Lifecycle, limits and security.** Decide idle limits, concurrent-resource limits, archive/delete
   behavior and graceful shutdown before coding. Closing a panel is detach, not kill; explicit Close
   terminates a resource. For the first version, a Core restart may end processes/contexts but must mark
   them ended/interrupted, never pretend to resume them. Test orphan cleanup. Guard stream origins,
   attachment authorization and cross-project access; do not expose a remote shell or authenticated
   browser over the existing tokenless non-loopback mode without an approved access model.
-- [ ] **Visible context boundary.** A terminal/browser panel is a workspace resource, not another chat
+- [x] **Visible context boundary.** A terminal/browser panel is a workspace resource, not another chat
   timeline. Opening it or viewing its output does not automatically feed the model. Explicitly attached
   output, page extracts and screenshots become normal visible messages/tool results with provenance,
   clipping and untrusted-content treatment. Separate UI resource-management APIs/control tools from
   workspace task actions; do not add task tools that mutate Nexus sessions, models or workspace state.
-- [ ] **Shared shell placement.** Design a shared workspace panel with Terminal/Browser tabs, a resource
+- [x] **Shared shell placement.** Design a shared workspace panel with Terminal/Browser tabs, a resource
   list, split/expand/collapse and focus return, using the existing file-panel/layout machinery where
   appropriate. Keep the session composer draft and scroll unchanged when switching. Put commands and
   shortcuts in `interface/manifest.toml`; arbitrate terminal/browser input versus global shortcuts, IME,
@@ -516,22 +511,22 @@ Supports section 2 (terminal). The browser parts are deferred.
 
 The detail behind section 2.
 
-- [ ] **Core PTY service.** Add a dedicated resource service (proposed
+- [x] **Core PTY service.** Add a dedicated resource service (proposed
   `nexus-core/nexus/terminals.py`) for shell spawning in the selected workspace, terminal dimensions,
   environment, process groups, binary-safe I/O and resize. Preserve UTF-8 split across chunks and
   arbitrary terminal control bytes. Set a defined terminal type; support signals, exit codes and
   graceful-close/force-stop. Do not repurpose `bash_output`'s combined text buffer as a PTY.
-- [ ] **Shared terminal semantics.** Choose a maintained VT parser/screen checkpoint representation
+- [x] **Shared terminal semantics.** Choose a maintained VT parser/screen checkpoint representation
   and compatible renderers for NSH and Rust. Verify colors, Unicode/wide characters, cursor movement,
   scrollback, alternate screen, bracketed paste and interactive programs (`less`, an editor, a shell
   prompt). Bound scrollback and queued bytes; announce discarded history. Disable or gate terminal
   escape features that write the clipboard, access files, or launch URLs without the user's action.
-- [ ] **User interaction.** Open/list/rename/switch/close terminals; show cwd/workspace, running/exited
+- [x] **User interaction.** Open/list/rename/switch/close terminals; show cwd/workspace, running/exited
   status and active controller. Support selection/copy/paste, resize, Ctrl+C and focus handoff. Warn
   before terminating a running shell/process. Detach/reconnect restores a bounded screen checkpoint
   plus subsequent bytes without replaying input. First version is user-operated; agent raw typing is
   deferred until the authority model in 14.5 is settled.
-- [ ] **Exit gate.** Tests run real PTYs against an isolated workspace: shell input/output, interactive
+- [x] **Exit gate.** Tests run real PTYs against an isolated workspace: shell input/output, interactive
   alternate screen, resize, split byte sequences, high-volume output, two clients, control contention,
   disconnect/reconnect, exit, close and Core shutdown. Compare both clients' screens and input behavior.
   A terminal is not done if it only renders line-oriented command output.

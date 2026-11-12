@@ -36,6 +36,7 @@ RELIST_AFTER = 60.0
 BACKOFF = (5.0, 15.0, 30.0, 60.0)
 MAX_LOG_BYTES = 1024 * 1024
 MAX_TOOLS = 2000
+MAX_LISTED = 200  # resources or prompts returned by one listing
 Publish = Callable[[str, dict[str, Any]], Any]
 Guard = Callable[[ServerConfig], None]
 
@@ -238,6 +239,81 @@ class Connection:
                 self._fail(text)
                 raise McpUnavailable(f"server {self.config.name} is unavailable: {text}") from None
             raise McpUnavailable(f"{self.config.name}/{tool} failed: {text}") from None
+
+    async def _ask(self, what: str, call: Any) -> Any:
+        """One resources/prompts request on a live connection; a refusal or failure is `McpUnavailable`."""
+        await self.connect()
+        self._check()
+        client = self.client
+        if client is None:
+            raise McpUnavailable(f"server {self.config.name} is unavailable: {self.error or 'not connected'}")
+        try:
+            return await call(client)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise McpUnavailable(f"{self.config.name} {what} failed: {_describe(exc)}") from None
+
+    async def list_resources(self) -> list[dict[str, Any]]:
+        async def run(client: Any) -> list[Any]:
+            found: list[Any] = []
+            cursor = None
+            for _ in range(20):
+                page = await client.list_resources(cursor=cursor)
+                found += page.resources
+                cursor = page.next_cursor
+                if not cursor or len(found) >= MAX_LISTED:
+                    break
+            return found[:MAX_LISTED]
+        return [{"uri": bridge.sanitize(r.uri, keep_newlines=False)[:500],
+                 "name": bridge.sanitize(getattr(r, "name", "") or "", keep_newlines=False)[:200],
+                 "description": bridge.first_line(bridge.sanitize(getattr(r, "description", "") or "")),
+                 "mime_type": bridge.sanitize(getattr(r, "mime_type", "") or "", keep_newlines=False)[:100]}
+                for r in await self._ask("resources/list", run)]
+
+    async def read_resource(self, uri: str) -> str:
+        """The resource's text as fenced, bounded untrusted data; binary contents are named, never shown."""
+        result = await self._ask("resources/read", lambda client: client.read_resource(uri))
+        blocks = []
+        for item in getattr(result, "contents", None) or []:
+            text = getattr(item, "text", None)
+            where = bridge.sanitize(getattr(item, "uri", uri), keep_newlines=False)[:500]
+            if text is not None:
+                blocks.append(f"[resource {where}]\n{text}")
+            else:
+                size = len(getattr(item, "blob", "") or "") * 3 // 4
+                blocks.append(f"[binary resource {where} ({size} bytes) not shown]")
+        return bridge.fence("\n\n".join(blocks) or "(the resource is empty)", server=self.config.name, kind="resource")
+
+    async def list_prompts(self) -> list[dict[str, Any]]:
+        async def run(client: Any) -> list[Any]:
+            found: list[Any] = []
+            cursor = None
+            for _ in range(20):
+                page = await client.list_prompts(cursor=cursor)
+                found += page.prompts
+                cursor = page.next_cursor
+                if not cursor or len(found) >= MAX_LISTED:
+                    break
+            return found[:MAX_LISTED]
+        return [{"name": bridge.sanitize(p.name, keep_newlines=False)[:200],
+                 "description": bridge.first_line(bridge.sanitize(getattr(p, "description", "") or "")),
+                 "arguments": [{"name": bridge.sanitize(a.name, keep_newlines=False)[:100],
+                                "required": bool(getattr(a, "required", False)),
+                                "description": bridge.first_line(bridge.sanitize(getattr(a, "description", "") or ""))}
+                               for a in (getattr(p, "arguments", None) or [])]}
+                for p in await self._ask("prompts/list", run)]
+
+    async def get_prompt(self, name: str, arguments: dict[str, str] | None) -> str:
+        """The prompt's messages as fenced, bounded untrusted data. Nothing is sent to a session."""
+        result = await self._ask("prompts/get", lambda client: client.get_prompt(name, arguments or None))
+        lines = []
+        for message in getattr(result, "messages", None) or []:
+            content = message.content
+            kind = getattr(content, "type", "")
+            body = content.text if kind == "text" else f"[{kind or 'unsupported'} content not shown]"
+            lines.append(f"{bridge.sanitize(message.role, keep_newlines=False)[:20]}: {body}")
+        return bridge.fence("\n\n".join(lines) or "(the prompt has no messages)", server=self.config.name, kind="prompt")
 
     async def close(self) -> None:
         self._stop.set()
@@ -460,6 +536,22 @@ class McpManager:
         conn, tool = self.find(target)
         result = await conn.call(tool.name, arguments)
         return bridge.convert_result(result, server=conn.config.name, tool=tool.name, save=save)
+
+    async def resources(self, name: str) -> list[dict[str, Any]]:
+        await self._ensure_current()
+        return await self.connection(name).list_resources()
+
+    async def read_resource(self, name: str, uri: str) -> str:
+        await self._ensure_current()
+        return await self.connection(name).read_resource(uri)
+
+    async def prompts(self, name: str) -> list[dict[str, Any]]:
+        await self._ensure_current()
+        return await self.connection(name).list_prompts()
+
+    async def get_prompt(self, name: str, prompt: str, arguments: dict[str, str] | None = None) -> str:
+        await self._ensure_current()
+        return await self.connection(name).get_prompt(prompt, arguments)
 
     def approval(self, target: str) -> tuple[str, bool]:
         """`(qualified name for permission rules, read-only)` of a `server/tool`; unknown means a mutating call."""
