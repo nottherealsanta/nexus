@@ -551,8 +551,12 @@ impl Model {
         {
             // A live provider error goes once the turn continues or another message arrives.
             if matches!(event.kind.as_str(), "step_start" | "message.added") {
-                view.scratch
-                    .retain(|e| !matches!(e.kind.as_str(), "session.error" | "retry_exhausted"));
+                view.scratch.retain(|e| {
+                    !matches!(
+                        e.kind.as_str(),
+                        "session.error" | "retry_scheduled" | "retry_started" | "retry_exhausted"
+                    )
+                });
             }
             view.scratch.push(scratch_copy(event));
         }

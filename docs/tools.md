@@ -196,8 +196,54 @@ never ask for approval or an `ask` question.
   never re-enables a disabled tool.
 - The control tools are never bound inside `code`: a cell can call only the
   caller's task tools. `session`, `fork`, `message_session`, `expose_workspace_tools`,
-  `change_session_directory` and `worktree` are all excluded
+  `change_session_directory`, `worktree` and the two browser tools are all excluded
   (`agents.NEXUS_CONTROL_TOOLS`).
+
+## Browser tools
+
+`browser_exec` and `browser_screenshot` give the model a real browser. They are
+ordinary grantable tools, like `bash` or `web_fetch`: an agent without a `tools`
+list (such as `build`) has them, and an agent with a list has them only if it names
+them (`scout` does not). `disabled_tools` switches either off. They run on upstream
+browser-use (pinned `browser-use[cli]==1.0.2`, started with `uvx`; see
+`nexus/browser.py` and `nexus-browser/README.md`), which is not an MCP server in
+Settings. browser-use's other tools (`browser_login` for its cloud, and
+`browser_feedback`, which reports to its team) are not offered.
+
+| Tool | Arguments | Effect |
+| --- | --- | --- |
+| `browser_exec` | `code` | Run Python that drives the browser (`new_tab`, `goto_url`, `page_info`, `click_at_xy`, `type_text`, `js`, `cdp`, …); the namespace persists |
+| `browser_screenshot` | `full?`, `max_dim?` | The current page as an image (saved as an artifact and sent to the model) |
+
+- **Which browser.** By default, browser-use's own Chromium on a temporary profile
+  (`browser-use --mcp`). It never attaches your Chrome, whatever Chrome's settings.
+  Only with **Settings > Browser > Use my Chrome profile** (`[browser] use_my_chrome =
+  true`) does Core start `browser-use --cli-mcp`, which drives your own Chrome, with
+  its tabs and sign-ins, once Chrome's remote debugging is on
+  (`chrome://inspect/#remote-debugging`). The setting is read at every browser call:
+  a change replaces the session's running process on its next call, so turning it
+  off takes effect at once. A `browser_exec` result names the browser in use.
+- **One process per session**, started by the session's first browser call (never at
+  session start; the first start downloads the package, so allow up to 180 s) and
+  stopped when the daemon stops. If it dies, the running call fails and says the next
+  call restarts it. A call that has to start it again (it died, the setting changed,
+  or the daemon restarted after this session used the browser) does so at once, with
+  no MCP-style backoff, and its result begins `[Nexus notice: browser restarted]`: the
+  `browser_exec` namespace and open tabs are gone. stderr goes to
+  `~/.nexus/logs/browser/<session>.log`.
+- **Definitions** are Nexus's own, frozen in `nexus/browser.py`, so they never change
+  within a session.
+- **Output** is untrusted page data, in the same fence as MCP output
+  (`server: browser-use`), whose warning line says it came from the browser tools.
+  Images are saved as artifacts (`source: mcp:browser-use/<tool>`).
+- **Approval.** Both follow the session's permission setting and the permission rules
+  (`browser_exec(...)`). A fork refuses both, and neither is bound inside `code`
+  (they need the session's browser process).
+- **Timeline rows** (TUI and NSH alike): the web glyph, `Browser` with the first line of
+  the code, and `Screenshot` (`full page` when asked). A screenshot shows as the row's
+  image, like any tool image.
+- Events: `browser.failed` and `browser.tools_changed` (session-scoped) if the process
+  fails or changes its tools.
 
 ### `change_session_directory {directory}`
 
@@ -738,6 +784,10 @@ each checkout. Unarchiving creates a fresh kernel on the next code call.
 An owned kernel busy in another tree makes archive refuse until it is idle;
 merely borrowing another tree's kernel does not transfer ownership. At most eight kernels are live, with one cell at a
 time per kernel. Waiting for a busy kernel counts toward the timeout.
+
+In the desktop timelines, an expanded Code tool shows the cell source rather
+than its potentially large result. A notice marks the hidden result; raw view
+reveals it without changing the model's context.
 
 ```python
 import asyncio

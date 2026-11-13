@@ -61,6 +61,7 @@ from typing import Any
 
 from . import agents as agent_files
 from . import artifacts, cargo_env, oneshot, permissions, worktrees
+from . import browser as browser_control
 from . import extensions as extension_files
 from . import mcp as mcp_files
 from . import questions as question_contract
@@ -161,7 +162,8 @@ FORK_MARKER = (
     "before tools are disabled. Then report your findings and anything unverified.\n\nTask: "
 )
 # Refused inside a fork, whatever the parent may do: the fork is read-only, and the definitions stay for the cache.
-FORK_REFUSED = frozenset({"edit", "write", "patch", "bash_kill", *workspace_control.CONTROL_NAMES})
+FORK_REFUSED = frozenset({"edit", "write", "patch", "bash_kill", *workspace_control.CONTROL_NAMES,
+                          *browser_control.BROWSER_TOOLS})
 FORK_MIN_FREE = 0.10  # a fork needs this share of the model's context window left for its task
 TITLE_TIMEOUT_S = 20
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
@@ -306,6 +308,9 @@ class Runtime:
         self.mcp = mcp_files.McpManager(lambda kind, data: self.bus.publish(kind, data),
                                         lambda: ConfigFile().mcp_servers(), _config_stamp)
         self.project_mcps: dict[str, ProjectMcp] = {}
+        self.browser = browser_control.BrowserService(
+            lambda kind, data, session_id: self.bus.publish(kind, data, session_id=session_id),
+            lambda: bool(ConfigFile().read()["values"]["browser"]["use_my_chrome"]))
         self.inboxes: dict[str, list[str | Notice]] = {}  # session id -> notices waiting for its next model call
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.escalations: dict[str, list[str]] = {}  # child id -> blocks it reported, until its parent's report carries them
@@ -448,8 +453,8 @@ class Runtime:
         manager = self.project_mcps.get(project.id)
         if manager is None or manager.project_path != str(Path(project.path).resolve()):
             manager = ProjectMcp(project.id, project.path, lambda kind, data: self.bus.publish(kind, data),
-                                 # Only enabled globals reserve a name. A disabled entry (including the offered
-                                 # browser-use default) cannot shadow a project server; enabling it later makes
+                                 # Only enabled globals reserve a name. A disabled entry cannot shadow a
+                                 # project server; enabling it later makes
                                  # the project entry invalid on its next read.
                                  reserved=lambda: set(self.mcp.names()))
             self.project_mcps[project.id] = manager
@@ -746,7 +751,7 @@ class Runtime:
 
     def _registry(self) -> dict[str, Tool]:
         """Every task tool this build can execute and describe, by name."""
-        return {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS)}
+        return {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS, *browser_control.TOOLS)}
 
     @staticmethod
     def granted_tool_names(spec: agent_files.AgentDef, extra: Iterable[str] = ()) -> list[str]:
@@ -1029,8 +1034,8 @@ class Runtime:
         connections |= {n: project_connections[n] for n in up_project if project_connections[n] is not None}
         listing = self.mcp.listing_connections(connections, full=full, max_listed=limit) if connections else ""
         scopes = {n: "global" for n in global_names}
-        # A project entry wins the name even when a disabled global entry (the offered
-        # browser-use default) has the same name; only an enabled global reserves it.
+        # A project entry wins the name even when a disabled global entry has the same name;
+        # only an enabled global reserves it.
         scopes |= {n: "project" for n in definition.servers}
         # File warnings and cross-file duplicate notices travel with the server they concern.
         notes = {n: definition.warnings_for(n) for n in definition.all_names()}
@@ -1056,7 +1061,8 @@ class Runtime:
         else:
             skill_book, mcp_book = self._skills_at_start(project_path, disabled), self._mcp_at_start(disabled, project)
         skill_items, mcp_names = skill_book["items"], mcp_book["servers"]
-        granted = self.granted_tool_names(spec, [*user_tools, *([skill_files.SKILL_TOOL] if skill_items else []),
+        granted = self.granted_tool_names(spec, [*browser_control.BROWSER_TOOLS, *user_tools,
+                                                 *([skill_files.SKILL_TOOL] if skill_items else []),
                                                  *(mcp_files.MCP_TOOLS if mcp_names else [])])
         unknown = [n for n in granted if n not in registry and n not in user_tools
                    and n not in (skill_files.SKILL_TOOL, *mcp_files.MCP_TOOLS)]
@@ -1593,6 +1599,24 @@ class Runtime:
             self._forward_notice(session_id, text)
         self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
         return text
+
+    async def _browser_call(self, session_id: str, tool: str, args: dict[str, Any]) -> str | ToolOutput:
+        from .mcp import bridge as mcp_bridge
+        save, media = self._media_saver(session_id, f"{browser_control.SERVER}/{tool}")
+        try:
+            result, notice = await self.browser.call(session_id, tool, args,
+                                                     used_before=lambda: self._used_browser(session_id))
+        except mcp_files.McpUnavailable as exc:
+            raise ToolError(mcp_bridge.fence(str(exc), server=browser_control.SERVER, kind="tool-error", limit=2000,
+                                            source=browser_control.FENCE_SOURCE)
+                            + "\nThe next browser call starts browser-use again, with no tabs or variables.") from exc
+        text, is_error = mcp_bridge.convert_result(result, server=browser_control.SERVER, tool=tool, save=save,
+                                                    source=browser_control.FENCE_SOURCE)
+        if notice:
+            text = f"{notice}\n{text}"
+        if is_error:
+            raise ToolError(text)
+        return ToolOutput(text, tuple(media)) if media else text
 
     def _check_removing_worktree(self, directory: str | Path) -> None:
         target = Path(directory).resolve()
@@ -2400,7 +2424,7 @@ class Runtime:
             raise ValueError("disabled_tools must be a list of tool names")
         known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
                  + [agent_files.FORK_TOOL, agent_files.MESSAGE_TOOL, agent_files.ESCALATE_TOOL, skill_files.SKILL_TOOL, *mcp_files.MCP_TOOLS] + list(workspace_control.CONTROL_NAMES)
-                 + list(extra))
+                 + list(browser_control.BROWSER_TOOLS) + list(extra))
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
@@ -2574,13 +2598,19 @@ class Runtime:
         async def run_mcp_call(args: dict[str, Any], ctx: ToolContext) -> str:
             return await self._mcp_call(session.id, args)
 
-        bound = {mcp_files.MCP_SEARCH: run_mcp_search, mcp_files.MCP_CALL: run_mcp_call,
+        def browser_runner(tool: str) -> Callable[[dict[str, Any], ToolContext], Awaitable[str | ToolOutput]]:
+            async def run_browser(args: dict[str, Any], ctx: ToolContext) -> str | ToolOutput:
+                return await self._browser_call(session.id, tool, args)
+            return run_browser
+
+        bound: dict[str, Any] = {mcp_files.MCP_SEARCH: run_mcp_search, mcp_files.MCP_CALL: run_mcp_call,
                  skill_files.SKILL_TOOL: run_skill, "bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
                  "session": run_session, agent_files.FORK_TOOL: run_fork, agent_files.MESSAGE_TOOL: run_message, agent_files.ESCALATE_TOOL: run_escalate,
                  "ask": run_ask,
                  workspace_control.EXPOSE: run_expose,
                  workspace_control.CHANGE_DIRECTORY: run_change_directory,
-                 workspace_control.WORKTREE: run_worktree}
+                 workspace_control.WORKTREE: run_worktree,
+                 **{name: browser_runner(name) for name in browser_control.BROWSER_TOOLS}}
 
         def user_runner(record: dict[str, Any]) -> Callable[[dict[str, Any], ToolContext], Awaitable[str]]:
             async def run_user(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -2747,15 +2777,7 @@ class Runtime:
         if server not in self._mcp_allowed(self.session(session_id)):
             raise ToolError(f"server {server!r} is not available in this session")
         try:
-            media: list[Media] = []
-
-            def save(data: str, mime: str, kind: str) -> str:
-                name = f"{target.replace('/', '-')}.{kind}"
-                artifact = self.save_artifact(session_id, data, mime, name=name, source=f"mcp:{target}")
-                if kind == "image" and artifacts.clean_mime(mime) in artifacts.MODEL_IMAGE_TYPES:
-                    media.append(Media(artifact, artifacts.clean_mime(mime), name))
-                return artifact
-
+            save, media = self._media_saver(session_id, target)
             scope, _ = self._mcp_scope(self.session(session_id), server)
             text, is_error = await scope.call(target, arguments, save=save)
         except mcp_files.McpUnavailable as exc:
@@ -2763,6 +2785,29 @@ class Runtime:
         if is_error:
             raise ToolError(text)
         return ToolOutput(text, tuple(media)) if media else text
+
+    def _used_browser(self, session_id: str) -> bool:
+        """Whether a browser tool call of this session already has a result (so its process ran before)."""
+        calls: set[str] = set()
+        for stored in self.store.messages(session_id):
+            for part in stored.message.parts:
+                if isinstance(part, ToolCall) and part.name in browser_control.BROWSER_TOOLS:
+                    calls.add(part.id)
+                elif isinstance(part, ToolResult) and part.call_id in calls:
+                    return True
+        return False
+
+    def _media_saver(self, session_id: str, target: str) -> tuple[Callable[[str, str, str], str], list[Media]]:
+        """`save(data, mime, kind)` for MCP-shaped results, and the images it kept for the model."""
+        media: list[Media] = []
+
+        def save(data: str, mime: str, kind: str) -> str:
+            name = f"{target.replace('/', '-')}.{kind}"
+            artifact = self.save_artifact(session_id, data, mime, name=name, source=f"mcp:{target}")
+            if kind == "image" and artifacts.clean_mime(mime) in artifacts.MODEL_IMAGE_TYPES:
+                media.append(Media(artifact, artifacts.clean_mime(mime), name))
+            return artifact
+        return save, media
 
     # -- artifacts -------------------------------------------------------------
 
@@ -3670,6 +3715,14 @@ class Runtime:
             stopped = await self._cancel(child.id) or stopped
         return stopped
 
+    def mark_seen(self, session_id: str) -> None:
+        """A client is showing this session: tell every client, so none keeps it unread.
+
+        Unread is client-side (nothing is stored), so the event is live only."""
+        root = self._root(self.session(session_id))
+        self.bus.publish("session.seen", {"session": session_id, "root": root.id},
+                         session_id=session_id, durable=False)
+
     async def _cancel(self, session_id: str) -> bool:
         task = self.turns.get(session_id)
         if task is None:
@@ -3941,7 +3994,7 @@ class Runtime:
         await self.retention.stop()
         await self.jobs.shutdown()
         await self.kernels.shutdown()
-        await asyncio.gather(self.mcp.close(),
+        await asyncio.gather(self.mcp.close(), self.browser.close(),
                              *(manager.close() for manager in self.project_mcps.values()),
                              return_exceptions=True)
         skill_files.install.release_all()

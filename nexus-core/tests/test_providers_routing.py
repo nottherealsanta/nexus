@@ -18,10 +18,3 @@ def test_copilot_gpt_models_use_responses(monkeypatch, tmp_path):
     assert isinstance(make("copilot", _Auth(), "claude-sonnet-5"), ChatProvider)
 
 
-def test_enabled_only_override_keeps_default_command():
-    from nexus.mcp.config import with_defaults
-
-    merged = with_defaults({"browser-use": {"enabled": True}})
-    assert merged["browser-use"]["enabled"] is True
-    assert merged["browser-use"]["command"] == "uvx"
-    assert with_defaults({"x": {"url": "http://a"}})["x"] == {"url": "http://a"}

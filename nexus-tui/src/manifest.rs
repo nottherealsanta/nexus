@@ -226,7 +226,11 @@ impl Manifest {
     /// Shared UI text by key, `{name}` placeholders filled from `args`. A missing
     /// key shows the key itself (the checker fails the build of the manifest first).
     pub fn ui_text(&self, key: &str, args: &[(&str, &str)]) -> String {
-        let mut out = self.strings.get(key).cloned().unwrap_or_else(|| key.to_owned());
+        let mut out = self
+            .strings
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_owned());
         for (name, value) in args {
             out = out.replace(&format!("{{{name}}}"), value);
         }

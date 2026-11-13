@@ -164,7 +164,7 @@ pub fn verb_family(tool: &str) -> Option<&'static str> {
         "code" => "code",
         "ask" => "ask",
         "session" | "fork" => "session",
-        "web_search" | "web_fetch" => "web",
+        "web_search" | "web_fetch" | "browser_exec" | "browser_screenshot" => "web",
         _ => return None,
     })
 }

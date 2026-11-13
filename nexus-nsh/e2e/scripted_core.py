@@ -174,6 +174,19 @@ class Scripted:
             yield Usage(120, 0, 40, 0)
             yield Done("end_turn")
             return
+        if "browse" in prompt:  # the browser tools, against the stand-in browser-use server
+            steps = [
+                ToolCall("b_exec", "browser_exec", json.dumps({"code": "new_tab('https://example.com')\nprint(page_info())"})),
+                ToolCall("b_shot", "browser_screenshot", json.dumps({"full": True})),
+            ]
+            step = assistant_steps(req)
+            if step < len(steps):
+                yield PartDone(steps[step])
+                yield Done("tool_calls")
+            else:
+                yield PartDone(Text("The page loaded; the screenshot is above."))
+                yield Done("end_turn")
+            return
         if last.role == "tool":  # after an ordinary tool result: finish
             yield TextDelta("Done. The command finished; output is above.")
             yield PartDone(Text("Done. The command finished; output is above."))
@@ -245,6 +258,8 @@ def main() -> None:
         store.db.execute("insert or replace into provider_usage_cache (id, snapshot) values (1, ?)", (json.dumps(asyncio.run(fixture_usage())),))
         store.db.commit()
     rt = make_runtime(store)
+    # No real browser: the browser tools run against the test stand-in for browser-use.
+    rt.browser.command = (sys.executable, str(Path(__file__).resolve().parents[2] / "nexus-core/tests/fixtures/browser_fixture.py"))
     token = secrets.token_urlsafe(32)
     url = f"http://127.0.0.1:{port}"
     app = build_app(rt, token=token, url=url)

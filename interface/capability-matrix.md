@@ -240,6 +240,7 @@ event times. Status: running (`tool_start` without `tool_end`), done, error
 | X20 | Separate notice: UI hides vs model never saw | API ready | model-side clip is in the result text (`[… clipped N of TOTAL characters …]`, `[… line clipped at 2000 …]`) | UI preview cap is X18; keep the two labels distinct |
 | X21 | Raw toggle: exact arguments JSON and result text as sent | API ready | `ToolCall.arguments` (exact text), `ToolResult.output`; `wire_request` for the full body | |
 | X22 | "Open in inspector" from a tool line | API ready | `/inspector#…&session=…&level=` | Gap: no anchor for a single call; link opens the session at a level |
+| X23 | `browser_exec` / `browser_screenshot` | API ready | tool call/result (screenshot as image artifact); E: `browser.failed`; setting `[browser] use_my_chrome` (Settings > Browser) | `Browser` / `Screenshot` rows with the web glyph in both clients |
 
 ## 7. Child sessions
 
@@ -396,7 +397,7 @@ Dictation, Keybindings, Notifications, About.
 | ST12 | Agents: default root agent (write) | API ready | `GET/PATCH /api/config` | `defaults.agent` |
 | ST13 | Tools: defaults for new sessions | API ready | `GET/PATCH /api/config` | `tools.disabled` |
 | ST14 | Skills: discovered, sources, diagnostics, defaults | Core work | 11a Skills | |
-| ST15 | MCP: servers, enabled defaults, status, tools, connect/disconnect/retry; browser-use default | Core work | 11a MCP, `nexus-browser/` | |
+| ST15 | MCP: servers, enabled defaults, status, tools, connect/disconnect/retry (browser-use runs `browser_exec` / `browser_screenshot`, not an MCP default) | Core work | 11a MCP, `nexus-browser/` | |
 | ST16 | Context: handoff threshold percentage | Core work | 12a Compaction as handoff | |
 | ST17 | Dictation: engine, language, push-to-talk key | Client only | | Capture exists in both clients (`voice.dictate`); engine, language and key settings are still deferred |
 | ST18 | Keybindings: command list with editable keys | Client only | | |

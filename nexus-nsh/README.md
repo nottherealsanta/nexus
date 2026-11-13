@@ -191,7 +191,7 @@ tabs and last viewed session or new-session screen, held locally while the clien
 Startup shows the launch splash (`src/ui/splash.tsx`): the `_/` logo in white, animated from the first
 frame by a light sweep (no progress bar, percentage or step name; a quiet "Starting Nexus Core…" line after 5 s). It fades into the first live frame and is dismissed when a start fails.
 The timeline has starting
-context, Markdown (prose uses the 16/24 default in Google Sans; fenced code is a panel card with the language and
+context, Markdown (tables use a ruled grid with a distinct header; prose uses the 16/24 default in Google Sans; fenced code is a panel card with the language and
 a Copy button and padded code; inline code is Monaspace at 12.5/20 on the panel), and three detail levels: finished activity groups collapse in low and medium,
 while high expands their tools. Running groups show the latest five activities in medium (with earlier items announced), and waiting groups stay open. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
@@ -224,7 +224,7 @@ icons (the status glyph replaces the icon while running, failed, denied or waiti
 call adds its first error line, and read, edit, write, code and ask carry their summary. An open
 member's detail sits behind the tree line with `raw` on its row: `$ command` rows, then the last 8 output rows
 behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
-a tail, 100 lines each or 30 and 20 at high detail. Thoughts show `◇ Thought · preview`, with the body behind a rail, and no time;
+a tail, 100 lines each or 30 and 20 at high detail. Code instead shows its cell source and marks its output hidden; raw reveals the result. Thoughts show `◇ Thought · preview`, with the body behind a rail, and no time;
 the one-line preview strips raw Markdown emphasis. A thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group, and shows the diamond where a group would show its chevron.
 Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog. A finished background subagent is instead `⣿ Subagent done · Agent · title`, with `failed` or `interrupted` in the error colour; pressing it opens a modal with the agent, title, model, duration and the exact notice text the model received, plus an **Open session** button for the child.
 
@@ -363,11 +363,12 @@ In the Shells modal, ↑/↓ select a shell and `s` (or its `[stop]` / **Stop** 
 worktree adds a bundled fork icon (muted, primary on hover) with the tooltip `Worktree session`; clicking it
 opens the small **Worktree** modal with the copyable worktree path, branch and main-checkout path, and a
 `Copied` toast. The context reading (`82k · 41%`) stays on the right. The location strip sits below the controls, followed by the activity line on the dock's bottom edge, matching the TUI. While a turn runs it is a
-soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it stays
-hidden until context reaches 80% (warning) or 95% (error). Draft context is marked as an estimate.
-While a session runs, a Working row at the top of the dock shimmers the word and shows the elapsed
-time and output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
-block above the dock (commands, with their key hints); `@` completes project paths from
+soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it fills to the
+current context occupancy in the agent's colour. Draft context is marked as an estimate.
+While a session runs, a Working row right-aligned below the composer, on the path line, shimmers the
+word and shows the elapsed time (`Working · 12s`), as in the TUI; with an empty draft the send button
+becomes Stop. Typing `/` opens a completion layer floating over the timeline on the composer's top
+edge (commands, with their key hints; 8 rows, then it scrolls); `@` completes project paths from
 Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Ctrl+X arms the
 manifest's leader aliases for three seconds: then M, N, O/B, G, S, L, T, R, V,
 Shift+N or ? runs model, new session, sessions, agent, settings, sidebar, effort,
@@ -456,7 +457,7 @@ code, key entry, connect/disconnect and catalog refresh; the default agent and e
 with a line per subagent that opens its model and fallback lists (Esc returns
 from that detail); each model row has an effort stepper (`‹ effort low ›`, or Right after pressing it) writing
 `agents.efforts`. Tools keeps one permission choice, labelled with the tools it
-governs, and one clickable tool grid. Desktop session rows place the status mark before the title with a gap. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
+governs, and one clickable tool grid. Desktop session rows place the status mark before the title with a gap. Hovering a row shows an archive box at the upper right and an actions menu below it; archived sessions show only the menu. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
@@ -906,6 +907,9 @@ the focused pane (dark in the light theme). Choice and switch rows are the same 
 controls as the TUI; each option is a press target. Left returns focus to the section
 heading without changing the setting. (The TUI, which is keyboard-first, binds ←/→ to the
 focused segment instead; its Tab returns to the rail.)
+
+Theme offers System, Light and Dark. System follows the device appearance,
+including changes while NSH is running.
 
 Live microphone packets continue during silent output, with browser echo cancellation enabled. The shared silent-output regression scenario covers both clients.
 

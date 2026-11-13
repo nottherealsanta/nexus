@@ -155,7 +155,7 @@ async def bounded_lines(stream: asyncio.StreamReader, *, line_limit: int, total_
         yield bytes(pending)
 
 
-async def probe(executable: str, flag: str, *, env: dict[str, str], cwd: Path) -> str:
+async def probe(executable: str, flag: str, *, env: dict[str, str], cwd: Path, timeout: float = PROBE_TIMEOUT_SECONDS) -> str:
     process = await asyncio.create_subprocess_exec(
         executable, flag, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
@@ -171,7 +171,7 @@ async def probe(executable: str, flag: str, *, env: dict[str, str], cwd: Path) -
         return diagnostic_text(bytes(output))
 
     try:
-        return await asyncio.wait_for(collect(), PROBE_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(collect(), timeout)
     except TimeoutError:
         raise WorkerError(f"CLI {flag} probe timed out") from None
     finally:

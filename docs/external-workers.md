@@ -35,11 +35,11 @@ listed, and a `claude-code/…` or `agy/…` ref is refused with the setting to 
 | Provider id | Label | CLI | Models |
 | --- | --- | --- | --- |
 | `claude-code` | `ZMX · Claude Code` | `claude` (found as the `claude` provider finds it) | models.dev `anthropic` ids |
-| `agy` | `ZMX · Antigravity` | `$NEXUS10_AGY_CLI`, then `PATH`, then `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin` | `agy models`, bounded probe, cached 60 s |
+| `agy` | `ZMX · Antigravity` | `$NEXUS10_AGY_CLI`, then `PATH`, then `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin` | `agy models` (about 6 s; warmed at Core start, cached 60 s, a stale list is served while it refreshes) |
 
 Both have dialect `external-cli`. `GET /api/provider` lists them only when switched on, with `zmx: true` and no sign-in
 methods (sign-in is the CLI's own: `claude auth login`, or run `agy` once). `GET /api/model` marks their models
-`zmx: true`; clients list those in subagent pools only, never in a root model picker.
+`zmx: true`; clients list those in subagent pools, and in Change model only while a subagent is viewed, never for a root session or a draft.
 
 A child gets a ZMX model explicitly (an agent's `model:`, an `[agents.models]` pool, or `POST /api/session` with a
 `parent`), or by mapping: with `claude_backend = "zmx"`, a child whose model is `claude/<id>` runs as

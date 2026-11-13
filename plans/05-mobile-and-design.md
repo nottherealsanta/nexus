@@ -29,7 +29,7 @@ Implemented in the working tree for iPhone: three tabs, reduced timeline, compac
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
 - [x] **Remove** desktop capabilities from the iPhone build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
   management, row menus that reach them. Make them unreachable from the palette and shortcuts too.
-- [~] Phone polish on the three tabs (2026-11-11): keyboard avoidance (shell pads by `keyboardFrame()`), 44 px targets, safe areas on bars, sheets and drawer, gestures (long press, pull to refresh, edge swipe), Settings as pushed pages and the Connect copy are done and verified headless and in a 390 px browser. Decided 2026-11-12: iPad is desktop/web. Open: composer-selector targets under 44 px (the desktop composer row is hidden on a phone but not audited), landscape insets, Dynamic Type, and everything on a device.
+- [~] Phone polish on the three tabs (2026-11-11): keyboard avoidance (shell pads by `keyboardFrame()`), 44 px targets, safe areas on bars, sheets and drawer, gestures (long press, pull to refresh, edge swipe), Settings as pushed pages and the Connect copy are done and verified headless and in a 390 px browser. Decided 2026-11-12: iPad is desktop/web. Open: Dynamic Type and everything on a device. Done 2026-11-12: the composer selectors are 44 px on a phone and the shell pads the left/right safe-area insets for landscape (headless tests pass; not seen on a device).
 - [ ] Native mic for the Manager (section 3) so the Manager tab can talk.
   Partial 2026-11-12: native PCM conversion and 20 ms framing for GPT Live has unit tests in
   `nexus-nsh/native/src/live_pcm.rs`. A bounded native WebSocket transport in `live_socket.rs` has loopback tests for
@@ -79,7 +79,7 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
 
 Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device.
 
-Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims but does not slide the conversation aside). Search is the always-visible field in the list and drawer rather than a separate button.
+Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims; 2026-11-12 the conversation now slides aside by the drawer width, headless tests pass, not seen on a device). Search is the always-visible field in the list and drawer rather than a separate button.
 
 Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11 (recorded in [decisions.md](decisions.md)); `nexus pair` is implemented:**
 
@@ -111,5 +111,27 @@ card).
   Where a change is also right for the TUI (spacing, wording, grouping), land it there in the same change.
 - [~] Verify with Playwright screenshots (web done, 1024/1440 dark/light; macOS app not attempted: no non-interactive launch) and the macOS app; before/after pairs saved under
   `reports/nsh-look-2026-11/`.
+
+## 5.4 Redesign pass: web, macOS and phone (user, 2026-11-12)
+
+The user asked for a redesign of NSH web, macOS and the phone: "70–80% there, polish to finish", taking cues from the
+TUI. The old "Nexus Void Design" mockup artifact was removed; the new mockup is the private canvas
+[Nexus NSH Redesign](https://claude.ai/artifact/24HpRYp1i9R7JW6YSoGxqf) (session, file picker, palette, composer
+states, type rules, phone Sessions / conversation / Manager). Awaiting the user's review before implementation.
+
+- [ ] **Sans by default.** Interface text is Google Sans everywhere (tabs, sidebar, rail, palette, pickers, Settings,
+  modals, composer, prose, tool labels, turn footer). Monaspace only for code, diffs, shell commands and output, file
+  paths and tool arguments, `@` mentions in the draft, the path strip, tree/braille glyphs and the wordmark. Today
+  `font-mono` is spread across settings.tsx (12), composer.tsx (6), newsession.tsx (5), timeline/resources/
+  project-mcp/overlays (4 each) and others.
+- [ ] **One desktop type scale:** title 16/24, prose 15/24, body/UI 14/22, secondary 13/20, meta 12/16, section 11/16
+  caps. Picker and palette rows are 14 px (the completion rows are 16 px today).
+- [ ] **Pickers on top:** the `@` file and slash completion floats as a layer over the timeline, anchored to the
+  composer's top edge, instead of sitting in flow and pushing the conversation up. Same change in the TUI (parity).
+- [ ] **Composer:** the TUI soft card: text, then one control row (agent in its colour · model · effort … meter, mic,
+  send/stop); the text area is one line high until the draft wraps; Working on the line below the card,
+  right-aligned as in the TUI; path strip below in mono.
+- [ ] **Phone:** the `nexus` wordmark in Monaspace at the top of Sessions; the tab bar gets 10 px more top padding.
+- [ ] Verify with the screenshot skills (TUI and NSH web, dark and light) and record any client difference in the ledger.
 
 Audit list, open items (tab clip without ellipsis, light-theme selection contrast, Settings notes vs TUI one-line rows, palette disabled reasons) and before/after pairs: [reports/nsh-look-2026-11/README.md](../reports/nsh-look-2026-11/README.md).

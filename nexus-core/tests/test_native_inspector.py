@@ -351,3 +351,25 @@ def test_paging_survives_retention_deleting_rows_between_pages(data):
     boundary = min(r["id"] for r in first["records"])
     # every surviving row older than page 1 was reached exactly once through the cursors
     assert {i for i in remaining if i < boundary} == set(seen) - {r["id"] for r in first["records"]}
+
+
+def test_failures_read_in_the_list_with_when_and_where(data):
+    rt, sid = data
+    s = rt.store
+    turn = s.start_turn(sid, started=100)
+    request = s.start_request(turn["id"], sid, 1, model="scripted/m")
+    s.start_attempt(turn["id"], sid, request["id"], "att_1", 1)
+    s.finish_attempt("att_1", "failed", error="copilot: network error: ConnectTimeout")
+    s.start_attempt(turn["id"], sid, request["id"], "att_2", 2, delay=0.7, error="copilot: network error: ConnectTimeout")
+    s.finish_attempt("att_2", "failed", error="copilot: network error: ConnectTimeout")
+    s.append_event({"session_id": sid, "seq": 1, "time": 101, "type": "retry_scheduled",
+                    "data": {"attempt": 1, "max_attempts": 2, "delay": 0.7, "reason": "copilot: network error: ConnectTimeout"}})
+    s.append_event({"session_id": sid, "seq": 2, "time": 102, "type": "session.error",
+                    "data": {"kind": "provider", "message": "copilot: network error: ConnectTimeout"}})
+    lanes = inspect(s, sid, view="Timing", kind="attempt", now=200)["lanes"]
+    assert [l["label"] for l in lanes] == ["#1", "#2"]
+    assert all(l["summary"].endswith("· copilot: network error: ConnectTimeout") for l in lanes)
+    raw = inspect(s, sid, view="Raw")["records"]
+    assert [r["summary"].split(" · ")[:2] for r in raw] == [
+        ["retry_scheduled", "copilot: network error: ConnectTimeout"],
+        ["session.error", "copilot: network error: ConnectTimeout"]]

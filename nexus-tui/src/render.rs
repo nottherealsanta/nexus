@@ -1898,7 +1898,11 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
         // Sessions is 10 cells; the rest take their bracketed label's width after an
         // 8-cell stride, so Files keeps its place and Git fits the 28-cell sidebar.
         let i = i as u16;
-        let w = if i == 0 { 10 } else { t.label.chars().count() as u16 + 2 };
+        let w = if i == 0 {
+            10
+        } else {
+            t.label.chars().count() as u16 + 2
+        };
         let off = if i == 0 { 0 } else { 11 + (i - 1) * 8 };
         let rect = if cx.app.narrow() {
             Rect::new(r.x + 3 + off, r.y, w, 1)
@@ -2201,13 +2205,15 @@ fn draw_rail_popup(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
     let a = cx.app;
     let entries = a.rail_project_ids();
     let keyed = a.ui.focus == Focus::Rail;
-    let Some((RailItem::Project(i), band)) = rail_layout(a, r).into_iter().find(|(item, band)| {
-        match item {
-            RailItem::Project(i) if keyed => *i == a.rail_cursor(),
-            RailItem::Project(_) => cx.hovered(*band),
-            _ => false,
-        }
-    }) else {
+    let Some((RailItem::Project(i), band)) =
+        rail_layout(a, r)
+            .into_iter()
+            .find(|(item, band)| match item {
+                RailItem::Project(i) if keyed => *i == a.rail_cursor(),
+                RailItem::Project(_) => cx.hovered(*band),
+                _ => false,
+            })
+    else {
         return;
     };
     let Some(p) = entries.get(i).and_then(|id| a.state.model.projects.get(id)) else {
@@ -2312,7 +2318,11 @@ fn draw_project_git(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mu
         buf,
         y,
         &app.manifest.ui_text(
-            if sum.files == 1 { "git.summary.one" } else { "git.summary.many" },
+            if sum.files == 1 {
+                "git.summary.one"
+            } else {
+                "git.summary.many"
+            },
             &[
                 ("files", &sum.files.to_string()),
                 ("added", &sum.added.to_string()),
@@ -3795,7 +3805,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     let style = cx.st(token, SIDEBAR).patch(bg);
                     let age = text::age(now_secs(), s.updated);
                     let aw = width(&age) as u16;
-                    // Hovering the two rows of a session offers `×` where the time is.
+                    // Hovering the session exposes the archive control above its menu.
                     let close = (!s.archived && cx.hovered(Rect::new(rr.x, y, rr.width, 2)))
                         .then(|| Rect::new(inner_right.saturating_sub(2), y, 3, 1));
                     let inner = rr.width.saturating_sub(4);
@@ -3814,7 +3824,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                             buf,
                             x.x,
                             y,
-                            if cx.t.opts.ascii { "x" } else { "\u{00d7}" },
+                            cx.t.control("archive"),
                             cx.st(if hot { PRIMARY } else { MUTED }, SIDEBAR).patch(bg),
                             1,
                         );
@@ -3845,6 +3855,14 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                             muted.patch(bg),
                             mw as u16,
                         );
+                    }
+                    if cx.hovered(Rect::new(rr.x, y.saturating_sub(1), rr.width, 2)) {
+                        let button = Rect::new(inner_right.saturating_sub(2), y, 3, 1);
+                        clear(buf, button, cx.st(MUTED, SIDEBAR).patch(bg));
+                        put(buf, button.x, y, cx.ell(), cx.st(if cx.hovered(button) { PRIMARY } else { MUTED }, SIDEBAR).patch(bg), 1);
+                        hits.add(rr, Target::SideRow(i));
+                        hits.add(button, Target::SessionRowMenu(i));
+                        continue;
                     }
                 }
                 hits.add(rr, Target::SideRow(i));
@@ -7232,10 +7250,10 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
             } else {
                 "-"
             }
-        } else if active && cx.t.mono() {
-            "━"
-        } else {
+        } else if cx.t.mono() && !active {
             "─"
+        } else {
+            "━"
         };
         put(
             buf,
@@ -7412,11 +7430,13 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 }
 
-/// The completion popup: a borderless raised block exactly as wide as the
-/// composer card, sitting on its top edge and drawn after it so it covers the
-/// timeline (DESIGN_PLAN.md D11). Names are padded to the widest (at most 24)
-/// plus three columns, followed by muted help. A thin rail runs down the left
-/// edge, like the composer's; the selected row is raised.
+/// The completion popup: an overlay on the raised surface, as wide as the
+/// composer card and left-aligned with it, its bottom edge on the card's top
+/// edge. It is drawn after the composer so it covers the timeline without
+/// taking layout rows from it. At most eight rows; the selected row takes the
+/// selection band and the `▌` focus bar. Command rows are name then muted
+/// help; file rows are the name, then the directory muted. The last row is the
+/// footer: key hints on the left, `i of N` on the right.
 fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let Some(rows) = cx.app.completion_rows() else {
         return;
@@ -7428,22 +7448,40 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     // The block ends where the card's top edge row begins.
     let bottom = r.y + 1;
     let room = bottom.saturating_sub(g.centre.y);
-    let shown = (rows.len().min(crate::completion::MENU_LIMIT) as u16).min(room.saturating_sub(1));
+    // One row of the room goes to the footer.
+    let shown = (rows.len().min(COMPLETION_ROWS) as u16).min(room.saturating_sub(1));
     if shown == 0 {
         return;
     }
-    let height = shown;
+    let height = shown + 1;
     let area = Rect::new(r.x + 2, bottom - height, r.width.saturating_sub(4), height);
-    clear(buf, area, cx.st(PRIMARY, PANEL));
+    clear(buf, area, cx.st(PRIMARY, RAISED));
     let selected = cx.app.ui.completion.index.min(rows.len() - 1);
+    let file = rows
+        .first()
+        .is_some_and(|row| row.help.is_empty() && !row.value.starts_with('/'));
+    let split = |value: &str| -> (String, String) {
+        if !file {
+            return (value.to_owned(), String::new());
+        }
+        let trimmed = value.trim_end_matches('/');
+        match trimmed.rfind('/') {
+            Some(at) => (value[at + 1..].to_owned(), value[..=at].to_owned()),
+            None => (value.to_owned(), String::new()),
+        }
+    };
     let name_width = rows
         .iter()
-        .map(|row| width(&row.value))
+        .map(|row| width(&split(&row.value).0))
         .max()
         .unwrap_or(0)
         .min(24)
         + 3;
     let start = selected.saturating_sub(shown as usize - 1);
+    let band = cx
+        .st(PRIMARY, "interactive.selection")
+        .bg
+        .unwrap_or_default();
     for (offset, (i, row)) in rows
         .iter()
         .enumerate()
@@ -7453,21 +7491,30 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     {
         let y = area.y + offset as u16;
         let line = Rect::new(area.x, y, area.width, 1);
-        let bg = if i == selected { RAISED } else { PANEL };
-        let base = cx.st(PRIMARY, bg);
+        let on = i == selected;
+        let base = if on {
+            cx.st(PRIMARY, RAISED).bg(band)
+        } else {
+            cx.st(PRIMARY, RAISED)
+        };
         clear(buf, line, base);
-        put(
-            buf,
-            area.x,
-            y,
-            cx.t.structure("rail"),
-            cx.st("border.default", bg),
-            1,
-        );
+        if on {
+            put(
+                buf,
+                area.x,
+                y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", RAISED)
+                    .bg(band)
+                    .add_modifier(Modifier::BOLD),
+                1,
+            );
+        }
         let muted = base.patch(cx.t.fg(MUTED));
+        let (name, dir) = split(&row.value);
         let name_style = if row.reason.is_some() {
             muted
-        } else if i == selected {
+        } else if on {
             base.add_modifier(Modifier::BOLD)
         } else {
             base
@@ -7476,7 +7523,7 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             buf,
             area.x + 3,
             y,
-            &truncate(&row.value, name_width - 3, cx.ell()),
+            &truncate(&name, name_width - 3, cx.ell()),
             name_style,
             area.width.saturating_sub(3),
         );
@@ -7485,20 +7532,53 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             Some(reason) => format!("{}{}{reason}", row.help, cx.sep()),
             None => row.help.clone(),
         };
+        let help = if file { dir } else { help };
         let room = area.right().saturating_sub(help_x + 2) as usize;
         if x < help_x && room > 0 {
-            put(
-                buf,
-                help_x,
-                y,
-                &truncate(&help, room, cx.ell()),
-                muted,
-                room as u16,
-            );
+            let text = if file {
+                truncate_middle(&help, room, cx.ell())
+            } else {
+                truncate(&help, room, cx.ell())
+            };
+            put(buf, help_x, y, &text, muted, room as u16);
         }
         hits.add(line, Target::CompletionRow(i));
     }
+    // Footer: hints left, position right.
+    let y = area.bottom() - 1;
+    let key = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+    let muted = cx.st(MUTED, RAISED);
+    let end = area.right().saturating_sub(2);
+    let count = format!("{} of {}", selected + 1, rows.len());
+    let count_x = end.saturating_sub(width(&count) as u16).max(area.x + 3);
+    let stop = count_x.saturating_sub(1);
+    let mut x = area.x + 3;
+    for (i, (k, label)) in [
+        ("\u{2191}\u{2193}", "move"),
+        ("tab", "accept"),
+        ("esc", "close"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        if i > 0 {
+            x = put(buf, x, y, &cx.sep(), muted, stop.saturating_sub(x));
+        }
+        x = put(buf, x, y, k, key, stop.saturating_sub(x));
+        x = put(
+            buf,
+            x,
+            y,
+            &format!(" {label}"),
+            muted,
+            stop.saturating_sub(x),
+        );
+    }
+    put(buf, count_x, y, &count, muted, end.saturating_sub(count_x));
 }
+
+/// Completion rows the overlay lists before it scrolls.
+const COMPLETION_ROWS: usize = 8;
 
 /// A toast-sized explanation above the composer for the context numbers.
 fn draw_usage_tooltip(cx: &Cx, buf: &mut Buffer, composer: Rect, usage: &ComposerUsage) {
@@ -7636,6 +7716,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             })
         }
         "tools.search_status" => a.search_status_lines().into_iter().next(),
+        "browser.status" => a.browser_status_lines().into_iter().next(),
         "tools.search_start" => Some("enter".into()),
         "manager.enabled" | "manager.mode" | "manager.model" | "manager.proactive" => {
             a.manager_setting_value(&row.id)
@@ -7643,6 +7724,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         "manager.privacy" => Some("enter".into()),
         "dictation.push_to_talk" => Some("enter".into()),
         "about.inspector" => Some("enter".into()),
+        "appearance.theme" if a.theme_system => Some("system".into()),
         "appearance.theme" => Some(match a.theme.opts.mode {
             crate::theme::Mode::Dark => "dark".into(),
             crate::theme::Mode::Light => "light".into(),
@@ -7676,6 +7758,12 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             .config
             .as_ref()
             .and_then(|c| c["values"]["mcp"]["full_definitions"].as_bool())
+            .map(on_off),
+        "browser.use_my_chrome" => a
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"]["browser"]["use_my_chrome"].as_bool())
             .map(on_off),
         "zmx.claude_backend" => a.state.config.as_ref().map(|c| {
             if c["values"]["zmx"]["claude_backend"].as_str() == Some("zmx") {

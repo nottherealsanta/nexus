@@ -27,7 +27,7 @@ from typing import Any
 
 from ..paths import home
 from . import bridge
-from .config import ServerConfig, parse_all, with_defaults
+from .config import ServerConfig, parse_all
 from .search import Index, Result
 
 HEALTH_INTERVAL = 20.0  # a tools/list round trip; `ping` is gone from newer protocol versions
@@ -343,13 +343,12 @@ def _describe(exc: BaseException) -> str:
 
 class McpManager:
     def __init__(self, publish: Publish, read_servers: Callable[[], Any], stamp: Callable[[], Any] = lambda: None,
-                 *, workspace: str = "", defaults: bool = True, log_dir: str | None = None,
+                 *, workspace: str = "", log_dir: str | None = None,
                  guard: Guard | None = None):
         self.publish = publish
         self.read_servers = read_servers
         self.stamp = stamp  # changes when the config file does, so edits apply on the next use
         self.workspace = workspace
-        self.defaults = defaults
         self.log_dir = log_dir
         self.guard = guard
         self._stamped: Any = object()
@@ -363,7 +362,7 @@ class McpManager:
         """Read `[mcp.servers]` again: new servers appear, changed or removed ones close, the rest keep running."""
         self._stamped = self.stamp()
         entries = self.read_servers()
-        servers, self.invalid = parse_all(with_defaults(entries) if self.defaults else entries,
+        servers, self.invalid = parse_all(entries,
                                           workspace=self.workspace)
         self._configured = True
         for name in [n for n, c in self.connections.items() if servers.get(n) != c.config]:

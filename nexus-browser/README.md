@@ -1,28 +1,33 @@
 # Nexus Browser
 
-The default browser MCP is the upstream **browser-use** local stdio server.
-This directory contains launch configuration, not a custom browser server.
-Core offers it as the default MCP server (PLAN.md G, `nexus-core/nexus/mcp/config.py`
-`DEFAULT_SERVERS`), switched off until the user enables it in Settings; then it is
-written into `config.toml`. `mcp.json` here is the same entry in the portable
-format (`nexus config import-mcp` reads it).
+The browser tools `browser_exec` and `browser_screenshot` run on upstream
+**browser-use**, pinned (`nexus-core/nexus/browser.py`; see
+[docs/tools.md](../docs/tools.md#browser-tools)). It is not an MCP server in Settings.
+Core starts one stdio process per session at that session's first browser call.
 
-Upstream launch command:
+Launch commands (Core runs them; `uvx` must be on `PATH`):
 
 ```sh
-uvx --from 'browser-use[cli]==1.0.2' browser-use --cli-mcp
+uvx --from 'browser-use[cli]==1.0.2' browser-use --mcp       # default: its own Chromium, temporary profile
+uvx --from 'browser-use[cli]==1.0.2' browser-use --cli-mcp   # Settings > Browser > Use my Chrome profile
 ```
 
-Reference: https://github.com/browser-use/browser-use/blob/main/skills/open-source/references/integrations.md
+`--mcp` never attaches the user's Chrome (in 1.0.2 it is the deprecated name for the same
+tools on browser-use's own Chromium; the deprecation note goes to the log). `--cli-mcp`
+drives the user's Chrome once its remote debugging is on, and otherwise falls back to
+its own Chromium, and may open `chrome://inspect` in the user's Chrome to ask for that.
+That is why it is opt-in.
 
-Pinned to 1.0.2 (upgraded from 0.13.14 on 2026-11-12; 1.0 is a rewrite whose tools are
-`browser_exec`, `browser_screenshot`, `browser_login` and `browser_feedback`). Only the server
-start and `initialize` were checked; the tools were not exercised.
-Core owns lazy startup, shutdown, health, session isolation and error reporting.
-Browser-use is configured by default, subject to each agent's tool restrictions.
+browser-use 1.0.2 also offers `browser_login` (Browser Use Cloud) and `browser_feedback`
+(reports to its team). Nexus does not offer them to the model.
 
-Optional LLM-backed browser-use tools may require their own provider credentials;
-Nexus subscription sign-ins are not assumed to supply those. Keep credentials
-in environment/private Core configuration, never in this tracked file. Browser
-profiles, downloads and screenshots belong under `$NEXUS10_HOME`, not here and
-never under old Nexus's state directory.
+Pinned to 1.0.2 (upgraded from 0.13.14 on 2026-11-12). The tool definitions are Nexus's
+own, in `nexus/browser.py`. To upgrade, change `PACKAGE` there and check the flags and
+tool names still hold.
+
+Exercised on 2026-11-13: a real model (codex/gpt-6.1-terra) used both tools on a live
+site, and the default mode was checked to report "this server's own Chromium on a temp
+profile, not your Chrome". Driving the user's Chrome (`use_my_chrome` on) was not
+exercised.
+
+Logs: `~/.nexus/logs/browser/<session>.log`.

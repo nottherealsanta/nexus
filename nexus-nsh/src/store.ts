@@ -1135,7 +1135,8 @@ export async function selectSession(id: string) {
   openedTabs.update((tabs) => tabs.includes(tab) ? tabs : [...tabs, tab]);
   if (ses?.archived) reopenedArchived.add(tab);
   if (id !== tab && model.sessions.get(id)?.archived) reopenedArchived.add(id);
-  model.unreadSessions.delete(id);
+  const wasUnread = model.unreadSessions.delete(id);
+  if (model.unreadSessions.delete(tab) || wasUnread) void request("POST", `/api/session/${id}/seen`).catch(() => {});
   if (ses) {
     lastProjectSession.set(ses.project_id, id);
     currentProject.set(ses.project_id);

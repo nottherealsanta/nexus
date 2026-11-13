@@ -2468,7 +2468,10 @@ fn alt_enter_while_busy_sends_with_interrupt_mode_and_idle_does_not() {
     let mut a = app();
     typing(&mut a, "no turn running");
     press(&mut a, &["alt+enter"]);
-    assert!(!a.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, .. }) if mode == "interrupt")));
+    assert!(!a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Prompt { mode, .. }) if mode == "interrupt")));
     a.composer().take();
     a.effects.clear();
     busy(&mut a);
@@ -2491,7 +2494,10 @@ fn clipboard_paste_takes_image_then_text_then_reports_empty() {
     a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Text(" hello".into())));
     assert_eq!(a.composer_ref().text(), "[Image A] hello");
     a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Text("word ".repeat(400))));
-    assert!(a.composer_ref().text().contains("[Pasted"), "long text collapses");
+    assert!(
+        a.composer_ref().text().contains("[Pasted"),
+        "long text collapses"
+    );
     let toasts = a.ui.alerts.toasts.len();
     a.apply_clipboard_paste(SESSION.into(), Ok(Clip::Empty));
     assert_eq!(a.ui.alerts.toasts.len(), toasts + 1);
@@ -3324,4 +3330,38 @@ fn zmx_settings_show_core_s_unavailable_reason_and_change_nothing() {
         _ => None,
     });
     assert_eq!(found, Some(None));
+}
+
+#[test]
+fn browser_chrome_profile_setting_is_off_by_default_and_patches_core() {
+    let mut a = app();
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1",
+        "values": {"browser": {"use_my_chrome": false}}
+    }));
+    a.execute("app.settings");
+    a.ui.settings_section = "browser".into();
+    a.ui.settings_nav_focus = false;
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    let at = rows
+        .iter()
+        .position(|at| {
+            matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "browser.use_my_chrome")
+        })
+        .expect("Browser > Use my Chrome profile");
+    a.ui.settings_row = at;
+    press(&mut a, &["right"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { revision, path, value }))
+            if revision == "cfg-1" && path == "browser.use_my_chrome" && value == &serde_json::json!(true)
+    ));
+    a.effects.clear();
+    press(&mut a, &["enter"]);
+    assert!(matches!(
+        a.effects.last(),
+        Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+            if path == "browser.use_my_chrome" && value == &serde_json::json!(true)
+    ));
 }

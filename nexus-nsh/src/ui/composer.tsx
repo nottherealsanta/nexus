@@ -16,7 +16,6 @@ import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question, QuestionItem } from "../core/api";
 import { agentColor, agentSlot } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
-import { groupRequests, latestUsage, sumUsage, turnsIn } from "../core/turns";
 import type { ToolDetailLine } from "./timeline";
 import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
@@ -32,7 +31,8 @@ import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress
 import { PhoneApprovalChoices } from "./mobile/approval";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
-// a Working row above it while busy, the completion block on its top edge and the project strip below.
+// the Working row on the line below it while busy, the completion layer floating over the timeline from its top edge and the project strip below.
+declare const navigator: any;
 const focused = signal(false);
 const pendingSelection = signal<{ session: string; id: string } | null>(null);
 const selected = signal(0);
@@ -42,9 +42,9 @@ const atListing = signal<{ key: string; entries: FileEntry[] } | null>(null);
 let atSeq = 0;
 /** The listing being fetched: model bumps re-run the effect and must not ask again meanwhile. */
 let atAsking = "";
-const MENU_LIMIT = 10;
+const MENU_LIMIT = 8;
 
-type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string };
+type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string; file?: { name: string; dir: string; folder: boolean } };
 type Completion = { kind: "slash" | "file"; query: string; dir: string; rows: CompletionRow[] };
 
 /** `/` completes commands when the draft is a single word; `@` completes project paths at the end of the draft. */
@@ -73,7 +73,7 @@ function completionFor(text: string): Completion | null {
       .sort((a, b) => (a.kind === "directory" ? 0 : 1) - (b.kind === "directory" ? 0 : 1) || a.name.localeCompare(b.name))
       .map((e): CompletionRow => {
         const isDir = e.kind === "directory";
-        return { key: e.name, value: `@${dir}${e.name}${isDir ? "/" : ""}`, help: isDir ? "directory" : e.kind, accept: `@${dir}${e.name}${isDir ? "/" : " "}` };
+        return { key: e.name, value: `@${dir}${e.name}${isDir ? "/" : ""}`, help: isDir ? "directory" : e.kind, file: { name: `${e.name}${isDir ? "/" : ""}`, dir, folder: isDir }, accept: `@${dir}${e.name}${isDir ? "/" : " "}` };
       });
     return { kind: "file", query, dir, rows };
   }
@@ -87,7 +87,7 @@ function EditableComposer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
   blurComposer.fn = () => { try { ref?.blur(); } catch {} };
-  const h = signal(28);
+  const h = signal(phone ? 28 : 22);
   // The dock's own width, measured rather than taken from the window: the provider label leaves
   // when the controls would overprint, which the window width alone cannot say.
   const dockWidth = signal(0);
@@ -378,42 +378,30 @@ function EditableComposer() {
   });
 
   const agentName = () => capitalize(agent());
+  /** Dictation and send/stop. Desktop puts them at the end of the control row (30px, round); the phone keeps them beside the input. */
+  const actions = () => (
+    <View class={`shrink-0 flex-row items-center ${phone ? "gap-3 pb-1" : "gap-1 ml-2"}`}>
+      <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
+        <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
+          testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
+          class="bg-primary hover:bg-primary" tint="tint-on-accent" />
+        <Btn label="Cancel" kind="ghost" onPress={cancelDictation} testID="dictation-cancel" />
+      </If>
+      <If when={dictationPhase() === "idle"}>
+        <RoundButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
+          onPress={() => void run("voice.dictate")} reason={!canDictate() ? (questionPending() ? "Answer the question above" : ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
+      </If>
+      <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
+        <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
+      </If>
+      <If when={!phone && busy() && !canSend() && dictationPhase() === "idle"}
+        else={<RoundButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} filled={canSend()} onPress={() => void send()} onLongPress={() => { if (phone && busy() && canSend()) sendChoice.set({ choose: (mode) => void send(mode) }); }} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />}>
+        <RoundButton icon="stop" label="Interrupt" testID="stop" filled square onPress={() => void run("session.interrupt")} />
+      </If>
+    </View>
+  );
   return (
     <View class="w-full" testID="composer-area">
-    <TimelineColumn class="items-center pt-3">
-      <View class="w-full">
-        <If when={open()}>
-          {() => {
-            const c = () => completion()!;
-            const rows = () => c().rows.slice(0, MENU_LIMIT);
-            return (
-              <View class="w-full bg-popover px-1 pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
-                <Each of={rows()} key={(r) => r.key}>
-                  {(r, i) => {
-                    const sel = () => i() === Math.min(selected(), rows().length - 1);
-                    return (
-                      <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
-                        class={`flex-row items-center gap-3 rounded-(--radius) ${sel() ? "bg-selection" : ""} ${isNarrow() ? "min-h-11" : "h-8"} px-3 hover:bg-accent ${FOCUS}`}>
-                        <Text style={{ numberOfLines: 1 }} class={`font-mono text-[16px] leading-6 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
-                        <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[16px] leading-6 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
-                        <If when={!!r().hint}><Text class="text-[16px] leading-6 text-muted-foreground">{r().hint ?? ""}</Text></If>
-                      </Button>
-                    );
-                  }}
-                </Each>
-                <View class="flex-row items-center gap-3 h-7 px-3">
-                  <Text class={T.meta}>↑↓ move</Text>
-                  <Text class={T.meta}>tab accept</Text>
-                  <Text class={T.meta}>esc close</Text>
-                  <View class="flex-1" />
-                  <Text class={T.meta}>{`${Math.min(selected(), rows().length - 1) + 1} of ${c().rows.length}`}</Text>
-                </View>
-              </View>
-            );
-          }}
-        </If>
-      </View>
-    </TimelineColumn>
     <View class="w-full bg-background" style={{ paddingBottom: phone && keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="composer-dock"
       onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
@@ -466,7 +454,63 @@ function EditableComposer() {
           </If>
           <If when={pasting()}><Text class={T.meta}>Preparing image…</Text></If>
           <DictationStatus />
-          <View class={`w-full border border-border bg-card pb-2 ${phone ? "rounded-3xl px-4" : "rounded-(--radius-card) px-4"}`} testID="composer-surface">
+          <If when={open()}>
+            {() => {
+              const c = () => completion()!;
+              const total = () => c().rows.length;
+              const at = () => Math.min(selected(), total() - 1);
+              // Eight rows show; beyond that the window follows the selection (the TUI scrolls the same way).
+              const first = () => Math.max(0, Math.min(at() - MENU_LIMIT + 1, total() - MENU_LIMIT));
+              const rows = () => c().rows.slice(first(), first() + MENU_LIMIT);
+              const files = () => c().kind === "file";
+              // A layer over the timeline: its bottom sits 8px above the card, so opening it moves nothing.
+              return (
+                <View class="relative w-full h-0 z-50" testID="completion-anchor">
+                  <View class="absolute left-0 bottom-2 bg-popover rounded-xl p-1.5 border border-border overflow-hidden z-50" style={{ width: "100%", boxShadow: "0 12px 40px rgb(0 0 0 / 0.45)" }}
+                    testID="completion" accessibilityLabel="Completion">
+                    <If when={files()}>
+                      <View class="flex-row items-center gap-2 px-2.5 pt-1.5 pb-2" testID="completion-header">
+                        <Text class={`${T.meta} font-medium`}>Files</Text>
+                        <Text style={{ numberOfLines: 1 }} class={`font-mono text-[12px] leading-4 text-foreground-secondary min-w-0 shrink`}>{c().dir || "./"}</Text>
+                        <View class="flex-1" />
+                        <Text class={T.meta}>{`${c().rows.length} ${c().rows.length === 1 ? "match" : "matches"}`}</Text>
+                      </View>
+                    </If>
+                    <Each of={rows()} key={(r) => r.key}>
+                      {(r, i) => {
+                        const sel = () => first() + i() === at();
+                        return (
+                          <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
+                            class={`relative flex-row items-center gap-3 rounded-lg ${sel() ? "bg-selection" : ""} ${isNarrow() ? "min-h-11" : "h-[34px]"} px-2.5 hover:bg-accent ${FOCUS}`}>
+                            <If when={sel()}><View class="absolute left-0 top-[7px] w-[3px] h-5 rounded-sm bg-primary" testID="completion-bar" /></If>
+                            <If when={!!r().file} else={<>
+                              <Text style={{ numberOfLines: 1, ...UI_FONT }} class={`w-24 shrink-0 text-[14px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
+                              <Text style={{ numberOfLines: 1, ...UI_FONT }} class="flex-1 min-w-0 text-[14px] leading-5 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
+                              <If when={!!r().hint}><Text style={UI_FONT} class="text-[12px] leading-4 text-muted-foreground">{r().hint ?? ""}</Text></If>
+                            </>}>
+                              <Icon name={r().file!.folder ? "files" : "read"} size={14} class={sel() ? "tint-foreground-secondary" : "tint-muted-foreground"} />
+                              <Text style={{ numberOfLines: 1, ...UI_FONT }} class={`shrink-0 text-[14px] leading-5 text-foreground ${sel() ? "font-medium" : ""}`}>{r().file!.name}</Text>
+                              <Text style={{ numberOfLines: 1 }} class="font-mono text-[12px] leading-4 text-muted-foreground min-w-0 shrink">{r().file!.dir || "./"}</Text>
+                              <View class="flex-1" />
+                              <Text style={UI_FONT} class="text-[12px] leading-4 text-muted-foreground">{r().help}</Text>
+                            </If>
+                          </Button>
+                        );
+                      }}
+                    </Each>
+                    <View class="flex-row items-center gap-3.5 h-[30px] pt-1 px-2.5 mt-1 border-t border-border">
+                      <Text class={T.meta}><Text class="text-foreground-secondary font-medium">↑↓</Text> move</Text>
+                      <Text class={T.meta}><Text class="text-foreground-secondary font-medium">tab</Text> accept</Text>
+                      <Text class={T.meta}><Text class="text-foreground-secondary font-medium">esc</Text> close</Text>
+                      <View class="flex-1" />
+                      <Text class={T.meta}>{`${at() + 1} of ${c().rows.length}`}</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            }}
+          </If>
+          <View class={`w-full bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-3"} border ${open() ? "border-border" : "border-transparent"}`} testID="composer-surface">
           <RetryNotices />
           <View class={phone ? "h-2" : "h-4"} testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
@@ -485,6 +529,18 @@ function EditableComposer() {
               if (dictationPhase() !== "idle") return;
               // Enter belongs to the question card while it locks the composer.
               if (questionPending()) return;
+              // A standalone `/command` runs the highlighted one, as if typed and sent (the TUI does the same).
+              const c = open() ? completion() : null;
+              const t = text();
+              if (c && c.kind === "slash" && !/\s/.test(t)) {
+                const row = c.rows[Math.min(selected(), c.rows.length - 1)];
+                if (row && runSlashCommand(row.value)) {
+                  draft.update((d) => ({ ...d, [key()]: "" }));
+                  prunePastes(key(), "");
+                  selected.set(0);
+                  return;
+                }
+              }
               void send();
             }}
             onChange={({ value: t }) => { if (questionPending()) return; selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
@@ -495,29 +551,14 @@ function EditableComposer() {
               if (dictationPhase() !== "idle") { cancelDictation(); return; }
               if (open()) dismissed.set(text());
             }}
-            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(28, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + 4)))}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(phone ? 28 : 22, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + (phone ? 4 : 0))))}
             style={{ height: h(), ...UI_FONT }}
-            class={`flex-1 min-w-0 px-0 py-0 ${T.body} placeholder:text-muted-foreground`}
+            class={`flex-1 min-w-0 px-0 py-0 ${phone ? T.body : T.body.replace("text-[14px]", "text-[16px]").replace("leading-6", "leading-[22px]")} placeholder:text-muted-foreground`}
           />
-            <View class="shrink-0 flex-row items-center gap-3 pb-1">
-              <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
-                <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
-                  testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
-                  class="bg-primary hover:bg-primary" tint="tint-on-accent" />
-                <Btn label="Cancel" kind="ghost" onPress={cancelDictation} testID="dictation-cancel" />
-              </If>
-              <If when={dictationPhase() === "idle"}>
-                <IconButton icon="mic" label="Dictate into composer" testID="dictation-start" disabled={!canDictate()}
-                  onPress={() => void run("voice.dictate")} reason={!canDictate() ? (questionPending() ? "Answer the question above" : ses()?.archived ? "Unarchive this session first" : "Core is not connected") : undefined} />
-              </If>
-              <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
-                <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
-              </If>
-              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} onLongPress={() => { if (phone && busy() && canSend()) sendChoice.set({ choose: (mode) => void send(mode) }); }} class={`${phone ? "rounded-full " : ""}${canSend() ? "bg-foreground hover:bg-foreground" : "bg-raised"}`} tint={canSend() ? "tint-background" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
-            </View>
+          <If when={phone}>{actions()}</If>
           </View>
-          <View class="h-2" />
-          <View class="flex-row items-center gap-1 min-w-0 min-h-8">
+          <View class={phone ? "h-2" : "h-1.5"} />
+          <View class={`flex-row items-center gap-1 min-w-0 ${phone ? "min-h-8" : "min-h-[30px]"}`}>
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
               <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
               <Text class={T.meta}>·</Text>
@@ -530,7 +571,8 @@ function EditableComposer() {
                 <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
               </If>
             </View>
-            <If when={!!usageLabel() && !phone}><View class="shrink-0" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
+            <If when={!!usageLabel() && !phone}><View class="shrink-0 flex-row items-center gap-1" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
+            <If when={!phone}>{actions()}</If>
           </View>
           </View>
         </View>
@@ -606,6 +648,25 @@ function compact(n: number): string {
 }
 function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.slice(1)}` : "Build"; }
 
+/** The composer's 30px round control: mic (bare), send (disabled: dim fill, enabled: foreground fill) and stop (filled square). */
+function RoundButton(p: { icon: "mic" | "arrow-up" | "stop"; label: string; onPress?: () => void; onLongPress?: () => void; disabled?: boolean; filled?: boolean; square?: boolean; testID?: string; reason?: string }) {
+  const size = isNarrow() ? "size-11" : "size-[30px]";
+  const skin = p.filled ? "bg-foreground hover:bg-foreground" : p.icon === "arrow-up" ? "bg-raised" : "hover:bg-accent";
+  const tint = p.filled ? "tint-background" : p.icon === "arrow-up" ? "tint-muted-foreground" : "tint-foreground-secondary";
+  const face = p.square ? <View class="size-2.5 rounded-sm bg-background" /> : <Icon name={p.icon} size={p.icon === "mic" ? 16 : 15} class={tint} />;
+  if (p.onLongPress) {
+    return (
+      <View role="button" focusable onPress={() => { if (!p.disabled) p.onPress?.(); }} onLongPress={() => { if (!p.disabled) p.onLongPress?.(); }}
+        accessibilityLabel={p.label} testID={p.testID} class={`items-center justify-center rounded-full ${size} ${skin} active:bg-selection ${FOCUS}`}>{face}</View>
+    );
+  }
+  return (
+    <Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
+      tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
+      class={`items-center justify-center rounded-full ${size} ${skin} ${p.icon === "mic" && p.disabled ? "opacity-50" : ""} ${FOCUS}`}>{face}</Button>
+  );
+}
+
 /** A selector on the control row, with an optional muted sub-label. */
 function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean; fixed?: boolean }) {
   const c = byId.get(p.command);
@@ -617,10 +678,10 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-9" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-11" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1, ...UI_FONT }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ?? ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1, ...UI_FONT, ...(phone ? {} : { fontSize: 14, lineHeight: 22 }) }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ? `font-medium ${p.labelClass}` : ""}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT, ...(phone ? {} : { fontSize: 14, lineHeight: 22 }) }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -637,13 +698,11 @@ const AGENT_TONE: Record<string, string> = {
 /**
  * The TUI's activity line (`draw_activity_line`) along the dock's foot, in the agent's colour with a slight
  * glow, here on the text edges rather than across the whole centre. While busy a soft pulse a fifth of the
- * width glides back and forth on a cosine, three seconds a sweep. At rest the `418K · 42%` text already
- * says how full the context is, so the line stays out of sight until the context is nearly full (80%, then
- * 95%) and then fills to it in the warning or error colour.
+ * width glides back and forth on a cosine, three seconds a sweep. At rest the line fills to the current
+ * context occupancy, matching the TUI.
  */
 function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const phase = signal(0.5);
-  const trackWidth = signal(0);
   const reduced = () => !!config()?.values?.ui?.reduced_motion;
   effect(() => {
     if (!p.busy || reduced()) { phase.set(0.5); return; }
@@ -652,16 +711,14 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
     return () => clearInterval(id);
   });
   const left = () => activityOffsetPercent(phase());
-  const full = () => !p.busy && p.fraction >= 0.8;
-  const tone = () => (p.fraction >= 0.95 ? "bg-error" : "bg-warning");
   // This rule is the card's single bottom edge; the pulse is overlaid on that line.
   return <View class="w-full -mt-1" testID="composer-bottom-edge">
-      <View class="relative w-full h-px bg-border" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`} onLayout={(b: any) => trackWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
+      <View class="relative w-full h-0.5 bg-border" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
         <If when={p.busy}>
-          <View class={`absolute top-0 h-px ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
+          <View class={`absolute top-0 h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
         </If>
-        <If when={full()}>
-          <View class={`absolute top-0 h-px left-0 ${tone()}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
+        <If when={!p.busy && p.fraction > 0}>
+          <View class={`absolute top-0 h-0.5 left-0 ${AGENT_TONE[p.slot] ?? AGENT_TONE.blue}`} testID="activity-fill" style={{ width: `${Math.min(100, p.fraction * 100)}%`, boxShadow: [{ x: 0, y: 0, blur: 4 }] }} />
         </If>
       </View>
     </View>;
@@ -674,15 +731,6 @@ function WorkingRow() {
     const u = turn();
     return u ? Math.max(0, Date.now() / 1000 - u.created) : 0;
   };
-  const output = () => {
-    m();
-    const u = turn();
-    const sel = model.selected;
-    if (!u || !sel) return 0;
-    // The running turn: its loaded summary (joined mid-turn) completed by the live usage.
-    const group = turnsIn(sel.turns, u.seq, Infinity);
-    return sumUsage(groupRequests(group, sel.scratch)).output;
-  };
   effect(() => {
     const id = setInterval(() => tick.set(Date.now()), 1000);
     return () => clearInterval(id);
@@ -690,9 +738,8 @@ function WorkingRow() {
   return (
     <View class="shrink-0 flex-row items-center gap-2 h-7" testID="working-row">
       <Status kind="running" />
-      <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} />
-      <Text style={UI_FONT} class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
-      <Text style={UI_FONT} class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
+      <Shimmer text="Working" reduced={!!config()?.values?.ui?.reduced_motion} mono />
+      <Text class={T.mono}>{`· ${fmtDuration(elapsed())}`}</Text>
     </View>
   );
 }
@@ -883,7 +930,7 @@ function LocationStrip(p: { working: boolean }) {
   };
   return (
     <If when={phone ? p.working : (project() && directory()) || p.working}>
-      <View class="w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5" testID="location-strip"
+      <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${phone ? "" : "px-4"}`} testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
         <View class={phone ? "size-0 overflow-hidden" : "flex-1 w-0 min-w-0 overflow-hidden flex-row items-center gap-2"} accessible={!phone}>
@@ -919,11 +966,11 @@ function LocationStrip(p: { working: boolean }) {
         <If when={resourceCounts().kernels > 0 && !phone}>
           <Button onPress={() => openResources("kernels")} accessibilityLabel="kernel" testID="location-resources"
             class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}>
-            <Text style={{ numberOfLines: 1 }} class="text-xs leading-4 text-foreground-secondary">kernel</Text>
+            <Text style={{ numberOfLines: 1 }} class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary">kernel</Text>
           </Button>
         </If>
-        <If when={runningShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${runningShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${runningShells()} shell`}</Text></Button></If>
-        <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
+        <If when={runningShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${runningShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary tabular-nums">{`${runningShells()} shell`}</Text></Button></If>
+        <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
         </View>
         <View class={`flex-1 min-w-0 flex-row items-center overflow-hidden ${phone ? "justify-start pl-1" : "w-0 justify-end"}`}><If when={p.working}><WorkingRow /></If></View>
       </View>
@@ -1162,17 +1209,18 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
   return (
-    <View class={`relative w-full mb-2 bg-raised ${phone ? "rounded-3xl overflow-hidden" : "rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View class={`relative w-full mb-2 ${phone ? "bg-muted rounded-[22px] overflow-hidden" : "bg-raised rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" /></If>
       <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
-        <View class="pl-4 pr-4 py-3 gap-2.5">
+        <View class={phone ? "p-4 gap-2.5" : "pl-4 pr-4 py-3 gap-2.5"}>
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
-            <Text class={`text-[16px] leading-6 ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
-            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[16px] leading-6 font-semibold text-foreground ${"font-(family-name:--font-ui)"}`} testID="waiting-title">
+            <Text class={`${phone ? "text-[11px] leading-6" : "text-[16px] leading-6"} ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${phone ? "text-[17px]" : "text-[16px]"} leading-6 font-semibold text-foreground ${"font-(family-name:--font-ui)"}`} testID="waiting-title">
               {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
             </Text>
+            <If when={phone}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums" testID="waiting-timer">{clock(elapsed())}</Text></If>
             <If when={p.count > 1}>
               <Button onPress={() => run("waiting.next")} accessibilityLabel="Next waiting item" testID="waiting-next" class={`flex-row items-center gap-1.5 rounded-(--radius) px-1.5 hover:bg-accent ${FOCUS}`}>
                 <Text class={T.meta}>{`${(waitIndex() % p.count) + 1} of ${p.count} ·`}</Text>
@@ -1181,9 +1229,11 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
               </Button>
             </If>
           </View>
+          <If when={!phone || !!child()}>
           <Text class={`${T.sec} text-muted-foreground`} testID="waiting-sub">
-            {`waiting on you · ${clock(elapsed())}${child() ? ` · in child: ${child()}` : ""}`}
+            {phone ? `in child: ${child()}` : `waiting on you · ${clock(elapsed())}${child() ? ` · in child: ${child()}` : ""}`}
           </Text>
+          </If>
         </View>
         <If when={approval()}>{() => <ApprovalBody a={approval()!} />}</If>
         <If when={question()}>{() => <QuestionBody q={question()!} />}</If>

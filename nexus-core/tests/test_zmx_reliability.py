@@ -161,6 +161,29 @@ def test_doctor_reports_a_cli_version_and_flags(home, monkeypatch):
     assert row["status"] == "ok" and "version 1.5.0" in row["detail"] and "sign-in not verified" in row["detail"]
 
 
+async def test_agy_models_parse_tabbed_lines_and_a_stale_list_is_served_while_it_refreshes(home, monkeypatch):
+    import time
+
+    from nexus.config import ConfigFile
+    from nexus.workers import registry
+    fake_agy = home / "agy"
+    fake_agy.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(0.3)\n"
+                        "print('Fetching available models...')\nprint('m-one\\tModel One')\nprint('m-two\\tModel Two')\n")
+    fake_agy.chmod(0o700)
+    config = ConfigFile()
+    config.patch(config.read()["revision"], {"zmx.antigravity": True}, [])
+    monkeypatch.setenv("NEXUS10_AGY_CLI", str(fake_agy))
+    registry._models.clear()
+    registry.warm_agy_models()
+    assert await registry.agy_models() == ["m-one", "m-two"]
+    key = next(iter(registry._models))
+    registry._models[key] = (time.monotonic() - 3600, ["old"])
+    started = time.monotonic()
+    assert await registry.agy_models() == ["old"] and time.monotonic() - started < 0.2
+    await asyncio.gather(*registry._refreshing.values())
+    assert await registry.agy_models() == ["m-one", "m-two"]
+
+
 # -- races (Claude PTY worker, fake CLI) -------------------------------------------------------------------------------
 
 

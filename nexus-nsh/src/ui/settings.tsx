@@ -13,6 +13,7 @@ import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
 import { voiceStatus } from "../voice-state";
 import { searchStartReason, searchStatusLines } from "../search-service";
+import { browserStatusLines, refreshBrowserStatus } from "../browser-status";
 import { MANAGER_ROWS, managerControl } from "./manager/settings";
 import type { VoiceTarget } from "../voice-state";
 
@@ -65,7 +66,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "appearance.scrollbar", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "tools.search_status", "tools.search_start", "mcp.full_definitions", "mcp.max_listed_tools", "zmx.claude_backend", "zmx.antigravity", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
+const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "appearance.scrollbar", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "tools.search_status", "tools.search_start", "mcp.full_definitions", "browser.use_my_chrome", "browser.status", "mcp.max_listed_tools", "zmx.claude_backend", "zmx.antigravity", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -100,7 +101,7 @@ function UsageRefreshMinutes() {
   return <View class="flex-row items-center gap-2">
     <Input value={value()} placeholder="1–1440" accessibilityLabel="Refresh interval (minutes)" testID="usage-refresh-minutes"
       onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-      class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
+      class={`h-8 w-24 rounded-(--radius) bg-background px-2 text-right ${TS.base} tabular-nums text-foreground`} />
     <Btn label="Save" onPress={save} testID="usage-refresh-minutes-save" />
   </View>;
 }
@@ -123,7 +124,7 @@ function HandoffPercent() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="0–100" accessibilityLabel="Automatic handoff threshold (percent, 0 is off)" testID="handoff-percent"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
+        class={`h-8 w-24 rounded-(--radius) bg-background px-2 text-right ${TS.base} tabular-nums text-foreground`} />
       <Btn label="Save" onPress={save} testID="handoff-percent-save" />
     </View>
   );
@@ -145,7 +146,7 @@ function TitleModels() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="copilot/gpt-6-luna, codex/gpt-6-luna" accessibilityLabel="Title models, provider/model separated by commas" testID="title-models"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class={`h-8 min-w-0 flex-1 rounded-none bg-background px-2 ${TS.mono} text-foreground`} />
+        class={`h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 ${TS.base} text-foreground`} />
       <Btn label="Save" onPress={save} testID="title-models-save" />
     </View>
   );
@@ -174,7 +175,7 @@ function McpToolsLimit() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="1–1000" accessibilityLabel="Tools listed by name (limit)" testID="mcp-max-listed-tools"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class={`h-8 w-24 rounded-none bg-background px-2 text-right ${TS.mono} text-foreground`} />
+        class={`h-8 w-24 rounded-(--radius) bg-background px-2 text-right ${TS.base} tabular-nums text-foreground`} />
       <Btn label="Save" onPress={save} testID="mcp-max-listed-tools-save" />
     </View>
   );
@@ -273,14 +274,14 @@ export function ProviderDetailModal() {
         <If when={login()?.verification_uri}>{() => <Text class={T.meta}>{login()?.user_code ? "Open the link and enter the code below." : "Open the link to sign in."}</Text>}</If>
         <If when={login()?.verification_uri}>{() => <View class="flex-row items-center gap-2">
           <Button onPress={() => open(login()!.verification_uri!)} accessibilityLabel={`Open ${login()!.verification_uri}`} testID="provider-detail-link"
-            class={`flex-1 rounded-none px-2 min-h-9 items-start justify-center hover:bg-accent ${FOCUS}`}>
-            <Text style={{ userSelect: "text" }} class={`${TS.mono} text-info underline`}>{login()!.verification_uri!}</Text>
+            class={`flex-1 rounded-(--radius) px-2 min-h-9 items-start justify-center hover:bg-accent ${FOCUS}`}>
+            <Text style={{ userSelect: "text" }} class={`${TS.base} text-info underline`}>{login()!.verification_uri!}</Text>
           </Button>
           <Btn label="Open" kind="ghost" icon="web" onPress={() => open(login()!.verification_uri!)} testID="provider-detail-open" />
         </View>}</If>
         <If when={login()?.user_code}>{() => <View class="flex-row items-center gap-2">
           <Text class={T.sec}>Code</Text>
-          <Text style={{ userSelect: "text" }} class={`${TS.title} font-mono font-semibold text-foreground`}>{login()!.user_code!}</Text>
+          <Text style={{ userSelect: "text" }} class={`${TS.title} tabular-nums tracking-wider font-semibold text-foreground`}>{login()!.user_code!}</Text>
           <Btn label="Copy" kind="ghost" icon="copy" onPress={() => copyText(login()!.user_code!, "Code copied")} testID="provider-detail-copy" />
         </View>}</If>
         <If when={!login()?.user_code && !login()?.verification_uri}><Text class={T.meta}>{login()?.message || "Starting sign-in…"}</Text></If>
@@ -298,7 +299,7 @@ export function ProviderDetailModal() {
       </View>}</If>
       <If when={keying()}>{() => <View class="gap-2">
         <Input masked autoFocus accessibilityLabel={`${provider()!.label} API key`} placeholder={`API key ${provider()!.key_hint ?? ""}`} onChange={({ value }) => providerKey.set(value)}
-          class={`h-9 rounded-none bg-background px-3 ${TS.mono} text-foreground`} testID={`provider-key-${id()}`} />
+          class={`h-9 rounded-(--radius) bg-background px-3 ${TS.base} text-foreground`} testID={`provider-key-${id()}`} />
         <View class="flex-row items-center gap-2">
           <Btn label="Save key" kind="primary" onPress={() => void saveKey()} testID={`provider-key-save-${id()}`} />
           <Btn label="Cancel" onPress={() => { providerKey.set(""); keyEntry.set(null); }} />
@@ -320,7 +321,7 @@ function ProviderRow(p: { p: any }) {
   return <View testID={`provider-${id}`}>
     <Button onPress={() => { keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }} testID={`provider-open-${id}`}
       accessibilityLabel={`${p.p.label ?? id}: connection and sign-in`}
-      class={`flex-row items-center gap-3 rounded-none px-3 py-2 hover:bg-accent ${FOCUS}`}>
+      class={`flex-row items-center gap-3 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
       <View class="flex-1">
         <Text class={T.base}>{p.p.label ?? id}</Text>
         <Text class={T.meta}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(p.p)}</Text>
@@ -412,7 +413,7 @@ function AgentCard(p: { a: any }) {
     <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Models</Text><Text class={T.meta}>one picked at random</Text></View>
     <If when={!pool().length}><Text class={T.sec} testID={`agent-models-empty-${name()}`}>{`None: uses ${agentDefault(p.a)}.`}</Text></If>
     <Each of={pool()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-model-${name()}-${ref()}`}>
-      <Text class={`flex-1 ${T.mono}`}>{ref()}</Text>
+      <Text class={`flex-1 ${T.sec}`}>{ref()}</Text>
       <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
       <If when={connectedRef(ref())}><EffortStepper model={ref()} /><Text class={`w-12 text-right ${T.meta}`}>{odds(ref())}</Text></If>
       <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("models", pool().filter((v) => v !== ref()))} testID={`agent-model-remove-${name()}-${ref()}`} />
@@ -421,7 +422,7 @@ function AgentCard(p: { a: any }) {
     <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Fallbacks</Text><Text class={T.meta}>tried in order on failure</Text></View>
     <Each of={fallbacks()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-fallback-${name()}-${ref()}`}>
       <Text class={`w-5 ${T.meta}`}>{`${fallbacks().indexOf(ref()) + 1}.`}</Text>
-      <Text class={`flex-1 ${T.mono}`}>{ref()}</Text>
+      <Text class={`flex-1 ${T.sec}`}>{ref()}</Text>
       <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
       <If when={connectedRef(ref())}><EffortStepper model={ref()} /></If>
       <Btn label="Up" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === 0} onPress={() => move(ref(), -1)} />
@@ -461,7 +462,7 @@ function AgentsPage(p: { sec: Section }) {
     <View>
       <Each of={agents()} key={(a: any) => a.name}>{(a) => (
         <Button onPress={() => { settingsNavFocused.set(false); settingsPageOpen.set(true); settingsPage.set(`agents/${a().name}`); }} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
-          class={`flex-row items-center gap-6 rounded-none px-3 py-2 hover:bg-accent ${FOCUS}`}>
+          class={`flex-row items-center gap-6 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
           <View class="flex-1"><Text class={T.base}>{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
           <Text class={`${TS.base} ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
           <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
@@ -479,6 +480,13 @@ function control(r: Row): JSX.Element {
     return (
       <View testID={`voice-status-${target}`} class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>
         <Each of={voiceInfoLines(target)} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 2 }} class={`${TS.base} text-foreground-secondary`}>{line()}</Text>}</Each>
+      </View>
+    );
+  }
+  if (r.id === "browser.status") {
+    return (
+      <View testID="browser-status" class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>
+        <Each of={browserStatusLines()} key={(line) => line}>{(line) => <Text style={{ userSelect: "text", numberOfLines: 3 }} class={`${TS.base} text-foreground-secondary`}>{line()}</Text>}</Each>
       </View>
     );
   }
@@ -509,6 +517,7 @@ function control(r: Row): JSX.Element {
   if (r.id === "appearance.show_archived") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={archivedFilter() ? "on" : "off"} onPick={(v) => archivedFilter.set(v === "on")} />;
   if (r.id === "appearance.animations") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["on", "off"]} value={config()?.values?.ui?.reduced_motion ? "off" : "on"} onPick={(v) => void patchConfig("ui.reduced_motion", v === "off")} />;
   if (r.id === "notifications.sound") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={notificationSoundsOn() ? "on" : "off"} onPick={(v) => setNotificationSounds(v === "on")} />;
+  if (r.id === "browser.use_my_chrome") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.browser?.use_my_chrome ? "on" : "off"} onPick={(v) => void patchConfig("browser.use_my_chrome", v === "on").then(refreshBrowserStatus)} />;
   if (r.id === "mcp.full_definitions") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
   if (r.id === "zmx.claude_backend") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["Agent SDK", "ZMX"]} value={config()?.values?.zmx?.claude_backend === "zmx" ? "ZMX" : "Agent SDK"} onPick={(v) => void patchConfig("zmx.claude_backend", v === "ZMX" ? "zmx" : "sdk")} />;
   if (r.id === "zmx.antigravity") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "ZMX"]} value={config()?.values?.zmx?.antigravity ? "ZMX" : "off"} onPick={(v) => void patchConfig("zmx.antigravity", v === "ZMX")} />;
@@ -527,8 +536,8 @@ function control(r: Row): JSX.Element {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
     return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
       const off = disabled.includes(name);
-      return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-none px-2 ${isNarrow() ? "min-h-11" : "min-h-7"} justify-center hover:bg-accent ${FOCUS}`}>
-        <Text class={`${TS.mono} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
+      return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-7"} justify-center hover:bg-accent ${FOCUS}`}>
+        <Text class={`${TS.base} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
       </View>;
     })}</View>;
   }
@@ -539,7 +548,7 @@ function control(r: Row): JSX.Element {
     return <View role="button" focusable onFocus={() => focusSetting(r.id)} testID={`edit-${r.id}`} accessibilityLabel={`Change ${r.label}`} onPress={() => {
       const options: string[] = key === "agent" ? (data().agents?.agents ?? []).filter((a: any) => a.mode !== "subagent").map((a: any) => a.name) : ["low", "medium", "high", "xhigh"];
       picker.set({ title: r.label, items: ["", ...options].map((v) => ({ id: v || "automatic", label: v || "automatic", run: async () => { picker.set(null); await patchConfig(`defaults.${key}`, v); } })) });
-    }} class={`rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} mono /></View>;
+    }} class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Value text={value} /></View>;
   }
   if (r.kind === "choice" && r.options) return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
   if (r.kind === "toggle") return <Text class={`${TS.base} text-muted-foreground`}>{r.default ? "[x] on" : "[ ] off"}</Text>;
@@ -563,12 +572,12 @@ function SettingRow(p: { r: Row; sec: Section }) {
   return (
     <View focusable onFocus={() => focusSetting(r.id)}
       onPress={() => { settingsNavFocused.set(false); focusedSetting.set(r.id); }}
-      class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-none hover:bg-settings-selection focus-within:bg-settings-selection ${focusedSetting() === r.id ? "bg-settings-selection" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+      class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-(--radius) hover:bg-settings-selection focus-within:bg-settings-selection ${focusedSetting() === r.id ? "bg-settings-selection" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <If when={!settingsNavFocused() && focusedSetting() === r.id}><FocusEdge testID="settings-row-focus" /></If>
       <View class={isNarrow() ? "" : "w-[56%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`${TS.base} ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
-          <If when={tag}><Text class={`${TS.base} text-muted-foreground rounded-none px-1.5`}>{tag}</Text></If>
+          <If when={tag}><Text class={`${TS.base} text-muted-foreground rounded-(--radius) px-1.5`}>{tag}</Text></If>
         </View>
         {/* A row with no control yet keeps that note in its tooltip, not in every row's second line. */}
         <If when={disabled && why && wired}><Text class={T.meta}>{why}</Text></If>
@@ -646,7 +655,7 @@ export function SettingsView(p: { inline?: boolean }) {
           <Icon name="search" size={14} class="tint-muted-foreground" />
           <Input value={settingsQuery()} placeholder="Filter settings…" accessibilityLabel="Filter settings" testID="settings-search"
             onChange={({ value }) => settingsQuery.set(value)}
-            class={`h-8 min-w-0 flex-1 rounded-none bg-background px-2 ${TS.base} text-foreground`} />
+            class={`h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 ${TS.base} text-foreground`} />
           <If when={settingsQuery()}>{() => <Btn label="Clear" kind="ghost" onPress={() => settingsQuery.set("")} testID="settings-search-clear" />}</If>
         </View>
         <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(64, Math.min(520, Math.floor(windowSize().height * 0.70) - 180)) }}>
@@ -657,7 +666,7 @@ export function SettingsView(p: { inline?: boolean }) {
                 {(s) => (
                   <View role="button" focusable ref={(n: any) => { if (n) sectionRefs.set(s().id, n); else sectionRefs.delete(s().id); }}
                     onPress={() => { settingsNavFocused.set(!s().page); settingsPageOpen.set(!!s().page); settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
-                    class={`relative flex-row items-center rounded-none px-3 hover:bg-settings-selection ${cur().id === s().id ? "bg-settings-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"}`}>
+                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-settings-selection ${cur().id === s().id ? "bg-settings-selection" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"}`}>
                     <If when={cur().id === s().id && settingsNavFocused()}><FocusEdge testID="settings-section-focus" /></If>
                     <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
                   </View>
@@ -676,7 +685,7 @@ export function SettingsView(p: { inline?: boolean }) {
                 <If when={page() === "agents" && agent()}>{() => <View class="gap-2 pb-2">
                   <View class="flex-row items-center gap-2 px-3">
                     <Button onPress={() => settingsPage.set(null)} testID="settings-page-back" accessibilityLabel="Back to Agents"
-                      class={`flex-row items-center gap-1 rounded-none px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
+                      class={`flex-row items-center gap-1 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
                       <Icon name="arrow-left" size={14} class="tint-muted-foreground" />
                       <Text class={`${TS.base} text-foreground-secondary`}>Agents</Text>
                     </Button>
@@ -719,7 +728,7 @@ export function SettingsView(p: { inline?: boolean }) {
         <View class="gap-5">
           <Button onPress={() => coreEditing.set(true)} testID="phone-core-card" accessibilityLabel="Change Core address" class={`rounded-(--radius-card) bg-raised p-4 gap-2 ${FOCUS}`}>
             <View class="flex-row items-center gap-2"><Text style={{ fontFamily: "Google Sans" }} class="flex-1 text-[16px] leading-6 font-semibold text-foreground">Core connection</Text><Text style={{ fontFamily: "Google Sans" }} class={`text-[13px] leading-5 ${live() ? "text-success" : "text-warning"}`}>{live() ? "Connected" : connection().kind === "connecting" ? "Connecting" : "Disconnected"}</Text></View>
-            <Text style={{ numberOfLines: 2 }} class={`${T.mono} text-foreground-secondary`}>{coreUrl() ?? "No address configured"}</Text>
+            <Text style={{ numberOfLines: 2 }} class={`${T.sec}`}>{coreUrl() ?? "No address configured"}</Text>
           </Button>
           <View class="gap-1 rounded-(--radius-card) bg-raised overflow-hidden">
             <Each of={sections} key={(s) => s.id}>{(s) => <Button onPress={() => { settingsQuery.set(""); settingsSection.set(s().id); settingsPage.set(null); settingsPageOpen.set(!!s().page); phoneDetail.set(true); }} testID={`section-${s().id}`} accessibilityLabel={s().label} class={`flex-row items-center min-h-14 px-4 gap-2 ${FOCUS}`}>

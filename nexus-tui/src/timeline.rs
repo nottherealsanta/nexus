@@ -1118,6 +1118,11 @@ fn summary_rows(
                 .and_then(|id| view.messages[range.clone()].iter().position(|m| m.id == id))
                 .map(|i| (range.start + i, true))
                 .unwrap_or((last, false));
+            // A retry that worked is history (the inspector keeps it), not a status;
+            // so is a failure the turn got past (a fallback model answered).
+            if r.status != "failed" || t.status == "completed" {
+                continue;
+            }
             let mut attempts: Vec<&crate::api::AttemptSummary> = r.attempts.iter().collect();
             attempts.sort_by_key(|a| a.n);
             for (k, pair) in attempts.windows(2).enumerate() {
@@ -3665,6 +3670,8 @@ impl Builder<'_> {
                 "web_search" => "Search",
                 "web_fetch" => "Fetch",
                 "fork" => "Fork",
+                "browser_exec" => "Browser",
+                "browser_screenshot" => "Screenshot",
                 _ => &name,
             };
             // The status glyph replaces the verb glyph for running, error,
@@ -3880,6 +3887,16 @@ impl Builder<'_> {
                 let detail = self.diff_detail(&diff);
                 self.app.layout.borrow_mut().put_detail(key, detail.clone());
                 return detail;
+            }
+            "code" if a["code"].is_string() => {
+                if let Some(code) = a["code"].as_str() {
+                    for line in code.lines() {
+                        out.push((format!("  {line}"), self.primary()));
+                    }
+                    if !output.is_empty() || !error.is_empty() {
+                        out.push(("Output hidden · raw to view".into(), self.meta()));
+                    }
+                }
             }
             _ => {
                 tail_cap = true;
@@ -4851,6 +4868,13 @@ fn tool_summary(
             .or_else(|| a["prompt"].as_str())
             .map(|t| preview_80(t.lines().next().unwrap_or("")))
             .unwrap_or_default(),
+        "browser_exec" => a["code"]
+            .as_str()
+            .and_then(|c| c.lines().find(|l| !l.trim().is_empty()))
+            .map(|l| preview_80(l.trim()))
+            .unwrap_or_default(),
+        "browser_screenshot" if a["full"].as_bool() == Some(true) => "full page".to_owned(),
+        "browser_screenshot" => String::new(),
         "ask" => a["questions"]
             .as_array()
             .and_then(|q| q.first())

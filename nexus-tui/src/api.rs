@@ -1250,6 +1250,21 @@ impl CoreApi {
             .map(|_| ()))
     }
 
+    /// Tell Core this client is showing the session (`session.seen` clears unread everywhere).
+    pub async fn mark_seen(&self, id: &str) -> Result<(), Error> {
+        self.http
+            .call(
+                Method::POST,
+                &format!("/api/session/{id}/seen"),
+                &[],
+                Some(&json!({})),
+                None,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// The session's pending inputs (steers and queued messages), oldest first.
     pub async fn pending_inputs(&self, id: &str) -> Result<Vec<Value>, Error> {
         let body = self

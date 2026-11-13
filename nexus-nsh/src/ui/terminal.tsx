@@ -16,7 +16,7 @@ function TerminalButton(p: {icon: IconName; label: string; onPress: () => void; 
   return <View class="relative" onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}><Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
     class={`size-8 items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${FOCUS}`}>
     <View testID={`terminal-icon-${p.icon}`}><Icon name={p.icon} /></View>
-  </Button><If when={hovered()}><View style={{width:224}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-xs text-popover-foreground">{p.label}</Text></View></If></View>;
+  </Button><If when={hovered()}><View style={{width:224}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-popover-foreground">{p.label}</Text></View></If></View>;
 }
 
 const dockHeight = signal(320);
@@ -133,7 +133,7 @@ export function TerminalPanel() {
         <TerminalButton icon="plus" label="Attach selected output" onPress={attachSelection} disabled={!terminalSelected() || viewed()?.kind === "manager"} testID="terminal-attach" />
         <TerminalButton icon="copy" label="Copy output" onPress={requestTerminalCopy} disabled={!terminalSelected()} testID="terminal-copy" />
         <TerminalButton icon="chevron-down" label="Hide terminal panel" onPress={close} testID="terminal-panel-close" />
-        <If when={tabTip()}>{tip => <View style={{width:320}} class="absolute left-3 -top-7 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${tip().id}-tooltip`}><Text class="text-xs text-popover-foreground" style={{numberOfLines:1}}>{tip().label}</Text></View>}</If>
+        <If when={tabTip()}>{tip => <View style={{width:320}} class="absolute left-3 -top-7 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${tip().id}-tooltip`}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-popover-foreground" style={{numberOfLines:1}}>{tip().label}</Text></View>}</If>
       </View>
       <View class="flex-1 min-h-0">
         <Scroll horizontal ref={r => { list = r; }} focusable class="shrink-0 border-b border-border" testID="terminal-list">

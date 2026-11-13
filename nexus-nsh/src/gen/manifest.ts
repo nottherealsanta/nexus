@@ -587,6 +587,29 @@ export const manifest = {
     ]
    },
    {
+    "id": "browser",
+    "label": "Browser",
+    "row": [
+     {
+      "id": "browser.use_my_chrome",
+      "label": "Use my Chrome profile",
+      "kind": "toggle",
+      "scope": "core",
+      "clients": "both",
+      "default": false,
+      "note": "Off: browser_exec and browser_screenshot use their own Chromium on a temporary profile. On: they drive your Chrome, with its tabs and sign-ins, once Chrome's remote debugging is on (chrome://inspect/#remote-debugging). Takes effect on the next browser call. Core key [browser] use_my_chrome."
+     },
+     {
+      "id": "browser.status",
+      "label": "Browser tools",
+      "kind": "info",
+      "scope": "core",
+      "clients": "both",
+      "note": "Whether browser_exec and browser_screenshot can run here: uvx, a Chrome, Chromium or Edge (or the Chromium from browser-use install), and which profile they use (GET /api/browser)."
+     }
+    ]
+   },
+   {
     "id": "mcp",
     "label": "MCP",
     "row": [

@@ -62,3 +62,31 @@ describe("Tool images (K8)", () => {
     expect(app.texts().some((t) => t.includes("1 image"))).toBe(true);
   });
 });
+
+const browserNetwork = {
+  ...network,
+  "GET */api/session/ses_1/message*": { body: { messages: [
+    { id: "m1", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "check the page" }], created: 1 },
+    { id: "m2", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "tool_call", id: "b1", name: "browser_exec", arguments: JSON.stringify({ code: "\nnew_tab('https://example.com')\nprint(page_info())" }) }], created: 2 },
+    { id: "m3", session_id: "ses_1", seq: 3, role: "tool", parts: [{ type: "tool_result", call_id: "b1", output: "ok" }], created: 3 },
+    { id: "m4", session_id: "ses_1", seq: 4, role: "assistant", parts: [{ type: "tool_call", id: "b2", name: "browser_screenshot", arguments: JSON.stringify({ full: true }) }], created: 4 },
+    { id: "m5", session_id: "ses_1", seq: 5, role: "tool", parts: [{ type: "tool_result", call_id: "b2", output: "saved", media: [{ artifact: "art_2", mime: "image/png", name: "browser-use-browser_screenshot.image" }] }], created: 5 },
+  ], more: false, oldest_seq: 1 } },
+};
+
+describe("Browser tools", () => {
+  test("browser rows read Browser and Screenshot with their subjects, like the TUI", async () => {
+    const app = await open("./App.tsx", { network: browserNetwork, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:timeline-row");
+    await app.press("id:activity-group-tool-b1");
+    await app.waitFor("id:tool-row-b1");
+    const texts = app.texts();
+    expect(texts.includes("Browser")).toBe(true);
+    expect(texts.some((t) => t.includes("new_tab('https://example.com')"))).toBe(true);
+    expect(texts.includes("Screenshot")).toBe(true);
+    expect(texts.some((t) => t.includes("full page"))).toBe(true);
+    expect(texts.some((t) => t.includes("browser_exec") || t.includes("browser_screenshot"))).toBe(false);
+  });
+});

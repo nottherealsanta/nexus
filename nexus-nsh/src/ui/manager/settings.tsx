@@ -22,7 +22,7 @@ function ModelRef() {
     <View class="flex-row items-center gap-2">
       <Input value={value()} placeholder="provider/model" accessibilityLabel="Manager model, provider/model" testID="manager-model"
         onChange={({ value: text }) => value.set(text)} onSubmit={save} submitBehavior="submit"
-        class={`h-8 w-56 rounded-none bg-background px-2 ${TS.mono} text-foreground`} />
+        class={`h-8 w-56 rounded-(--radius) bg-background px-2 ${TS.base} text-foreground`} />
       <Btn label="Save" onPress={save} testID="manager-model-save" />
     </View>
   );

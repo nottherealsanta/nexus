@@ -37,13 +37,13 @@ export function ProjectMcpPanel() {
         <Text style={{ numberOfLines: 1 }} class={`${T.meta} font-mono`}>{midTruncate(data()?.file || project()!.path, 46)}</Text>
       </If>
       <If when={autoStart()}>
-        <Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-warning" testID="project-mcp-autostart">
+        <Text style={{ numberOfLines: 3 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning" testID="project-mcp-autostart">
           Enabled servers start automatically with a new session; their commands run then, without asking.
         </Text>
       </If>
-      <If when={!!state()?.error}><Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-error">{"✕ " + state()!.error}</Text></If>
-      <If when={!!data()?.error}><Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-error">{data()!.error!}</Text></If>
-      <If when={!!data()?.warnings?.length}><Text style={{ numberOfLines: 2 }} class="text-xs leading-4 text-warning">{data()!.warnings!.join(" · ")}</Text></If>
+      <If when={!!state()?.error}><Text style={{ numberOfLines: 3 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-error">{"✕ " + state()!.error}</Text></If>
+      <If when={!!data()?.error}><Text style={{ numberOfLines: 3 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-error">{data()!.error!}</Text></If>
+      <If when={!!data()?.warnings?.length}><Text style={{ numberOfLines: 2 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning">{data()!.warnings!.join(" · ")}</Text></If>
       <If when={!!state()?.loading && !data()}><Text class={T.sec}>Reading MCP configuration…</Text></If>
       <If when={!!data() && !data()!.exists}><Text class={T.sec}>No MCP configuration in this project.</Text></If>
       <If when={!!data()?.exists && rows().length === 0}><Text class={T.sec}>No servers in the project MCP files.</Text></If>
@@ -77,9 +77,9 @@ function ProjectMcpServerRow(p: { row: () => ProjectMcpRow }) {
         <Text style={{ numberOfLines: 1 }} class="font-mono text-xs leading-4 text-muted-foreground" testID={`project-mcp-meta-${row().server}`}>{meta()}</Text>
       </If>
       <If when={!!row().warnings?.length}>
-        <Text style={{ numberOfLines: 3 }} class="text-xs leading-4 text-warning" testID={`project-mcp-warning-${row().server}`}>{row().warnings!.join(" · ")}</Text>
+        <Text style={{ numberOfLines: 3 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning" testID={`project-mcp-warning-${row().server}`}>{row().warnings!.join(" · ")}</Text>
       </If>
-      <If when={!!row().error}><Text style={{ numberOfLines: 2 }} class="text-xs leading-4 text-warning">{row().error!}</Text></If>
+      <If when={!!row().error}><Text style={{ numberOfLines: 2 }} class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning">{row().error!}</Text></If>
     </View>
   );
 }

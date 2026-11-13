@@ -311,6 +311,35 @@ describe("shell", () => {
     expect(patched).toEqual([]);
   });
 
+  test("Browser settings: Use my Chrome profile is off by default and patches Core, like the TUI", async () => {
+    const config = (on: boolean) => ({ body: { revision: "rev1", values: { browser: { use_my_chrome: on }, defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } });
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(), "GET */api/config": config(false), "PATCH */api/config": config(true),
+        "GET */api/browser": { body: { ok: false, mode: "own", uvx: "/u/uvx", browser: null, chrome: null, note: "The browser tools use their own profile; your Chrome profile is never touched.",
+          problems: ["no Chrome, Chromium or Edge was found: install Google Chrome, or run `uvx --from 'browser-use[cli]==1.0.2' browser-use install` for a Chromium only the browser tools use"] } },
+      } as any,
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.press("id:rail-settings");
+    await app.press("id:section-browser");
+    await app.waitFor("id:setting-browser.use_my_chrome");
+    expect(app.texts().includes("Use my Chrome profile")).toBe(true);
+    expect(app.texts().some((t) => t.includes("temporary profile"))).toBe(true);
+    await app.waitFor("id:browser-status");
+    await app.waitFor("text:not ready");
+    expect(app.texts().some((t) => t.startsWith("no Chrome, Chromium or Edge was found") && t.includes("browser-use install"))).toBe(true);
+    expect(app.texts().some((t) => t.includes("your Chrome profile is never touched"))).toBe(true);
+    const asked = () => app.requests().filter((r) => r.method === "GET" && r.url.includes("/api/browser")).length;
+    const before = asked();
+    await app.press("label:Use my Chrome profile: on");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.includes("/api/config")));
+    const patch = app.requests().find((r) => r.method === "PATCH" && r.url.includes("/api/config"))!;
+    expect(JSON.parse(patch.body!).set).toEqual({ "browser.use_my_chrome": true });
+    await app.waitUntil(() => asked() > before);  // the mode changed: the status is asked again
+  });
+
   test("palette opens with the key, lists disabled commands with reasons, Esc walks the chain", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:rail-project-prj_1");
@@ -407,6 +436,16 @@ describe("history", () => {
     m.applyHistory({ sessionId: "ses_1", messages: [msg("m1", 1), msg("m2", 2)], turns: [turnSummary("trn_1", 0, []) as any, fetched as any], floor: null, usage: null, starting: null, turnsGap: null });
     expect(m.selected!.messages.map((x) => x.id)).toEqual(["m1", "m2", "m3"]);
     expect(m.selected!.turns.map((t) => [t.id, t.status])).toEqual([["trn_1", "completed"], ["trn_2", "completed"]]);
+  });
+
+  test("a retry notice goes once the turn continues", () => {
+    const m = live(new Model());
+    m.select("ses_1");
+    m.applyEvent(ev(1, "retry_scheduled", { attempt: 1, max_attempts: 2, delay: 0.7, reason: "network error" }));
+    m.applyEvent(ev(2, "retry_started", { attempt: 2 }));
+    expect(m.selected!.scratch.map((e) => e.type)).toEqual(["retry_scheduled", "retry_started"]);
+    m.applyEvent(ev(3, "step_start", { step: 2 }));
+    expect(m.selected!.scratch.map((e) => e.type)).toEqual(["step_start"]);
   });
 
   test("archive transitions carry the bumped revisions so the next If-Match write is current", () => {
@@ -775,6 +814,7 @@ describe("context, composer and footer parity", () => {
     expect(shown.includes("GPT-6.1 Terra") && shown.includes("codex")).toBe(true);
     expect(shown.includes("11K · 1.1%")).toBe(true);
     expect(app.shows("id:composer-meter")).toBe(true);
+    expect(app.shows("id:activity-fill")).toBe(true);
     expect(app.shows("id:location-strip")).toBe(true);
     expect(shown.includes("ctrl+p commands")).toBe(false);
   });
@@ -879,6 +919,12 @@ describe("timeline rhythm", () => {
 });
 
 describe("tool output detail cap", () => {
+  test("code shows the complete source and keeps its result in raw", () => {
+    const args = JSON.stringify({ code: "first()\nsecond()\nthird()" });
+    const detail = detailOf("code", args, "large result", false);
+    expect(detail.map((line) => line.text)).toEqual(["  first()", "  second()", "  third()", "Output hidden · raw to view"]);
+    expect(detailOf("code", args, "large result", true).map((line) => line.text)).toContain("large result");
+  });
   test("a diff or the raw view keeps a head and a tail; command output keeps its command rows and last rows", () => {
     const output = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
     const patch = Array.from({ length: 500 }, (_, i) => `+diff line ${i + 1}`).join("\n");

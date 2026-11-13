@@ -10,7 +10,6 @@ import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar, NewSessionButton, ProjectSelector, SessionsTab } from "./sidebar";
 import { RightSidebar } from "./right";
 import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
-import { structure } from "../gen/theme";
 
 // --- command palette ---------------------------------------------------------------------------
 export function Palette() {
@@ -48,8 +47,8 @@ function PaletteBody() {
     <Modal size="medium" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
       <View role="menu" class="gap-2">
         <ModalTitle title="Command palette" />
-        <View class="border-b border-border">
-          <Input autoFocus placeholder="type to filter commands" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class={`h-10 ${TS.base} text-foreground placeholder:text-muted-foreground`} />
+        <View class="rounded-[9px] bg-card px-3 mt-1">
+          <Input autoFocus placeholder="type to filter commands" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class={`h-[38px] ${TS.base} text-foreground placeholder:text-muted-foreground`} />
         </View>
         <If when={items().length > 0} else={<View class="py-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
           <Scroll style={{ maxHeight: Math.min(380, modalBodyHeight(40)) }} testID="palette-list">
@@ -61,10 +60,10 @@ function PaletteBody() {
                 const heading = () => grouped() && (i() === 0 || paletteGroup(items()[i() - 1].c.category) !== paletteGroup(c().category));
                 return (
                   <View>
-                    <If when={heading()}><Text class={`px-3 ${TS.base} font-semibold uppercase text-muted-foreground ${i() === 0 ? "pb-1" : "pt-3 pb-1"}`} testID={`palette-group-${paletteGroup(c().category)}`}>{paletteGroup(c().category)}</Text></If>
+                    <If when={heading()}><Text class={`px-3 ${T.section} uppercase pt-3.5 pb-1.5`} testID={`palette-group-${paletteGroup(c().category)}`}>{paletteGroup(c().category)}</Text></If>
                     <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                      class={`group/row relative rounded-none px-3 py-0.5 min-h-7 justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
-                      <If when={idx() === i()}><Text class={`absolute left-0 ${TS.base} text-foreground`} accessible={false}>{structure.focus_bar.unicode}</Text></If>
+                      class={`group/row relative rounded-(--radius) px-3 h-[34px] justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                      <If when={idx() === i()}><View class="absolute left-0 top-[7px] h-5 w-[3px] rounded-full bg-primary" accessible={false} /></If>
                       <View class="flex-row items-center gap-3">
                         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{dis() ? `${c().title} · ${it().a.reason}` : c().title}</Text>
                         <Text class={T.meta}>{keyLabel(c()) ?? ""}</Text>
@@ -97,6 +96,8 @@ function fuzzyMatch(query: string, text: string) {
   return at === q.length;
 }
 
+const MODEL_INFO_HEIGHT = 120;
+
 function PickerBody() {
   const p = () => picker()!;
   const query = signal("");
@@ -126,6 +127,11 @@ function PickerBody() {
     if (p().title === "Prompt history") return "Type to find an earlier prompt…";
     return "Type to filter…";
   };
+  // The model picker keeps one size whatever the list holds (loading, filtered to nothing, one row or fifty).
+  const listBox = () => {
+    const max = Math.min(340, modalBodyHeight(40 + (isModels() ? MODEL_INFO_HEIGHT : 0)));
+    return isModels() ? { height: max } : { maxHeight: max };
+  };
   const keys = [
     keymap.bind("down", () => idx.set(clamp(idx() + 1)), { when: "always" }),
     keymap.bind("up", () => idx.set(clamp(idx() - 1)), { when: "always" }),
@@ -139,11 +145,11 @@ function PickerBody() {
         <View class="border-b border-border">
           <Input autoFocus value={query()} placeholder={placeholder()} accessibilityLabel={placeholder()} testID="picker-input"
             onChange={({ value }) => { query.set(value); idx.set(0); }} onSubmit={() => choose()} submitBehavior="submit"
-            class={`h-10 ${TS.base} text-foreground placeholder:text-muted-foreground`} />
+            class={`h-[38px] ${TS.base} text-foreground placeholder:text-muted-foreground`} />
         </View>
-        <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
-          <If when={filtered().length > 0} else={<View class="py-3"><Text class={T.sec}>Nothing matches “{query()}”.</Text></View>}>
-            <Scroll style={{ maxHeight: Math.min(340, modalBodyHeight(40 + (chosen()?.detail?.length ? 120 : 0))) }}>
+        <Scroll style={listBox()} testID="picker-list">
+          <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
+            <If when={filtered().length > 0} else={<View class="py-3"><Text class={T.sec}>Nothing matches “{query()}”.</Text></View>}>
               <View class="gap-0.5">
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
@@ -157,13 +163,13 @@ function PickerBody() {
                 )}
               </Each>
               </View>
-            </Scroll>
+            </If>
           </If>
-        </If>
-        <If when={!!chosen()?.detail?.length}>
-          <View class="gap-0.5 border-t border-border px-3 pt-2">
-            <Text style={{ numberOfLines: 1 }} class={`${TS.mono} text-popover-foreground`}>{chosen()!.id}</Text>
-            <Each of={chosen()!.detail!} key={(line) => line}>
+        </Scroll>
+        <If when={isModels() || !!chosen()?.detail?.length}>
+          <View class="gap-0.5 border-t border-border px-3 pt-2" style={isModels() ? { height: MODEL_INFO_HEIGHT } : undefined}>
+            <Text style={{ numberOfLines: 1 }} class={`${TS.base} text-popover-foreground`}>{chosen()?.id ?? ""}</Text>
+            <Each of={chosen()?.detail ?? []} key={(line) => line}>
               {(line) => <Text style={{ numberOfLines: 2 }} class={`${TS.base} text-muted-foreground tabular-nums`}>{line()}</Text>}
             </Each>
           </View>
@@ -213,13 +219,13 @@ function SkillChecklistBody() {
                 const checked = () => selected().includes(skill().name);
                 return (
                   <Button onPress={() => { active.set(i()); toggle(skill().name); }} selected={active() === i()} accessibilityLabel={`${skill().name}, ${checked() ? "selected" : "not selected"}${skill().installed ? ", installed, will be replaced" : ""}`} testID={`learn-skill-${skill().name}`}
-                    class={`group/row relative rounded-none px-3 py-1.5 min-h-9 hover:bg-accent ${active() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${active() === i() ? "bg-selection" : ""} ${FOCUS}`}>
                     <View class="flex-row items-start gap-2">
                       <Text class={`w-4 text-center ${TS.base} ${checked() ? "text-primary" : "text-muted-foreground"}`}>{checked() ? "☑" : "☐"}</Text>
                       <View class="flex-1 min-w-0 gap-0.5">
                         <View class="flex-row items-center gap-2">
                           <Text class={`${TS.base} font-medium text-popover-foreground`}>{skill().name}</Text>
-                          <If when={!!skill().installed}><Text class={`${TS.base} text-warning rounded-none px-1.5`}>installed</Text></If>
+                          <If when={!!skill().installed}><Text class={`${TS.base} text-warning rounded-(--radius) px-1.5`}>installed</Text></If>
                         </View>
                         <If when={!!skill().description}><Text style={{ numberOfLines: 2 }} class={T.meta}>{skill().description}</Text></If>
                         <If when={!!skill().warnings?.length}><Text style={{ numberOfLines: 1 }} class={`${TS.base} text-warning`}>{skill().warnings!.join(" · ")}</Text></If>
@@ -323,7 +329,7 @@ function AddProjectBody() {
       <View testID="add-project-dialog" class="gap-3" accessibilityLabel="Add project">
         <ModalTitle title="Add project" />
         <Text class={T.sec}>Absolute path of a directory on the machine running Core. Core creates the project if it is new.</Text>
-        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-10 rounded-none px-3 ${TS.mono} text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
+        <Input autoFocus placeholder="/path/to/repo" accessibilityLabel="Project path" testID="project-path" onChange={({ value: t }) => path.set(t)} onSubmit={() => void submit()} submitBehavior="submit" class={`h-10 rounded-(--radius) px-3 ${TS.mono} text-foreground ${err() ? "bg-error/10" : "bg-background"}`} />
         <If when={err()}><Text class={`${TS.base} text-error`}>{"✕ " + err()}</Text></If>
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={() => addProjectOpen.set(false)} />
@@ -376,7 +382,7 @@ function NotificationList() {
       <If when={notifications().length > 0} else={<Empty title="No notifications" body="Toasts and alerts are kept here, newest first." />}>
         <List each={notifications()} keyExtractor={(n) => String(n.id)} class="flex-1" contentStyle={{ padding: 8, gap: 4 }}>
           {(n) => (
-            <Button onPress={() => alertDetail.set(n())} accessibilityLabel={`${n().level}: ${n().text}`} testID="notification-open" class={`flex-row gap-2 rounded-none px-2.5 py-2 hover:bg-accent ${FOCUS}`}>
+            <Button onPress={() => alertDetail.set(n())} accessibilityLabel={`${n().level}: ${n().text}`} testID="notification-open" class={`flex-row gap-2 rounded-(--radius) px-2.5 py-2 hover:bg-accent ${FOCUS}`}>
               <Text class={`w-3.5 text-center ${TS.base} text-foreground-secondary`}>{GL[n().level]}</Text>
               <Text style={{ numberOfLines: 3 }} class={`flex-1 min-w-0 ${TS.base} text-foreground`}>{n().text}</Text>
             </Button>
@@ -454,7 +460,7 @@ function RenameSessionBody() {
       <View class="gap-3">
         <ModalTitle title="Rename session" />
         <Input autoFocus defaultValue={initial} onChange={({ value }) => text.set(value)} onSubmit={save} submitBehavior="submit"
-          accessibilityLabel="Session title" testID="rename-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
+          accessibilityLabel="Session title" testID="rename-input" class={`rounded-(--radius) bg-card px-3 h-10 ${TS.base} text-foreground`} />
         <View class="flex-row justify-end gap-2">
           <Btn label="Cancel" onPress={cancel} />
           <Btn label="Save" kind="primary" onPress={save} disabled={!text().trim()} testID="rename-save" />
@@ -482,7 +488,7 @@ function GitInputBody() {
   const cancel = () => gitInput.set(null);
   const submit = () => { if (value().trim()) input.submit(value().trim()); };
   return <Modal size="small" label={input.title} testID="git-input-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}><View class="gap-3">
-    <ModalTitle title={input.title} /><Input autoFocus onChange={({ value: v }) => value.set(v)} onSubmit={submit} submitBehavior="submit" accessibilityLabel={input.title} testID="git-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
+    <ModalTitle title={input.title} /><Input autoFocus onChange={({ value: v }) => value.set(v)} onSubmit={submit} submitBehavior="submit" accessibilityLabel={input.title} testID="git-input" class={`rounded-(--radius) bg-card px-3 h-10 ${TS.base} text-foreground`} />
     <View class="flex-row justify-end gap-2"><Btn label="Cancel" onPress={cancel} /><Btn label="Continue" kind="primary" onPress={submit} disabled={!value().trim()} testID="git-input-submit" /></View>
   </View></Modal>;
 }
@@ -504,7 +510,7 @@ function FileOperationBody() {
   };
   return <Modal size="small" label={title} testID="file-operation-dialog" onCancel={cancel} onOpenChange={(open) => { if (!open) cancel(); }}>
     <View class="gap-3"><ModalTitle title={title} />
-      <Input autoFocus defaultValue={operation.path} onChange={({ value }) => text.set(value)} onSubmit={() => void save()} submitBehavior="submit" accessibilityLabel="Path" testID="file-operation-input" class={`rounded-none bg-card px-3 h-10 ${TS.base} text-foreground`} />
+      <Input autoFocus defaultValue={operation.path} onChange={({ value }) => text.set(value)} onSubmit={() => void save()} submitBehavior="submit" accessibilityLabel="Path" testID="file-operation-input" class={`rounded-(--radius) bg-card px-3 h-10 ${TS.base} text-foreground`} />
       <View class="flex-row justify-end gap-2"><Btn label="Cancel" onPress={cancel} /><Btn label="Save" kind="primary" onPress={() => void save()} disabled={!text().trim() || busy()} testID="file-operation-save" /></View>
       <ModalFooter hints="enter save · esc cancel" />
     </View>

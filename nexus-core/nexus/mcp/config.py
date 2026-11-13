@@ -35,25 +35,6 @@ _SHOWN_ONLY = {"autoApprove", "alwaysAllow", "trust", "oauth", "auth", "headersH
 _VAR = re.compile(r"\$\{([^}]+)\}|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-# Offered, switched off, until the user enables it in Settings (which then writes the entry into config.toml).
-# Version pinned; see nexus-browser/README.md. Never launched by Nexus on its own.
-DEFAULT_SERVERS: dict[str, dict[str, Any]] = {
-    "browser-use": {"command": "uvx", "args": ["--from", "browser-use[cli]==1.0.2", "browser-use", "--cli-mcp"],
-                    "enabled": False},
-}
-
-
-def with_defaults(servers: Any) -> dict[str, Any]:
-    """The configured servers, plus each default the file does not mention."""
-    configured = servers if isinstance(servers, dict) else {}
-    merged = {n: dict(e) for n, e in DEFAULT_SERVERS.items()}
-    for name, entry in configured.items():
-        base = merged.get(name)
-        # A default the file only overrides (`enabled = true`) keeps its command.
-        merged[name] = {**base, **entry} if base and isinstance(entry, dict) and not ({"command", "url"} & entry.keys()) else entry
-    return merged
-
-
 class McpConfigError(ValueError):
     """One server's entry is unusable."""
 

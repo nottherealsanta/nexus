@@ -127,8 +127,8 @@ def diagram(mode: str) -> dict[str, object]:
 
 
 # Radius and fonts are NSH-medium choices (see README.md); colours are not. Controls, cards and
-# surfaces are square, matching the TUI's cell grid; only circular indicators keep their shape.
-RADIUS = {"radius": "0", "radius-card": "0"}
+# surfaces take the 2026-11 redesign radii: 8 px controls and rows, 14 px cards and modals.
+RADIUS = {"radius": "8px", "radius-card": "14px"}
 FONTS = {
     "font-sans": "Google Sans, system-ui, sans-serif",
     "font-mono": "Monaspace Argon, ui-monospace, monospace",

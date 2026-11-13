@@ -218,6 +218,8 @@ pub enum ApiCall {
     SearchServiceStatus,
     /// Start the local search service and wait until it answers.
     SearchServiceStart,
+    /// What the browser tools need on Core's machine (Settings › Browser).
+    BrowserStatus,
     VoiceModel {
         target: VoiceTarget,
         operation: VoiceOperation,
@@ -249,6 +251,10 @@ pub enum ApiCall {
         playback: crate::speech::Playback,
     },
     Interrupt {
+        session: String,
+    },
+    /// This client is showing the session: Core tells every client to clear its unread mark.
+    Seen {
         session: String,
     },
     Archive {
@@ -467,8 +473,9 @@ impl ApiCall {
             | ApiCall::ManagerTranscribe { .. }
             | ApiCall::ManagerSpeak { .. }
             | ApiCall::ManagerLive { .. }
-            | ApiCall::ManagerSpeakStop => "",
-            ApiCall::SearchServiceStatus => "",
+            | ApiCall::ManagerSpeakStop
+            | ApiCall::Seen { .. } => "",
+            ApiCall::SearchServiceStatus | ApiCall::BrowserStatus => "",
             ApiCall::SearchServiceStart => "Web search is running",
             ApiCall::VoiceDownload { .. } => "Voice model download started",
             ApiCall::VoiceModel {
@@ -583,6 +590,8 @@ pub struct Done {
     pub voice: Option<Value>,
     /// Core's `/api/search/service` answer.
     pub search_service: Option<Value>,
+    /// Core's `/api/browser` answer.
+    pub browser_status: Option<Value>,
     /// A transcription result. It remains a response until the app inserts it.
     pub transcript: Option<String>,
     /// The answer to a `/btw` question.
@@ -1252,6 +1261,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::SearchServiceStatus => {
             done.search_service = Some(api.http.get("/api/search/service", &[]).await.map_err(e)?);
         }
+        ApiCall::BrowserStatus => {
+            done.browser_status = Some(api.http.get("/api/browser", &[]).await.map_err(e)?);
+        }
         ApiCall::SearchServiceStart => {
             done.search_service = Some(
                 api.http
@@ -1349,6 +1361,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     done.input_parts = Some(parts);
                 }
             }
+        }
+        ApiCall::Seen { session } => {
+            api.mark_seen(session).await.map_err(e)?;
         }
         ApiCall::Archive { session, archived } => {
             conflict(

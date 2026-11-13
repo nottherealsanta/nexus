@@ -192,6 +192,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/session/{id}/input/{iid}/move` | `{before}` | reorder pending input |
 | POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
+| POST | `/api/session/{id}/seen` | | 204; a client is showing the session. Publishes a live-only `session.seen` so every client clears its unread mark |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
 | GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more, floor, head, generation, history_truncated}`: the retained stored event log |
 | GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
@@ -1021,6 +1022,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |
 | `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived, revisions: {id: revision}}`: one transition for a whole tree, stored in the root's event log; it bumps each session's revision, and `revisions` carries the new values |
+| `session.seen` | `{session, root}`, live only (never stored): a client showed the session, so every client drops its unread mark for it and its root |
 | `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?, turn_finished?}` before and after each turn and when child activity changes the parent's status. A parent remains busy while a child runs; `turn_finished: true` marks its own turn ending while its status remains busy. A recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
@@ -1038,6 +1040,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `log.retention` | a global retention pass: `{at, elapsed_ms, events: {removed, floor, head, protected, pinned, batches, retained_bytes, over_budget}, wire: {expired, expired_bytes, wire_bytes, over_budget, blocked}, migration, turn_links, scheduled, turns, mutations, storage, blockers, worked, settings}` |
 | `session.notified` | `{from, text, notice}`: a `wait: false` child finished, and its answer goes to this (parent) session. `notice` is the structured subagent metadata clients also receive on the stored message |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
+| `browser.failed` / `browser.tools_changed` | `{server, error}` / `{server, added, removed}`: a session's browser-use process failed or changed its tool list ([tools.md](tools.md#browser-tools)) |
 | `session.worker` | a ZMX child's `worker` object, each time its CLI starts or ends a turn ([external-workers.md](external-workers.md)); `session.updated` follows with the same object on the session |
 | `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
 | `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |
@@ -1313,8 +1316,8 @@ frozen system prompt is not rewritten. An agent switch rebuilds the snapshot
 from the current files and appends `[Nexus notice: agent changed]`. An already-running call keeps its configuration; explicit changes apply to
 subsequent model/tool calls, including within the same turn.
 
-`disabled_tools` accepts task tools, `session`, `message_session` and the three
-workspace control names. New sessions offer `expose_workspace_tools`; activating it adds
+`disabled_tools` accepts task tools, `session`, `message_session`, the three
+workspace control names and the two browser tool names. New sessions offer `expose_workspace_tools`; activating it adds
 `change_session_directory` and `worktree` to later request schemas and to the
 model-visible tool result, never to the frozen prompt. Activation persists with
 the snapshot, and a pending directory move is visible in `directory_change`.

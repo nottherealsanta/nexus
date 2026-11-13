@@ -219,7 +219,7 @@ function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string;
           <Text class={`text-[10px] leading-5 ${p.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.on ? "●" : "○"}</Text>
         </Button>
         <Button onPress={p.onInfo} accessibilityLabel={`${p.name} details`} testID={`${p.testID}-info`} class={`shrink min-w-0 flex-row items-center gap-2 rounded-(--radius) px-1 h-6 hover:bg-accent ${FOCUS} ${p.locked ? "opacity-60" : ""}`}>
-          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.mono} ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
           <If when={!!p.status}><Text style={{ numberOfLines: 1 }} class={T.meta}>{p.status!}</Text></If>
         </Button>
       </View>
@@ -298,7 +298,7 @@ function EntryRow(p: { entry: () => ContextEntry; focus: boolean }) {
         class={`self-stretch flex-row items-start gap-2 rounded-(--radius) px-1 py-1 hover:bg-accent ${FOCUS}`}>
         <View class="w-4 h-5 shrink-0 items-center justify-center"><Icon name={open() ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
         <View class="flex-1 min-w-0">
-          <Text class={`${TS.mono} text-foreground`}>{e().name}</Text>
+          <Text class={`${TS.base} text-foreground`}>{e().name}</Text>
           <If when={!!e().description}><Text style={{ numberOfLines: 2 }} class={T.sec}>{e().description}</Text></If>
         </View>
       </Button>
@@ -344,7 +344,7 @@ function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?:
           const row = () => p.rows.find((row) => row.name === entry().key);
           return <View class={`p-3 gap-2 min-w-0 ${focused() === entry().key ? "bg-skill-card-focus" : "bg-skill-card"}`} testID={`skill-card-${entry().key}`}>
             <View role="button" focusable ref={(node: any) => names.set(entry().key, node)} onFocus={() => { focused.set(entry().key); focusedAction.set("name"); }} onPress={() => open(entry())} accessibilityLabel={`${entry().name} details`} testID={`skill-name-${entry().key}`} class="self-stretch min-w-0 focus-visible:outline-none">
-              <Text class={`${TS.mono} font-semibold text-foreground ${focused() === entry().key && focusedAction() === "name" ? "underline" : ""}`}>{entry().name}</Text>
+              <Text class={`${TS.base} font-semibold text-foreground ${focused() === entry().key && focusedAction() === "name" ? "underline" : ""}`}>{entry().name}</Text>
             </View>
             <Text style={{ numberOfLines: 2 }} class={T.sec}>{entry().description}</Text>
             <View role="switch" focusable accessibilityState={{ selected: row()?.on ?? false }} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">

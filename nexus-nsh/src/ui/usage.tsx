@@ -12,6 +12,7 @@ const windows = (p: UsageProvider) => (p.windows ?? []).filter((w) => p.id !== "
 const notes = (p: UsageProvider) => (p.notes ?? []).filter((n) => !(p.id === "codex" && n.startsWith("Limit reached:")) && !(p.id === "grok" && (n.startsWith("Prepaid credits:") || n.endsWith(" of credits"))) && !(p.id === "copilot" && ["AI credits used this period:", "Chat: ", "Completions: "].some((prefix) => n.startsWith(prefix))));
 const glyphs = [usageGlyphs.empty, usageGlyphs.eighth_1, usageGlyphs.eighth_2, usageGlyphs.eighth_3, usageGlyphs.eighth_4, usageGlyphs.eighth_5, usageGlyphs.eighth_6, usageGlyphs.eighth_7, usageGlyphs.full];
 const mono = "font-mono text-[13px]";
+const sans = "font-(family-name:--font-ui) text-[13px] tabular-nums";
 
 function Window(p: { w: NonNullable<UsageProvider["windows"]>[number]; now: number }) {
   const used = () => p.w.used_percent;
@@ -23,12 +24,12 @@ function Window(p: { w: NonNullable<UsageProvider["windows"]>[number]; now: numb
   const color = () => (used() ?? 0) >= 90 ? "text-error" : (used() ?? 0) >= 70 ? "text-warning" : "text-success";
   return (
     <View accessibilityLabel={`${p.w.label ?? "window"}, ${used() == null ? "unknown" : `${used()}%`} used, ${left()} left, reserve ${reserveLabel()}, expires ${expires()}`} class={isNarrow() ? "pl-3" : "flex-row items-center pl-3"}>
-      <Text style={{ numberOfLines: 1 }} class={`${isNarrow() ? "" : "flex-1"} ${mono} text-foreground`}>{p.w.label ?? "window"}</Text>
+      <Text style={{ numberOfLines: 1 }} class={`${isNarrow() ? "" : "flex-1"} ${sans} text-foreground`}>{p.w.label ?? "window"}</Text>
       <View class="flex-row items-center">
         <Text accessible={false} class={`w-24 ${mono}`}><Text class={color()}>{filled()}</Text><Text class="text-muted-foreground">{empty()}</Text></Text>
-        <Text class={`w-14 text-right ${mono} ${left() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{left()}</Text>
-        <Text class={`w-16 text-right ${mono} ${reserve() == null || reserveLabel() === "0%" ? "text-muted-foreground" : reserve()! > 0 ? "text-success" : "text-warning"}`}>{reserveLabel()}</Text>
-        <Text style={{ numberOfLines: 1 }} class={`w-20 pl-3 ${mono} ${expires() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{expires()}</Text>
+        <Text class={`w-14 text-right ${sans} ${left() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{left()}</Text>
+        <Text class={`w-16 text-right ${sans} ${reserve() == null || reserveLabel() === "0%" ? "text-muted-foreground" : reserve()! > 0 ? "text-success" : "text-warning"}`}>{reserveLabel()}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`w-20 pl-3 ${sans} ${expires() === "—" ? "text-muted-foreground" : "text-foreground"}`}>{expires()}</Text>
       </View>
     </View>
   );
@@ -46,7 +47,7 @@ export function UsageDialog() {
           <View class={isNarrow() ? "" : "flex-row items-center"}>
             <Text class={`${isNarrow() ? "" : "flex-1"} ${mono} text-muted-foreground`}>Window</Text>
             <View class="flex-row items-center">
-            <Text class={`w-24 ${mono} text-muted-foreground`}>Progress</Text><Text class={`w-14 text-right ${mono} text-muted-foreground`}>Left</Text><Text class={`w-16 text-right ${mono} text-muted-foreground`}>Reserve</Text><Text class={`w-20 pl-3 ${mono} text-muted-foreground`}>Expires</Text>
+            <Text class={`w-24 ${mono} text-muted-foreground`}>Progress</Text><Text class={`w-14 text-right ${sans} text-muted-foreground`}>Left</Text><Text class={`w-16 text-right ${sans} text-muted-foreground`}>Reserve</Text><Text class={`w-20 pl-3 ${sans} text-muted-foreground`}>Expires</Text>
             </View>
           </View>
           <Scroll focusable style={{ maxHeight: Math.max(48, Math.floor(windowSize().height * 0.9) - 200) }}>

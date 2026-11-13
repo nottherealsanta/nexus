@@ -77,11 +77,11 @@ export function FilePanel() {
         <View class="flex-row items-center gap-2 min-h-8">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
             placeholder="Find" accessibilityLabel="Find in file" testID="file-find-input"
-            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
+            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-(family-name:--font-ui) text-[13px] text-foreground" />
           <Text class={`${T.meta} w-20 text-right`} testID="file-find-count">{matchCount()}</Text>
           <View class="flex-row rounded-(--radius) bg-muted p-0.5">
             <Button onPress={() => caseSensitive.set(!caseSensitive())} selected={caseSensitive()} accessibilityLabel="Match case" testID="file-find-case"
-              class={`rounded-none px-2 min-h-6 items-center justify-center hover:bg-accent ${caseSensitive() ? "bg-selection" : ""} ${FOCUS}`}>
+              class={`rounded-(--radius) px-2 min-h-6 items-center justify-center hover:bg-accent ${caseSensitive() ? "bg-selection" : ""} ${FOCUS}`}>
               <Text class={`text-[13px] leading-5 ${caseSensitive() ? "font-medium text-foreground" : "text-foreground-secondary"}`}>Aa</Text>
             </Button>
           </View>
@@ -91,7 +91,7 @@ export function FilePanel() {
         </View>
         <View class="flex-row items-center gap-2 min-h-8">
           <Input value={replacement()} onChange={({ value }) => replacement.set(value)} placeholder="Replace" accessibilityLabel="Replace in file" testID="file-replace-input"
-            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-mono text-[12.5px] text-foreground" />
+            class="h-7 flex-1 min-w-0 rounded-(--radius) bg-background px-2 font-(family-name:--font-ui) text-[13px] text-foreground" />
           <Btn label="Replace" kind="ghost" disabled={!query() || !editing() || !found().count} onPress={() => editor?.replace(replacement())} testID="file-replace-next" />
           <Btn label="All" kind="ghost" disabled={!query() || !editing() || !found().count} onPress={() => void editor?.replaceAll(replacement())} testID="file-replace-all" />
         </View>

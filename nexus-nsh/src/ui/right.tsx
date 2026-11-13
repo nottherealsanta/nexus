@@ -140,10 +140,10 @@ export function RightSidebar(p: { drawer?: boolean }) {
                   <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{midTruncate(ses().id, 15)}</Text><Button onPress={() => run("session.copy_id")} accessibilityLabel="Copy session id" testID="copy-session-id" class="size-5 items-center justify-center rounded-(--radius) hover:bg-accent"><Icon name="copy" size={12} class="tint-muted-foreground" /></Button></View></Field>
                   <Field k="Status"><View class="flex-row"><Status kind={state().kind} word text={state().word} /></View></Field>
                   <Field k="Agent"><Text class={`${agentColor(ses().agent)} text-[13px] leading-5`}>{ses().agent}</Text></Field>
-                  <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} mono />
+                  <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} />
                   <Field k="Effort" v={(ses().effort as string) || "default"} />
                   <Field k="Directory">
-                    <Text style={{ userSelect: "text", numberOfLines: 1 }} testID="session-directory" tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ses().directory}</Text>} class={`${T.mono} text-foreground`}>{midTruncate(shortPath(ses().directory, userHome() || info()?.home || ""), 32)}</Text>
+                    <Text style={{ userSelect: "text", numberOfLines: 1 }} testID="session-directory" tooltip={<Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{ses().directory}</Text>} class={`${T.mono} text-foreground`}>{midTruncate(shortPath(ses().directory, userHome() || info()?.home || ""), 32)}</Text>
                   </Field>
                   <Field k="Started" v={date(ses().created)} />
                   <Field k="Last activity" v={`${date(ses().updated)} · ${relTime(ses().updated)}`} />

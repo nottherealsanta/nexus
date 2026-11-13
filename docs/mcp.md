@@ -55,12 +55,10 @@ entries. `${input:…}` is refused everywhere. Any other key is an error for tha
 server only; the others still load. `GET /api/config` masks global `env` and
 `headers`, and a PATCH that sends the mask back keeps the stored value.
 
-**browser-use** is offered by default, switched off: the pinned upstream
-`uvx --from 'browser-use[cli]==1.0.2' browser-use --cli-mcp`. Enabling it in
-Settings writes the entry into `config.toml`. Nexus never starts it on its own.
-Upgraded from 0.13.14 on 2026-11-12: 1.0.2 is a rewrite that drives the user's own Chrome through
-`browser_exec` (Python on CDP), `browser_screenshot`, `browser_login` and `browser_feedback`. Only
-the server start and `initialize` were checked; the tools were not exercised.
+No server is offered by default. browser-use, offered here switched off until 2026-11-13, is now a
+Nexus tool: `browser_exec` and `browser_screenshot` ([tools.md](tools.md#browser-tools)). An existing
+`[mcp.servers.browser-use]` entry that only said `enabled = true` has no command any more and shows
+as invalid. Delete it, or give it a full entry if you still want browser-use as an MCP server too.
 
 ## Project servers
 
@@ -90,8 +88,7 @@ are deliberately strict because a repository may be committed by someone else:
   defaults to the project path.
 - A project name that is already an **enabled** global server name is invalid.
   A repository cannot silently replace a trusted global server; rename the
-  project entry instead. A disabled global entry (including the offered
-  `browser-use` default) reserves nothing, so a project may use that name, and
+  project entry instead. A disabled global entry reserves nothing, so a project may use that name, and
   that enabled project entry is the one a session starts. If the global entry is
   enabled later, the project entry becomes invalid at the next read (see
   [Changes and invalidation](#changes-and-invalidation)).

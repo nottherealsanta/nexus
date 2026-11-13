@@ -324,9 +324,9 @@ impl Splash {
         let logo = if flash > 0.0 { p.peak } else { p.logo };
         // Waiting: a soft light sweeps left to right across the logo (colour
         // only, a function of the clock).
-        let sweep = self.waiting().then(|| {
-            (frame / SWEEP_FRAMES) as i32 % (mark_width + 16) - 8 + left
-        });
+        let sweep = self
+            .waiting()
+            .then(|| (frame / SWEEP_FRAMES) as i32 % (mark_width + 16) - 8 + left);
         for (x, y, symbol) in &targets {
             let lit = sweep.is_some_and(|c| (*x - c).abs() <= 1);
             put(buf, area, *x, *y, symbol, if lit { p.peak } else { logo });
@@ -339,7 +339,14 @@ impl Splash {
             let x = i32::from(area.x) + (i32::from(area.width) - note.width() as i32).max(0) / 2;
             for (i, ch) in note.chars().enumerate() {
                 let mut utf8 = [0u8; 4];
-                put(buf, area, x + i as i32, y, ch.encode_utf8(&mut utf8), p.muted);
+                put(
+                    buf,
+                    area,
+                    x + i as i32,
+                    y,
+                    ch.encode_utf8(&mut utf8),
+                    p.muted,
+                );
             }
         }
     }
@@ -419,7 +426,11 @@ mod tests {
         one.reach(1, t0);
         let mut four = Splash::new(t0, true);
         four.reach(4, t0);
-        assert_eq!(one.phase(500, 80), Phase::Loading, "time alone never finishes");
+        assert_eq!(
+            one.phase(500, 80),
+            Phase::Loading,
+            "time alone never finishes"
+        );
         assert_eq!(rendered(&one, 30, 80, 24), rendered(&four, 30, 80, 24));
     }
 

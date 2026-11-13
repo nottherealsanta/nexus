@@ -31,6 +31,8 @@ type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
 const META = `${T.meta}`;
+/** A tool argument or error line: a path or command you could type, so Monaspace 12.5. */
+const ARG = "font-(family-name:--font-code) text-[12.5px] leading-5 text-foreground-secondary";
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
@@ -206,6 +208,8 @@ function toolArg(name: string, args: string | undefined): string {
     case "code": return "";
     case "ask": return str(o.questions?.[0]?.question);
     case "fork": return preview80(first(o.title) || first(o.prompt));
+    case "browser_exec": return preview80((str(o.code).split(/\r?\n/).find((l) => l.trim()) ?? "").trim());
+    case "browser_screenshot": return o.full === true ? "full page" : "";
     default: return str(o.pattern ?? o.path ?? o.query ?? o.url ?? o.name);
   }
 }
@@ -520,6 +524,13 @@ export function detailOf(name: string, args: string | undefined, output: string 
       return out;
     } catch { /* fall through */ }
   }
+  if (name === "code") {
+    try {
+      const code = JSON.parse(args ?? "{}").code;
+      const lines = typeof code === "string" ? detailLines(code).map((text) => ({ text: `  ${text}`, tone: "command" as const })) : [];
+      return [...lines, ...(output || error ? [{ text: "Output hidden · raw to view", tone: "muted" as const }] : [])];
+    } catch { /* fall through */ }
+  }
   const head = commandRows(name, args);
   if (finished) return [...head, ...detailLines(output ?? "").map((l) => ({ text: l, tone: outputTone })), ...sidechainLines(side)];
   return [...head, error ? { text: error, tone: "plain" as const } : { text: "no output", tone: "muted" as const }];
@@ -666,7 +677,7 @@ function buildStableRows(): Row[] {
             const failed = state === "error";
             const allDetail = detailOf(name, p.arguments, res?.output, rawOpen, failed, tr?.error, !!res, (res as any)?.raw?.sidechain);
             // Output keeps its command rows and last rows; a diff or the raw view keeps a head and a tail.
-            const tailCap = !rawOpen && !isEdit;
+            const tailCap = !rawOpen && !isEdit && name !== "code";
             const commandHead = tailCap ? commandRows(name, p.arguments).length : 0;
             const clipped = tailCap ? allDetail.length - commandHead > OUTPUT_TAIL + 2 : allDetail.length > head + tail + 20;
             const capped = tailCap ? capToolOutput(allDetail, showAll, commandHead) : capToolDetail(allDetail, showAll, head, tail);
@@ -973,7 +984,7 @@ function RowView(p: { r: () => Row; sid: string }) {
                   : <CodeFence block={block} />;
               }}
               classes={PROSE}
-              styles={{ root: phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 25 } : { fontFamily: "Google Sans" } }}
+              styles={{ root: { fontFamily: "Google Sans", fontSize: 16, lineHeight: 25 } }}
             />
           </View>
         </If>
@@ -1002,7 +1013,7 @@ function RowView(p: { r: () => Row; sid: string }) {
                   </View>
                   <Text class={`shrink-0 ${TS.base} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
                   <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{c.title}</Text>
-                  <If when={c.background}><Text class="shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-xs leading-4 text-foreground-secondary">Background</Text></If>
+                  <If when={c.background}><Text class="shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
                 </View>
                 <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
                 <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-6`}>{c.outcome}</Text></If>
@@ -1137,7 +1148,7 @@ export function CodeFence(p: { block: TextViewCodeBlock }) {
   return (
     <View class="w-full my-1 bg-card overflow-hidden" testID="code-fence">
       <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
-        <Text class={`flex-1 min-w-0 ${META} font-(family-name:--font-code)`}>{p.block.language ?? ""}</Text>
+        <Text class={`flex-1 min-w-0 ${META}`}>{p.block.language ?? ""}</Text>
         <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
           class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
           <Icon name="copy" size={12} class="tint-muted-foreground" />
@@ -1274,7 +1285,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class={`${TS.body} text-foreground`}>{body()}</Text>
+            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class="text-[16px] leading-6 text-foreground">{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
@@ -1364,13 +1375,14 @@ function ToolTone(tone: string): string {
 const VERB: Record<string, string> = {
   bash: "Shell", read: "Read", edit: "Edit", patch: "Edit", write: "Write", code: "Code", ask: "Ask",
   web_search: "Search", web_fetch: "Fetch", fork: "Fork",
+  browser_exec: "Browser", browser_screenshot: "Screenshot",
 };
 function verbLabel(name: string): string { return VERB[name] ?? name; }
 function verbIcon(name: string): IconName {
   if (name === "read") return "read";
   if (name === "edit" || name === "patch" || name === "write") return "edit";
   if (name.startsWith("bash")) return "shell";
-  if (name.startsWith("web_")) return "web";
+  if (name.startsWith("web_") || name.startsWith("browser_")) return "web";
   if (name === "grep" || name === "glob" || name === "search") return "search";
   if (name === "ask") return "ask";
   if (name === "session" || name === "fork") return "session";
@@ -1396,7 +1408,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
-        <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{r().summary}</Text>}>
+        <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.secondary}`}>{r().summary}</Text>}>
           <Shimmer text={r().summary} reduced={reduced()} testID="group-working" />
         </If>
         <If when={!!r().diff}>
@@ -1464,7 +1476,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
     <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS} ${p.nested ? "gap-2" : ""}`}>
-        <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" /></View>
+        <View class={p.nested ? "w-[13px] shrink-0 items-center" : ACTIVITY_CHEVRON}><Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" /></View>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
           <Text class={`${TS.base} font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>
@@ -1534,23 +1546,23 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
             </If>
           </View>}
         </If>
-        <Text class={`shrink-0 ${TS.base} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
-        <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${T.mono}`}>{r().arg}</Text></If>
-        <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.mono}`}>{r().errorLine!}</Text></If>
+        <Text class={`shrink-0 ${T.secondary} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
+        <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${ARG}`}>{r().arg}</Text></If>
+        <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${ARG}`}>{r().errorLine!}</Text></If>
         <If when={!!r().summary}>
           <Text class={`${META} shrink-0`}><Text class={r().summary.startsWith("+") ? "text-success" : "text-muted-foreground"}>{r().summary.split(" −")[0]}</Text><If when={r().summary.includes(" −")}><Text class="text-error">{` −${r().summary.split(" −")[1]}`}</Text></If></Text>
         </If>
         <View class="flex-1" />
         <If when={open()}>
           <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
-            <Text class={`text-xs leading-4 ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
+            <Text class={`text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
           </Button>
         </If>
-        <If when={r().exit !== undefined}><Text class="text-xs leading-4 text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
+        <If when={r().exit !== undefined}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
         <If when={r().exit !== undefined && (r().state !== "done" || !!r().duration)}><Text class={META}>·</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-xs leading-4 text-primary shrink-0">waiting</Text></If>
-        <If when={r().state === "denied"}><Text class="text-xs leading-4 text-error shrink-0">denied</Text></If>
-        <If when={r().state === "error"}><Text class="text-xs leading-4 text-muted-foreground shrink-0">failed</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-primary shrink-0">waiting</Text></If>
+        <If when={r().state === "denied"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-error shrink-0">denied</Text></If>
+        <If when={r().state === "error"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
         <If when={(r().state === "done" || r().state === "running") && !!r().duration}><Text class={`${META} shrink-0`}>{r().duration!}</Text></If>
       </View>
       <If when={open()}>
@@ -1820,7 +1832,7 @@ export function Timeline() {
         <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn>
             <View class="w-full items-end pr-4">
-              <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-2 rounded-none bg-popover px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} shadow-md hover:bg-accent ${FOCUS}`}>
+              <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${below()} new`} testID="jump-latest" class={`flex-row items-center gap-2 rounded-(--radius) bg-popover px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} shadow-md hover:bg-accent ${FOCUS}`}>
                 <Text class={`${TS.base} text-foreground-secondary`}>↓</Text>
                 <Text class={`${TS.base} text-popover-foreground`}>{below() > 0 ? `${below()} new` : "latest"}</Text>
                 <Text class={META}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>

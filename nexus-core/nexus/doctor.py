@@ -92,6 +92,17 @@ def check_search() -> Row:
     return _row("search", "ok" if response.status_code == 200 else "warn", f"{url} HTTP {response.status_code}")
 
 
+def check_browser() -> Row:
+    """What browser_exec and browser_screenshot need: uvx and a browser (and Google Chrome with use_my_chrome)."""
+    from . import browser
+    needed = browser.requirements(bool(ConfigFile().read()["values"]["browser"]["use_my_chrome"]))
+    if needed["problems"]:
+        return _row("browser", "warn", "; ".join(needed["problems"]))
+    found = needed["chrome"] if needed["mode"] == "chrome" else needed["browser"]
+    mode = "your Chrome profile (remote debugging must be on)" if needed["mode"] == "chrome" else "own profile"
+    return _row("browser", "ok", f"{found['name']} ({found['path']}), {mode}; uvx {needed['uvx']}")
+
+
 def check_mcp(found: dict[str, Any] | None) -> Row:
     if found is None:
         return _row("mcp", "warn", "daemon not running, servers not checked")
@@ -181,7 +192,7 @@ def check_rust_builds() -> list[Row]:
 def run() -> list[Row]:
     found = daemon.discover()
     return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_search(),
-            check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
+            check_browser(), check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
 
 
 RELEASES_URL = "https://api.github.com/repos/nottherealsanta/nexus/releases/latest"

@@ -45,7 +45,7 @@ pub struct UiPrefs {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemePrefs {
-    /// `dark` or `light`.
+    /// `system`, `dark` or `light`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

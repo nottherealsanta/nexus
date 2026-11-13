@@ -267,7 +267,11 @@ pub async fn clipboard_any() -> Result<Clip, String> {
         return Ok(Clip::Image(image));
     }
     let text = clipboard_text().await?;
-    Ok(if text.is_empty() { Clip::Empty } else { Clip::Text(text) })
+    Ok(if text.is_empty() {
+        Clip::Empty
+    } else {
+        Clip::Text(text)
+    })
 }
 
 pub async fn clipboard_text() -> Result<String, String> {

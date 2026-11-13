@@ -316,7 +316,7 @@ streams: formatting appears as the deltas arrive, and an unclosed fence draws
 as a code block until its closing line lands. These streaming frames are not
 cached (every delta is a new body); the durable message is. Headings are bold: H1 and H2 in
 `text.primary` (H1 with a muted `─` underline as wide as its text), H3 and
-below in `text.secondary`. Inline code is `text.primary` on `surface.panel`,
+below in `text.secondary`. Tables have a bold header and ruled rows and columns. Inline code is `text.primary` on `surface.panel`,
 padded by one space, never accent. A fence has no background, framed as in old Nexus: a `╭─ language` header and a `╰─`
 footer in `text.muted`, each code line behind a muted `│ ` and drawn in
 `status.warning` (ASCII: `+-` and `| `). A focused or hovered fence shows `copy` at the right end of its header
@@ -329,6 +329,8 @@ where none is available), and the source as the fallback. The box-art renderer s
 monochrome. Not done yet: OSC 8
 hyperlinks (the buffer has no cell for escape sequences) and `path:line` links
 that open the file view.
+
+An expanded Code tool shows its cell source and marks its output hidden; raw view reveals the result.
 
 `diff.rs` is the one diff renderer, for edit, write and patch tool details and
 for the Git diff view. It parses `git diff` text, `apply_patch` text, an
@@ -569,7 +571,8 @@ time of last activity right-aligned (`now`, `3m`, `4d`). Line 2 is the agent in 
 colour, `·` and `⌥ branch` muted, with the descendant-session count (`2 ↳`) right-aligned. The
 open session has the selection band on both lines; focus draws `▌` at x=0 on both.
 The title or branch is truncated first, and on a very narrow sidebar the time or
-count is dropped. The `.`/`m` row menu is a raised popover beside the row (Delete in
+count is dropped. Hovering a session shows an archive box at the upper right and an
+actions menu below it; archived sessions show only the menu. The `.`/`m` row menu is a raised popover beside the row (Delete in
 red, going to the usual confirmation); the rail's open item has the selection band.
 The Git rows are `M path  +2 −3` (`M` warning, `A` and `?` success, `D` error); a
 side that is 0 is left out. Set `NEXUS_PORT` and `NEXUS_PORT_EMPTY` to run the shots
@@ -585,8 +588,9 @@ edge drag is saved when the button is released). A missing or corrupt file is
 ignored and replaced by the next save. Flags and the environment override the
 file for the run and are not written back: `--dark|--light` over the saved mode,
 `--mono|--256|--16` or `NO_COLOR` over monochrome, and `--reduced-motion` or
-`NEXUS10_REDUCED_MOTION` over animations. `COLORFGBG` only picks the default, so
-a saved mode wins over it.
+`NEXUS10_REDUCED_MOTION` over animations. Theme offers System, Light and Dark;
+System detects `COLORFGBG` at startup (or when selected), falling back to dark.
+It cannot detect live terminal appearance changes. A saved explicit mode wins over it.
 
 Environment:
 

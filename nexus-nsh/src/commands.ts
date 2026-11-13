@@ -27,6 +27,7 @@ import { appendTranscript } from "./dictation-logic";
 import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, toggleManagerMute, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
+import { refreshBrowserStatus } from "./browser-status";
 import { closeInspector, inspectSession, inspector, inspectorCommand } from "./inspector";
 import { focusSessionSearch, rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
@@ -194,6 +195,7 @@ export function openSettings() {
   previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); settingsNavFocused.set(true); settingsPageOpen.set(false); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
   void refreshSearchService();
+  void refreshBrowserStatus();
 }
 on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
@@ -917,8 +919,9 @@ function applyModel(model: string) {
 
 on("model.change", () => void pickOne("Change model", async () => {
   const cat = await request<any>("GET", "/api/model");
-  const models = ((cat.models ?? []) as any[]).filter((m) => !m.zmx); // ZMX models are for subagent pools only
   const s = viewed();
+  // ZMX models run subagents only: a root session or a draft never lists them.
+  const models = ((cat.models ?? []) as any[]).filter((m) => !m.zmx || !!s?.parent_id);
   const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
   const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
   const selectedModel = s ? s.model : sessionDraft().model || agentModel || rememberedModel(currentProject(), chosenAgent);

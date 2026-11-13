@@ -1,6 +1,7 @@
 # Multiplayer Nexus
 
-Status: design proposal; not implemented.
+Status: design proposal, still under discussion; not implemented. Moved to `plans/planning/` on 2026-11-12 (user). The conversation is in
+[multiplayer-discussion-log.md](multiplayer-discussion-log.md), which ends with "Where to pick up".
 
 ## Goal
 
@@ -25,6 +26,144 @@ runtime traffic, or be required to keep an established collaboration running.
 - Disconnections must not destroy sessions or accepted work. B must be able to
   reconnect and continue.
 - Interactive work requires a sufficiently good connection to A's runtime.
+
+## Two pillars (user, 2026-11-12, voice)
+
+Multiplayer has two parts. The rest of this file is almost entirely the second one.
+
+1. **Voice: real-time communication** between the players.
+2. **Sharing** a session or a project.
+
+### Voice (new; nothing designed yet)
+
+Real-time voice between A and B while they work on the shared session. Not covered anywhere below.
+Open questions:
+
+- Transport: peer to peer between the two Nexus installs, or through a relay. The rule below still holds: Nexus-operated
+  infrastructure must not carry session traffic, and voice is session traffic.
+- Whether voice is part of the invitation (one string joins the session and the call) or a separate step.
+- The timeline rule: the timeline shows what the model receives. Human-to-human audio is not model context, so it must
+  either stay out of the timeline or be shown as an explicit, labelled event. Decide before building.
+- How it relates to the Manager's voice control ([28](../28-manager-indicator.md)): two different voice paths, so the UI must
+  make clear which one is listening.
+- Mobile is a cut-down client; voice on mobile needs the user's approval (see AGENTS.md).
+
+### Sharing: container, tailcat address, link or QR (user, 2026-11-12)
+
+What the user described:
+
+- A shares a **session or the whole project**. To be shareable it **must run in a Docker container** (the "any container"
+  case below is the same rule: any OCI-style container, not only Docker). This matches "A provides an execution runtime inside a
+  container or VM" in the requirements.
+- A's project container is shared with **B's container, or other containers**. (Heard from voice: whether B's work runs in
+  A's container, or B gets their own container joined to A's project, is not settled. See open questions.)
+- **B must have Nexus installed.**
+- **tailcat is the sharing mechanism** (the voice transcript spelled it "Talecat"; confirmed as Tailscale's tailcat). It provides a **base64 string**, the "tailcat address". A gives B that string, and B pastes it into
+  Nexus to join.
+- The string can be offered three ways: **pasted text, a QR code, or a link**. The link would be on `nexus.santa.build`
+  (**later**; the install site is discussed in [install-site.md](install-site.md)). The string alone must work with no hosted
+  site, in line with "optional discovery" below.
+
+#### What tailcat is (checked 2026-11-12)
+
+[tailcat](https://github.com/tailscale/tailcat) (Tailscale, released 2026-08-31, [blog](https://tailscale.com/blog/tailcat)) is
+"netcat over Tailscale's data plane, without Tailscale's control plane". A Go library and CLI.
+
+- **No account, no control plane, no root, no TUN device.** It is userspace WireGuard plus a gVisor TCP/IP stack, so it
+  works inside an unprivileged container.
+- **The address is `tc` + base64(CBOR)** of the server's WireGuard public key, a path-discovery key, a pre-shared key and
+  the DERP relay info (about 140 bytes with a region number, longer with `--full-address`). It is exchanged out of band, so
+  a pasted string, a QR code or a link all work.
+- **Connection:** the client reaches the server through a DERP relay, then NAT traversal upgrades to a direct UDP
+  connection when it can. If it cannot, traffic stays on the relay. Tailscale's free relays are rate-limited; you can run
+  your own `derper` and embed its hostname in the address, so Nexus need not depend on Tailscale's relays.
+- **Server side** runs `tailcat serve <ports>` (or the Go library) and prints the address; the client runs
+  `tailcat forward <addr> 18080:8080` to get ordinary local ports, or `tailcat ssh <addr>`. Services include port forward,
+  ssh, exec per connection, files, ping and perf.
+- **The address is a bearer secret.** Knowing it is what lets a client connect. By default each server run makes a fresh
+  ephemeral key and the address dies with the process (single use per run). Saved keys keep the address stable but then
+  anyone who ever had it can reconnect. `serve --allow=<client node key>` restricts the tunnel to known clients.
+- A browser build (WASM) exists, relayed over DERP only until WebRTC support lands.
+
+#### What this means for Nexus (agent's reading, not decided)
+
+- **tailcat is a transport and a ticket, not an admission system.** It fits "direct connection" and "invitation" below, and
+  it removes the need for hosted discovery for the NAT problem: the string alone is enough to connect. This answers part of
+  "Networking constraints": tailcat is a better first transport than "reachable HTTPS endpoints", and the DERP relay only
+  carries WireGuard-encrypted packets. Still, a relay is third-party infrastructure on the path (see the rule at the top);
+  the plan should say Nexus uses a relay the user can choose (Tailscale's, or their own `derper`).
+- **A's Nexus (or the container) runs the listener; B's Nexus is the client.** Nexus should embed the tailcat Go library or
+  ship the binary, started by A's Core, serving the Nexus API port only. B's Nexus then reaches it as a local port.
+- **Never `no-auth-ssh`, and never expose a shell.** Its own docs warn the address would be the credential. The Nexus
+  admission step (A approves B, scoped membership) must sit on top. Preferably use `--allow` once B's node key is known, so
+  the pasted address is only good for the first knock.
+- **Container:** the listener can run inside A's container, since it needs no root and no TUN. That fits "must be in a
+  container" and the "any container" wording.
+- **Voice:** tailcat can carry UDP (`DialUDPPort`, 1232 byte payloads), so a voice stream could ride the same tunnel. Not
+  decided; see the voice questions above.
+- **Mobile:** no tailcat build for iOS is mentioned. The browser WASM build is relayed only. Check before promising joins
+  from a phone.
+
+#### Cautions
+
+- tailcat is new (2026-08-31) and the library API may change. Pin a version.
+- Tailscale's default relays are throttled, and the project says to contact them for heavy use. Plan for a self-run `derper`.
+- Licence and supply chain of the Go dependency are not checked yet.
+
+How it fits the existing model (agent's reading, not decided):
+
+- The tailcat address is the **invitation** in the join flow below: "permission to knock, not permission to enter". It is
+  not the membership. A still approves B, and A still issues a scoped, revocable membership.
+- The string must therefore carry only what B needs to find and authenticate A (A's pinned cell identity and a connection
+  hint), a scope, an expiry and a one-use or limited-use token. It must not carry credentials, provider access or secrets.
+- Treat the string, QR code and link as three encodings of one invitation. Anyone who sees a QR code or link can try to
+  use it, so expiry, single use and A's approval carry the security.
+
+Open questions from this idea:
+
+- Embed the tailcat Go library in Core, or ship the `tailcat` binary? Which relay: Tailscale's, or our own `derper`?
+- Single-use ephemeral address per invitation (default), or a saved key with `--allow`? Does A's Nexus start a new listener per invitation?
+- The address pins A's WireGuard key, so a link on `nexus.santa.build` that merely carries the address cannot redirect B to an impersonator. Check that the link form (for example `https://nexus.santa.build/j#tc...`, with the address in the fragment so it never reaches the server) keeps that property.
+- How the string is entered: a `nexus join <string>` command, a paste field in both TUI and NSH (parity rule applies),
+  scanning the QR with the phone camera. Mobile is a cut-down client, so joining from mobile needs approval.
+- What happens when the string is re-used, leaked or expired.
+
+### Answers and first step (user, 2026-11-12, voice)
+
+| Question | Answer |
+| --- | --- |
+| B's container | **Both shapes should be possible. The user wants to think about it more.** (1) B connects to A's container and works inside A's runtime, optionally using A's agent. (2) A and B each work in their own container under the same project, and each can watch the other's container working. |
+| Session or project | **The whole project.** |
+| Where to start | **B connects to A's container and works there, with either B's own agent or A's agent.** The user asked for advice on this. |
+
+Agent's advice (not decided):
+
+- **The starting point is right, and it is what the "first milestone" at the end of this file already describes.** Shape 1 is
+  one runtime with one owner, which the rest of this file assumes: A's Nexus orders the runtime's operations and holds the
+  authoritative state.
+- **Build it in two stages even though both agent choices are wanted.**
+  1. *A's agent, B as a remote client.* B's Nexus (or a thin client) attaches to A's Core over tailcat and uses A's sessions,
+     A's agent and A's provider access. Nothing new is needed in the agent loop; this is mostly transport, admission and
+     attribution. It proves the invitation, approval, reconnect and revoke path.
+  2. *B's agent against A's runtime.* B's Nexus runs B's loop and sends tool calls to A's container. This needs the
+     cross-host operation protocol (stable operation IDs, reconnection, results returning to B's context), so it is the
+     harder half. It should come second, and its context rules ("no host switch may silently inject hidden context")
+     deserve their own design pass.
+- **Give B their own worktree in A's container, not A's working directory.** The plan already prefers separate worktrees
+  and explicit merges over two agents writing to one directory. This is cheap now and it is the main protection against
+  A and B clobbering each other.
+- **"Whole project" means the invitation scope is the project.** B can see every session in it. Per-session scopes can come
+  later. Because that includes A's agent, A's spend is exposed: the first version needs an explicit A-side switch for
+  "B may run A's agent" and a spending or turn limit, off by default. B's own agent costs A nothing but still runs
+  commands in A's container, so it needs the same approval.
+- **Keep shape 2 possible; do not build it yet.** The one design rule that keeps the door open: a *runtime* has an owner, a
+  *project* does not. A project is a set of runtimes that may belong to different cells, and "A watches B's container" is
+  a read-only view of a runtime that another cell owns, using the same invitation and membership. So do not hard-code
+  "A is the host and B the guest" in names, tables or the protocol; use "runtime host" and "member".
+  Shape 2 needs extra things shape 1 does not: how code moves between the two containers (git), what each side sees of the
+  other's agent context (the timeline rule), and what "same project" means when two cells each hold a copy. Decide those
+  when the user returns to it.
+- **Voice is independent of all of this** and can follow once the tunnel exists.
 
 ## Model: runtime host and agent host
 
@@ -143,6 +282,7 @@ Suggested initial transports:
 - Reachable, authenticated HTTPS endpoints.
 - LAN connections with authenticated peers.
 - Private overlay networks such as Tailscale.
+- tailcat (see "What tailcat is" above): direct WireGuard with NAT traversal and a DERP relay fallback.
 
 NAT traversal can follow later. If direct connectivity fails, report that clearly
 rather than silently routing private traffic through Nexus-operated infrastructure.

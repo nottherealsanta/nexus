@@ -16,6 +16,7 @@ from .store import Store
 VERSION = 2
 VIEWS = ("Timing", "Conversation", "Steps", "Requests", "Raw", "Questions")
 LANE_KINDS = ("turn", "model", "tool", "attempt")
+ERROR_EVENTS = frozenset({"session.error", "retry_scheduled", "retry_exhausted", "model_fallback"})
 RECORD_KINDS = ("message", "event", "turn", "request", "tool", "attempt")
 PAGE = 50
 PAGE_MAX = 200
@@ -196,11 +197,21 @@ def _ms(item: dict[str, Any]) -> str:
     return f"{max(0.0, item['finished'] - item['started']) * 1000:.0f} ms"
 
 
+def _error_text(item: dict[str, Any]) -> str:
+    """The first line of what went wrong in a lane, so a failure reads in the list without opening it."""
+    error = item.get("error")
+    if isinstance(error, dict):
+        error = error.get("message") or error.get("kind")
+    return str(error).strip().splitlines()[0][:200] if error else ""
+
+
 def _lane_summary(kind: str, label: str, status: str, item: dict[str, Any]) -> str:
     bits = [kind, label, status, _ms(item)]
     if kind == "model" and item.get("ttfb") is not None:
         bits.append(f"ttfb {item['ttfb'] * 1000:.0f} ms")
-    return " ".join(b for b in bits if b)
+    summary = " ".join(b for b in bits if b)
+    error = _error_text(item)
+    return f"{summary} · {error}" if error else summary
 
 
 def _event_summary(row: Any, data: Any) -> str:
@@ -210,6 +221,10 @@ def _event_summary(row: Any, data: Any) -> str:
         model = data.get("model") or (body.get("model") if isinstance(body, dict) else None)
     size = row["payload_bytes"]
     bits = [row["type"] + (f" {model}" if model else "")]
+    if row["type"] in ERROR_EVENTS and isinstance(data, dict):
+        failure = _error_text({"error": data if row["type"] == "session.error" else data.get("reason")})
+        if failure:
+            bits.append(failure)
     if size is not None and size >= 0:
         bits.append(_size(size))
     if row["payload_state"] != "full":
@@ -338,7 +353,8 @@ def inspect(store: Store, sid: str, *, view: str = "Timing", before: str | None 
                         state = "error"
                     finish = now if running else (end if end is not None else start)  # never invent an end
                     ident = item.get("id", item.get("call_id"))
-                    label = item.get("name") or item.get("model") or f'{lane_kind} {item.get("step", "")}'.strip()
+                    label = item.get("name") or item.get("model") or (
+                        f'#{item["attempt"]}' if lane_kind == "attempt" else f'{lane_kind} {item.get("step", "")}'.strip())
                     ref_id = f'{row["id"]}:{ident}' if lane_kind == "tool" else ident
                     lane = {"id": f'{row["session_id"]}:{lane_kind}:{ident}', "session": names.get(row["session_id"]),
                             "session_id": row["session_id"], "kind": lane_kind, "label": label, "turn_id": row["id"],

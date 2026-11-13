@@ -99,7 +99,7 @@ function ProjectsOverviewBody() {
                 {(row, i) => (
                   <Button onPress={() => { set(i()); activate(row()); }} selected={cursor() === i()} disabled={row().kind === "group"} testID={`overview-row-${i()}`}
                     accessibilityLabel={overviewRowLabel(row(), project(projectOf(row()) ?? ""), row().kind === "session" ? model.sessions.get((row() as { id: string }).id) : undefined, row().kind === "session" ? stateOf((row() as { id: string }).id) : "")}
-                    class={`relative rounded-none px-3 min-h-8 justify-center hover:bg-accent ${cursor() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${cursor() === i() ? "bg-selection" : ""} ${FOCUS}`}>
                     <If when={cursor() === i()}><FocusEdge testID={`overview-cursor-${i()}`} /></If>
                     {line(row())}
                   </Button>

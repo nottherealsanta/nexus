@@ -1,13 +1,19 @@
 // The header title marquee only moves a title wider than its tab, starts and
 // ends with a readable hold, and stops at the title's end.
 import { describe, expect, test } from "nsh/test";
-import { marqueeShift, tabTitleRoomCells } from "./src/ui/header";
+import { marqueeShift, tabTitleOverflow, tabTitleRoomCells } from "./src/ui/header";
 import { textCellPoints } from "./src/ui/geometry";
 
 describe("hover tab title marquee", () => {
   test("a title that fits never moves", () => {
     expect(marqueeShift(0, 0)).toBe(0);
     expect(marqueeShift(90_000, 0)).toBe(0);
+  });
+
+  test("overflow uses rendered width rather than character count", () => {
+    expect(tabTitleOverflow(150, 160)).toBe(0);
+    expect(tabTitleOverflow(160, 160)).toBe(0);
+    expect(tabTitleOverflow(175, 160)).toBe(15);
   });
 
   test("a moving title holds, reveals exactly its overflow, then holds the end", () => {

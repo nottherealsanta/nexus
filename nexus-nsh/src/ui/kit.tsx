@@ -11,17 +11,21 @@ import { config, isNarrow, phone } from "../store";
 // Screen typography keeps metadata quieter.
 const typeSize = (platform.os === "web" || platform.os === "macos")
   ? "text-[14px] leading-6" : "text-[16px] leading-6";
-const titleSize = (platform.os === "web" || platform.os === "macos")
-  ? "text-[16px] leading-6" : typeSize;
+const titleSize = typeSize;
 const metaSize = (platform.os === "web" || platform.os === "macos")
-  ? "text-[12px] leading-5" : typeSize;
+  ? "text-[14px] leading-6" : typeSize;
 // Interface text reads in Google Sans; code and mono text keep Monaspace.
 const ui = " font-(family-name:--font-ui)";
+const proseSize = (platform.os === "web" || platform.os === "macos") ? "text-[14px] leading-6" : typeSize;
+// Secondary (13/20) for tabs and tool labels; the section label is 11/16 semibold caps.
+const secondarySize = "text-[14px] leading-6";
+const code = "font-(family-name:--font-code)";
 export const TS = {
   title: titleSize + ui,
   body: typeSize + ui,
   base: typeSize + ui,
-  mono: `font-mono ${typeSize}`,
+  mono: `${code} text-[14px] leading-6`,
+  secondary: secondarySize + ui,
 };
 // Colour roles on top of the shared sizes: a modal or settings pane picks a role, not a size.
 export const T = {
@@ -31,7 +35,8 @@ export const T = {
   label: `${TS.base} font-medium text-foreground`,
   sec: `${TS.base} text-foreground-secondary`,
   meta: `${metaSize}${ui} text-muted-foreground tabular-nums`,
-  section: `${metaSize}${ui} font-medium text-muted-foreground`,
+  section: `text-[11px] leading-4${ui} font-semibold tracking-[0.06em] text-muted-foreground`,
+  secondary: `${secondarySize}${ui} text-foreground-secondary`,
   mono: `${TS.mono} text-foreground-secondary`,
 };
 /** Interface text reads in Google Sans, not monospace; code keeps its own family. */
@@ -115,7 +120,7 @@ export const TONE: Record<string, string> = {
 };
 /** TextView part classes: a calm hierarchy told apart by weight and colour. */
 export const PROSE = {
-  root: `${TS.body} text-foreground`,
+  root: `${proseSize}${ui} text-foreground`,
   heading1: `${TS.title} font-semibold`,
   heading2: `${TS.title} font-semibold`,
   heading3: `${TS.body} font-semibold`,
@@ -123,17 +128,14 @@ export const PROSE = {
   heading5: `${TS.body} font-semibold text-foreground-secondary`,
   heading6: `${TS.body} font-semibold text-foreground-secondary`,
   listMarker: `${TS.body} text-foreground-secondary`,
-  table: "border-0 rounded-none",
-  tableScroll: "border-0 rounded-none",
-  tableRow: "border-0",
-  tableCell: `border-0 ${TS.base}`,
-  tableHeaderCell: "text-muted-foreground font-medium",
-  tableHead: "bg-card rounded-none",
-  code: `font-(family-name:--font-code) ${TS.base} rounded-none bg-card text-foreground`,
+  tableCell: TS.base,
+  tableHeaderCell: "text-foreground font-semibold",
+  tableHead: "bg-card",
+  code: `font-(family-name:--font-code) text-[13px] rounded-[4px] bg-card text-foreground`,
 };
 
 /** The shared travelling highlight, on the same clock and curve as the TUI. */
-export function Shimmer(p: { text: string; reduced: boolean; testID?: string }) {
+export function Shimmer(p: { text: string; reduced: boolean; testID?: string; mono?: boolean }) {
   effect(() => { if (!p.reduced) return holdSpinner(); });
   const color = (index: number) => {
     const colors = shimmerColors[colorScheme() === "light" ? "light" : "dark"];
@@ -146,7 +148,7 @@ export function Shimmer(p: { text: string; reduced: boolean; testID?: string }) 
   };
   return <View class="flex-row" accessibilityLabel={p.text} testID={p.testID ?? "working-shimmer"}>
     <Each of={[...p.text]}>{(c, i) => <Text
-      class={`${TS.base} font-medium text-foreground`}
+      class={`${p.mono ? TS.mono : TS.base} font-medium text-foreground`}
       style={p.reduced ? {} : { color: color(i()) }}
     >{c()}</Text>}</Each>
   </View>;
@@ -217,11 +219,11 @@ export function StatusRail(p: { color?: string; testID?: string }) {
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
 export function Seg(p: { onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
   return (
-    <View class="flex-row gap-0.5 rounded-none bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
+    <View class="flex-row gap-0.5 rounded-(--radius) bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
         {(o) => (
           <View focusable onFocus={p.onFocus} role="radio" accessibilityState={{ selected: p.value === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
-            class={`rounded-none px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
+            class={`rounded-(--radius) px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
             <Text class={`${TS.base} ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
           </View>
         )}

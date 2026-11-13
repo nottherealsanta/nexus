@@ -1,6 +1,7 @@
 """ZMX selection and discovery. No CLI is probed until its user-only switch is on."""
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ DISCLOSURE = ("The CLI runs its own tools, permissions, settings, MCP servers an
 INFO = {pid: ProviderInfo(pid, LABELS[pid], "external-cli", f"{pid}://", "anthropic" if pid == "claude-code" else "", None, False)
         for pid in IDS}
 _models: dict[str, tuple[float, list[str]]] = {}
+MODELS_TTL_S = 60
+MODELS_PROBE_TIMEOUT_S = 30.0  # `agy models` fetches over the network and takes about 6 s
 
 
 def external(ref: str) -> bool:
@@ -90,20 +93,48 @@ class ExternalProvider:
         yield  # pragma: no cover
 
 
+_refreshing: dict[str, asyncio.Task[list[str]]] = {}
+
+
+async def _fetch_agy_models(cli: str) -> list[str]:
+    try:
+        output = await probe(cli, "models", env=child_env(), cwd=Path.home(), timeout=MODELS_PROBE_TIMEOUT_S)
+    except (OSError, WorkerError):
+        kept = _models.get(cli, (0.0, []))[1]  # keep the last good list; a failed probe is not retried on every picker open
+        _models[cli] = time.monotonic(), kept
+        return kept
+    firsts = (line.partition("\t")[0].strip() for line in output.splitlines())  # lines are `id<TAB>display name`
+    ids = [first for first in firsts if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", first)
+           and first not in {"Models", "models"}]
+    ids = list(dict.fromkeys(ids))[:200]
+    _models[cli] = time.monotonic(), ids
+    return ids
+
+
+def _refresh_agy_models(cli: str) -> asyncio.Task[list[str]]:
+    task = _refreshing.get(cli)
+    if task is None:
+        task = _refreshing[cli] = asyncio.create_task(_fetch_agy_models(cli))
+        task.add_done_callback(lambda _: _refreshing.pop(cli, None))
+    return task
+
+
 async def agy_models() -> list[str]:
+    """The CLI's model ids. `agy models` takes seconds, so a stale list is returned at once and refreshed in the
+    background; only the very first call (not warmed at startup) waits."""
     require("agy")
     cli = cli_path("agy")
     if not cli:
         return []
     cached = _models.get(cli)
-    if cached and time.monotonic() - cached[0] < 60:
+    if cached:
+        if time.monotonic() - cached[0] >= MODELS_TTL_S:
+            _refresh_agy_models(cli)
         return list(cached[1])
-    try:
-        output = await probe(cli, "models", env=child_env(), cwd=Path.home())
-    except (OSError, WorkerError):
-        return []
-    ids = [line.strip() for line in output.splitlines() if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", line.strip())
-           and line.strip() not in {"Models", "models"}]
-    ids = list(dict.fromkeys(ids))[:200]
-    _models[cli] = time.monotonic(), ids
-    return ids
+    return list(await asyncio.shield(_refresh_agy_models(cli)))
+
+
+def warm_agy_models() -> None:
+    """Start the first `agy models` probe now, when ZMX Antigravity is on, so the model picker never waits for it."""
+    if enabled("agy") and (cli := cli_path("agy")):
+        _refresh_agy_models(cli)

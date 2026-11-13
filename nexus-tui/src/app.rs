@@ -905,6 +905,9 @@ pub struct Ui {
     pub search_service: Option<Value>,
     pub search_service_error: Option<String>,
     pub search_starting: bool,
+    /// Last `/api/browser` response and its error (Settings › Browser).
+    pub browser_status: Option<Value>,
+    pub browser_status_error: Option<String>,
     pub edit: Option<TextEdit>,
     pub alerts: Alerts,
     pub scroll: Scroll,
@@ -985,6 +988,7 @@ pub struct App {
     pub file_watch_status: String,
     pub manifest: Arc<Manifest>,
     pub theme: Theme,
+    pub theme_system: bool,
     pub state: AppState,
     pub ui: Ui,
     pub hits: HitMap,
@@ -1282,6 +1286,7 @@ impl App {
             file_watch_status: String::new(),
             manifest,
             theme,
+            theme_system: true,
             state,
             terminal_open: false,
             terminal_panel: crate::terminal_panel::TerminalPanel::default(),
@@ -1352,6 +1357,8 @@ impl App {
                 search_service: None,
                 search_service_error: None,
                 search_starting: false,
+                browser_status: None,
+                browser_status_error: None,
                 edit: None,
                 alerts: Alerts::default(),
                 scroll: Scroll::default(),
@@ -3325,9 +3332,7 @@ impl App {
                     && self.ui.tab == Tab::Sessions
                     && self.list_len(Tab::Sessions) > 0
             }
-            "focus.project" => {
-                self.ui.focus == Focus::Rail && !self.rail_project_ids().is_empty()
-            }
+            "focus.project" => self.ui.focus == Focus::Rail && !self.rail_project_ids().is_empty(),
             "focus.assistant_block" => {
                 self.ui.focus == Focus::Timeline
                     && self
@@ -4336,8 +4341,10 @@ impl App {
                 );
                 let favorites = self.favorite_models();
                 for (i, m) in self.state.models.iter().enumerate() {
-                    if m["zmx"].as_bool() == Some(true) {
-                        continue; // ZMX models are for subagent pools only
+                    if m["zmx"].as_bool() == Some(true)
+                        && !self.viewed().is_some_and(|s| s.parent_id.is_some())
+                    {
+                        continue; // ZMX models run subagents only: a root session or draft never lists them
                     }
                     let r = m["ref"].as_str().unwrap_or_default();
                     let label = m["name"]
@@ -5101,6 +5108,50 @@ impl App {
         self.api(ApiCall::SearchServiceStatus);
     }
 
+    fn refresh_browser_status(&mut self) {
+        self.api(ApiCall::BrowserStatus);
+    }
+
+    /// Lines for the browser status row: ready or not, the browser and profile, each gap with its fix, the note.
+    /// NSH's `browserStatusLines` says the same.
+    pub fn browser_status_lines(&self) -> Vec<String> {
+        let Some(status) = self.ui.browser_status.as_ref() else {
+            return vec![if self.ui.browser_status_error.is_some() {
+                "status unavailable".into()
+            } else {
+                "loading status…".into()
+            }];
+        };
+        let mine = status["mode"].as_str() == Some("chrome");
+        let mut lines = vec![if status["ok"].as_bool() == Some(true) {
+            "ready".to_owned()
+        } else {
+            "not ready".to_owned()
+        }];
+        let found = if mine && status["chrome"].is_object() {
+            &status["chrome"]
+        } else {
+            &status["browser"]
+        };
+        if let Some(name) = found["name"].as_str() {
+            let profile = if mine {
+                "your Chrome profile"
+            } else {
+                "own profile"
+            };
+            lines.push(format!("{name} · {profile}"));
+        }
+        for problem in status["problems"].as_array().into_iter().flatten() {
+            if let Some(text) = problem.as_str() {
+                lines.push(text.to_owned());
+            }
+        }
+        if let Some(note) = status["note"].as_str() {
+            lines.push(note.to_owned());
+        }
+        lines
+    }
+
     /// Why the search service cannot be started now. Settings and the palette share it.
     pub fn search_start_reason(&self) -> Option<String> {
         if self.ui.search_starting {
@@ -5841,7 +5892,9 @@ impl App {
             if !self.ui.tabs.contains(&root) {
                 self.ui.tabs.push(root.clone());
             }
-            self.ui.unread_sessions.remove(&root);
+            if self.ui.unread_sessions.remove(&root) {
+                self.api(ApiCall::Seen { session: root });
+            }
         }
         self.ui.file_open = false;
         self.ui.file_edit = None;
@@ -6554,6 +6607,7 @@ impl App {
                         .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
                     self.refresh_voice_settings_status();
                     self.refresh_search_service();
+                    self.refresh_browser_status();
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
@@ -6565,6 +6619,7 @@ impl App {
             }
             "app.theme" => {
                 let mut o = self.theme.opts;
+                self.theme_system = false;
                 o.mode = match o.mode {
                     crate::theme::Mode::Dark => crate::theme::Mode::Light,
                     crate::theme::Mode::Light => crate::theme::Mode::Dark,
@@ -8082,6 +8137,18 @@ impl App {
                 options.reduced_motion = reduced;
                 self.theme = self.theme.with(options);
             }
+            // The browser status depends on the mode; ask again once Core has the new setting.
+            let mine = config["values"]["browser"]["use_my_chrome"]
+                .as_bool()
+                .unwrap_or(false);
+            if self
+                .ui
+                .browser_status
+                .as_ref()
+                .is_some_and(|status| (status["mode"].as_str() == Some("chrome")) != mine)
+            {
+                self.refresh_browser_status();
+            }
         }
         if let SyncMsg::Manager { tag, result } = msg {
             return self.manager_reply(&tag, result);
@@ -8455,7 +8522,9 @@ impl App {
                         self.effects.push(Effect::Notify(text));
                     }
                 }
-                if viewed_root.as_deref() != Some(root.as_str())
+                if kind == "session.seen" {
+                    self.ui.unread_sessions.remove(&root);
+                } else if viewed_root.as_deref() != Some(root.as_str())
                     && (kind == "session.error"
                         || (kind == "message.added" && data["role"] == "assistant"))
                 {
@@ -8874,6 +8943,16 @@ impl App {
                 self.apply_search_service(call, done.result);
                 return;
             }
+            ApiCall::BrowserStatus => {
+                match done.result {
+                    Ok(result) => {
+                        self.ui.browser_status = result.browser_status;
+                        self.ui.browser_status_error = None;
+                    }
+                    Err(error) => self.ui.browser_status_error = Some(error),
+                }
+                return;
+            }
             ApiCall::VoiceDownload { generation } => {
                 self.apply_voice_download(generation, done.result);
                 return;
@@ -8897,7 +8976,7 @@ impl App {
                 self.manager_done(done);
                 return;
             }
-            ApiCall::ManagerSpeakStop => return,
+            ApiCall::ManagerSpeakStop | ApiCall::Seen { .. } => return,
             _ => {}
         }
         let name = done.call_name();
@@ -13276,6 +13355,7 @@ impl App {
                 | "tools.default_permission"
                 | "tools.defaults"
                 | "tools.search_status"
+                | "browser.status"
                 | "tools.search_start"
                 | "appearance.theme"
                 | "appearance.monochrome"
@@ -13288,6 +13368,7 @@ impl App {
                 | "appearance.scrollbar"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
+                | "browser.use_my_chrome"
                 | "mcp.full_definitions"
                 | "mcp.max_listed_tools"
                 | "zmx.claude_backend"
@@ -13343,11 +13424,11 @@ impl App {
         let pair = |options: &[&'static str], current: String| Some((options.to_vec(), current));
         match row.id.as_str() {
             "appearance.theme" => pair(
-                &["light", "dark"],
-                match self.theme.opts.mode {
+                &["system", "light", "dark"],
+                if self.theme_system { "system" } else { match self.theme.opts.mode {
                     Mode::Dark => "dark",
                     Mode::Light => "light",
-                }
+                }}
                 .to_owned(),
             ),
             "appearance.monochrome" => pair(&["off", "on"], on_off(self.theme.mono())),
@@ -13389,6 +13470,14 @@ impl App {
                 on_off(
                     values
                         .and_then(|v| v["mcp"]["full_definitions"].as_bool())
+                        .unwrap_or(false),
+                ),
+            ),
+            "browser.use_my_chrome" => pair(
+                &["off", "on"],
+                on_off(
+                    values
+                        .and_then(|v| v["browser"]["use_my_chrome"].as_bool())
                         .unwrap_or(false),
                 ),
             ),
@@ -13458,8 +13547,10 @@ impl App {
         match row.id.as_str() {
             "appearance.theme" => {
                 let mut options = self.theme.opts;
+                self.theme_system = chosen == "system";
                 options.mode = match chosen {
                     "light" => Mode::Light,
+                    "system" => crate::theme::Options::from_env().mode,
                     _ => Mode::Dark,
                 };
                 self.theme = self.theme.with(options);
@@ -13513,6 +13604,9 @@ impl App {
             }
             "mcp.full_definitions" => {
                 self.patch_config_value("mcp.full_definitions", json!(chosen == "on"))
+            }
+            "browser.use_my_chrome" => {
+                self.patch_config_value("browser.use_my_chrome", json!(chosen == "on"))
             }
             "tools.default_permission" => {
                 self.patch_config_value("defaults.permission", json!(chosen))
@@ -13599,6 +13693,7 @@ impl App {
         match row.id.as_str() {
             "tools.defaults" => self.tools_grid_lines(),
             "tools.search_status" => self.search_status_lines(),
+            "browser.status" => self.browser_status_lines(),
             "tools.search_start" => vec![
                 "Starts the local SearXNG that web_search uses (Apple container, else Docker)."
                     .into(),
@@ -13736,15 +13831,14 @@ impl App {
             }
             "manager.model" => self.manager_edit_model(),
             "manager.privacy" => {}
-            "mcp.full_definitions" => {
+            "mcp.full_definitions" | "browser.use_my_chrome" => {
+                let (section, key) = row.id.split_once('.').unwrap_or_default();
                 if let Some(config) = &self.state.config {
                     if let Some(revision) = config["revision"].as_str() {
-                        let value = !config["values"]["mcp"]["full_definitions"]
-                            .as_bool()
-                            .unwrap_or(false);
+                        let value = !config["values"][section][key].as_bool().unwrap_or(false);
                         self.effects.push(Effect::Sync(SyncCommand::PatchConfig {
                             revision: revision.to_owned(),
-                            path: "mcp.full_definitions".into(),
+                            path: row.id.clone(),
                             value: json!(value),
                         }));
                     }
@@ -13949,6 +14043,7 @@ impl App {
             | "appearance.timeline_detail"
             | "appearance.scrollbar" => self.settings_change_row(row, 1),
             "mcp.full_definitions"
+            | "browser.use_my_chrome"
             | "mcp.max_listed_tools"
             | "context.handoff_percent"
             | "context.usage_refresh_minutes" => self.settings_change_row(row, 1),
@@ -14468,7 +14563,11 @@ impl App {
             .unwrap_or_default();
         let mut out = vec![PageLine::Text(self.provider_status(p), Tone::Secondary)];
         if let Some(note) = p["note"].as_str().filter(|n| !n.is_empty()) {
-            let tone = if connected { Tone::Muted } else { Tone::Warning };
+            let tone = if connected {
+                Tone::Muted
+            } else {
+                Tone::Warning
+            };
             out.push(PageLine::Text(note.to_owned(), tone));
         }
         if connected {
@@ -14941,10 +15040,10 @@ impl App {
             },
             theme: ThemePrefs {
                 mode: Some(
-                    match self.theme.opts.mode {
+                    if self.theme_system { "system" } else { match self.theme.opts.mode {
                         Mode::Dark => "dark",
                         Mode::Light => "light",
-                    }
+                    }}
                     .into(),
                 ),
                 monochrome: Some(self.theme.opts.tier == Tier::Mono),
@@ -14994,10 +15093,12 @@ impl App {
             self.ui.sound = sound;
         }
         let mut options = self.theme.opts;
+        self.theme_system = !over.mode && !matches!(prefs.theme.mode.as_deref(), Some("dark" | "light"));
         if !over.mode {
             match prefs.theme.mode.as_deref() {
                 Some("dark") => options.mode = Mode::Dark,
                 Some("light") => options.mode = Mode::Light,
+                Some("system") => options.mode = crate::theme::Options::from_env().mode,
                 _ => {}
             }
         }
@@ -15684,14 +15785,18 @@ impl App {
                 }
             }
             Target::ArchiveSession(session) => {
-                if self.writable() {
-                    self.api(ApiCall::Archive {
-                        session,
-                        archived: true,
-                    });
-                } else {
-                    self.toast(Level::Warning, READ_ONLY);
+                if let Some(i) = self.side_entries().iter().position(|e| e.id == session) {
+                    self.ui.focus = Focus::Sidebar;
+                    self.ui.cursor.insert(Tab::Sessions, i);
+                    self.sidebar_activate(i);
+                    self.run_command("session.archive");
                 }
+            }
+            Target::SessionRowMenu(i) => {
+                self.ui.focus = Focus::Sidebar;
+                self.ui.cursor.insert(Tab::Sessions, i);
+                self.sidebar_activate(i);
+                self.execute("sidebar.row_menu");
             }
             Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
@@ -16051,10 +16156,7 @@ impl App {
                     draft.images.push(image);
                 }
             }
-            Ok(None) => self.toast(
-                Level::Info,
-                "The clipboard is empty",
-            ),
+            Ok(None) => self.toast(Level::Info, "The clipboard is empty"),
             Err(e) => self.toast(Level::Error, e),
         }
     }
@@ -16396,6 +16498,7 @@ impl ActionDone {
             ApiCall::VoicePrepare { .. } => "Voice model loading failed",
             ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",
             ApiCall::SearchServiceStatus => "Search status failed",
+            ApiCall::BrowserStatus => "Browser status failed",
             ApiCall::SearchServiceStart => "Web search did not start",
             ApiCall::VoiceDownload { .. } => "Voice model download failed",
             ApiCall::VoiceModel { operation, .. } => match operation {
@@ -16409,6 +16512,7 @@ impl ActionDone {
             | ApiCall::ManagerLive { .. }
             | ApiCall::ManagerSpeakStop => "Manager voice failed",
             ApiCall::Interrupt { .. } => "Interrupt failed",
+            ApiCall::Seen { .. } => "",
             ApiCall::Archive { .. } => "Archive failed",
             ApiCall::Rename { .. } => "Rename failed",
             ApiCall::Delete { .. } => "Delete failed",

@@ -21,7 +21,7 @@ branch list fills the tab and is the only thing on it.
   (`git.stage`, `git.unstage`, `git.discard`) and open the diff on press. Fed by `loadGitPage` / `gitPage` in
   `store.ts` for `currentWorktree()`.
 - Core: the Git page route returns `worktree`, `branch`, `changes` and `branches`.
-- Background: [09-backlog.md](09-backlog.md) 9.2 (the whole Git page); [33](done/33-remove-git-from-right-sidebar.md)
+- Background: [09-backlog.md](../09-backlog.md) 9.2 (the whole Git page); [33](33-remove-git-from-right-sidebar.md)
   removes the right sidebar's Git status, so this tab becomes the only Git view besides the diff modal.
 
 ## Plan
@@ -37,7 +37,7 @@ branch list fills the tab and is the only thing on it.
 - [x] Remove `Branches` from both clients. Branch switching stays in the `session.worktrees` picker (the location
   strip's branch button). Core may keep returning `branches`; stop rendering it and note it as unused.
 - [x] Header: keep the branch on one line with the worktree folder name; drop the full path line (the worktree info
-  modal from [32](done/32-worktree-indicator.md) has it).
+  modal from [32](32-worktree-indicator.md) has it).
 - [x] Core: add the line counts the summary needs (`git diff --numstat` for staged and unstaged) to the Git page
   response if it does not have them; keep `changes` for expanded folders. Core test with a scratch repo.
 - [x] TUI: rewrite the tab body as summary + folder rows; keyboard cursor and `SideRow` hits over folder rows (and
@@ -45,6 +45,6 @@ branch list fills the tab and is the only thing on it.
 - [x] NSH: the same in `GitTab`; the row context menu moves to file rows inside an expanded folder.
 - [x] Shared manifest/strings for the labels (decided 2026-11-12): `[strings]` table in `interface/manifest.toml` (`git.*` keys), `Manifest::ui_text` in the TUI, `uiText` in NSH, validated by `check_manifest.py`; documented in `interface/README.md`. Other strings are not migrated.
 - [x] Tests: TUI render/behaviour tests (no changes, mixed changes, many files in one folder, expand/collapse); NSH
-  browser test the same; paired screenshots of the Git tab (not verified: no screenshots taken; the tests assert the branch list is gone).
+  browser test the same. Paired screenshots of the Git tab were not taken; the tests assert the branch list is gone.
 - [x] Docs: both READMEs, `interface/design-language.md`, `interface/capability-matrix.md`, the Git page notes in
-  [09-backlog.md](09-backlog.md) 9.2; ledger row if old Nexus listed branches in its Git page.
+  [09-backlog.md](../09-backlog.md) 9.2; ledger row if old Nexus listed branches in its Git page.

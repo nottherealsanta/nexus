@@ -1840,6 +1840,33 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
 }
 
 #[test]
+fn system_theme_can_be_selected_and_restored() {
+    use nexus_tui::prefs::{self, Overrides, Prefs};
+    let home = std::env::temp_dir().join(format!("nexus-theme-system-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&home).unwrap();
+    let mut saved = Prefs::default();
+    saved.theme.mode = Some("dark".into());
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.apply_prefs(&home, saved, Overrides::default());
+    app.execute("app.settings");
+    press(&mut app, &["t", "h", "e", "m", "e"]);
+    let (_, rows) = draw(&mut app, 120, 36);
+    let text = joined(&rows);
+    assert!(text.contains("system") && text.contains("light") && text.contains("dark"), "{text}");
+    press(&mut app, &["left", "left"]);
+    assert!(app.theme_system);
+    assert_eq!(app.theme.opts.mode, nexus_tui::theme::Options::from_env().mode);
+    app.persist_prefs();
+    let saved = prefs::load(&home);
+    assert_eq!(saved.theme.mode.as_deref(), Some("system"));
+    let mut restored = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    restored.apply_prefs(&home, saved, Overrides::default());
+    assert!(restored.theme_system);
+    assert_eq!(restored.theme.opts.mode, nexus_tui::theme::Options::from_env().mode);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
 fn settings_segments_move_with_left_right_and_esc_steps_back() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
@@ -3028,13 +3055,19 @@ fn ctrl_r_searches_the_prompt_history_and_fills_the_composer() {
     app.composer().set_text("half typed draft");
     press(&mut app, &["ctrl+r"]);
     let all = joined(&draw(&mut app, 120, 40).1);
-    assert!(all.contains("Prompt history") && all.contains("type to find an earlier prompt"), "{all}");
+    assert!(
+        all.contains("Prompt history") && all.contains("type to find an earlier prompt"),
+        "{all}"
+    );
     // Newest first, and the repeated prompt is listed once.
     assert_eq!(all.matches("fix the login bug").count(), 1, "{all}");
     assert!(all.find("run the tests").unwrap() < all.find("fix the login bug").unwrap());
     assert!(all.contains("2 lines"), "{all}");
     press(&mut app, &["r", "e", "l", "e", "a", "s", "e", "enter"]);
-    assert_eq!(app.composer_ref().text(), "write the release notes\nwith two lines");
+    assert_eq!(
+        app.composer_ref().text(),
+        "write the release notes\nwith two lines"
+    );
     assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
     // Esc leaves the draft alone.
     app.composer().set_text("keep me");
@@ -3045,13 +3078,18 @@ fn ctrl_r_searches_the_prompt_history_and_fills_the_composer() {
 #[test]
 fn the_claude_provider_detail_shows_core_s_install_note() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
-    app.state.providers = vec![serde_json::json!({"id": "claude", "label": "Claude", "connected": false, "methods": ["browser"],
-        "note": "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in."})];
+    app.state.providers = vec![
+        serde_json::json!({"id": "claude", "label": "Claude", "connected": false, "methods": ["browser"],
+        "note": "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in."}),
+    ];
     app.execute("app.sign_in");
     press(&mut app, &["down", "enter"]);
     assert_eq!(app.ui.provider_detail.as_deref(), Some("claude"));
     let all = joined(&draw(&mut app, 120, 50).1);
-    assert!(all.contains("Claude Code is not installed") && all.contains("2.1.248"), "{all}");
+    assert!(
+        all.contains("Claude Code is not installed") && all.contains("2.1.248"),
+        "{all}"
+    );
 }
 
 #[test]
@@ -3286,9 +3324,17 @@ fn every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar() {
             let tab = nexus_tui::ui::Tab::from_id(&entry.id).unwrap();
             let rect = app.hits.rect_of(&Target::Tab(tab)).expect("manifest tab");
             assert_eq!(rect.y, 0);
-            assert!(rect.right() <= app.regions.left.unwrap().right(), "{width}: {}", entry.id);
+            assert!(
+                rect.right() <= app.regions.left.unwrap().right(),
+                "{width}: {}",
+                entry.id
+            );
             click(&mut app, rect.x, rect.y);
-            assert_eq!(app.ui.tab, tab, "{width}: {} tab activates on click", entry.id);
+            assert_eq!(
+                app.ui.tab, tab,
+                "{width}: {} tab activates on click",
+                entry.id
+            );
         }
     }
 }
@@ -3721,20 +3767,31 @@ fn the_strip_marks_a_linked_worktree_with_a_muted_icon() {
 }
 
 #[test]
-fn completion_is_a_block_as_wide_as_the_card_with_a_left_rail() {
+fn completion_is_an_overlay_with_a_footer_and_a_focus_bar() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let before = draw(&mut app, 120, 36).1;
     typing(&mut app, "/");
+    let timeline = app.regions.timeline;
     let (buf, rows) = draw(&mut app, 120, 36);
     let r = app.regions.composer;
-    assert!(
-        !rows.iter().any(|row| row.contains("tab complete")),
-        "no key hint row"
+    assert_eq!(
+        app.regions.timeline, timeline,
+        "the overlay takes no layout rows"
     );
-    // The last row sits on the card's top edge, with the rail in the card's column.
-    let last = r.y;
-    assert_eq!(buf[(r.x + 2, last)].symbol(), "\u{2502}");
-    assert_eq!(buf[(r.x + 2, last - 1)].symbol(), "\u{2502}");
-    assert_ne!(buf[(r.x + 1, last)].symbol(), "\u{2502}");
+    // The footer sits on the card's top edge row, left-aligned with the card.
+    let footer = &rows[r.y as usize];
+    assert!(footer.contains("\u{2191}\u{2193} move"), "{footer}");
+    assert!(footer.contains("tab accept") && footer.contains("esc close"));
+    assert!(footer.contains("1 of "), "{footer}");
+    // Eight rows at most, the first selected with the focus bar in the card's column.
+    let top = r.y - 8;
+    assert_eq!(buf[(r.x + 2, top)].symbol(), "\u{258c}");
+    assert_ne!(buf[(r.x + 2, top - 1)].symbol(), "\u{258c}");
+    assert_ne!(buf[(r.x + 1, top)].symbol(), "\u{258c}");
+    // Above the overlay the timeline is untouched.
+    for y in 0..top as usize {
+        assert_eq!(rows[y], before[y], "row {y}");
+    }
 }
 
 /// The left sidebar's text, cut at its width (the centre column starts after it).
@@ -4186,7 +4243,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
                 .map(|rect| (option, rect))
         })
         .collect();
-    assert_eq!(seg_rects.len(), 2, "the Theme row is a segmented control");
+    assert_eq!(seg_rects.len(), 3, "the Theme row is a segmented control");
     let lit: Vec<_> = seg_rects
         .iter()
         .filter(|(_, rect)| buf[(rect.x, rect.y)].bg == selected)
@@ -5973,15 +6030,24 @@ fn git_tab_groups_by_top_level_folder_and_expands_on_enter() {
     let text = lines.join("\n");
     assert!(text.contains("4 files changed · +16 −3"), "{text}");
     assert!(text.contains("2 staged · 2 unstaged"), "{text}");
-    assert!(text.contains("▸ src/  2") && text.contains("▸ plans/  1"), "{text}");
+    assert!(
+        text.contains("▸ src/  2") && text.contains("▸ plans/  1"),
+        "{text}"
+    );
     assert!(!text.contains("x.rs"), "folders start collapsed");
     app.ui.focus = nexus_tui::ui::Focus::Sidebar;
     app.ui.cursor.insert(nexus_tui::ui::Tab::Git, 2);
     press(&mut app, &["enter"]);
     let (_, lines) = draw(&mut app, 120, 36);
     let text = lines.join("\n");
-    assert!(text.contains("▾ src/  2") && text.contains("src/x.rs") && text.contains("src/y.rs"), "{text}");
+    assert!(
+        text.contains("▾ src/  2") && text.contains("src/x.rs") && text.contains("src/y.rs"),
+        "{text}"
+    );
     press(&mut app, &["enter"]);
     let (_, lines) = draw(&mut app, 120, 36);
-    assert!(!lines.join("\n").contains("src/x.rs"), "Enter on the folder collapses it");
+    assert!(
+        !lines.join("\n").contains("src/x.rs"),
+        "Enter on the folder collapses it"
+    );
 }

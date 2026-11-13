@@ -258,6 +258,9 @@ loss.
 activated: `{active: true, entry, tools}`. It is stored in the session's event
 log; the tool result (or the API notice) holds the definitions.
 
+`browser.failed` and `browser.tools_changed` (the browser tools' process) are session-scoped and carry the same payloads as their
+`mcp.*` counterparts.
+
 `session.escalated` records a child's `escalate` call: `{needed, why, parent_id}`.
 
 `session.message_tool` records that `message_session` was exposed by a session's

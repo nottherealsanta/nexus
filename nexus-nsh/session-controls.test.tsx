@@ -170,6 +170,17 @@ describe("archive closes its tab (plan 29)", () => {
     expect(app.shows("id:session-tab-ses_2")).toBe(true);
   });
 
+  test("Enter on a partial slash command runs the highlighted command, not a prompt", async () => {
+    const flags: Flags = {};
+    const app = await openApp(flags);
+    await openSession(app, "ses_1");
+    await app.type("id:composer-input", "/arch");
+    await app.waitFor("id:completion-session.archive");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/ses_1/archive")));
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/prompt"))).toBe(false);
+  });
+
   test("the sidebar row menu's Archive session runs the same command", async () => {
     const flags: Flags = {};
     const app = await openApp(flags);
@@ -183,6 +194,13 @@ describe("archive closes its tab (plan 29)", () => {
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/ses_1/archive")));
     await app.waitUntil(() => !app.shows("id:session-tab-ses_1"), { timeout: 8000 });
     expect(app.shows("id:session-tab-ses_2")).toBe(true);
+  });
+
+  test("the sidebar archive button archives its own session", async () => {
+    const app = await openApp({});
+    await openSession(app, "ses_2", "Chores");
+    await app.press("id:row-archive-ses_1");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/ses_1/archive")));
   });
 
   test("the reducer records the archived root and its descendants", () => {
@@ -512,6 +530,29 @@ describe("session control failure and edge cases", () => {
     await app.press("id:confirm-ok");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "DELETE").length === 2);
     expect(app.value("id:composer-input")).toBe(scenario.queue[0]);
+  });
+
+  test("edit restores every line of a multi-line queued message", async () => {
+    const text = "first line\nsecond line\n\nfourth line";
+    const flags: Flags = { inputs: [{ id: "q1", session_id: "ses_1", mode: "queue", parts: [{ type: "text", text }] }] };
+    const app = await openApp(flags);
+    await openSession(app);
+    await app.wait(150);
+    await app.hover("id:pending-q1");
+    await app.press("id:pending-edit-q1");
+    await app.waitUntil(() => app.value("id:composer-input") === text);
+  });
+
+  test("Enter on a selected multi-line queued row restores every line", async () => {
+    const text = "first line\nsecond line";
+    const flags: Flags = { inputs: [{ id: "q1", session_id: "ses_1", mode: "queue", parts: [{ type: "text", text }] }] };
+    const app = await openApp(flags);
+    await openSession(app);
+    await app.wait(150);
+    await app.type("id:composer-input", "");
+    await app.keyboard.press("up");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.value("id:composer-input") === text);
   });
 
   test("a visible question blocks queued edit and Send next", async () => {

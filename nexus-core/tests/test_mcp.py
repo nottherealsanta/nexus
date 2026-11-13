@@ -416,17 +416,18 @@ async def test_server_switch_and_no_servers_means_no_tools(env):
     await rt.shutdown()
 
 
-async def test_api_lists_servers_without_connecting_and_offers_browser_use_off(env):
+async def test_api_lists_servers_without_connecting_and_offers_no_defaults(env):
     rt, client, _, _, home = env
     write_config(home, '\n[mcp.servers.fx.env]\nSECRET = "hunter2"\n')
     rows = {r["server"]: r for r in (await client.get("/api/mcp")).json()["servers"]}
-    assert rows["fx"]["state"] == "idle" and rows["browser-use"]["state"] == "disabled"
+    # browser-use runs the browser_exec and browser_screenshot tools; it is no longer an offered MCP server.
+    assert rows["fx"]["state"] == "idle" and set(rows) == {"fx"}
     assert "hunter2" not in json.dumps(rows) and rows["fx"]["env_names"] == ["SECRET"]
     one = (await client.get("/api/mcp/fx")).json()
     assert one["tool_names"] == [] and one["log"].endswith("fx.log")
     assert (await client.get("/api/mcp/nope")).status_code == 404
     shown = (await client.get("/api/config")).json()["values"]["mcp"]["servers"]
-    assert shown["browser-use"]["enabled"] is False and shown["fx"]["env"]["SECRET"] != "hunter2"
+    assert set(shown) == {"fx"} and shown["fx"]["env"]["SECRET"] != "hunter2"
     restarted = (await client.post("/api/mcp/fx/restart")).json()
     assert restarted["state"] == "connected" and restarted["tools"] == 5
     assert (await client.get("/api/mcp/fx")).json()["tool_names"][0] in {"echo", "write_note", "evil", "crash"}
@@ -435,7 +436,8 @@ async def test_api_lists_servers_without_connecting_and_offers_browser_use_off(e
 
 async def test_a_disabled_global_name_does_not_hide_an_enabled_project_server(env):
     rt, client, _, workspace, home = env
-    write_config(home)  # fx is enabled; browser-use is only the disabled default
+    write_config(home, f'\n[mcp.servers.browser-use]\ncommand = {json.dumps(sys.executable)}\n'
+                       f'args = [{json.dumps(FIXTURE)}]\nenabled = false\n')  # fx is enabled; browser-use is a disabled global entry
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()
     (workspace / ".mcp.json").write_text(json.dumps({"mcpServers": {"browser-use": entry()}}))
 
@@ -445,11 +447,11 @@ async def test_a_disabled_global_name_does_not_hide_an_enabled_project_server(en
 
     manager = rt.project_mcp(rt.project(project["id"]))
     assert manager.names() == ["browser-use"]
-    assert "browser-use" not in rt.mcp.names()  # the disabled default was never connected for it
+    assert "browser-use" not in rt.mcp.names()  # the disabled global entry was never connected for it
     assert rt.switchable(str(workspace), project["id"]).count("mcp:browser-use") == 1
 
     # The NEW SESSION draft is Core's plan for the next session. The project's enabled
-    # browser-use wins the name and is connected; the disabled global default is never a
+    # browser-use wins the name and is connected; the disabled global entry is never a
     # draft row (it remains in GET /api/mcp for Settings).
     draft = await client.post("/api/draft/context", json={"directory": str(workspace), "agent": "build"})
     assert draft.status_code == 200, draft.text
@@ -469,7 +471,8 @@ async def test_a_disabled_global_name_does_not_hide_an_enabled_project_server(en
 
 async def test_enabling_a_global_server_after_a_project_entry_takes_the_name_back(env):
     rt, client, _, workspace, home = env
-    write_config(home)  # browser-use starts as the disabled default
+    write_config(home, f'\n[mcp.servers.browser-use]\ncommand = {json.dumps(sys.executable)}\n'
+                       f'args = [{json.dumps(FIXTURE)}]\nenabled = false\n')  # browser-use starts as a disabled global entry
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()
     (workspace / ".mcp.json").write_text(json.dumps({"mcpServers": {"browser-use": entry()}}))
     manager = rt.project_mcp(rt.project(project["id"]))
@@ -490,7 +493,8 @@ async def test_enabling_a_global_server_after_a_project_entry_takes_the_name_bac
 
     # Disabling it again frees the name; the project entry is valid but is only started by a
     # new session (or an explicit restart), not by the read that noticed the change.
-    write_config(home)
+    write_config(home, f'\n[mcp.servers.browser-use]\ncommand = {json.dumps(sys.executable)}\n'
+                       f'args = [{json.dumps(FIXTURE)}]\nenabled = false\n')
     await manager.sync()
     definition = manager.definition()
     assert set(definition.servers) == {"browser-use"} and definition.invalid == {}

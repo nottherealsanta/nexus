@@ -59,7 +59,7 @@ function ResourcesBody() {
       <View class="gap-3">
         <ModalTitle title={title()} />
         <If when={!!resourcesError()}>
-          <Text class="text-xs leading-4 text-warning">Could not refresh: {resourcesError()}</Text>
+          <Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning">Could not refresh: {resourcesError()}</Text>
         </If>
         <Scroll style={{ height: Math.min(480, modalBodyHeight()) }} testID="resources-list">
           <View class="gap-2">
@@ -100,8 +100,8 @@ function KernelRow(p: { kernel: any }) {
   return (
     <View testID={`resource-kernel-${k().id}`} class="rounded-(--radius) bg-card px-3 py-2 gap-1">
       <View class="flex-row items-center gap-2 min-w-0">
-        <Text style={{ numberOfLines: 1 }} class="font-mono text-[12.5px] leading-5 text-foreground">{k().id}</Text>
-        <Text class={`text-xs leading-4 ${k().busy ? "text-warning" : "text-muted-foreground"}`}>{k().busy ? "busy" : "idle"}</Text>
+        <Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 font-(family-name:--font-ui) text-foreground">{k().id}</Text>
+        <Text class={`text-[12px] leading-4 font-(family-name:--font-ui) ${k().busy ? "text-warning" : "text-muted-foreground"}`}>{k().busy ? "busy" : "idle"}</Text>
         <Text class={T.meta}>{`${k().cell_count ?? 0} ${k().cell_count === 1 ? "cell" : "cells"}`}</Text>
       </View>
       <Text style={{ numberOfLines: 1 }} class={T.meta}>{`created by ${sessionLabel(k().created_by)} · ${users()} ${users() === 1 ? "user" : "users"} · ${fmtDuration(age())} ago`}</Text>
@@ -122,15 +122,15 @@ function JobRow(p: { job: any; selected: boolean; onSelect: () => void }) {
     <Button onPress={p.onSelect} selected={p.selected} accessibilityLabel={`Shell ${j().id}, ${j().status}`} testID={`resource-job-${j().id}`}
       class={`rounded-(--radius) px-3 py-2 gap-1 items-stretch ${p.selected ? "bg-selection" : "bg-card hover:bg-accent"} ${FOCUS}`}>
       <View class="flex-row items-center gap-2 min-w-0">
-        <Text style={{ numberOfLines: 1 }} class="font-mono text-[12.5px] leading-5 text-foreground">{j().id}</Text>
-        <Text class={`text-xs leading-4 ${statusClass(String(j().status))}`}>{j().status}</Text>
+        <Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 font-(family-name:--font-ui) text-foreground">{j().id}</Text>
+        <Text class={`text-[12px] leading-4 font-(family-name:--font-ui) ${statusClass(String(j().status))}`}>{j().status}</Text>
         <If when={typeof j().exit_code === "number"}><Text class={T.meta}>{`exit ${j().exit_code}`}</Text></If>
         <Text class={T.meta}>{fmtDuration(typeof j().duration_s === "number" ? j().duration_s : 0)}</Text>
         <View class="flex-1" />
         <If when={j().status === "running"}>
           <Button onPress={() => void stopShell(j().id)} accessibilityLabel={`Stop shell ${j().id}`} testID={`resource-job-stop-${j().id}`}
             class={`rounded-(--radius) px-2 min-h-6 justify-center bg-secondary hover:bg-accent ${FOCUS}`}>
-            <Text class="text-xs leading-4 text-warning">Stop</Text>
+            <Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-warning">Stop</Text>
           </Button>
         </If>
       </View>

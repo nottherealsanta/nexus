@@ -101,7 +101,7 @@ call. Neither client has a Settings row for them yet.
 
 `nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
 `context_servers` maps into `[mcp.servers.<name>]`, refusing duplicate names.
-Entries retain their source dialect and are read by the MCP manager ([mcp.md](mcp.md)); `browser-use` is listed switched off when the file does not mention it. The config API
+Entries retain their source dialect and are read by the MCP manager ([mcp.md](mcp.md)); no server is offered by default (browser-use runs the `browser_exec` and `browser_screenshot` tools, not an MCP entry). The config API
 exposes these entries with environment values, headers and credential fields
 masked. PATCH of `mcp.servers` restores unchanged `********` placeholders from
 the existing file. Importing configuration does not start an MCP server.
@@ -175,6 +175,15 @@ The vendors' terms for this use are not verified; Settings › ZMX says so.
 start the local service from `nexus-search/` when the URL is a local address
 (`GET /api/search/service`, `POST /api/search/service/start`). Core never starts it
 on its own.
+
+## `[browser]`
+
+`use_my_chrome` (default `false`; Settings > Browser > Use my Chrome profile) picks the
+browser the `browser_exec` and `browser_screenshot` tools drive. Off: browser-use's own
+Chromium on a temporary profile, never your Chrome. On: your own Chrome, with its tabs
+and sign-ins, once Chrome's remote debugging is on. Core reads it at every browser call,
+and a change replaces a session's running browser at its next call
+([tools.md](tools.md#browser-tools)).
 
 ## `[voice]` and `[speech]`
 

@@ -9,7 +9,7 @@ unusable entry is reported without hiding the others.
 The file is still parsed strictly, because a repository may be committed by
 someone else. A project entry may not shadow an enabled global name, so it
 cannot silently replace the user's own trusted server. A disabled global entry
-(including the offered `browser-use` default) holds no name: the project entry
+holds no name: the project entry
 may use it, and if the global entry is enabled later the collision invalidates
 the project entry at the next read.
 
@@ -185,7 +185,6 @@ class ProjectMcp:
             self._entries,
             self._stamp,
             workspace=self.project_path,
-            defaults=False,
             log_dir=f"projects/{hashlib.sha256(project_id.encode()).hexdigest()[:16]}",
             guard=self._require,
         )
@@ -276,8 +275,8 @@ class ProjectMcp:
                 else:
                     invalid[name] = state.invalid[name]
         warnings.extend(duplicate.message() for duplicate in duplicates)
-        # A project server may not replace an *enabled* global server. A disabled entry (such as
-        # the offered browser-use default) holds no name, so a repository may use it. Enabling that
+        # A project server may not replace an *enabled* global server. A disabled entry holds
+        # no name, so a repository may use it. Enabling that
         # entry later changes the reserved set, invalidates this definition and closes the connection.
         for name in sorted(set(servers) & reserved):
             invalid[name] = f"name {name!r} is already used by a global MCP server; rename this project entry"

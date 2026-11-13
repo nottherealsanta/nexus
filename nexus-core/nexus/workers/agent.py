@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,7 +111,8 @@ class ExternalAgent:
                     assignment = prompt if resume or not self.instructions else "[Nexus assignment instructions]\n" + self.instructions + "\n\n[Assignment]\n" + prompt
                     result = await worker.run(prompt=assignment, model=self.model, workspace=self.workspace,
                                               policy=WorkerPolicy(self.worker["permission_mode"]), emit=emit,
-                                              conversation=resume, effort=self.reasoning_effort)
+                                              conversation=resume,
+                                              effort=None if re.search(r"-(low|medium|high)$", self.model) else self.reasoning_effort)
                 await queue.put(result)
             except asyncio.CancelledError:
                 raise

@@ -27,7 +27,7 @@ export function Modal(p: {
     >
       <View testID={p.testID ? `${p.testID}-shell` : undefined}
         style={{ boxShadow: SHADOW, width: isNarrow() ? "100%" : WIDTH[p.size ?? "medium"], maxWidth: "100%", pointerEvents: "auto" }}
-        class={`${p.tall ? "max-h-[90%]" : "max-h-[70%]"} rounded-(--radius-card) bg-popover overflow-hidden ${p.padded === false ? "" : "p-6"}`}>
+        class={`${p.tall ? "max-h-[90%]" : "max-h-[70%]"} rounded-(--radius-card) bg-popover overflow-hidden ${p.padded === false ? "" : "px-5 pt-[18px] pb-3"}`}>
         <View accessibilityLabel={p.label} testID={p.testID} class="min-h-0">
           {p.children}
         </View>

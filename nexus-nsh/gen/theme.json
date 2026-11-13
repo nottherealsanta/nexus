@@ -5,8 +5,8 @@
       "font-mono": "Monaspace Argon, ui-monospace, monospace",
       "font-code": "Monaspace Argon, ui-monospace, monospace",
       "font-ui": "Google Sans, system-ui, sans-serif",
-      "radius": "0",
-      "radius-card": "0"
+      "radius": "8px",
+      "radius-card": "14px"
     },
     "light": {
       "background": "#f7f7f5",

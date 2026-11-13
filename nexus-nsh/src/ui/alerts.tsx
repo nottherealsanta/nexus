@@ -106,7 +106,7 @@ export function Toasts() {
   return (
     <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-14" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
       <Each of={shown()} key={(t) => t.id}>{(t) => <ToastCard t={t} />}</Each>
-      <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-none bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
+      <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-(--radius) bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
     </View>
   );
 }

@@ -671,8 +671,9 @@ pub enum Target {
     /// An open session's tab in the header, by position.
     SessionTab(usize),
     SessionTabClose(usize),
-    /// The `×` on a hovered sidebar session row: archive it.
+    /// The archive control on a hovered sidebar session row.
     ArchiveSession(String),
+    SessionRowMenu(usize),
     /// The `×` on a hovered project row: remove it (after confirming).
     RemoveProject(String),
     /// The heading row's compact back control: return to the viewed session's root.

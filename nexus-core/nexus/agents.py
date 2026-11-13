@@ -67,7 +67,9 @@ CONTROL_TOOLS = ("session", FORK_TOOL)  # the control tools an agent file may gr
 # is ever bound inside a `code` cell.
 MESSAGE_TOOL = "message_session"  # exposed to a session by its first `session` call, never granted by an agent file
 ESCALATE_TOOL = "escalate"  # every sub agent has it; a root session never does; never granted by an agent file
-NEXUS_CONTROL_TOOLS = ("session", FORK_TOOL, MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree")
+NEXUS_CONTROL_TOOLS = ("session", FORK_TOOL, MESSAGE_TOOL, ESCALATE_TOOL, "expose_workspace_tools", "change_session_directory", "worktree",
+                       # Grantable task tools, but bound to the session's browser process, so not inside `code` either.
+                       "browser_exec", "browser_screenshot")
 
 
 @dataclass(frozen=True, slots=True)

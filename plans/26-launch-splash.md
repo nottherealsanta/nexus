@@ -43,3 +43,13 @@ playing. Remove the progress bar: it never seems to move; it only ever shows `0%
 - Decision: flash starts as soon as `ready` is reached and the 480 ms intro is done (the 200 ms bar fill is gone).
 - Tests: TUI `cargo test splash` (6) and NSH `splash.test.ts` (4) pass. Not verified: cold start in Ghostty / NSH web,
   screenshots and a capture; the NSH sweep cost per tick (30 Text nodes at 30 Hz) is unmeasured.
+
+## Verification follow-up (2026-11-12)
+
+- Re-ran `cargo test splash` (6 passed) and `node scripts/nsh-web.mjs test --target web splash.test.ts`
+  (4 passed); the NSH web build also passed.
+- Started the NSH web host with a fresh scratch home and stopped Core, then opened it in Chromium. The host started
+  Core and the empty-workspace screen appeared, but the splash had finished before it could be captured. This checks
+  startup to a live screen, **not** the animation, first frame or transition. The scratch daemon and host were stopped.
+- Still open: record and inspect the cold-start animation in Ghostty and NSH web, including a slow-start wait and
+  the transition. The sweep's runtime cost has not been measured.

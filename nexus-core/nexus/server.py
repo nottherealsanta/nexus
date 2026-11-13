@@ -28,6 +28,7 @@ are in docs/api.md.
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/voice | offline voice model status |
 | GET | /api/search/service | state of the local SearXNG behind `web_search` |
+| GET | /api/browser | what the browser tools need here: `uvx`, a browser, and the mode (`[browser] use_my_chrome`) |
 | POST | /api/search/service/start | start it and wait until it answers |
 | POST | /api/voice/transcribe | mono 16 kHz PCM16 WAV → `{text}`; `?partial=1` never queues |
 | POST | /api/voice/stt/download | consented, pinned STT model download |
@@ -56,6 +57,7 @@ are in docs/api.md.
 | POST | /api/session/{id}/prompt | `{text?, images?, mode?}` → 202; `send` is 409 while a turn runs, `steer`/`queue` return an input id, `interrupt` cancels the turn and runs this first (idle: `send`) |
 | POST | /api/session/{id}/continue | start a turn from the stored context with no new user message → 202 |
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
+| POST | /api/session/{id}/seen | a client is showing the session: publish a live-only `session.seen` so every client clears its unread mark → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
 | GET | /api/session/{id}/event | stored events: `?after=<event id>&limit=&type=a,b` (the durable log) |
 | GET | /api/session/{id}/turn | turn summaries (usage, model, timings, retries) and the spend ledger: `?after=` or `?before=<turn id>&limit=` |
@@ -149,6 +151,7 @@ from .voice.model import VoiceError
 from .voice.speech import SpeechError, SpeechService, final_answer
 from .workers.registry import unavailable as zmx_unavailable
 from .workers.registry import visible as zmx_visible
+from .workers.registry import warm_agy_models as zmx_warm_agy_models
 
 VERSION = version("nexus10")
 MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room for a coalesced line
@@ -975,6 +978,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         freed = voice_download.remove(repo)
         return JSONResponse({"repo": repo, "freed": freed, **voice_status_module.status()[target]})
 
+    async def browser_status(request: Request) -> Response:
+        from . import browser as browser_control
+        use_my_chrome = bool(ConfigFile().read()["values"]["browser"]["use_my_chrome"])
+        return JSONResponse(await asyncio.to_thread(browser_control.requirements, use_my_chrome))
+
     async def search_service_status(request: Request) -> Response:
         from . import searchservice
         return JSONResponse(await asyncio.to_thread(searchservice.status))
@@ -1642,6 +1650,10 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         await runtime.interrupt(p(request, "id"))
         return Response(status_code=204)
 
+    async def session_seen(request: Request) -> Response:
+        runtime.mark_seen(p(request, "id"))
+        return Response(status_code=204)
+
     async def messages(request: Request) -> Response:
         runtime.session(p(request, "id"))
         if "limit" in request.query_params or "before" in request.query_params:  # a page: K6
@@ -1969,6 +1981,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/voice/speak", route(voice_speak), methods=["POST"]),
         Route("/api/voice/speak/stop", route(voice_speak_stop), methods=["POST"]),
         Route("/api/search/service", route(search_service_status)),
+        Route("/api/browser", route(browser_status)),
         Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
         *(Route(f"/api/mcp/{{name}}/{what}", route(mcp_extra_route(what)))
@@ -2023,6 +2036,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/input/{iid}/move", route(move_input), methods=["POST"]),
         Route("/api/session/{id}/continue", route(session_continue), methods=["POST"]),
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
+        Route("/api/session/{id}/seen", route(session_seen), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),
         Route("/api/session/{id}/event", route(stored_events)),
         Route("/api/session/{id}/diagnostics", route(diagnostics), methods=["GET", "POST"]),
@@ -2067,6 +2081,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await runtime.start_maintenance()
+        with suppress(Exception):
+            zmx_warm_agy_models()
         watcher = asyncio.create_task(watch_config())
         usage_watcher = asyncio.create_task(usage_cache.run())
         try:

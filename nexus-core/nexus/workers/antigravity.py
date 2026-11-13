@@ -95,6 +95,11 @@ class StreamParser:
                 session = event.get("conversation_id")
                 self.session_id = session[:200] if isinstance(session, str) else None
                 events.append(WorkerEvent("init", {**data, "conversation_id": self.session_id}))
+        elif kind == "result" and not self.initialized and data.get("status") != "SUCCESS":
+            self.finished = True
+            self._result(data)
+            self.error = diagnostic_text(str(data.get("error") or self.error).encode("utf-8", "replace"))[:500]
+            events.append(WorkerEvent("result", data))
         elif kind in ("step_update", "result") and not self.initialized:
             self.error = "agy emitted work or success before init"
         elif kind == "step_update":

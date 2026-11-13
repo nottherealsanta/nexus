@@ -121,13 +121,11 @@ fn parse_args() -> Result<Args, String> {
             "--ascii" => opts.ascii = true,
             "--reduced-motion" => opts.reduced_motion = true,
             "--once" => a.once = true,
-            "--open" => {
-                match it.next().as_deref() {
-                    Some("first") => a.open_first = true,
-                    Some(id) if !id.starts_with('-') => a.open_id = Some(id.to_owned()),
-                    _ => return Err("--open takes: first or a session id".into()),
-                }
-            }
+            "--open" => match it.next().as_deref() {
+                Some("first") => a.open_first = true,
+                Some(id) if !id.starts_with('-') => a.open_id = Some(id.to_owned()),
+                _ => return Err("--open takes: first or a session id".into()),
+            },
             "--svg" => a.svg = true,
             "--keys" => a.keys = keys::parse_spec(&it.next().ok_or("--keys needs a spec")?)?,
             "--name" => a.name = Some(it.next().ok_or("--name needs a file stem")?),
@@ -938,7 +936,12 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
     }
     if args.open_first || args.open_id.is_some() {
         let first = match &args.open_id {
-            Some(id) => app.state.model.sessions.contains_key(id).then(|| id.clone()),
+            Some(id) => app
+                .state
+                .model
+                .sessions
+                .contains_key(id)
+                .then(|| id.clone()),
             None => app
                 .state
                 .model

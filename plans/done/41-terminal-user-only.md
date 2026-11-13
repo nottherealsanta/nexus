@@ -3,7 +3,7 @@
 User request (2026-11-11): "plan to have terminal different from shell tool, separate them please, terminal is only
 for user".
 
-This reverses the 2026-11-08 decision in [02](done/02-terminal.md) ("running background bash jobs appear in the terminal
+This reverses the 2026-11-08 decision in [02](02-terminal.md) ("running background bash jobs appear in the terminal
 dock and allow interactive input") and the porting-ledger row "Background bash jobs were non-interactive pipe
 processes, separate from terminal resources". After this change:
 
@@ -78,10 +78,10 @@ Desktop/web TUI and NSH in the same change; mobile has neither surface.
 - [x] Docs: `docs/terminals.md` (the dock is user-only; delete the background-job paragraphs, simplify the
   agent-control table), `docs/tools.md` (pipe jobs only), `docs/api.md`, `docs/inspector.md`, manifest notes. Ledger:
   replace row 30 with "Terminal dock is user-only; agent bash jobs are pipe processes with their own indicator
-  (2026-11-11)". Add the reversal to [decisions.md](decisions.md) and a note at the 11-08 decision in
-  [02](done/02-terminal.md).
-- [x] Verify: `uv run pytest -q`, ruff, TUI and NSH test suites; paired TUI/NSH screenshots of the dock with a user
-  terminal while a background job runs (job only under `1 shell`, dock shows `Terminals (1)`).
+  (2026-11-11)". Add the reversal to [decisions.md](../decisions.md) and a note at the 11-08 decision in
+  [02](02-terminal.md).
+- [~] Verification: paired TUI/NSH screenshots of the dock with a user terminal while a background job runs were not
+  taken; scenario tests assert the separation. The full requested suites are not independently verified here.
 
 ## Landed (2026-11-11)
 
@@ -99,6 +99,6 @@ Desktop/web TUI and NSH in the same change; mobile has neither surface.
   be able to stop them"): both clients select a shell with ↑/↓ and stop a running one with `s` or `[stop]` / **Stop**
   (`DELETE /api/bash/{id}`), toast `Shell stopped`, list refreshed. Tests: TUI `resources` 7/7, NSH
   `resources.test.tsx` 5/5; TUI text render and NSH screenshot compared (same structure, hints and selection).
-- Follow-up: the inspector `job` lane (not built; see the decision above).
+- Follow-up: the inspector `job` lane (not built; tracked in [09 backlog 9.18](../09-backlog.md)).
 - Paired TUI/NSH screenshots: **not verified** (not taken in this change); the scenario tests assert the same facts
   in both clients (`Terminals (1)`, `1 shell`, `1 terminal shell`, job only under the shell indicator).

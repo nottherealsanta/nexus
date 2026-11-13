@@ -32,6 +32,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "usage": {"refresh_minutes": 10},
     "ui": {"detail": "medium", "reduced_motion": False, "favorite_models": []},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
+    "browser": {"use_my_chrome": False},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
     "voice": {"stt_model": "moondream/parakeet-redux"},
     "speech": {"tts_model": "gradium/phonon-31m-en"},
@@ -71,6 +72,9 @@ SCHEMA: dict[str, dict[str, Any]] = {
                                            "0 turns automatic archiving off"},
     "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
     "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
+    "browser.use_my_chrome": {"type": "boolean", "description": "off: browser_exec and browser_screenshot use browser-use's own "
+                              "Chromium on a temporary profile; on: they drive your own Chrome (its tabs and sign-ins) when "
+                              "Chrome's remote debugging is on. Read at every browser call"},
     "mcp.full_definitions": {"type": "boolean", "description": "new sessions put every MCP tool's full definition in the context; "
                              "off lists names and descriptions (or only servers past max_listed_tools) and the model uses mcp_tool_search"},
     "mcp.max_listed_tools": {"type": "integer", "minimum": 1, "maximum": 1000,
@@ -177,6 +181,8 @@ def _valid(section: str, key: str, value: Any) -> bool:
         return isinstance(value, str) and value in allowed
     if section in ("voice", "speech"):
         return isinstance(value, str) and bool(re.fullmatch(r"[\w.-]+/[\w.-]+", value))
+    if section == "browser":
+        return isinstance(value, bool)
     if section == "mcp":
         if key == "full_definitions":
             return isinstance(value, bool)
@@ -281,8 +287,7 @@ class ConfigFile:
                         errors.append(f"{section}.{key}: invalid value")
         mcp = doc.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers", {}), dict):
-            from .mcp.config import with_defaults
-            values["mcp"]["servers"] = _mask(with_defaults(_plain(mcp.get("servers", {}))))
+            values["mcp"]["servers"] = _mask(_plain(mcp.get("servers", {})))
         else:
             errors.append("mcp.servers: expected a table")
         hooks_table = doc.get("hooks", {})

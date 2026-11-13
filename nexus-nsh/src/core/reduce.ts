@@ -246,7 +246,7 @@ export class Model {
         v.scratch = [];
       } else {
         // A live provider error goes once the turn continues or another message arrives.
-        if (e.type === "step_start" || e.type === "message.added") v.scratch = v.scratch.filter((x) => x.type !== "session.error" && x.type !== "retry_exhausted");
+        if (e.type === "step_start" || e.type === "message.added") v.scratch = v.scratch.filter((x) => !["session.error", "retry_scheduled", "retry_started", "retry_exhausted"].includes(x.type));
         const kept = scratchOf(e);
         if (kept) v.scratch.push(kept);
       }
@@ -285,6 +285,9 @@ export class Model {
         this.sessions.set(ses.id, ses);
         break;
       }
+      case "session.seen": // another client (or this one) showed the session: unread is cleared everywhere
+        for (const id of [d.session, d.root, sid]) if (typeof id === "string") this.unreadSessions.delete(id);
+        break;
       case "session.deleted": this.dropSession(d.id ?? sid); break;
       case "session.archived":
       case "session.unarchived":

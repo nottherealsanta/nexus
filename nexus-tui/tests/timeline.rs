@@ -960,6 +960,41 @@ fn a_retry_sequence_leaves_only_the_latest_outcome_and_a_count() {
     assert_eq!(drawn[err].matches("HTTP 429").count(), 1, "{text}");
 }
 
+#[test]
+fn a_retry_notice_goes_once_the_turn_continues() {
+    let mut a = app();
+    fn send(a: &mut nexus_tui::app::App, id: u64, kind: &str, data: serde_json::Value) {
+        let v = serde_json::json!({"id": id, "type": kind, "session_id": SESSION,
+            "cursor": format!("log_c915bfc9b6d826c4:{id}"), "data": data});
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value(kind, None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    send(
+        &mut a,
+        500,
+        "retry_scheduled",
+        serde_json::json!({"attempt": 1, "max_attempts": 2, "delay": 0.7,
+                           "reason": "copilot: network error: ConnectTimeout"}),
+    );
+    send(
+        &mut a,
+        501,
+        "retry_started",
+        serde_json::json!({"attempt": 2}),
+    );
+    assert!(
+        nexus_tui::timeline::session_outcome(a.state.model.selected.as_ref().unwrap()).is_some()
+    );
+    send(&mut a, 502, "step_start", serde_json::json!({"step": 2}));
+    assert_eq!(
+        nexus_tui::timeline::session_outcome(a.state.model.selected.as_ref().unwrap()),
+        None
+    );
+}
+
 /// Replace the viewed session's messages with one assistant turn of tool calls,
 /// each `(name, result output)`; a `None` output leaves the call running.
 fn calls(a: &mut nexus_tui::app::App, tools: &[(&str, Option<&str>)]) {
@@ -1304,6 +1339,36 @@ fn the_turn_footers_usage_units_are_fainter_than_their_counts() {
 }
 
 #[test]
+fn code_detail_shows_source_and_keeps_output_in_raw() {
+    let mut a = app();
+    let call = serde_json::json!({"id": 80, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:80",
+        "data": {"id": "msg_code", "session_id": SESSION, "seq": 20, "created": 1793113420.0,
+                 "role": "assistant", "parts": [{"type": "tool_call", "id": "call_code", "name": "code",
+                 "arguments": "{\"code\":\"first()\\nsecond()\\nthird()\"}"}]}});
+    let result = serde_json::json!({"id": 81, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:81",
+        "data": {"id": "msg_code_result", "session_id": SESSION, "seq": 21, "created": 1793113421.0,
+                 "role": "tool", "parts": [{"type": "tool_result", "call_id": "call_code",
+                 "output": "large result", "is_error": false}]}});
+    for v in [call, result] {
+        if let Ok(nexus_tui::api::Frame::Event(e)) = nexus_tui::api::Frame::from_value("message.added", None, &v) {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    rows(&mut a);
+    a.ui.focus = Focus::Timeline;
+    a.ui.timeline_sel = a.blocks().iter().position(|b| b.kind == nexus_tui::timeline::BlockKind::Group);
+    a.execute("tool.expand_toggle");
+    rows(&mut a);
+    a.ui.timeline_sel = a.blocks().iter().position(|b| b.kind == nexus_tui::timeline::BlockKind::Tool);
+    a.execute("tool.expand_toggle");
+    let text = nexus_tui::timeline::build(&a, &a.theme, 0, 100).lines.iter().map(|line| line_text(line)).collect::<Vec<_>>().join("\n");
+    assert!(text.contains("third()") && text.contains("Output hidden · raw to view"), "{text}");
+    assert!(!text.contains("large result"), "{text}");
+}
+
+#[test]
 fn long_tool_output_keeps_head_and_tail_and_show_all_restores_the_middle() {
     let mut a = app();
     let output: String = (1..=500).map(|n| format!("line {n}\n")).collect();
@@ -1452,11 +1517,21 @@ fn following_anchors_and_jump_to_latest_hold_at_every_size() {
 }
 
 fn add_tool(a: &mut nexus_tui::app::App, n: i64, command: &str, output: &str) {
+    add_named_tool(a, n, "bash", serde_json::json!({"command": command}), output);
+}
+
+fn add_named_tool(
+    a: &mut nexus_tui::app::App,
+    n: i64,
+    name: &str,
+    args: serde_json::Value,
+    output: &str,
+) {
     let call = serde_json::json!({"id": 2000 + n * 10, "type": "message.added", "session_id": SESSION,
         "cursor": format!("log_c915bfc9b6d826c4:{}", 2000 + n * 10),
         "data": {"id": format!("msg_t{n}"), "session_id": SESSION, "seq": 200 + n * 2, "created": 1793113600.0 + n as f64,
-                 "role": "assistant", "parts": [{"type": "tool_call", "id": format!("call_t{n}"), "name": "bash",
-                 "arguments": serde_json::json!({"command": command}).to_string()}]}});
+                 "role": "assistant", "parts": [{"type": "tool_call", "id": format!("call_t{n}"), "name": name,
+                 "arguments": args.to_string()}]}});
     let result = serde_json::json!({"id": 2001 + n * 10, "type": "message.added", "session_id": SESSION,
         "cursor": format!("log_c915bfc9b6d826c4:{}", 2001 + n * 10),
         "data": {"id": format!("msg_r{n}"), "session_id": SESSION, "seq": 201 + n * 2, "created": 1793113600.5 + n as f64,
@@ -1998,7 +2073,7 @@ fn the_sticky_header_pins_the_band_and_the_next_band_pushes_it_up() {
 
 #[test]
 fn a_finished_group_flashes_its_glyph_for_six_frames_unless_motion_is_reduced() {
-    use nexus_tui::timeline::{build, BlockKind, flash_frames};
+    use nexus_tui::timeline::{build, flash_frames, BlockKind};
     for reduced in [false, true] {
         let mut a = app();
         let mut options = a.theme.opts;
@@ -2065,7 +2140,10 @@ fn background_shell_completion_is_a_notice_without_a_user_turn() {
         .messages
         .push(message);
     let text = rows(&mut a).join("\n");
-    assert!(text.contains("$ Background Shell Done: 'make test'"), "{text}");
+    assert!(
+        text.contains("$ Background Shell Done: 'make test'"),
+        "{text}"
+    );
     assert!(!text.contains("exit code 0"));
     let index = a
         .blocks()
@@ -2992,4 +3070,25 @@ fn a_fork_call_renders_as_a_tool_row_in_the_parent() {
     assert_eq!(link.kind, BlockKind::Child);
     assert_eq!(link.target.as_deref(), Some("ses_f"));
     assert!(line_text(&linked.lines[link.start]).contains("open fork"));
+}
+
+
+#[test]
+fn browser_tools_have_labels_subjects_and_the_web_glyph() {
+    use nexus_tui::ui::Detail;
+    let mut a = app();
+    a.ui.detail = Detail::High;
+    add_named_tool(
+        &mut a,
+        1,
+        "browser_exec",
+        serde_json::json!({"code": "\nnew_tab('https://example.com')\nprint(page_info())"}),
+        "ok",
+    );
+    add_named_tool(&mut a, 2, "browser_screenshot", serde_json::json!({"full": true}), "img");
+    let shown = rows(&mut a).join("\n");
+    assert!(shown.contains("↗ Browser") && shown.contains("new_tab('https://example.com')"), "{shown}");
+    assert!(!shown.contains("browser_exec"), "{shown}");
+    assert!(shown.contains("Screenshot") && shown.contains("full page"), "{shown}");
+    assert_eq!(nexus_tui::paint::verb_glyph("browser_exec", false), "↗");
 }

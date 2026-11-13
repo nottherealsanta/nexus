@@ -582,7 +582,7 @@ impl<'a> Walker<'a> {
                 }
                 self.flush();
             }
-            if head && i + 1 == table.head_rows {
+            if i + 1 < table.rows.len() {
                 self.cur.push(rule("├", "┼", "┤"));
                 self.flush();
             }
@@ -1140,6 +1140,29 @@ mod tests {
             .chain(&row.spans)
             .map(|span| span.content.as_ref())
             .collect()
+    }
+
+    #[test]
+    fn table_separates_every_row_and_keeps_the_header_bold() {
+        let palette = Palette::from_theme(&Theme::new(Options::default()));
+        let rows = lines(
+            "| | TUI | NSH |\n|---|---|---|\n| Changed | yes | yes |\n| Tests | pass | pass |",
+            &palette,
+            80,
+        );
+        let text: Vec<String> = rows.iter().map(row_text).collect();
+        assert_eq!(text.iter().filter(|line| line.starts_with('├')).count(), 2);
+        assert!(text.iter().any(|line| line.starts_with('┌')));
+        assert!(text.iter().any(|line| line.starts_with('└')));
+        let header = rows
+            .iter()
+            .find(|row| row_text(row).contains("TUI"))
+            .unwrap();
+        assert!(header
+            .spans
+            .iter()
+            .any(|span| span.content.contains("TUI")
+                && span.style.add_modifier.contains(Modifier::BOLD)));
     }
 
     #[test]

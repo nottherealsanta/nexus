@@ -17,7 +17,7 @@ with the same operations in both. Not the old `nexus nsh tui` launcher and not a
 [reports/section14/spikes.md](../../reports/section14/spikes.md) (PTY + pyte, `vt100`, `@xterm/headless` all proven in
 spikes) and the archived 14.2/14.3.
 
-**Reversed 2026-11-11 (user, [plan 41](../41-terminal-user-only.md)): the dock is user-only and agent bash jobs are pipe processes again with their own `N shell` indicator; the paragraph below is history.**
+**Reversed 2026-11-11 (user, [plan 41](41-terminal-user-only.md)): the dock is user-only and agent bash jobs are pipe processes again with their own `N shell` indicator; the paragraph below is history.**
 
 Decision (user, 2026-11-08): running background bash jobs appear in the terminal dock and allow interactive input, rather than being a separate shell indicator. **Core integration implemented:** project-backed jobs share one PTY with the terminal service, preserving `bash_output`, `bash_kill`, output limits, completion notices and explicit single-writer control. Job metadata links `terminal_id`; terminal metadata links `background_job_id`. Without a terminal service/project, the legacy non-interactive pipe fallback remains. PTY echo/CRLF/escape bytes may appear in captured job output. Focused Core terminal/job/inspector tests: **58 passed**. Paired real-Core smoke checks and screenshots pass; the previously reported TUI 404 was not reproduced. [Terminal work and remaining release gates](../../reports/terminal-work-2026-11-08.md).
 

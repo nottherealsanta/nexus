@@ -76,7 +76,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
   TypeScript, Go, C, HTML, CSS, YAML, JSON, TOML, Shell, Markdown); anything else opens as plain text.
 - [ ] Tests: TUI unit tests for the vendored additions and key mapping, PTY screenshots at 80×24, 120×40 and 160×48,
   `--bench` typing on a 1 MiB file; NSH save and stale-file paths in the browser harness.
-- [x] Sidebar tabs: the TUI tab strip now sizes each tab by its label (Sessions 10 cells, then 8-cell strides), so `[Git]` fits the default 28-cell sidebar; NSH already shows all three icons. Test `every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar` (28 and 40) passes; paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Plans [33](done/33-remove-git-from-right-sidebar.md) and [40](40-git-tab-summary.md) change the tab's body, not its tab; untouched here.
+- [x] Sidebar tabs: the TUI tab strip now sizes each tab by its label (Sessions 10 cells, then 8-cell strides), so `[Git]` fits the default 28-cell sidebar; NSH already shows all three icons. Test `every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar` (28 and 40) passes; paired captures in [reports/ui-backlog-2026-11-11](../reports/ui-backlog-2026-11-11/). Plans [33](done/33-remove-git-from-right-sidebar.md) and [40](done/40-git-tab-summary.md) change the tab's body, not its tab; untouched here.
 - [~] New file, new folder, rename and delete are implemented in both clients through shared commands, row menus and prompts. Core confinement/count and focused client tests pass; new-file/delete dialog screenshots compared in `reports/files-operations/`. Broader rename/folder interaction coverage remains. Delete asks first,
   gives the item count for a folder, and is permanent.
 - [x] Core file mutations and folder counting implemented with confinement, symlink/race checks, shared tool/API file lock, global workspace events and focused tests: `POST /api/project/{id}/files?session=` with
@@ -358,8 +358,11 @@ The feature landed on 2026-11-06 (Core order, move API, drag and menu in both cl
   enforced without changing a cached prompt or granting permissions.
 - [~] (Core 11-11: read-only `GET /api/mcp/{name}/resources|resource|prompts|prompt` and the project-scoped twins, fenced, bounded, tested against the stdio fixture; no model tool and no client UI yet, those need a decision on how a model should reach them) MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
   untrusted and visible as received.
-- [ ] Exercise browser-use (the pinned `uvx` package, `nexus-browser/`) in a real model session, including server
-  failure, screenshots and its LLM-backed tools.
+- [~] (11-13: browser-use runs `browser_exec` and `browser_screenshot`, ordinary task tools, no longer an MCP
+  default; its own Chromium profile unless Settings > Browser allows the user's Chrome; a real model session ran
+  both on a live site; a dead process restarts on the next call with a notice; TUI and NSH rows and the setting
+  are tested in both) Exercise browser-use in a real model session. Open: driving the user's Chrome with
+  `use_my_chrome` on and remote debugging on (needs the user).
 - [x] (verified 11-11: `test_a_disabled_global_name_does_not_hide_an_enabled_project_server` and `test_enabling_a_global_server_after_a_project_entry_takes_the_name_back` pass) Verify the new-session inventory prefers an enabled project MCP row over a same-named disabled global row
   (the `browser-use` case).
 - [~] (Core 11-11: `SessionEnd` fires on archive (background, payload `reason`), `bash(...)` matchers see every part of a compound command, `PostToolUse` fires with `is_error` after a denied approval, all tested; open: Settings editing, timeline rows, a real-model blocking hook) Hooks: edit them in Settings, render hook rows in both timelines, fire `SessionEnd` on archive; test
@@ -436,6 +439,9 @@ Decided 2026-11-04: finished sessions' events are compacted, announced by a `ses
 ## 9.18 Inspector hardening (old 14.1)
 
 The native inspector first pass landed 11-06; these are the remaining gates.
+
+- [ ] Add a background `job` Timing lane, deferred from [plan 41](done/41-terminal-user-only.md). Jobs record
+  `turn_id`/`tool_call_id`, but live only in daemon memory; decide retention and connect the inspector to job data.
 
 - [~] **Shared navigation and readable views.** (Clients landed in TUI and NSH: Questions view, per-view state kept across refresh/view/session switches, tree selector, `q`/`kind`/`status`/`type` filters, `summary` rows with expandable `detail` and on-demand `/inspect/record`. Pending: links from Questions into the kernel/job modal.) Preserve selection, zoom, expanded details and scroll
   while refreshing or switching back. Add a session/tree selector and search/filter by request, tool,
@@ -559,8 +565,8 @@ Deferred (not in this plan's scope). Kept whole.
   uploads/download destinations, camera/microphone/location, clipboard and popups; reject access outside
   the approved policy. Existing authenticated pages may contain private data: attaching their contents
   to a model is always an explicit, visible action.
-- [ ] **Reuse automation rather than launch a second browser.** Review the pinned browser-use MCP
-  integration in `nexus-browser/`. Establish whether it can target the exact managed context/tab, with
+- [ ] **Reuse automation rather than launch a second browser.** Review the pinned browser-use
+  integration (`browser_exec` / `browser_screenshot`, `nexus/browser.py`). Establish whether it can target the exact managed context/tab, with
   stable IDs and explicit control ownership. If it cannot, design an adapter or expose the limitation;
   do not show one page while tools operate another. Preserve current MCP users and keep any LLM-backed
   browser helper's model access, data sharing and cost disclosed and opt-in.

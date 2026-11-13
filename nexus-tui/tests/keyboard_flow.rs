@@ -121,12 +121,17 @@ fn the_focused_rail_project_shows_its_full_name_and_counts_and_enter_opens_it() 
     let name = app.state.model.projects[&name].name.clone();
     let text = overview_text(&mut app);
     assert!(text.contains(&name), "{text}");
-    assert!(text.contains("attention") && text.contains("idle"), "{text}");
+    assert!(
+        text.contains("attention") && text.contains("idle"),
+        "{text}"
+    );
     press(&mut app, &["enter"]);
     assert_eq!((app.ui.focus, app.ui.tab), (Focus::Sidebar, Tab::Sessions));
     assert_eq!(
         app.current_project().as_deref(),
-        app.rail_project_ids().get(app.rail_cursor()).map(|s| s.as_str())
+        app.rail_project_ids()
+            .get(app.rail_cursor())
+            .map(|s| s.as_str())
     );
 }
 

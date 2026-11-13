@@ -28,10 +28,11 @@ const tabWidth = () => {
   const unit = textCellPoints();
   return workspaceTabCells(titles, tabRoom() / unit || 160) * unit;
 };
-const tabHeight = () => isNarrow() ? "h-10" : "h-7";
+const tabHeight = () => isNarrow() ? "h-10" : "h-8";
 const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
 /** The title's dedicated cells, after status, padding and the fixed close slot. */
 export const tabTitleRoomCells = (widthPx: number) => Math.max(1, Math.round(widthPx / textCellPoints()) - 7);
+export const tabTitleOverflow = (titleWidth: number, roomWidth: number) => Math.max(0, titleWidth - roomWidth);
 
 /** Hover marquee timing: a short hold, then the title's overflow at a readable speed. */
 const MARQUEE_HOLD_MS = 600;
@@ -60,10 +61,11 @@ function SessionTab(p: { id: string }) {
   const title = () => session()?.title || "Untitled";
   const hovered = signal(false);
   const shift = signal(0);
+  const measuredTitleWidth = signal(0);
   const reduced = () => !!config()?.values?.ui?.reduced_motion;
   // The shared tab width leaves seven cells for the status mark, close button and padding.
   const titleRoom = () => tabTitleRoomCells(tabWidth());
-  const titleOverflow = () => Math.max(0, (Array.from(title()).length - titleRoom()) * textCellPoints());
+  const titleOverflow = () => tabTitleOverflow(measuredTitleWidth(), titleRoom() * textCellPoints());
   effect(() => {
     const overflow = titleOverflow();
     // Touch has no hover to leave behind, and the reduced-motion setting is the
@@ -106,13 +108,15 @@ function SessionTab(p: { id: string }) {
             <Spinner class={`shrink-0 ${TS.base} ${status().tone}`} label={status().label} />
           </If>
         </If>
+        <Text accessible={false} onLayout={(b: any) => measuredTitleWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
+          style={{ numberOfLines: 1, opacity: 0 }} class={`absolute ${TS.secondary} ${active() ? "font-medium" : ""}`}>{title()}</Text>
         <View testID={`tab-title-clip-${p.id}`} class="shrink-0 overflow-hidden" style={{ width: titleRoom() * textCellPoints() }}>
           <Text testID={`tab-title-${p.id}`} accessibilityLabel={title()}
-            style={{ numberOfLines: 1, width: titleOverflow() > 0 ? Array.from(title()).length * textCellPoints() : undefined, transform: shift() ? `translateX(${-shift()}px)` : undefined }}
-            class={`${TS.base} ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
+            style={{ numberOfLines: 1, width: titleOverflow() > 0 ? measuredTitleWidth() : undefined, transform: shift() ? `translateX(${-shift()}px)` : undefined }}
+            class={`${TS.secondary} ${active() ? "font-medium text-foreground" : "text-muted-foreground"}`}>{title()}</Text>
         </View>
       </Button>
-      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`w-6 shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10" : "h-7"} text-muted-foreground hover:text-foreground ${FOCUS}`}>
+      <Button onPress={() => closeTab(p.id)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${p.id}`} class={`w-6 shrink-0 items-center justify-center rounded-r-(--radius) ${isNarrow() ? "h-10" : "h-8"} text-muted-foreground hover:text-foreground ${FOCUS}`}>
         <Icon name="x" size={14} class="tint-muted-foreground" />
       </Button>
     </View>
@@ -131,10 +135,10 @@ function WorkspaceTabs() {
         <Each of={ids()} key={(id) => id}>{(id) => <SessionTab id={id()} />}</Each>
         <If when={current() === "new_session" || (current() === "session" && !viewed())}>
           <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" style={{ width: tabWidth() }} class={`${tabBox()} bg-background px-2.5 ${FOCUS}`}>
-            <Text style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.base} font-medium text-foreground`}>New session</Text>
+            <Text style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.secondary} font-medium text-foreground`}>New session</Text>
           </Button>
         </If>
-        <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
+        <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-8"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
           <Icon name="plus" size={14} class="tint-muted-foreground" />
         </Button>
         </View>

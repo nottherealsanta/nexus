@@ -160,11 +160,11 @@ registerProcessor("nexus-dictation-capture", NexusDictationProcessor);
 
 async function openRecorder(onSamples: (samples: Float32Array) => void): Promise<{ rate: number; recorder: Recorder }> {
   const root = environment();
-  const getUserMedia = root.navigator?.mediaDevices?.getUserMedia;
+  const devices = root.navigator?.mediaDevices;
   const Context = root.AudioContext ?? root.webkitAudioContext;
-  if (!getUserMedia) throw new Error("Microphone capture is not available in this client");
+  if (!devices?.getUserMedia) throw new Error("Microphone capture is not available in this client");
   if (!Context) throw new Error("Web Audio is not available in this client");
-  const stream = await getUserMedia({ audio: { channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  const stream = await devices.getUserMedia({ audio: { channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   let context: AudioContextLike | null = null;
   let source: AudioNodeLike | null = null;
   let processor: AudioNodeLike | null = null;

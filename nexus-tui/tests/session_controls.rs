@@ -190,6 +190,25 @@ fn archive_is_a_slash_command_in_the_shared_manifest() {
 }
 
 #[test]
+fn hovered_session_row_has_stacked_archive_and_menu_actions() {
+    let mut app = app();
+    draw(&mut app, 120, 36);
+    let row = app.hits.rect_of(&Target::SideRow(0)).unwrap();
+    app.mouse = Some((row.x + 3, row.y));
+    draw(&mut app, 120, 36);
+    let archive = app.hits.rect_of(&Target::ArchiveSession(SESSION.to_owned())).unwrap();
+    let menu = app.hits.rect_of(&Target::SessionRowMenu(0)).unwrap();
+    assert_eq!(archive.x, menu.x);
+    assert_eq!(archive.y + 1, menu.y);
+    click(&mut app, menu.x, menu.y);
+    assert!(app.palette_items().iter().any(|item| item.label == "Archive session"));
+    app.ui.overlay = None;
+    draw(&mut app, 120, 36);
+    click(&mut app, archive.x, archive.y);
+    assert!(app.effects.iter().any(|effect| matches!(effect, Effect::Api(ApiCall::Archive { session, archived: true }) if session == SESSION)));
+}
+
+#[test]
 fn row_menu_archive_refusal_keeps_the_tab_and_explains_why() {
     let mut app = app();
     draw(&mut app, 120, 36);
@@ -1115,4 +1134,23 @@ fn a_failed_answer_keeps_the_answer_and_allows_one_retry() {
     assert_eq!(after.last(), before.last());
     press(&mut app, &["enter"]);
     assert_eq!(sent_answers(&app).len(), after.len());
+}
+
+#[test]
+fn enter_on_a_multiline_steer_restores_every_line() {
+    let mut app = pending_app();
+    app.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": false, "inputs": [
+            {"id": "s1", "mode": "steer", "parts": [{"type": "text", "text": "one\ntwo\n\nfour"}]}
+        ]}),
+    );
+    app.ui.pending_selected = Some(0);
+    press(&mut app, &["enter"]);
+    let call = input_call(&app).cloned().expect("remove call");
+    app.apply_done(nexus_tui::actions::ActionDone {
+        call,
+        result: Ok(nexus_tui::actions::Done::default()),
+    });
+    assert_eq!(app.composer_ref().text(), "one\ntwo\n\nfour");
 }
