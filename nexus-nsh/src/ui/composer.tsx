@@ -1472,3 +1472,74 @@ function QuestionBody(p: { q: Question }) {
     </View>
   );
 }
+
+/**
+ * The composer of a session shown by an unfocused group (plan 45): the same card with that session's own draft,
+ * agent, model and effort. A press focuses the group, which makes the session the viewed one, and puts the caret
+ * in its live composer; the draft is the same text (drafts are kept per session).
+ */
+export function PeerComposer(p: { sid: string; onFocus: () => void }) {
+  const ses = () => { m(); return model.sessions.get(p.sid) ?? null; };
+  const text = () => draft()[p.sid] ?? "";
+  const agent = () => ses()?.agent ?? "build";
+  const busy = () => ses()?.status === "busy";
+  const modelName = () => {
+    const s = ses();
+    const ref = s?.model ? String(s.model) : (agentCatalog().agents.find((a) => a.name === agent())?.model || rememberedModel(s?.project_id ?? null, agent()) || "");
+    if (!ref) return { name: "default", provider: "" };
+    const entry = modelCatalog().find((item) => item.ref === ref);
+    if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: ref.includes("/") ? ref.split("/")[0] : "" };
+    return { name: entry.name || ref.split("/").at(-1) || ref, provider: entry.provider || ref.split("/")[0] };
+  };
+  const effort = () => { const s: any = ses(); return (s?.effort || s?.extra?.effort || "default") as string; };
+  const width = signal(0);
+  const peerPath = () => {
+    const dir = ses()?.directory ?? "";
+    const stateHome = info()?.home ?? "";
+    const home = userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
+    return midTruncate(shortPath(dir, home), Math.max(24, Math.floor((width() - 32) / 9.6)));
+  };
+  const label = (t: string, cls = "") => <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 14, lineHeight: 22 }} class={`min-w-0 shrink ${T.sec} ${cls}`}>{t}</Text>;
+  const press = () => { p.onFocus(); setTimeout(() => focusComposer.fn(), 0); };
+  return (
+    <View class="w-full" testID={`peer-composer-${p.sid}`}>
+      <View class="w-full bg-background">
+        <TimelineColumn class="items-center">
+          <View role="button" focusable onPress={press} accessibilityLabel={`Message ${ses()?.title || "Untitled"}`} testID={`peer-composer-press-${p.sid}`}
+            class={`w-full pt-3 pb-1 ${FOCUS}`} onLayout={(b: any) => width.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
+            <View class="w-full bg-card rounded-[14px] px-5 pb-2 border border-transparent hover:border-border">
+              <View class="h-5" />
+              <View class="w-full flex-row items-end gap-3">
+                <Text style={{ numberOfLines: 8, ...UI_FONT, minHeight: 22 }} testID={`peer-composer-text-${p.sid}`}
+                  class={`flex-1 min-w-0 ${T.body.replace("text-[14px]", "text-[16px]").replace("leading-6", "leading-[22px]")} ${text() ? "text-foreground" : "text-muted-foreground"}`}>
+                  {text() || (busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
+                </Text>
+              </View>
+              <View class="h-2.5" />
+              <View class="flex-row items-center gap-1 min-w-0 min-h-[30px]">
+                <View class="flex-1 min-w-0 flex-row items-center gap-1">
+                  <View class="pl-0 pr-2 h-7 flex-row items-center">{label(capitalize(agent()), `font-medium ${agentColor(agent())}`)}</View>
+                  <Text class={T.meta}>·</Text>
+                  <View class="px-2 h-7 flex-row items-center gap-1.5 min-w-0 shrink">
+                    {label(modelName().name)}
+                    <If when={width() >= 560 && !!modelName().provider}>{label(modelName().provider)}</If>
+                  </View>
+                  <Text class={T.meta}>·</Text>
+                  <View class="px-2 h-7 flex-row items-center shrink-0">{label(effort())}</View>
+                </View>
+                <View class="shrink-0 flex-row items-center gap-1 ml-2">
+                  <View class={`items-center justify-center rounded-full ${isNarrow() ? "size-11" : "size-[30px]"} bg-raised`}><Icon name="arrow-up" size={15} class="tint-muted-foreground" /></View>
+                </View>
+              </View>
+            </View>
+          </View>
+          {/* The session's folder, where the live composer has its location strip, so both cards line up. */}
+          <View class="w-full flex-row items-center min-w-0 min-h-7 pt-1 pb-1.5 px-4" testID={`peer-location-${p.sid}`}>
+            <Text style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0 shrink`}>{peerPath()}</Text>
+          </View>
+          <ActivityBar busy={busy()} fraction={0} slot={agentSlot(agent())} />
+        </TimelineColumn>
+      </View>
+    </View>
+  );
+}

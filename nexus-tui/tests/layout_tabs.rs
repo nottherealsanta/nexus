@@ -1097,3 +1097,173 @@ fn hiding_a_session_tab_unsubscribes_its_view() {
     draw(&mut app, 38, 24);
     assert!(app.ui.groups.watching.is_empty());
 }
+
+/// The column of rows a group covers.
+fn group_text(app: &App, rows: &[String], group: u32) -> String {
+    let r = app
+        .ui
+        .groups
+        .rects
+        .iter()
+        .find(|(g, _)| *g == group)
+        .map(|(_, r)| *r)
+        .unwrap();
+    rows[r.y as usize..r.bottom() as usize]
+        .iter()
+        .map(|row| {
+            row.chars()
+                .skip(r.x as usize)
+                .take(r.width as usize)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn other_group(app: &App) -> u32 {
+    app.ui
+        .groups
+        .rects
+        .iter()
+        .find(|(g, _)| *g != app.groups().focused)
+        .unwrap()
+        .0
+}
+
+#[test]
+fn every_drawn_session_group_has_its_own_composer() {
+    let mut app = two_sessions();
+    let (_, rows) = draw(&mut app, 160, 48);
+    let right = other_group(&app);
+    let focused = app.groups().focused;
+    // The live composer sits in the focused group; the other group has one of its own.
+    let live = app.regions.composer;
+    let focus_rect = app
+        .ui
+        .groups
+        .rects
+        .iter()
+        .find(|(g, _)| *g == focused)
+        .unwrap()
+        .1;
+    assert!(
+        live.x >= focus_rect.x && live.right() <= focus_rect.right(),
+        "{live:?} {focus_rect:?}"
+    );
+    let peer = app
+        .hits
+        .rect_of(&Target::PeerComposer(right))
+        .expect("a composer in the other group");
+    let right_rect = app
+        .ui
+        .groups
+        .rects
+        .iter()
+        .find(|(g, _)| *g == right)
+        .unwrap()
+        .1;
+    assert!(peer.x >= right_rect.x && peer.bottom() <= right_rect.bottom());
+    let text = group_text(&app, &rows, right);
+    assert!(text.contains("Type a message"), "{text}");
+    assert!(text.contains("Build"), "{text}");
+    assert!(app.hits.rect_of(&Target::PeerComposer(focused)).is_none());
+}
+
+#[test]
+fn clicking_the_other_composer_focuses_that_group_its_session_and_its_composer() {
+    let mut app = two_sessions();
+    draw(&mut app, 160, 48);
+    let left = app.groups().focused;
+    let right = other_group(&app);
+    app.ui.focus = nexus_tui::ui::Focus::Timeline;
+    app.click(Target::PeerComposer(right));
+    draw(&mut app, 160, 48);
+    assert_eq!(app.groups().focused, right);
+    assert_eq!(app.viewed_id(), Some("second"));
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    // The session left behind now has the other-group composer.
+    assert!(app.hits.rect_of(&Target::PeerComposer(left)).is_some());
+    assert!(app.hits.rect_of(&Target::PeerComposer(right)).is_none());
+    typing(&mut app, "for second");
+    assert_eq!(
+        app.ui.drafts.get("second").map(|c| c.text()),
+        Some("for second".to_owned())
+    );
+    assert!(app
+        .ui
+        .drafts
+        .get(SESSION)
+        .is_none_or(|c| c.text().is_empty()));
+}
+
+#[test]
+fn each_session_keeps_its_draft_and_the_other_group_shows_it() {
+    let mut app = two_sessions();
+    draw(&mut app, 160, 48);
+    let left = app.groups().focused;
+    let right = other_group(&app);
+    app.ui.focus = nexus_tui::ui::Focus::Composer;
+    typing(&mut app, "draft for one");
+    app.click(Target::PeerComposer(right));
+    let (_, rows) = draw(&mut app, 160, 48);
+    assert!(
+        group_text(&app, &rows, left).contains("draft for one"),
+        "{}",
+        rows.join("\n")
+    );
+    typing(&mut app, "draft for two");
+    app.click(Target::PeerComposer(left));
+    let (_, rows) = draw(&mut app, 160, 48);
+    assert_eq!(app.viewed_id(), Some(SESSION));
+    assert_eq!(app.composer_ref().text(), "draft for one");
+    assert!(
+        group_text(&app, &rows, right).contains("draft for two"),
+        "{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn opening_a_session_shown_by_another_group_moves_the_focus_and_highlight_there() {
+    let mut app = two_sessions();
+    draw(&mut app, 160, 48);
+    let left = app.groups().focused;
+    let right = other_group(&app);
+    // Each session in one group only: "second" lives on the right, SESSION on the left.
+    for (g, i) in app.groups().find(&Tab::session("second")) {
+        if g == left {
+            app.ui.groups.layout.close_tab(g, i);
+        }
+    }
+    for (g, i) in app.groups().find(&Tab::session(SESSION)) {
+        if g == right {
+            app.ui.groups.layout.close_tab(g, i);
+        }
+    }
+    draw(&mut app, 160, 48);
+    assert_eq!(app.groups().focused, left);
+    assert_eq!(app.groups().find(&Tab::session("second")), vec![(right, 0)]);
+    app.open_session("second");
+    draw(&mut app, 160, 48);
+    assert_eq!(app.groups().focused, right);
+    assert_eq!(app.viewed_id(), Some("second"));
+    // Not opened a second time in the group that had the focus.
+    assert_eq!(app.groups().find(&Tab::session("second")).len(), 1);
+    app.open_session(SESSION);
+    draw(&mut app, 160, 48);
+    assert_eq!(app.groups().focused, left);
+    assert_eq!(app.groups().find(&Tab::session(SESSION)).len(), 1);
+}
+
+#[test]
+fn a_narrow_window_draws_no_other_composer() {
+    let mut app = two_sessions();
+    app.ui.left_open = false;
+    app.ui.right_open = false;
+    draw(&mut app, 38, 24);
+    draw(&mut app, 38, 24);
+    assert!(app.ui.groups.rects.len() == 1);
+    for g in [1, 2, 3] {
+        assert!(app.hits.rect_of(&Target::PeerComposer(g)).is_none());
+    }
+}

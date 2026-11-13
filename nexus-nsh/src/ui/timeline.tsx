@@ -31,8 +31,9 @@ type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
 const META = `${T.meta}`;
-/** A tool argument or error line: a path or command you could type, so Monaspace 12.5. */
-const ARG = "font-(family-name:--font-code) text-[12.5px] leading-5 text-foreground-secondary";
+const TOOL_TEXT = "text-[16px] leading-6 font-(family-name:--font-ui)";
+/** A tool argument or error line: a path or command you could type. */
+const ARG = "font-(family-name:--font-code) text-[16px] leading-6 text-foreground-secondary";
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
@@ -1009,12 +1010,12 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                     <If when={c.state === "running"}><Status kind="running" /></If>
                     <If when={c.state === "done"}><Text class={`${TS.base} ${agentColor(c.agent)}`}>⣿</Text></If>
                   </View>
-                  <Text class={`shrink-0 ${TS.base} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
-                  <Text style={{ numberOfLines: 1 }} class={`ml-2 shrink min-w-0 ${TS.base} text-foreground-secondary`}>{c.title}</Text>
+                  <Text class={`shrink-0 ${TOOL_TEXT} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
+                  <Text style={{ numberOfLines: 1 }} class={`ml-2 shrink min-w-0 ${TOOL_TEXT} text-foreground-secondary`}>{c.title}</Text>
                   <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
                 </View>
-                <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-3`}>{c.meta}</Text></If>
-                <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-3`}>{c.outcome}</Text></If>
+                <If when={!!c.meta}><Text testID="child-meta" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.meta}</Text></If>
+                <If when={!!c.outcome}><Text testID="child-outcome" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.outcome}</Text></If>
               </Button></View>
             );
           }}
@@ -1544,7 +1545,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
         </If>
         </View>
         <View class="flex-row flex-1 min-w-0 items-center gap-2">
-        <Text class={`shrink-0 ${T.secondary} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
+        <Text class={`shrink-0 ${TOOL_TEXT} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
         <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${ARG}`}>{r().arg}</Text></If>
         <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${ARG}`}>{r().errorLine!}</Text></If>
         <If when={!!r().summary}>

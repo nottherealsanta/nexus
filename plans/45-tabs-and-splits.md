@@ -125,6 +125,13 @@ manifest entries are written; the table is the proposal.
   read-only timeline, as the TUI does (`PeerTimeline`, `Model.pin` / `withView`, `Sync.watch`). Tests: a two-group
   restore in `layout-ui.test.tsx`, the pin/cache test in `App.test.tsx`. The phone plan-45 test was fixed to check the
   tabs on the list screen (the conversation page has no tab bar).
+- [x] **A composer in every session group; the highlight follows an opened session (2026-11-13, user).** Both clients
+  draw each unfocused session group's own composer (its draft, agent, model, effort); pressing it focuses the group and
+  the live composer. NSH: opening a session did not move focus to its group because `rootNow` was a `computed` that
+  never re-ran (it read the model without `m()`); fixed, and opening the session already in view also brings its group
+  forward (`sessionOpened`). TUI: `open_session` now focuses the group already showing the session instead of adding a
+  second tab in the focused group. Tests: 8 in `layout-ui.test.tsx` ("several sessions side by side"), 5 in
+  `tests/layout_tabs.rs`.
 - [ ] **Verification.** TUI `cargo test`, NSH focused tests (`node scripts/nsh-web.mjs test --target web …`), manifest
   check. Paired TUI / NSH screenshots (both skills) for: one group; split right; split down; nested 2 × 2 with a
   terminal; drag in progress with drop zones; join; narrow collapse; unsaved-close prompt. Drag tested by hand in real

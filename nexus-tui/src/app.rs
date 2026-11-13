@@ -15751,6 +15751,10 @@ impl App {
             Target::GroupNew(g) => self.group_new_session(g),
             Target::GroupMenu(g) => self.open_group_menu(g),
             Target::GroupBody(g) => self.group_focus_click(g),
+            Target::PeerComposer(g) => {
+                self.group_focus_click(g);
+                self.ui.focus = Focus::Composer;
+            }
             Target::GroupDivider(_) => {}
             Target::SessionRootBack => self.run_command("nav.root"),
             Target::ArchiveSession(session) => {

@@ -656,6 +656,14 @@ impl App {
                 self.toast_too_small();
                 self.ui.groups.layout.open(tab.clone());
             }
+        } else if let Some((g, i)) = layout
+            .find(&tab)
+            .first()
+            .copied()
+            .filter(|_| tab.kind == Kind::Session && !layout.focused_group().tabs.contains(&tab))
+        {
+            // A session already shown by another group: go there (and move the highlight), as NSH does.
+            layout.activate(g, i);
         } else {
             layout.open(tab.clone());
         }

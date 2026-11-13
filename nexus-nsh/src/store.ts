@@ -1168,6 +1168,8 @@ export function rememberNewSession(project: string | null | undefined) {
   if (project) lastProjectSession.set(project, "");
 }
 
+/** Counts session opens (plan 45): the layout focuses the opened session's tab even when it was already the viewed one. */
+export const sessionOpened = signal(0);
 export async function selectSession(id: string) {
   if (phone) phonePage.set("conversation");
   const ses = model.sessions.get(id);
@@ -1187,6 +1189,7 @@ export async function selectSession(id: string) {
   centre.set("session");
   scrolledUp.set(false);
   bump();
+  sessionOpened.update((n) => n + 1);
   loadSessionWorktrees(id);
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {

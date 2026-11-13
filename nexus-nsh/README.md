@@ -48,7 +48,7 @@ See [the inspector guide](../docs/inspector.md).
 
 The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
 Argon for interface text and prose and a full-width reading column with a fixed 12 px
-outer gutter, with a 16 px left inset for user messages and activity groups. Desktop and web controls use bundled,
+outer gutter, with a 16 px left inset for user messages and activity groups. Tool labels and arguments, and child-session labels and metadata, use 16 px text. Desktop and web controls use bundled,
 theme-tinted SVGs, including icon-only desktop sidebar tabs in a compact segmented
 control whose names and shortcuts appear on hover, and the Settings row alongside its label. The narrow drawer retains
 tab labels. Open and closed sidebar indicators use distinct icons; timeline status

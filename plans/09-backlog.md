@@ -199,7 +199,11 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   another page available, and a scroll while the request is pending. Native paging tests verify data/navigation,
   not coordinates. A GPUI switch test failed once under concurrent host runs and passed five serial reruns; its
   cause remains unknown. Exact native positioning, packaged hosts and a live scratch Core remain unverified.
-  Do not treat these cases as proof that all random jumps are fixed.
+  Do not treat these cases as proof that all random jumps are fixed. On 2026-11-13 a user reported further
+  upward movement in web; whether it happens while following or reading history is unclear. The follow handler also
+  treats upward list/layout corrections as reader input, a possible cause not yet reproduced. The web scroll suite
+  passed 15/16 cases; restoring a session position failed waiting for the jump button. Installed NSH is 209cb84;
+  upstream has since changed List key diffing, but an upgrade has not been evaluated as a fix.
 - [ ] Write the generator (`interface/scripts/spinners.py` or `scripts/gen.py`) that emits the frame lists, and add
   `[glyphs.spinner_tab]` and `[glyphs.spinner_agent]` (unicode, ascii) to `interface/theme.toml`, with the random
   shape choice specified as data (variants plus a per-session seed) so both clients behave the same.

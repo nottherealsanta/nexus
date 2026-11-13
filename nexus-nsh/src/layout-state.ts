@@ -11,7 +11,7 @@ import {
 } from "./layout";
 import {
   bufferDirty, confirmDialog, currentFileId, currentProject, currentWorktree, dropBuffer, dropGitDiff, fileBuffers, fileFindOpen, fileTabId, gitDiffs, gitDiffId, live, model, openedTabs, openGitDiff,
-  rememberNewSession, rootOf, saveFile, selectSession, showFile, splitFileTabId, toast, viewed, visibleTabIds, centre, bump, phone, selectedGitFile, m, sync,
+  rememberNewSession, rootOf, saveFile, selectSession, showFile, splitFileTabId, toast, viewed, visibleTabIds, centre, bump, phone, selectedGitFile, m, sync, sessionOpened,
 } from "./store";
 import {
   focusTerminal, forgetTerminal, newTerminal, refreshTerminals, requestTerminalClose, terminalAvailable, terminalItems, terminalOpen, terminalsKnown, terminalView, detachTerminal,
@@ -30,6 +30,7 @@ let loadingKey: string | null = null;
 let everLoaded = false;
 /** What the reconcile effects last applied; a freshly loaded layout starts them over. */
 let lastRoot: string | null = null;
+let lastOpened = 0;
 let lastIds = "";
 export const layoutReady = signal(false);
 /** The "New session" tab (centre is the new-session view): shown in the focused group, not part of the tree. */
@@ -370,7 +371,8 @@ function askUnsaved(files: Tab[], done: () => void) {
 
 // --- reconciliation and restore -----------------------------------------------------------------------------------
 
-const rootNow = computed(() => rootOf(model.selected?.sessionId));
+// `m()` subscribes to the model: without it this never recomputed, so opening a session did not move the focus.
+const rootNow = computed(() => rootOf(m().selected?.sessionId));
 const tabIdsNow = computed(() => visibleTabIds().join("\n"));
 
 /**
@@ -414,9 +416,12 @@ export function installLayout() {
   });
   effect(() => {
     const root = rootNow();
+    // Opening the session already in view still brings its tab forward (and the highlight with it).
+    const opened = sessionOpened();
     if (!layoutReady()) return;
-    if (root === lastRoot) return;
+    if (root === lastRoot && opened === lastOpened) return;
     lastRoot = root;
+    lastOpened = opened;
     if (!root) return;
     untracked(() => {
       newTabShown.set(false);

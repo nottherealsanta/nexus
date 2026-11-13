@@ -323,34 +323,6 @@ describe("tabs and splits (desktop and web)", () => {
     expect(app.shows("id:session-tab-ses_gone")).toBe(false);
   });
 
-  test("a session in another group shows its own live timeline, and focusing it makes it the viewed one", async () => {
-    const second = { ...session, id: "ses_2", title: "Second task", continued_from: null, created: 4, updated: 4 };
-    const empty = { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } };
-    const reply = { id: "m9", session_id: "ses_2", seq: 1, role: "user", parts: [{ type: "text", text: "a message in the second session" }], created: 4 };
-    const two = {
-      "GET */api/session/ses_2/message*": { body: { messages: [reply], more: false, oldest_seq: 1 } },
-      "GET */api/session/ses_2/turn*": empty,
-      "GET */api/session/ses_2/snapshot": { body: null },
-      "GET */api/session/ses_2/worktrees": { body: { worktrees: [] } },
-      "GET */api/session/ses_2": { body: second },
-    };
-    const saved = { v: 1, seq: 2, focus: "g1", root: { type: "split", dir: "row", ratios: [0.5, 0.5], children: [
-      { type: "group", id: "g1", tabs: [{ kind: "session", id: "ses_1" }], active: "session:ses_1" },
-      { type: "group", id: "g2", tabs: [{ kind: "session", id: "ses_2" }], active: "session:ses_2" },
-    ] } };
-    const app = await open("./App.tsx", { network: { ...inputs, ...two, ...network, "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, second] } } }, storage: { ...core, "nexus.layout.prj_1.main": JSON.stringify(saved) }, width: 1500, height: 800, platform: "web" });
-    await app.waitFor("text:Refactor loader");
-    await app.press("id:session-ses_1");
-    await app.waitFor("id:peer-timeline-ses_2");
-    await app.waitFor("text:a message in the second session");
-    expect(app.shows("id:session-placeholder-ses_2")).toBe(false);
-    // Focusing the other group makes its session the viewed one; the first session turns into the read-only view.
-    await app.keyboard.press("ctrl+x");
-    await app.keyboard.press("right");
-    await app.waitFor("id:peer-timeline-ses_1");
-    expect(app.shows("id:peer-timeline-ses_2")).toBe(false);
-  });
-
   test("Ctrl+` opens a new terminal in a split below, and the tab shows its name", async () => {
     const app = await open("./App.tsx", { network: withTerminal, storage: core, width: 1500, height: 800, platform: "web" });
     await app.waitFor("text:Refactor loader");
@@ -365,5 +337,139 @@ describe("tabs and splits (desktop and web)", () => {
     // Closing a running terminal asks first; the terminal's own tab is the only one in its group.
     await app.press("id:tab-close-terminal:term_1");
     await app.waitFor("text:Close running terminal?");
+  });
+});
+
+// Several sessions side by side (plan 45): each drawn session group has its own live timeline and composer.
+const second = { ...session, id: "ses_2", title: "Second task", continued_from: null, created: 4, updated: 4 };
+const turnsEmpty = { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } };
+const secondMessage = { id: "m9", session_id: "ses_2", seq: 1, role: "user", parts: [{ type: "text", text: "a message in the second session" }], created: 4 };
+const sideBySide = (focus = "g1", right: any[] = [{ kind: "session", id: "ses_2" }], active = "session:ses_2") => ({
+  v: 1, seq: 2, focus, root: { type: "split", dir: "row", ratios: [0.5, 0.5], children: [
+    { type: "group", id: "g1", tabs: [{ kind: "session", id: "ses_1" }], active: "session:ses_1" },
+    { type: "group", id: "g2", tabs: right, active },
+  ] },
+});
+const bootTwo = async (opts: { saved?: any; extra?: any; size?: { width: number; height: number } } = {}) => {
+  const net = {
+    ...inputs,
+    "GET */api/session/ses_2/message*": { body: { messages: [secondMessage], more: false, oldest_seq: 1 } },
+    "GET */api/session/ses_2/turn*": turnsEmpty,
+    "GET */api/session/ses_2/snapshot": { body: null },
+    "GET */api/session/ses_2/worktrees": { body: { worktrees: [] } },
+    "GET */api/session/ses_2": { body: second },
+    "POST */api/session/*/prompt*": { status: 202, body: { status: "busy" } },
+    ...network,
+    "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, second] } },
+    ...(opts.extra ?? {}),
+  };
+  const size = opts.size ?? { width: 1500, height: 800 };
+  const app = await open("./App.tsx", { network: net, storage: { ...core, "nexus.layout.prj_1.main": JSON.stringify(opts.saved ?? sideBySide()) }, ...size, platform: "web" });
+  await app.waitFor("text:Refactor loader");
+  await app.press("id:session-ses_1");
+  await app.waitFor("id:group-g2");
+  return app;
+};
+
+describe("several sessions side by side (desktop and web)", () => {
+  test("the other group shows its session's own timeline and composer, not a placeholder", async () => {
+    const app = await bootTwo();
+    await app.waitFor("id:peer-timeline-ses_2");
+    await app.waitFor("text:a message in the second session");
+    expect(app.shows("id:peer-composer-ses_2")).toBe(true);
+    expect(app.shows("id:session-placeholder-ses_2")).toBe(false);
+    // Both groups have a composer: the live one for the viewed session, the other for ses_2.
+    expect(app.count("id:composer-input")).toBe(1);
+    expect(app.count("id:peer-composer-ses_2")).toBe(1);
+    expect(app.shows("id:group-focused-g1")).toBe(true);
+  });
+
+  test("pressing the other group's composer focuses it, moves the highlight and the caret there", async () => {
+    const app = await bootTwo();
+    await app.waitFor("id:peer-composer-press-ses_2");
+    await app.press("id:peer-composer-press-ses_2");
+    await app.waitFor("id:group-focused-g2");
+    expect(app.shows("id:group-focused-g1")).toBe(false);
+    // The first session now has the other-group composer and timeline; ses_2 has the live one.
+    await app.waitFor("id:peer-composer-ses_1");
+    await app.waitFor("id:peer-timeline-ses_1");
+    expect(app.shows("id:peer-composer-ses_2")).toBe(false);
+    await app.type("id:composer-input", "typed after the press");
+    expect(app.value("id:composer-input")).toBe("typed after the press");
+  });
+
+  test("each session keeps its own draft, shown in its group's composer while unfocused", async () => {
+    const app = await bootTwo();
+    await app.waitFor("id:composer-input");
+    await app.type("id:composer-input", "draft for one");
+    await app.press("id:peer-composer-press-ses_2");
+    await app.waitFor("id:peer-composer-ses_1");
+    expect(app.texts()).toContain("draft for one");
+    expect(app.value("id:composer-input")).toBe("");
+    await app.type("id:composer-input", "draft for two");
+    await app.press("id:peer-composer-press-ses_1");
+    await app.waitFor("id:group-focused-g1");
+    await app.waitFor("id:peer-composer-ses_2");
+    expect(app.value("id:composer-input")).toBe("draft for one");
+    expect(app.texts()).toContain("draft for two");
+  });
+
+  test("a message sent from the second group goes to the second session", async () => {
+    const app = await bootTwo();
+    await app.press("id:peer-composer-press-ses_2");
+    await app.waitFor("id:group-focused-g2");
+    await app.type("id:composer-input", "hello two");
+    await app.submit("id:composer-input");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/api/session/ses_2/prompt")));
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/api/session/ses_1/prompt"))).toBe(false);
+  });
+
+  test("opening a session from the sidebar moves the tab highlight to the group showing it", async () => {
+    const app = await bootTwo();
+    await app.waitFor("id:group-focused-g1");
+    await app.press("id:session-ses_2");
+    await app.waitFor("id:group-focused-g2");
+    expect(app.shows("id:group-focused-g1")).toBe(false);
+    await app.waitFor("id:peer-composer-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:group-focused-g1");
+    await app.waitFor("id:peer-composer-ses_2");
+  });
+
+  test("opening the session already in view brings its group forward from a file group", async () => {
+    const file = { kind: "file", id: "prj_1:hello.txt" };
+    const app = await bootTwo({ saved: sideBySide("g1", [file], "file:prj_1:hello.txt") });
+    await app.waitFor("id:tab-file:prj_1:hello.txt");
+    await app.press("id:tab-file:prj_1:hello.txt");
+    await app.waitFor("id:group-focused-g2");
+    // ses_1 is still the viewed session; its group keeps the live composer.
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:group-focused-g1");
+    expect(app.shows("id:group-focused-g2")).toBe(false);
+  });
+
+  test("a live event of the other session shows in its group without focusing it", async () => {
+    let send = false, sent = false;
+    const ev = (id: number, type: string, data: unknown) => `event: message\ndata: ${JSON.stringify({ id, time: id, cursor: `log_t:${id}`, type, session_id: "ses_2", data })}\n\n`;
+    const live = ev(1, "message.added", { id: "m10", session_id: "ses_2", seq: 2, role: "assistant", parts: [{ type: "text", text: "a live reply in the other group" }], created: 5 });
+    const app = await bootTwo({ extra: { "GET */api/event*": () => {
+      const body = send && !sent ? (sent = true, connected + live) : connected;
+      return { body, headers: { "content-type": "text/event-stream" }, delay: 150 };
+    } } });
+    await app.waitFor("text:a message in the second session");
+    send = true;
+    await app.waitFor("text:a live reply in the other group", { timeout: 8000 });
+    expect(app.shows("id:group-focused-g1")).toBe(true);
+  });
+
+  test("a narrow window shows only the focused group, with no other composer", async () => {
+    const app = await bootTwo();
+    await app.waitFor("id:peer-composer-ses_2");
+    await app.setViewport(390, 800);
+    await app.waitFor("id:hidden-groups");
+    expect(app.shows("id:peer-composer-ses_2")).toBe(false);
+    expect(app.shows("id:composer-input")).toBe(true);
+    await app.setViewport(1500, 800);
+    await app.waitFor("id:peer-composer-ses_2");
   });
 });

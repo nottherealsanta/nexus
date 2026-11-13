@@ -10,6 +10,7 @@ import { MARQUEE_HOLD_MS, MARQUEE_SPEED, marqueeShift, tabBox, tabHeight, tabTit
 import { FilePane, DiffPane } from "./editor";
 import { SessionPane } from "./centre";
 import { PeerTimeline } from "./timeline";
+import { PeerComposer } from "./composer";
 import { TerminalPane } from "./terminal";
 import { byId, keyLabel, run } from "../commands";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
@@ -245,8 +246,15 @@ function GroupBody(p: { id: string }) {
   return (
     <View class="flex-1 min-h-0" testID={`group-body-${p.id}`}>
       <If when={kind() === "new" || (kind() === "session" && live())}><SessionPane /></If>
-      {/* Another session (or the same one again): its own live, read-only timeline; the composer stays with the focused group. */}
-      <If when={kind() === "session" && !live()}><PeerTimeline sid={tab()?.id ?? ""} onFocus={() => activateTab(p.id, tabKey(tab()!))} /></If>
+      {/* Another session (or the same one again): its own live timeline and composer; a press there makes it the viewed session. */}
+      <If when={kind() === "session" && !live()}>
+        <View class="flex-1 min-h-0 flex-col bg-background">
+          <PeerTimeline sid={tab()?.id ?? ""} onFocus={() => activateTab(p.id, tabKey(tab()!))} />
+          <If when={(m().sessions.get(tab()?.id ?? "") as any)?.kind !== "manager"}>
+            <PeerComposer sid={tab()?.id ?? ""} onFocus={() => activateTab(p.id, tabKey(tab()!))} />
+          </If>
+        </View>
+      </If>
       <If when={kind() === "file"}><FilePane id={tab()?.id ?? ""} group={p.id} /></If>
       <If when={kind() === "diff"}><DiffPane id={tab()?.id ?? ""} /></If>
       <If when={kind() === "browser"}><View class="flex-1 items-center justify-center"><Text class={T.sec}>The browser is not available yet.</Text></View></If>
@@ -262,6 +270,8 @@ function GroupBox(p: { id: string }) {
       onTouchStart={() => { if (focusedGroupId() !== p.id) focusGroup(p.id); }}>
       <GroupStrip id={p.id} width={() => r().w} />
       <GroupBody id={p.id} />
+      {/* Which group holds the focus (and the tab highlight), for tests and assistive tech. */}
+      <If when={focusedGroupId() === p.id}><View testID={`group-focused-${p.id}`} accessible={false} class="absolute w-px h-px" style={{ pointerEvents: "none" }} /></If>
     </View>
   );
 }

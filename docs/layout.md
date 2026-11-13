@@ -93,12 +93,16 @@ Code: `nexus-nsh/src/layout.ts` (the pure tree and every operation, tested in `l
   anywhere gains or loses its tab); file, diff and terminal tabs belong to the layout. Switching worktree swaps the
   layout; a file tab with unsaved text is carried over rather than lost. Restore drops a session that is gone or
   archived, a terminal that is closed and a file that no longer reads, without a message.
-- **Several sessions side by side:** the viewed session has the composer, so only one group owns it (the focused
-  group if it shows a session tab, else the group showing the viewed session). A session tab active in any other
-  drawn group shows that session's own live timeline, read-only and following the latest message; focusing the group
-  (a press in it, or the leader's arrows) makes it the viewed session. NSH: `PeerTimeline` in `src/ui/timeline.tsx`,
-  rows built inside `Model.withView` (the TUI's `swap_in`), views kept by `Model.pin` and loaded by `Sync.watch`
-  (again after each resync), driven by `backgroundSessions()` in `src/layout-state.ts`.
+- **Several sessions side by side:** every drawn session group shows its session's own live timeline and its own
+  composer (that session's draft, agent, model and effort; drafts are kept per session). The focused group's session
+  is the viewed one and its composer is the live editor; pressing another group's composer (or anywhere in that group,
+  or the leader's arrows) focuses that group, makes its session the viewed one and puts the caret in its composer.
+  Opening a session (sidebar, search, notification) focuses the group already showing it, so the tab highlight follows;
+  the focused group is preferred when it holds the tab, else the first group that does; only a session shown nowhere
+  opens in the focused group. NSH: `PeerTimeline` (`src/ui/timeline.tsx`, rows built inside `Model.withView`, the
+  TUI's `swap_in`), `PeerComposer` (`src/ui/composer.tsx`), views kept by `Model.pin` and loaded by `Sync.watch` (again
+  after each resync), driven by `backgroundSessions()` in `src/layout-state.ts`. TUI: `peer_split` /
+  `draw_peer_composer` in `render/groups_ui.rs`, `Target::PeerComposer`.
 - **Terminals:** one controller per terminal (`src/terminal-panel.ts`); a terminal that is the active tab of a drawn
   group is attached and live, so two visible terminals both stream. Terminal screens are one flat layer keyed by
   terminal id and positioned from the layout rectangles, so a terminal tab dragged or moved to another group keeps its
@@ -132,8 +136,9 @@ and `prefs.rs` (`layouts`).
   read-only, and the PTY resizes only for the controller. Focusing a group takes control on its existing attachment;
   a terminal whose tab is closed, covered, or in a group hidden by the narrow collapse is detached. Files: another
   group shows the last text seen (the shared buffer when it has unsaved changes). Sessions: every drawn session tab
-  shows its own timeline, read-only and following the latest message (no composer, no hits); only the focused
-  group's session has the composer, selection and input. The reducer keeps a view per session (`Model.cached`, with
+  shows its own timeline, read-only and following the latest message, over its own composer (`draw_peer_composer`:
+  the session's draft, agent, model and effort; a click is `Target::PeerComposer`, which focuses the group and its
+  composer); only the focused group's session has the live editor, selection and input. The reducer keeps a view per session (`Model.cached`, with
   `Model.pinned` views that are never evicted); a drawn unfocused session is pinned and its history is watched
   (`SyncCommand::Watch`: loaded when it first shows and again after each resync), and events reach pinned views as they
   reach the selected one. The timeline of such a tab is built by swapping its view in as the selected one for the build

@@ -64,7 +64,11 @@ pub(super) fn draw_groups(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut Hit
         match tab.kind {
             Kind::Session => {
                 if !is_focus {
-                    draw_session_stub(cx, buf, body, &tab.id);
+                    let (timeline, composer) = peer_split(cx, body, &tab.id);
+                    draw_session_stub(cx, buf, timeline, &tab.id);
+                    if let Some(r) = composer {
+                        draw_peer_composer(cx, buf, r, *id, &tab.id, hits);
+                    }
                 }
             }
             Kind::File => {
@@ -340,6 +344,137 @@ fn draw_strip(
 /// An unfocused group's session: its own timeline, following the latest
 /// message, read-only (no hits, no composer). Its title stands in until the
 /// history has loaded.
+/// An unfocused session group: its timeline above, its own composer below
+/// (none for the Manager's debug view or a body too short to hold both).
+pub(crate) fn peer_split(cx: &Cx, body: Rect, id: &str) -> (Rect, Option<Rect>) {
+    let manager = cx.app.ui.manager.debug_session.as_deref() == Some(id);
+    let h = peer_composer_height(cx, body.width, id);
+    if manager || body.height < h + 3 || body.width < 16 {
+        return (body, None);
+    }
+    let timeline = Rect::new(body.x, body.y, body.width, body.height - h);
+    let composer = Rect::new(body.x, body.y + body.height - h, body.width, h);
+    (timeline, Some(composer))
+}
+
+fn peer_composer_height(cx: &Cx, width: u16, id: &str) -> u16 {
+    let rows = cx
+        .app
+        .ui
+        .drafts
+        .get(id)
+        .map_or(1, |c| c.layout(width.saturating_sub(10) as usize).0.len())
+        .clamp(1, 8) as u16;
+    // As the live card: the attachment row, the card (padding, input, blank,
+    // controls, edge) and the two rows the live one keeps for its strips below.
+    rows + 7
+}
+
+/// The composer of a session an unfocused group shows (plan 45): the same card
+/// with that session's own draft, agent, model and effort. A click focuses the
+/// group and its live composer, which holds the same draft.
+fn draw_peer_composer(
+    cx: &Cx,
+    buf: &mut Buffer,
+    r: Rect,
+    group: GroupId,
+    id: &str,
+    hits: &mut HitMap,
+) {
+    let a = cx.app;
+    let Some(session) = a.state.model.sessions.get(id) else {
+        return;
+    };
+    let rows = r.height.saturating_sub(7);
+    let panel = Rect::new(r.x + 2, r.y + 1, r.width.saturating_sub(4), rows + 4);
+    let base = cx.st(PRIMARY, PANEL);
+    clear(buf, panel, base);
+    hits.add(panel, Target::PeerComposer(group));
+    card_edge(
+        cx,
+        buf,
+        panel,
+        panel.bottom() - 1,
+        cx.t.structure("card_bottom"),
+    );
+    let x = panel.x + 3;
+    let w = panel.width.saturating_sub(6);
+    let draft = a.ui.drafts.get(id).filter(|c| !c.is_empty());
+    match draft {
+        Some(c) => {
+            for (i, line) in c
+                .layout(w as usize)
+                .0
+                .iter()
+                .take(rows as usize)
+                .enumerate()
+            {
+                put(buf, x, panel.y + 1 + i as u16, line, base, w);
+            }
+        }
+        None => {
+            let ph = if a.is_busy(id) {
+                "Type a message\u{2026} Enter steer \u{b7} Tab queue \u{b7} Alt+Enter interrupt"
+                    .replace('\u{2026}', cx.ell())
+                    .replace('\u{b7}', cx.t.structure("separator"))
+            } else {
+                "Type a message\u{2026}".replace('\u{2026}', cx.ell())
+            };
+            put(buf, x, panel.y + 1, &ph, cx.st(MUTED, PANEL), w);
+        }
+    }
+    let cy = panel.y + 2 + rows;
+    let reference = a.effective_model(Some(session));
+    let model = if reference.is_empty() {
+        cx.ell().to_owned()
+    } else {
+        model_parts(a, &reference).1
+    };
+    let effort = session
+        .extra
+        .get("effort")
+        .and_then(serde_json::Value::as_str)
+        .filter(|e| !e.is_empty())
+        .unwrap_or("default");
+    // The session's folder below the card, where the live composer has its location strip.
+    let room = panel.width.saturating_sub(2);
+    put(
+        buf,
+        panel.x,
+        panel.bottom(),
+        &short_path(&session.directory, room as usize, cx.ell()),
+        cx.st(SECONDARY, CANVAS),
+        room,
+    );
+    let end = panel.right().saturating_sub(2);
+    let mut cx_ = put(
+        buf,
+        x,
+        cy,
+        &text::capitalize(&session.agent),
+        base,
+        end.saturating_sub(x),
+    );
+    for (label, token) in [(model.as_str(), PRIMARY), (effort, SECONDARY)] {
+        cx_ = put(
+            buf,
+            cx_,
+            cy,
+            &cx.sep(),
+            cx.st(MUTED, PANEL),
+            end.saturating_sub(cx_),
+        );
+        cx_ = put(
+            buf,
+            cx_,
+            cy,
+            label,
+            cx.st(token, PANEL),
+            end.saturating_sub(cx_),
+        );
+    }
+}
+
 fn draw_session_stub(cx: &Cx, buf: &mut Buffer, body: Rect, id: &str) {
     let key = (id.to_owned(), body.width.saturating_sub(2));
     if let Some((_, timeline)) = cx.app.ui.groups.bg.get(&key) {

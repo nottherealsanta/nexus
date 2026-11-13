@@ -684,6 +684,8 @@ pub enum Target {
     GroupNew(crate::groups::GroupId),
     GroupMenu(crate::groups::GroupId),
     GroupBody(crate::groups::GroupId),
+    /// The composer of a session an unfocused group shows: focus that group and its composer.
+    PeerComposer(crate::groups::GroupId),
     GroupDivider(usize),
     /// The archive control on a hovered sidebar session row.
     ArchiveSession(String),
