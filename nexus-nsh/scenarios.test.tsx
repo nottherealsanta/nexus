@@ -9,6 +9,7 @@ import zmxInterrupt from "../interface/scenarios/zmx-interrupt.json";
 import zmxNeedsAttention from "../interface/scenarios/zmx-needs-attention.json";
 import zmxParallel from "../interface/scenarios/zmx-parallel-tools.json";
 import zmxRecovered from "../interface/scenarios/zmx-recovered.json";
+import zmxParentCard from "../interface/scenarios/zmx-parent-card.json";
 import { subagentDone } from "./src/store";
 
 const session = {
@@ -44,6 +45,16 @@ const network = (messages: unknown[], sessions: any[] = [], primary: any = sessi
 };
 
 describe("shared scenarios", () => {
+  test("zmx parent card shows the agent and worker on separate lines", async () => {
+    const app = await open("./App.tsx", { network: network(zmxParentCard.messages, [zmxParentCard.child]), width: 1280, height: 900, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:child-meta");
+    const shown = app.texts().join("\n");
+    expect(shown).toContain("Scout");
+    expect(shown).toContain("Check shortcuts");
+    expect(shown).toContain(zmxParentCard.meta);
+  });
   test("activity group", async () => {
     const scenario = activityGroup;
     const app = await open("./App.tsx", { network: network(scenario.messages), width: 1280, height: 900, platform: "web" });

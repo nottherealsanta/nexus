@@ -3365,3 +3365,36 @@ fn browser_chrome_profile_setting_is_off_by_default_and_patches_core() {
             if path == "browser.use_my_chrome" && value == &serde_json::json!(true)
     ));
 }
+
+#[test]
+fn browser_status_row_says_what_is_missing_and_asks_again_when_the_mode_changes() {
+    let mut a = app();
+    assert_eq!(a.browser_status_lines(), vec!["loading status…".to_string()]);
+    a.execute("app.settings");
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(nexus_tui::actions::ApiCall::BrowserStatus))));
+    a.ui.browser_status = Some(serde_json::json!({
+        "ok": false, "mode": "own", "uvx": "/u/uvx", "browser": null, "chrome": null,
+        "problems": ["no Chrome, Chromium or Edge was found: install Google Chrome, or run `uvx --from 'browser-use[cli]==1.0.2' browser-use install` for a Chromium only the browser tools use"],
+        "note": "The browser tools use their own profile; your Chrome profile is never touched."
+    }));
+    let lines = a.browser_status_lines();
+    assert_eq!(lines[0], "not ready");
+    assert!(lines[1].starts_with("no Chrome, Chromium or Edge was found") && lines[1].contains("browser-use install"));
+    assert!(lines[2].contains("never touched"));
+    a.ui.browser_status = Some(serde_json::json!({
+        "ok": true, "mode": "own", "uvx": "/u/uvx", "problems": [], "note": "n", "chrome": null,
+        "browser": {"name": "Google Chrome", "path": "/Applications/Google Chrome.app"}
+    }));
+    assert_eq!(a.browser_status_lines()[..2], ["ready".to_string(), "Google Chrome · own profile".to_string()]);
+    a.effects.clear();
+    a.apply_sync(SyncMsg::Config(Ok(serde_json::json!({
+        "revision": "cfg-2", "values": {"browser": {"use_my_chrome": true}}
+    }))));
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(nexus_tui::actions::ApiCall::BrowserStatus))));
+}

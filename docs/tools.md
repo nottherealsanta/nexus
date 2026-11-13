@@ -223,6 +223,17 @@ Settings. browser-use's other tools (`browser_login` for its cloud, and
   (`chrome://inspect/#remote-debugging`). The setting is read at every browser call:
   a change replaces the session's running process on its next call, so turning it
   off takes effect at once. A `browser_exec` result names the browser in use.
+- **What it needs.** `uvx` (from uv, which the Nexus install sets up; Core also looks
+  beside `uv` and in `~/.local/bin`, so a daemon started without uv on `PATH` still
+  finds it) and a browser browser-use can launch: Google Chrome, Chromium, Microsoft
+  Edge or Chrome Canary, else the Chromium `uvx --from 'browser-use[cli]==1.0.2'
+  browser-use install` downloads. A Snap Chromium does not count. Nobody needs
+  Chrome's remote debugging for the default mode. `browser.requirements` checks this
+  the way browser-use 1.0.2 looks, without starting anything; it feeds
+  `GET /api/browser`, the `browser` row of `nexus doctor`, and the **Browser tools**
+  status row in Settings > Browser (TUI and NSH: `ready` or `not ready`, the browser
+  and profile, each gap with its fix). A browser call that would fail for one of
+  these reasons fails at once with the same text instead of starting browser-use.
 - **One process per session**, started by the session's first browser call (never at
   session start; the first start downloads the package, so allow up to 180 s) and
   stopped when the daemon stops. If it dies, the running call fails and says the next

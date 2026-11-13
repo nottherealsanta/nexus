@@ -91,4 +91,5 @@ change as the code.
 | HTTP API and event stream | [docs/api.md](docs/api.md) |
 | Daemon, projects, sessions, turns, approvals | [docs/daemon.md](docs/daemon.md) |
 | The Manager (voice agent above all sessions): hidden sessions, tools, authority, cards, navigation | [docs/manager.md](docs/manager.md) |
+| Tabs, groups and splits (files, terminals, sessions as tabs; plan 45) | [docs/layout.md](docs/layout.md) |
 | ZMX: Claude Code / Antigravity CLIs as child sessions | [docs/external-workers.md](docs/external-workers.md) |

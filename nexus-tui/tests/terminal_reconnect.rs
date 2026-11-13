@@ -10,7 +10,7 @@ use nexus_tui::{
 #[test]
 fn terminal_reconnects_read_only_without_replaying_pending_input() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
+    draw(&mut app, 120, 36);
     app.terminal_panel.terminals.push(
         serde_json::from_value(serde_json::json!({
             "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
@@ -18,7 +18,7 @@ fn terminal_reconnects_read_only_without_replaying_pending_input() {
         }))
         .unwrap(),
     );
-    press(&mut app, &["down", "enter"]);
+    app.terminal_created("t1".into());
     let generation = app.terminal_panel.generation;
     app.terminal_event(TerminalEvent::Attached {
         generation,

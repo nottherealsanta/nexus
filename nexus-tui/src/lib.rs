@@ -22,6 +22,7 @@ pub mod diff;
 pub mod discovery;
 pub mod editor;
 pub mod frames;
+pub mod groups;
 pub mod images;
 pub mod indicator;
 pub mod inspector;

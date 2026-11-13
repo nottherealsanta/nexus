@@ -53,6 +53,14 @@ export const manifest = {
    "alert.open",
    "drawer.open",
    "layout.narrow",
+   "layout.tab_active",
+   "layout.split_multiple",
+   "layout.can_join_right",
+   "layout.can_join_down",
+   "layout.has_left",
+   "layout.has_right",
+   "layout.has_up",
+   "layout.has_down",
    "terminal.open",
    "terminal.selected",
    "terminal.focused",
@@ -321,7 +329,48 @@ export const manifest = {
    ],
    "default": "file",
    "anchored": "centre",
-   "note": "The page keeps its layout underneath; a click outside closes it, and long lines wrap."
+   "note": "SUPERSEDED by [navigation.layout] (plan 45): files and diffs open as tabs, not in a modal. Client agents remove this table, the check_manifest.py panel rule and the editor modal together."
+  },
+  "layout": {
+   "region": "between_sidebars",
+   "tab_kinds": [
+    "session",
+    "file",
+    "diff",
+    "terminal",
+    "browser"
+   ],
+   "tab_identity": "kind + resource id",
+   "node_kinds": [
+    "split",
+    "group"
+   ],
+   "split_directions": [
+    "row",
+    "column"
+   ],
+   "persistence": "client_local_per_project_worktree",
+   "narrow": "focused_group_only",
+   "group_menu_glyph": "\u22ef",
+   "min_pane_cells_tui": [
+    20,
+    5
+   ],
+   "phone": "excluded",
+   "model_sees": "nothing",
+   "note": "Layout is a tree: a split has a direction, children and ratios; a leaf is a group with ordered tabs, an active tab and an id. One group is focused. Splits nest freely; one that would leave a pane under the minimum is refused with the layout.too_small toast. Not shared through Core.",
+   "drop_zones": {
+    "body": [
+     "left",
+     "right",
+     "top",
+     "bottom",
+     "centre"
+    ],
+    "strip": "reorder_or_move",
+    "modifier_copy": "alt",
+    "cancel": "esc"
+   }
   },
   "waiting_card": {
    "position": "above_composer",
@@ -864,7 +913,33 @@ export const manifest = {
   "git.summary.one": "{files} file changed \u00b7 +{added} \u2212{removed}",
   "git.summary.many": "{files} files changed \u00b7 +{added} \u2212{removed}",
   "git.groups": "{staged} staged \u00b7 {unstaged} unstaged \u00b7 {untracked} untracked",
-  "git.folder": "{name}  {count}"
+  "git.folder": "{name}  {count}",
+  "layout.too_small": "Not enough room to split here (a pane needs at least {cols} \u00d7 {rows}).",
+  "layout.no_neighbour": "No group {direction} of this one.",
+  "layout.hidden_groups.one": "1 group hidden",
+  "layout.hidden_groups.many": "{count} groups hidden",
+  "layout.hidden_groups.hint": "Widen the window to see every group.",
+  "layout.menu.split_right": "Split right",
+  "layout.menu.split_down": "Split down",
+  "layout.menu.join_right": "Join right",
+  "layout.menu.join_down": "Join down",
+  "layout.menu.close_tab": "Close tab",
+  "layout.menu.close_group": "Close group",
+  "layout.menu.open_to_side": "Open to the side",
+  "layout.menu.tooltip": "Group actions",
+  "layout.unsaved.title": "Save changes to {name}?",
+  "layout.unsaved.body": "Your changes will be lost if you discard them.",
+  "layout.unsaved.group": "{count} files in this group have unsaved changes.",
+  "layout.unsaved.save": "Save",
+  "layout.unsaved.discard": "Discard",
+  "layout.unsaved.cancel": "Cancel",
+  "layout.terminal.split": "New terminal",
+  "layout.drop.cancelled": "Drag cancelled."
+ },
+ "layout": {
+  "strings_pending": {
+   "layout.restore.dropped": "Some tabs from your last layout are gone and were not restored."
+  }
  },
  "command": [
   {
@@ -1157,7 +1232,7 @@ export const manifest = {
     "palette",
     "menu"
    ],
-   "note": "Toggles the dock, including while the terminal screen has focus; the key is never sent to the shell. Closing the dock detaches, never terminates."
+   "note": "Plan 45 (docs/terminals.md): no dock. Focuses the most recent terminal tab, or opens a new terminal tab in a split below the focused group when none exists. Works while a terminal screen has focus; the key is never sent to the shell. Closing a terminal tab terminates it (with the running-terminal prompt). The clients are being migrated; until then the old dock toggle applies."
   },
   {
    "id": "terminal.new",
@@ -1169,7 +1244,8 @@ export const manifest = {
    "unavailable_reason": "Open Terminal first.",
    "placement": [
     "panel"
-   ]
+   ],
+   "note": "New terminal tab in the focused group (a split below when the focused group has no terminal). Plan 45: the panel placement means the terminal tab toolbar."
   },
   {
    "id": "terminal.rename",
@@ -1193,7 +1269,8 @@ export const manifest = {
    "unavailable_reason": "Select a terminal first.",
    "placement": [
     "panel"
-   ]
+   ],
+   "note": "SUPERSEDED by layout.tab_close (plan 45): closing a terminal tab terminates it, asking first while it runs. Client agents remove this entry."
   },
   {
    "id": "terminal.acquire",
@@ -1259,7 +1336,270 @@ export const manifest = {
    "unavailable_reason": "The terminal screen does not have focus.",
    "placement": [
     "panel"
+   ],
+   "note": "SUPERSEDED by plan 45: there is no resource list or dock. Ctrl+] returns focus from the terminal screen to the group strip. Client agents may rename the behaviour; the key stays."
+  },
+  {
+   "id": "layout.split_right",
+   "title": "Split right",
+   "category": "navigation",
+   "leader": [
+    "\\"
+   ],
+   "when": [
+    "layout.tab_active"
+   ],
+   "unavailable_reason": "Open a tab first.",
+   "placement": [
+    "palette",
+    "menu",
+    "panel"
+   ],
+   "note": "File, diff and session tabs are shown again in a new group to the right (shared buffer); a terminal tab creates a new terminal in the new group. Refused with the layout.too_small toast under the minimum."
+  },
+  {
+   "id": "layout.split_down",
+   "title": "Split down",
+   "category": "navigation",
+   "leader": [
+    "-"
+   ],
+   "when": [
+    "layout.tab_active"
+   ],
+   "unavailable_reason": "Open a tab first.",
+   "placement": [
+    "palette",
+    "menu",
+    "panel"
+   ],
+   "note": "As split right, below the focused group."
+  },
+  {
+   "id": "layout.join_right",
+   "title": "Join right",
+   "category": "navigation",
+   "leader": [
+    "shift+right"
+   ],
+   "when": [
+    "layout.can_join_right"
+   ],
+   "unavailable_reason": "There is no group to the right to join.",
+   "placement": [
+    "palette",
+    "panel"
+   ],
+   "note": "Moves the focused group's tabs into the neighbour to the right (appended, the active tab stays active) and closes the split. Not shown in the group menu when not possible."
+  },
+  {
+   "id": "layout.join_down",
+   "title": "Join down",
+   "category": "navigation",
+   "leader": [
+    "shift+down"
+   ],
+   "when": [
+    "layout.can_join_down"
+   ],
+   "unavailable_reason": "There is no group below to join.",
+   "placement": [
+    "palette",
+    "panel"
+   ],
+   "note": "As join right, into the neighbour below."
+  },
+  {
+   "id": "layout.focus_left",
+   "title": "Focus group left",
+   "category": "navigation",
+   "leader": [
+    "left"
+   ],
+   "when": [
+    "layout.has_left"
+   ],
+   "unavailable_reason": "There is no group to the left.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Focus moves by geometry to the nearest group in that direction."
+  },
+  {
+   "id": "layout.focus_right",
+   "title": "Focus group right",
+   "category": "navigation",
+   "leader": [
+    "right"
+   ],
+   "when": [
+    "layout.has_right"
+   ],
+   "unavailable_reason": "There is no group to the right.",
+   "placement": [
+    "palette"
    ]
+  },
+  {
+   "id": "layout.focus_up",
+   "title": "Focus group up",
+   "category": "navigation",
+   "leader": [
+    "up"
+   ],
+   "when": [
+    "layout.has_up"
+   ],
+   "unavailable_reason": "There is no group above.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "layout.focus_down",
+   "title": "Focus group down",
+   "category": "navigation",
+   "leader": [
+    "down"
+   ],
+   "when": [
+    "layout.has_down"
+   ],
+   "unavailable_reason": "There is no group below.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "layout.move_left",
+   "title": "Move tab to group left",
+   "category": "navigation",
+   "leader": [
+    "alt+left"
+   ],
+   "when": [
+    "layout.tab_active",
+    "layout.has_left"
+   ],
+   "unavailable_reason": "There is no group to the left.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Moves the active tab; the target group becomes focused and the source group is removed when it empties."
+  },
+  {
+   "id": "layout.move_right",
+   "title": "Move tab to group right",
+   "category": "navigation",
+   "leader": [
+    "alt+right"
+   ],
+   "when": [
+    "layout.tab_active",
+    "layout.has_right"
+   ],
+   "unavailable_reason": "There is no group to the right.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "layout.move_up",
+   "title": "Move tab to group up",
+   "category": "navigation",
+   "leader": [
+    "alt+up"
+   ],
+   "when": [
+    "layout.tab_active",
+    "layout.has_up"
+   ],
+   "unavailable_reason": "There is no group above.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "layout.move_down",
+   "title": "Move tab to group down",
+   "category": "navigation",
+   "leader": [
+    "alt+down"
+   ],
+   "when": [
+    "layout.tab_active",
+    "layout.has_down"
+   ],
+   "unavailable_reason": "There is no group below.",
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "layout.tab_close",
+   "title": "Close tab",
+   "category": "navigation",
+   "leader": [
+    "w"
+   ],
+   "when": [
+    "layout.tab_active"
+   ],
+   "unavailable_reason": "Open a tab first.",
+   "placement": [
+    "palette",
+    "menu",
+    "panel"
+   ],
+   "note": "Closes the focused group's active tab of any kind. A file with unsaved changes asks layout.unsaved.title (Save, Discard, Cancel); a running terminal asks before it is terminated; a session tab only closes the tab. Closing the last tab of a group removes the group. session.tab_close (alt+x, /close) and session.tab_next / session.tab_prev (alt+], alt+[) keep their ids and act on the focused group's tabs."
+  },
+  {
+   "id": "layout.group_close",
+   "title": "Close group",
+   "category": "navigation",
+   "leader": [
+    "shift+w"
+   ],
+   "when": [
+    "layout.split_multiple"
+   ],
+   "unavailable_reason": "The centre has only one group.",
+   "placement": [
+    "palette",
+    "menu"
+   ],
+   "note": "Closes every tab of the focused group and gives its space to the sibling. A group holding unsaved files asks once for all of them (Save, Discard, Cancel); a running terminal asks before it is terminated. Absent from the group menu when there is only one group."
+  },
+  {
+   "id": "layout.open_to_side",
+   "title": "Open to the side",
+   "category": "navigation",
+   "when": [
+    "layout.tab_active"
+   ],
+   "unavailable_reason": "Select a file, diff or session first.",
+   "placement": [
+    "palette",
+    "row_menu"
+   ],
+   "note": "Opens the selected resource in the group to the right, creating it if needed. Pointer form: Ctrl+click (TUI) or Cmd/Ctrl+click (NSH) on a file, diff or session row. No default key."
+  },
+  {
+   "id": "layout.group_menu",
+   "title": "Group menu",
+   "category": "navigation",
+   "leader": [
+    "."
+   ],
+   "when": [
+    "layout.tab_active"
+   ],
+   "unavailable_reason": "Open a tab first.",
+   "placement": [
+    "palette",
+    "panel"
+   ],
+   "note": "The menu behind the strip's right-end glyph (navigation.layout.group_menu_glyph): Split right, Split down, Join right and Join down (the last two only when possible), Close tab. Also opened by clicking the glyph."
   },
   {
    "id": "sidebar.left.toggle",

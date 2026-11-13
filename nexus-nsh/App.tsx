@@ -6,9 +6,7 @@ import { LeftSidebar, SessionRail } from "./src/ui/sidebar";
 import { PhoneShell } from "./src/ui/mobile/shell";
 import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
-import { FilePanel } from "./src/ui/editor";
-import { TerminalPanel } from "./src/ui/terminal";
-import { terminalOpen } from "./src/terminal-panel";
+import { installLayout } from "./src/layout-state";
 import { ContextDetailModal } from "./src/ui/newsession";
 import { SubagentDoneModal } from "./src/ui/timeline";
 import { ManagerContextModal } from "./src/ui/manager/context-modal";
@@ -30,7 +28,7 @@ import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
 import { Splash } from "./src/ui/splash";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
-import { coreReady, coreUrl, m, model, selectSession, isNarrow, leftOpen, loadPrefs, native, panelOpen, phone, phonePage, railShown, startApp, syncView, themeChoice, viewed } from "./src/store";
+import { coreReady, coreUrl, m, model, selectSession, isNarrow, leftOpen, loadPrefs, native, phone, phonePage, railShown, startApp, syncView, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
 // A value import, though nothing is read from it: `nsh package` links a native UI set into the web runtime only
 // when the bundle imports it, and the modules look it up by name (`nativeModule`), which the packager cannot see.
@@ -69,6 +67,7 @@ function App() {
   effect(() => { rightWidthHint.w = windowSize().width; });
   effect(() => { syncView(); });
   installFileWatch();
+  if (!phone) installLayout();
   effect(() => { if (platform.os === "macos") Window.setTitleBar({ style: "hidden", height: 44 }); });
   effect(() => { if (!phone) installTray(); });
   void colorScheme;
@@ -90,8 +89,6 @@ function App() {
           </View>
           <Drawers />
         </View>
-        <If when={panelOpen()}><FilePanel /></If>
-        <If when={terminalOpen()}><TerminalPanel /></If>
         </>}><PhoneShell /></If>
         <ContextDetailModal />
         <SubagentDoneModal />

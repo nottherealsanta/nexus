@@ -139,6 +139,19 @@ describe("phone sessions (plans/05 5.2)", () => {
   });
 });
 
+describe("phone ignores the tab layout (plan 45)", () => {
+  test("a session view has no group strip, tabs, splits or saved layout, and the three tabs stay", async () => {
+    const app = await openPhone();
+    // The three tabs on the list screen; the conversation is a page over them (its drawer switches sessions).
+    for (const tab of ["sessions", "manager", "settings"]) expect(app.shows(`id:phone-tab-${tab}`)).toBe(true);
+    expect(app.count("id:phone-tabs")).toBe(1);
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:phone-conversation");
+    for (const id of ["groups", "group-strip-g1", "group-menu-g1", "session-tab-ses_1", "new-session-tab", "terminal-panel", "file-panel"]) expect(app.shows(`id:${id}`)).toBe(false);
+    expect(Object.keys(await app.storage()).some((k) => k.startsWith("nexus.layout."))).toBe(false);
+  });
+});
+
 describe("phone approval card", () => {
   test("Allow once, Always allow and Deny with a note", async () => {
     const app = await openPhone();

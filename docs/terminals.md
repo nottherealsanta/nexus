@@ -2,38 +2,38 @@
 
 This is the Core terminal slice of [plans/done/02-terminal.md](../plans/02-terminal.md).
 The browser resource is separate work. Both desktop clients expose the shared
-terminal dock, resource list, creation, attachment, screen, control, input and
+terminal tabs, creation, attachment, screen, control, input and
 resize operations described below; see their READMEs for current limitations.
 
 ## Client behaviour
 
-The desktop workspace has a bottom terminal dock below the composer and activity bar;
-mobile never exposes it. The dock holds only terminals a user opened; nothing the
-agent runs appears there. The terminal-shell activity indicator shows the terminal
-count; clicking it opens or closes the dock, remembering its state. **``Ctrl+` ``** toggles the dock from anywhere, including while the
-terminal screen owns the keys; **`Ctrl+~`** and the Shift spellings (**``Ctrl+Shift+` ``**,
-**`Ctrl+Shift+~`**) are the same physical key and do the same. The shortcut is never
-forwarded to the shell. Legacy terminals that collapse ``Ctrl+` `` and `Ctrl+~` into NUL
-look like Ctrl+Space, which Nexus deliberately leaves to the shell instead of
-hijacking. Closing with the shortcut or Hide detaches and never terminates.
+> **Being migrated (plan 45, 2026-11-13).** This section describes the target: terminals are tabs in the layout
+> ([layout.md](layout.md)) and there is no dock. Until the TUI and NSH migrations land, both clients still show the
+> bottom dock with its own tab strip and a hide action; treat any dock behaviour in the code as the old design.
+
+Terminals are **tabs** (kind `terminal`) in the desktop layout's groups, beside session, file and diff tabs; mobile
+never exposes them. Only terminals a user opened appear; nothing the agent runs does. The terminal-shell activity
+indicator shows the terminal count; clicking it does what **``Ctrl+` ``** does: focus the most recent terminal tab, or,
+when none exists, open a new terminal in a split below the focused group. The shortcut works from anywhere, including
+while a terminal screen owns the keys; **`Ctrl+~`** and the Shift spellings (**``Ctrl+Shift+` ``**, **`Ctrl+Shift+~`**)
+are the same physical key. It is never forwarded to the shell. Legacy terminals that collapse ``Ctrl+` `` and `Ctrl+~`
+into NUL look like Ctrl+Space, which Nexus deliberately leaves to the shell instead of hijacking.
 The agent's running background bash jobs have their own **N shell** indicator, which
 opens the Shells modal; the user can stop a running job there (↑/↓ select, `s` or **Stop**); see [tools.md](tools.md#background-bash-jobs). The distinct
-**kernel** indicator has no number (there is exactly one kernel). The dock header
-reads **Terminals (N)**.
-Each terminal has a tab showing a running/exited status dot, its name, and a close
-**×**; **+** creates a terminal. Select a tab to switch, and double-click it or use
-the pencil control to rename. The compact toolbar orders New, Rename, Close,
-Take/Release control, Copy output and Hide terminal panel. Controls show descriptive
+**kernel** indicator has no number (there is exactly one kernel).
+Each terminal tab shows a running/exited status dot, its name and a close **×**. A new terminal opens from the group
+menu or the palette (**New terminal**); splitting a terminal tab creates a new terminal in the new group, not a second
+view of the same PTY. Double-click the tab or use its pencil control to rename. A terminal tab's toolbar orders
+Rename, Take/Release control and Copy output. Controls show descriptive
 hover tooltips in both clients; text actions use square brackets, including
 `[Take control]` / `[Release control]` when terminal-safe lock glyphs are unavailable.
 Taking or releasing control is always explicit.
-Opening or creating a terminal takes control if available and focuses its screen;
-otherwise a read-only banner offers **Take control**. Closing the dock detaches;
-the tab close action terminates. Closing a running terminal first asks
+Opening or creating a terminal tab takes control if available and focuses its screen;
+otherwise a read-only banner offers **Take control**. There is no hiding or detaching by closing: closing a terminal
+tab terminates it. Closing a running terminal first asks
 `Close running terminal?` with **Close terminal** and **Cancel**. An exited
-terminal can be closed without that warning. Closed resources are omitted from the
-list; opening the dock prefers a running resource, falling back to an ended one.
-An exit frame immediately marks its tab ended and disables input, even if an
+terminal closes without that warning. Closed resources are omitted from the
+restored layout. An exit frame immediately marks its tab ended and disables input, even if an
 older successful control request is still completing.
 
 The screen receives input only while focused and while this attachment holds
@@ -46,10 +46,9 @@ The screen uses the retained replay and subsequent live output; this is not a
 lossless screen checkpoint. Scrollback is bounded.
 
 When the screen has focus, keyboard input, including Esc and Ctrl+C, belongs to
-the terminal rather than global Nexus shortcuts, except the dock toggle above.
-**Ctrl+]** returns focus to the resource list without sending that key to the
-shell; from the list, Esc closes the panel. Closing the panel returns focus to
-the composer. Paste goes only to the focused terminal, using bracketed paste when
+the terminal rather than global Nexus shortcuts, except the ``Ctrl+` `` shortcut above.
+**Ctrl+]** returns focus to the group's tab strip without sending that key to the
+shell. Closing the tab moves focus to the group's next tab, or to the composer when the group is gone. Paste goes only to the focused terminal, using bracketed paste when
 requested by the application. Mouse interaction is owned by the terminal screen
 when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selection and an explicit **Copy** action
 are required before emitting OSC 52. Escape sequences in terminal output never
@@ -111,14 +110,14 @@ controller or type in this version.
 
 ## Agent-control boundary
 
-The terminal dock is a user-controlled surface, not an additional agent tool.
+Terminal tabs are a user-controlled surface, not an additional agent tool.
 The approved `bash`, `bash_output` and `bash_kill` tools are the agent's only
 execution path; they never create, read or type into a terminal resource.
 
 | Operation | Current authority and scope |
 | --- | --- |
 | Start a command with `bash` | Existing tool permission checks, visible arguments and result; one invocation, not a terminal-control grant |
-| Send raw keystrokes, paste or signals through the dock | User controller only; attachment-scoped, revoked on detach, overflow, disconnect or Core restart |
+| Send raw keystrokes, paste or signals through a terminal tab | User controller only; attachment-scoped, revoked on detach, overflow, disconnect or Core restart |
 | Acquire another viewer's writer control | Rejected; the current controller must release it first |
 | Clipboard, files, URLs or credentials requested by terminal output | Output grants no authority; clipboard copy requires an explicit user action, other actions are not executed by the terminal renderer |
 | Destructive commands or credential-bearing input | Same host-user powers as a local shell; neither PTY parsing nor command allow patterns make interactive input safe |

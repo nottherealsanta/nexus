@@ -12,24 +12,28 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
-**Terminal** in the command palette opens the Core terminal panel, and
-``Ctrl+` `` toggles it from anywhere, including while the terminal screen owns
-the keys. ``Ctrl+Shift+` `` / `Ctrl+~` spell the same physical key. The toggle
-is never sent to the shell; hiding the dock detaches and returns focus to the
-composer. Use Up/Down and Enter to create a terminal or attach to a listed one.
-On an attached terminal, `c` takes control and `r` releases it; Enter on the
-selected row focuses its screen. Ctrl+] returns to the list and Esc from the
-list detaches.
+**Terminal** in the command palette, and ``Ctrl+` `` from anywhere (including while
+the terminal screen owns the keys), focus the most recent terminal tab, or open a new
+terminal in a split below the focused group when there is none. ``Ctrl+Shift+` `` /
+`Ctrl+~` spell the same physical key. The shortcut is never sent to the shell. A
+terminal is a tab (`●` running, `○` ended) in a group, beside file, diff and session
+tabs; there is no dock and no hiding. The group menu and the palette (**New
+terminal**) open more; splitting a terminal tab creates a new terminal in the new
+group. Closing a terminal tab terminates it (a running one asks `Close running
+terminal?` first). On the focused terminal tab `c` takes control, `r` releases it and
+Enter focuses its screen; Ctrl+] hands the keys back to the strip.
 Input is sent only while this attachment has control. Terminal applications receive
 mouse events when they request them; hold Shift to select text instead.
-The compact dock toolbar offers new, rename, close, take/release control, copy and
-hide; hover a control for its label. The dock holds only the user's terminals; the
+The toolbar row above the screen offers rename, take/release control, attach and
+copy; hover a control for its label. Terminals are the user's only; the
 agent's running background shells have their own `N shell` indicator, which opens the Shells modal.
 In the Shells modal, ↑/↓ select a shell and `s` (or its `[stop]` / **Stop** action) stops a running one (`DELETE /api/bash/{id}`).
-Closed resources are hidden and opening the dock prefers a running terminal.
+The terminal list is read when a restored layout has terminal tabs to check; closed
+resources are dropped from the layout. The PTY resizes with its pane (controller only).
 Exit immediately disables input and updates the tab; a late control acknowledgment
 cannot make an ended terminal writable again. `--dump-frame` also runs the real
-terminal attachment and stream, so dock captures include the actual VT screen.
+terminal attachment and stream, so captures include the actual VT screen. Every terminal
+tab that is drawn streams into its own screen; only the focused one takes input and control.
 
 **Attach selected output** (`[Attach]`) freezes the rendered terminal selection and
 previews the exact payload before **Add to draft**. Use Up/Down or PageUp/PageDown
@@ -93,8 +97,8 @@ model change), provider, effort, and on the right the `╱` meter with
 The first row is a band on the chrome surface (`surface.sidebar`, shared
 with both sidebars). It holds the centred left toggle over the project rail, the
 `[Sessions]` / `[Files]` tabs over the left sidebar, aligned with session titles (the drawer's first row when narrow), the
-session tabs, the waiting status at the centre's right edge, the notification
-count and the right toggle. Sidebars are 34 / 36 cells from 160 columns and 28 / 30
+breadcrumb of the viewed session, the waiting status at the centre's right edge, the notification
+count and the right toggle. The session tabs are not here: they are tabs of the centre's groups (below). Sidebars are 34 / 36 cells from 160 columns and 28 / 30
 below. `paint::scrim` dims a buffer under a modal (see the modal recipe below). Every surface is a
 rectangle on the cell grid; the TUI has no rounded corners, and only circular status marks and
 meters are round. The project rail is five cells wide and always there, from 70 columns, whether
@@ -146,7 +150,14 @@ before deleting it. Steer rows keep the keyboard selection and the existing keys
 but have no action icons. The keyboard path is unchanged: Enter edits, Backspace
 removes, Shift+↑/↓ moves. Up from an empty composer selects the last pending row;
 on a held queue, `n` or the shared **Send next** control releases the next input.
-The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`) in one fixed-width cell for every tab, root or New session, so the strip keeps its rhythm and a long title ellipsises; hovering a title too wide for its tab scrolls it to its end inside its dedicated title region, so the status mark and the fixed `×` never move or get overwritten; reduced motion instead shows the full title in a tooltip. Below the tabs the page keeps exactly one heading row: a root session leaves it blank (the full title is already its tab), while a viewed subagent shows its title on the left and right-aligned `agent · model · provider · effort` metadata, shifted right by a full-height four-cell muted-grey back strip at the page's far left. The strip runs from the heading through the composer, centres its `←` both vertically and horizontally, and the whole strip is clickable; it and Left outside the composer, text fields, the editor and overlays return straight to the root. Esc still returns to the immediate parent, and a root session has no strip. There is no second subagent-tab row; child cards remain the navigation path to a subagent. The viewed tab is bold on the page surface, the others muted on the band. `alt+d`
+The centre is a tree of groups of tabs (plan 45, [docs/layout.md](../docs/layout.md); `groups.rs` is the pure
+tree, `app/tabs.rs` the glue and `render/groups_ui.rs` the strips). Each group has a one-row strip of tabs
+(`×`, `+` for a new session, `⋯` for the group menu; `alt+x`, `alt+[`, `alt+]` act on the focused group) in
+one cell width for every tab, so a long title ellipsises, and a gap-free strip scrolls around the active tab with a
+`…`. A group that is not focused still shows its session's own timeline, read-only (its view is pinned and watched
+while drawn); only the focused group has the composer. Session tabs show their status mark, files a `●` when they hold unsaved text, terminals a status dot and diffs
+`±`. A group's active tab is bold on the page surface when the group is focused (secondary when not); the others
+are muted on the band. Below the strip the session page keeps exactly one heading row: a root session leaves it blank (the full title is already its tab), while a viewed subagent shows its title on the left and right-aligned `agent · model · provider · effort` metadata, shifted right by a full-height four-cell muted-grey back strip at the far left of the centre. The strip runs from the heading through the composer, centres its `←` both vertically and horizontally, and the whole strip is clickable; it and Left outside the composer, text fields, the editor and overlays return straight to the root. Esc still returns to the immediate parent, and a root session has no strip. There is no second subagent-tab row; child cards remain the navigation path to a subagent. The viewed tab is bold on the page surface, the others muted on the band. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
@@ -351,8 +362,10 @@ and a click or `files.root_toggle` switches between the project and the open ses
 worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
 folders are bold, ignored entries are muted and can be hidden, and Git status letters are
 right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens the
-editable, syntax-highlighted source in a full-height modal, centred across the dimmed page. The header has
-`‹ Back`, the path (basename bold), and `editing`, `● modified` or `changed on disk · reload`.
+editable, syntax-highlighted source as a tab of the focused group (the group's body; no modal, no dimmed page). The first
+row has the path (basename bold), and `editing`, `● modified` or `changed on disk · reload`. Esc ends a search but does
+not close the file; close the tab with its `×`, `alt+x` or Ctrl+X W (Save, Discard or Cancel when it holds unsaved text).
+One buffer serves every tab of a file, and unsaved text survives switching to another tab.
 The vendored editor supplies line numbers (the cursor's line bright), quiet `▾`/`▸` fold marks and horizontal
 scrolling for long lines; the wheel scrolls the text without moving the cursor, and a click or drag places it or selects;
 NSH currently soft-wraps, so long-line wrapping parity remains an unresolved verification gate,
@@ -468,19 +481,21 @@ unknown), folded by default and toggled like a group (Enter/Space, a click,
 Left/Right). Open, the copied messages render as usual, three cells in under
 the chevron; the `[Nexus fork]` task message after them is a normal user band.
 A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
-`ZMX · Claude Code` or `ZMX · Antigravity` on its parent's child card and in its heading. Its timeline
+with its agent name on the parent's child card, with `ZMX · Claude Code` or `ZMX · Antigravity` in the metadata below and in its heading. Its timeline
 opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
 `Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
 own subagents show read-only inside the calling tool's card. As in NSH.
+Group headers, thoughts, tools, child cards and notices share one left icon column and label edge;
+expanded members have no tree prefix. Every icon occupies one cell, like the group fold.
 Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,
 from `paint::verb_glyph` and `[glyphs.verb]` in `theme.toml`) that the status
 glyph replaces while running, failed, denied or waiting. Opening a member shows
-the old box (`┌ │ ╰` in `border.strong`): the command's first two rows, the last
+indented output (`│ ╰` in `border.strong`): the command's first two rows, the last
 eight output rows behind `↑ N earlier lines · enter show all` (a diff or the raw
 view keeps a head and a tail), and a `raw` toggle on the head row. `o`, or Enter
 on the open tool, shows all; `r` raw and `i` inspector work on a focused tool.
 Reasoning reads `◇ Thought · preview` (its own icon where a group would show a
-fold; within an activity tree the `◇` follows the tree glyph, ASCII `o Thought`;
+fold, including inside an expanded group; ASCII `o Thought`;
 no duration, see Interface notes) and strips raw Markdown emphasis from the
 one-line preview. It stays open with its last ten wrapped lines while it streams,
 with a count of earlier lines hidden. Once finished, opening it shows the full
@@ -797,7 +812,7 @@ the height stays steady), each with its title as muted help and the reason when
 it is off. A token starting with `@` asks Core for paths
 (`GET /api/project/{id}/files/search`, directories end with `/`), keeps replies
 cached per token, drops a reply for an old token and pads a short list from an
-empty-query listing. Up/Down move, Tab or Enter accepts (`@path ` or `/name `;
+empty-query listing. Up/Down move, Tab or Enter accepts without sending (`@path ` or `/name `;
 a `dir/` gets no space so completion continues inside it), Enter on a lone
 `/command` runs the highlighted one, a click accepts a row, and Esc hides the
 popup for that token without reaching the Esc chain. Nothing completes while a

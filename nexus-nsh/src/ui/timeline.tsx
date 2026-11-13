@@ -8,7 +8,7 @@ import { Btn, FOCUS, Icon, IconButton, UI_FONT, PROSE, Shimmer, Status, StatusRa
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
-import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
+import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
 import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
 import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
@@ -91,8 +91,6 @@ const COMMAND_ROWS = 2;
 const DECLINED = "the user declined this tool call";
 /** How long a finished group's chevron flashes the accent (the TUI's six animation frames), from theme.toml. */
 const FLASH_MS = motionDurations.flash_ms;
-/** Verb and thought icons in an open group: quieter than the 16 px chrome icons. */
-const MEMBER_ICON = 13;
 
 /** UI-only cap: the model's separate output clip stays untouched. */
 export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = DETAIL_HEAD, tail = DETAIL_TAIL): ToolDetailLine[] {
@@ -639,11 +637,11 @@ function buildStableRows(): Row[] {
             const done = res && !(background && running && !res.is_error) ? res : undefined;
             const failure = done?.is_error ? (firstLine(done.output ?? "").split("failed:").at(-1) ?? "").trim() : "";
             const end = running ? Date.now() / 1000 : child?.updated ?? 0;
-            const meta = child ? [childModel(child), child.created > 0 ? fmtDuration(end - child.created) : ""].filter(Boolean).join(" · ") : "";
+            const meta = child ? [child.worker?.label, childModel(child), child.created > 0 ? fmtDuration(end - child.created) : ""].filter(Boolean).join(" · ") : "";
             const key = `child:${id}`;
             const title = (follow ? "" : a.title || firstLine(a.prompt ?? "")) || child?.title || "";
             out.push({
-              key, kind: "child", childId: child?.id, agent: child?.worker?.label ? child.worker.label : child?.fork || a.agent === "fork" ? "fork" : follow ? child?.agent ?? a.agent ?? "child" : a.agent ?? "child",
+              key, kind: "child", childId: child?.id, agent: child?.fork || a.agent === "fork" ? "fork" : child?.agent ?? a.agent ?? "child",
               title: title.length > 48 ? `${title.slice(0, 47)}…` : title,
               state: running && !waits && !done ? "running" : done ? "done" : "idle", background: background && !follow, meta,
               outcome: done?.is_error ? (failure ? `failed ${failure.length > 60 ? `${failure.slice(0, 59)}…` : failure}` : "failed") : waits && !done ? "waiting for input" : "",
@@ -831,10 +829,9 @@ function mergeDiagnostics(flat: Row[]): Row[] {
 
 /** Append the live streaming rows without rebuilding the settled history. */
 /** What the live stream holds now; reading it inside a render follows each token. */
-function liveStream(part: "text" | "reasoning"): string {
+function liveStream(part: "text" | "reasoning", sid: string): string {
   streamRev();
-  const sel = model.selected;
-  return (sel && model.streaming.get(sel.sessionId)?.[part]) ?? "";
+  return model.streaming.get(sid)?.[part] ?? "";
 }
 // One object per session and part: a new object per token would make the list forget
 // the row's height (see `keepIdentity`), and a key without the session would let a
@@ -844,8 +841,8 @@ function streamRow(sid: string, part: "reasoning" | "text"): Row {
   let rows = streamRows.get(sid);
   if (!rows) {
     rows = {
-      reasoning: { key: `stream-r:${sid}`, kind: "reasoning", get text() { return liveStream("reasoning"); }, get open() { return open("reason:streaming", true); }, running: true },
-      text: { key: `stream-t:${sid}`, kind: "assistant", get text() { return liveStream("text"); }, streaming: true },
+      reasoning: { key: `stream-r:${sid}`, kind: "reasoning", get text() { return liveStream("reasoning", sid); }, get open() { return open("reason:streaming", true); }, running: true },
+      text: { key: `stream-t:${sid}`, kind: "assistant", get text() { return liveStream("text", sid); }, streaming: true },
     };
     streamRows.set(sid, rows);
   }
@@ -933,7 +930,8 @@ function reportHeight(row: Row, sid: string, h: number) {
   rowHeights.set({ ...cur, [key]: h });
 }
 
-function RowView(p: { r: () => Row; sid: string }) {
+/** `peer`: the row is in another group's read-only timeline (plan 45); actions on the session focus that group first. */
+function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
   const r = p.r;
   return (
     <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), p.sid, b.bounds?.size?.height ?? b.size?.height ?? 72)}>
@@ -941,7 +939,7 @@ function RowView(p: { r: () => Row; sid: string }) {
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
-            return <StartingContext sections={c.sections} total={c.total} estimated window={c.window} reconstructed={!!c.reconstructed} onInventoryToggle={(kind, name, locked) => { void toggleSessionInventory(kind, name, locked); }} />;
+            return <StartingContext sections={c.sections} total={c.total} estimated window={c.window} reconstructed={!!c.reconstructed} onInventoryToggle={(kind, name, locked) => { if (p.peer) p.peer(); else void toggleSessionInventory(kind, name, locked); }} />;
           }}
         </If>
         <If when={r().kind === "user"}>
@@ -966,7 +964,7 @@ function RowView(p: { r: () => Row; sid: string }) {
           }}
         </If>
         <If when={r().kind === "handoff"}>
-          <View class="py-2"><HandoffCard r={r as any} /></View>
+          <View class="py-2"><HandoffCard r={r as any} sid={p.sid} /></View>
         </If>
         <If when={r().kind === "notice"}>
           <If when={!!(r() as any).subagent} else={<NoticeRow text={() => (r() as any).text} />}>
@@ -1006,17 +1004,17 @@ function RowView(p: { r: () => Row; sid: string }) {
             return (
               <View class={TURN_INSET}><Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId} testID="child-card" accessibilityLabel={`${c.agent} ${c.title}`}
                 class={`items-start rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 hover:bg-accent ${FOCUS}`}>
-                <View class="flex-row items-center gap-2 max-w-full">
-                  <View class="w-4 shrink-0 items-center">
+                <View class="flex-row items-center max-w-full">
+                  <View class={ACTIVITY_CHEVRON}>
                     <If when={c.state === "running"}><Status kind="running" /></If>
                     <If when={c.state === "done"}><Text class={`${TS.base} ${agentColor(c.agent)}`}>⣿</Text></If>
                   </View>
                   <Text class={`shrink-0 ${TS.base} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
-                  <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-foreground-secondary`}>{c.title}</Text>
-                  <If when={c.background}><Text class="shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
+                  <Text style={{ numberOfLines: 1 }} class={`ml-2 shrink min-w-0 ${TS.base} text-foreground-secondary`}>{c.title}</Text>
+                  <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
                 </View>
-                <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-6`}>{c.meta}</Text></If>
-                <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-6`}>{c.outcome}</Text></If>
+                <If when={!!c.meta}><Text testID="child-meta" class={`${META} pl-3`}>{c.meta}</Text></If>
+                <If when={!!c.outcome}><Text testID="child-outcome" class={`${META} pl-3`}>{c.outcome}</Text></If>
               </Button></View>
             );
           }}
@@ -1032,7 +1030,7 @@ function RowView(p: { r: () => Row; sid: string }) {
         <If when={r().kind === "older"}>
           <If when={(r() as any).action === "load-older"} else={<Text class={`${META} py-2 ${TEXT_INDENT}`} testID="timeline-older">{(r() as any).text}</Text>}>
             <View class={`flex-row items-center py-2 ${TEXT_INDENT}`} testID="timeline-older">
-              <Button onPress={() => run("turn.load_older")} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 -ml-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
+              <Button onPress={() => { if (p.peer) p.peer(); else void run("turn.load_older"); }} testID="load-older" accessibilityLabel="Load older messages" class={`rounded-(--radius) px-2 -ml-2 ${hit("min-h-6")} justify-center hover:bg-accent ${FOCUS}`}>
                 <Text class={`${TS.base} text-foreground-secondary`}>Load older messages</Text>
               </Button>
             </View>
@@ -1071,7 +1069,7 @@ function NoticeRow(p: { text: () => string }) {
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}>
           <If when={shell()} else={<Icon name="chevron-right" size={14} class="tint-muted-foreground" />}>
-            <Icon name="shell" size={MEMBER_ICON} class="tint-muted-foreground" />
+            <Icon name="shell" size={activityIconSize("shell")} class="tint-muted-foreground" />
           </If>
         </View>
         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{label()}</Text>
@@ -1218,10 +1216,10 @@ export function handoffParts(body: string): { from: string; summary: string } {
 }
 
 /** The summary a continued session starts from: a user-message-like card of three lines; a click shows all of it. */
-function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
+function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }>; sid: string }) {
   const r = p.r;
   const lines = () => r().summary.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).filter(Boolean);
-  const origin = () => { m(); const id = viewed()?.continued_from; return id ? model.sessions.get(id) ?? null : null; };
+  const origin = () => { m(); const id = model.sessions.get(p.sid)?.continued_from; return id ? model.sessions.get(id) ?? null : null; };
   const name = () => origin()?.title ? `“${origin()!.title}”` : r().from;
   const open = () => contextDetail.set({ title: `Handoff from ${name()}`, detail: r().summary });
   return (
@@ -1235,7 +1233,7 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }> }) {
       </Button>
       <View class="flex-row gap-3">
         <Button onPress={open} class={`${FOCUS}`}><Text class={META}>Show all</Text></Button>
-        <If when={!!origin()}>{() => <Button onPress={() => openLinked("continued_from")} testID="handoff-open-original" class={`${FOCUS}`}><Text class={`${META} underline`}>Open the original session</Text></Button>}</If>
+        <If when={!!origin()}>{() => <Button onPress={() => { if (p.sid === viewed()?.id) void openLinked("continued_from"); else void selectSession(origin()!.id); }} testID="handoff-open-original" class={`${FOCUS}`}><Text class={`${META} underline`}>Open the original session</Text></Button>}</If>
       </View>
     </View>
   );
@@ -1418,9 +1416,9 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
       </Button>
       <If when={r().open}>
         <View>
-          <If when={r().hidden > 0}><Button onPress={() => timelineOpen.update((o) => ({ ...o, [r().key]: true }))} accessibilityLabel={`Show ${r().hidden} earlier activities`} class={`self-start pl-4 ${FOCUS}`}><Text class={META}>{`… ${r().hidden} earlier`}</Text></Button></If>
+          <If when={r().hidden > 0}><Button onPress={() => timelineOpen.update((o) => ({ ...o, [r().key]: true }))} accessibilityLabel={`Show ${r().hidden} earlier activities`} class={`self-start pl-3 ${FOCUS}`}><Text class={META}>{`… ${r().hidden} earlier`}</Text></Button></If>
           <Each of={r().items} key={(item) => item.key}>
-            {(item) => <ActivityItem item={item} last={() => r().items.at(-1)?.key === item().key} />}
+            {(item) => <ActivityItem item={item} />}
           </Each>
         </View>
       </If>
@@ -1443,16 +1441,13 @@ function ForkRow(p: { r: () => Extract<Row, { kind: "fork" }> }) {
   );
 }
 
-/** A member of an expanded group, on the group's tree: `├` for each member and `└` for the last, unless its box stays open. */
-function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
+/** Members keep the group's icon and label columns; only their output is indented. */
+function ActivityItem(p: { item: () => ActivityEntry }) {
   const item = p.item;
-  const ends = () => p.last() && !item().open;
   return (
-    <View class="relative pl-4" testID={p.last() ? "activity-tree-end" : "activity-tree-mid"}>
-      <View class={`absolute left-[7px] top-0 w-px bg-border-strong ${ends() ? "h-[14px]" : "bottom-0"}`} />
-      <View class="absolute left-[7px] top-[14px] w-[7px] h-px bg-border-strong" />
+    <View testID="activity-member">
       <If when={item().kind === "tool"}>
-        <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
+        <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} nested />
       </If>
       <If when={item().kind === "reasoning"}>
         <ReasoningRow x={item as () => Extract<Row, { kind: "reasoning" }>} nested />
@@ -1475,8 +1470,8 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
   return (
     <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
-        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS} ${p.nested ? "gap-2" : ""}`}>
-        <View class={p.nested ? "w-[13px] shrink-0 items-center" : ACTIVITY_CHEVRON}><Icon name="diamond" size={MEMBER_ICON} class="tint-muted-foreground" /></View>
+        class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
+        <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={activityIconSize("diamond")} class="tint-muted-foreground" /></View>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
           <Text class={`${TS.base} font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>
@@ -1509,7 +1504,7 @@ function ToolDetail(p: { line: () => ToolDetailLine }) {
   return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[12.5px] leading-5 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
-function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
+function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean }) {
   const r = p.r;
   const toggleRaw = () => toggle(`${r().key}:raw`, false);
   const markFocused = () => focusedTool.set({ key: r().key, clipped: r().clipped, toggleRaw });
@@ -1530,22 +1525,25 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
     </Button>
   );
   return (
-    <View class="py-0.5">
+    <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => {
         markFocused();
         // Enter or a press on an open, clipped row brings the rest of its output back.
         if (open() && r().clipped && !r().showAll) showAll();
         else toggle(r().key, timelineDetail() === "high");
       }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
-        class={`flex-row items-center gap-2 rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
-        <If when={live()} else={<Icon name={verbIcon(r().name)} size={MEMBER_ICON} class="tint-muted-foreground" />}>
-          {() => <View class="w-[13px] shrink-0 items-center">
+        class={`flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
+        <View class={ACTIVITY_CHEVRON}>
+        <If when={live()} else={<Icon name={verbIcon(r().name)} size={activityIconSize(verbIcon(r().name))} class="tint-muted-foreground" />}>
+          {() => <View class="w-4 shrink-0 items-center">
             <If when={r().state === "error"} else={<Status kind={stateKind()} />}>
               {/* A failed call is part of the flow: marked, never red. */}
               <Text class="text-center text-[12px] leading-5 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
             </If>
           </View>}
         </If>
+        </View>
+        <View class="flex-row flex-1 min-w-0 items-center gap-2">
         <Text class={`shrink-0 ${T.secondary} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
         <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${ARG}`}>{r().arg}</Text></If>
         <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${ARG}`}>{r().errorLine!}</Text></If>
@@ -1564,6 +1562,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         <If when={r().state === "denied"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-error shrink-0">denied</Text></If>
         <If when={r().state === "error"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
         <If when={(r().state === "done" || r().state === "running") && !!r().duration}><Text class={`${META} shrink-0`}>{r().duration!}</Text></If>
+        </View>
       </View>
       <If when={open()}>
         <View class="pl-4 pr-4 pb-1" onFocus={markFocused} onBlur={clearFocused}>
@@ -1840,6 +1839,51 @@ export function Timeline() {
             </View>
           </TimelineColumn>
         </View>
+      </If>
+    </View>
+  );
+}
+
+/**
+ * The timeline of a session another group shows (plan 45, the TUI's background timeline): built from the session's
+ * own pinned view, live, read-only (the composer stays with the focused group). It follows the end until the reader
+ * scrolls up; pressing in the group focuses it and makes the session the viewed one.
+ */
+export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
+  let ref: any;
+  let lastStable: Row[] = [];
+  let lastRows: Row[] = [];
+  const stable = computed(() => { m(); return (lastStable = keepIdentity(lastStable, model.withView(p.sid, buildStableRows) ?? [])); });
+  const rows = computed(() => {
+    streamRev();
+    const sid = p.sid;
+    return (lastRows = keepIdentity(lastRows, groupActivities(withStreaming(stable(), model.streaming.get(sid), sid), model.running.has(sid))));
+  });
+  const loaded = () => { m(); return !!model.viewOf(p.sid)?.loaded; };
+  let following = true, lastY = 0, queued = false;
+  const toEnd = () => { try { ref?.scrollToEnd({ animated: false }); } catch {} };
+  const keepEnd = () => {
+    if (!following || queued) return;
+    queued = true;
+    setTimeout(() => { queued = false; if (following) toEnd(); }, 0);
+  };
+  effect(() => { rowHeights(); rows(); untracked(keepEnd); });
+  return (
+    <View class="relative flex-1 min-h-0" testID={`peer-timeline-${p.sid}`}>
+      <If when={rows().length > 0} else={<View class="flex-1 items-center justify-center p-6"><Text class={T.sec}>{loaded() ? "No messages yet" : "Loading…"}</Text></View>}>
+        <List
+          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
+          onLayout={() => keepEnd()}
+          onScroll={(e) => {
+            const y = e.offset.y, height = e.contentSize.height;
+            const gap = Math.max(0, height - (y + e.size.height));
+            following = followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
+            lastY = y;
+          }}
+          scrollEventThrottle={16}
+        >
+          {(r) => <RowView r={r} sid={p.sid} peer={p.onFocus} />}
+        </List>
       </If>
     </View>
   );

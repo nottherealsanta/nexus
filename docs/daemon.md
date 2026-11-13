@@ -40,7 +40,8 @@ FAIL` row each for: the daemon (reachable, and its `code` fingerprint from
 `/api/info` equals the hash of the checkout's `nexus/**/*.py`, so a daemon
 started before a code change fails), sign-ins (fails with none), the models.dev
 cache age (warns past 7 days), config errors (fails), the `[web] search_url`
-container, MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
+container, the browser tools (warns when `uvx` or a Chrome, Chromium or Edge is missing, or
+Google Chrome is with `[browser] use_my_chrome` on; `browser.requirements`), MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
 Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon,
 loads a model or downloads. `nexus update` compares `/api/info`'s version with
 the latest GitHub release and never installs. The daemon's version (also sent

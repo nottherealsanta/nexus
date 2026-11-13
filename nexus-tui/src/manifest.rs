@@ -73,6 +73,9 @@ pub struct Command {
     pub keys: Option<Keys>,
     pub key_aliases: Option<KeyAliases>,
     pub key_context: Option<String>,
+    /// Ctrl+X leader sequences (the second key).
+    #[serde(default)]
+    pub leader: Vec<String>,
     #[serde(default)]
     pub when: Vec<String>,
     pub unavailable_reason: Option<String>,
@@ -384,6 +387,7 @@ mod tests {
                 "agents",
                 "tools",
                 "zmx",
+                "browser",
                 "mcp",
                 "context",
                 "dictation",

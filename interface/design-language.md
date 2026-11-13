@@ -94,10 +94,13 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   the usage units (`i`, `o`, `r`, `c`) are fainter than their counts. Durations
   read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Consecutive activity folds into a verb
   group; a live group is `Working` (old Nexus's soft shimmer) over its newest five
-  members in a `├─`/`╰─` tree, a finished one a count by verb with `+N −M` and
+  members, a finished one a count by verb with `+N −M` and
   failures that stay visible. Members lead with a verb glyph (`[glyphs.verb]` in
   `theme.toml`) that the status glyph replaces while running, failed, denied or
-  waiting; their detail is the old `┌ │ ╰` box in `border.strong` with capped
+  waiting. Groups, members, child cards and notices share one left icon column and label edge,
+  with no member tree prefix. Icons match the fold’s visible size (one TUI cell; NSH tool/thought
+  SVGs use 9–14 px canvases to match the strokes of a 14 px chevron, with shell at 12 px). Only expanded output stays
+  indented; its TUI `│ ╰` rail is in `border.strong` with capped
   output and a `raw` toggle. A single-item row shows that item's own icon where a
   group's fold would be: a thought is `◇ Thought · preview` (ASCII `o Thought`;
   italic muted preview, with raw Markdown emphasis stripped) and one finished

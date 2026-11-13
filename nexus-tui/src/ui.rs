@@ -145,6 +145,8 @@ pub enum PaletteMode {
     History,
     /// Actions on the focused sidebar row (the manifest's `row_menu` placement).
     RowMenu,
+    /// The focused group's menu behind the strip's glyph (plan 45).
+    GroupMenu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +386,13 @@ pub enum Confirmed {
         path: String,
     },
     CloseTerminal(String),
+    /// Closing a file tab with unsaved text: Save, Discard or Cancel.
+    CloseDirty {
+        group: crate::groups::GroupId,
+        tab: crate::groups::Tab,
+    },
+    /// Closing a group that holds unsaved files: Save all, Discard all or Cancel.
+    CloseDirtyGroup { group: crate::groups::GroupId },
     AttachTerminalEvidence {
         draft: String,
         payload: String,
@@ -394,8 +403,6 @@ pub enum Confirmed {
         mode: Option<String>,
     },
     Unarchive(String),
-    /// Leave the editor and drop its unsaved text (K10).
-    DiscardEdit,
     /// Read the file again and drop the unsaved text.
     ReloadEdit,
     /// A model or agent switch that would make the next request start cold (K9).
@@ -668,9 +675,16 @@ pub enum Target {
     ToggleLeft,
     ToggleRight,
     Title,
-    /// An open session's tab in the header, by position.
-    SessionTab(usize),
-    SessionTabClose(usize),
+    /// A tab in a group's strip, by group and position; its close control;
+    /// the strip's `+` (new session) and `⋯` (group menu); the body (click to
+    /// focus); a divider between groups (index into the last drawn dividers);
+    /// the marker that other groups are hidden.
+    GroupTab(crate::groups::GroupId, usize),
+    GroupTabClose(crate::groups::GroupId, usize),
+    GroupNew(crate::groups::GroupId),
+    GroupMenu(crate::groups::GroupId),
+    GroupBody(crate::groups::GroupId),
+    GroupDivider(usize),
     /// The archive control on a hovered sidebar session row.
     ArchiveSession(String),
     SessionRowMenu(usize),
@@ -752,16 +766,11 @@ pub enum Target {
     ResourceJob(usize),
     /// A running background shell's `[stop]` action: kill the job.
     ResourceStop(String),
-    TerminalTab(usize),
-    TerminalClose(usize),
-    TerminalNew,
     TerminalCopy,
     TerminalAttach,
     TerminalTakeControl,
     TerminalReleaseControl,
     TerminalRename,
-    TerminalCloseSelected,
-    TerminalPanelClose,
     /// The Files tree root line (project checkout / session worktree).
     FilesRoot,
     /// The panel header's `‹ Back`: close the file or diff panel.

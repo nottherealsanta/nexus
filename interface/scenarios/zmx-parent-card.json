@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {"id":"u", "seq":1, "created":1, "role":"user", "parts":[{"type":"text", "text":"Investigate"}]},
+    {"id":"a", "seq":2, "created":2, "role":"assistant", "parts":[{"type":"tool_call", "id":"call_zmx", "name":"session", "arguments":"{\"agent\":\"scout\",\"title\":\"Check shortcuts\",\"prompt\":\"check\"}"}]}
+  ],
+  "child": {"id":"ses_child", "project_id":"prj_1", "parent_id":"ses_1", "parent_call_id":"call_zmx", "agent":"scout", "title":"Check shortcuts", "model":"agy/gemini", "created":1, "updated":36, "worker":{"label":"ZMX · Antigravity"}},
+  "head": "Scout Check shortcuts",
+  "meta": "ZMX · Antigravity · agy/gemini · 35s"
+}

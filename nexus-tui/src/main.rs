@@ -215,7 +215,8 @@ struct Interactive {
     loading_cue: Option<tokio::task::JoinHandle<()>>,
     program_status: nexus_tui::program_status::Tracker,
     terminal_tx: mpsc::UnboundedSender<nexus_tui::terminal_panel::TerminalEvent>,
-    terminal_task: Option<tokio::task::JoinHandle<()>>,
+    /// One stream task per attached terminal, by generation.
+    terminal_tasks: std::collections::HashMap<u64, tokio::task::JoinHandle<()>>,
 }
 
 /// Draw one frame; shared by the first splash paint and the main loop.
@@ -249,8 +250,8 @@ impl Interactive {
         self.app.persist_prefs();
         for effect in std::mem::take(&mut self.app.effects) {
             match effect {
-                Effect::TerminalStop => {
-                    if let Some(task) = self.terminal_task.take() {
+                Effect::TerminalStop(generation) => {
+                    if let Some(task) = self.terminal_tasks.remove(&generation) {
                         task.abort();
                     }
                 }
@@ -259,13 +260,10 @@ impl Interactive {
                     client,
                     generation,
                 } => {
-                    if let Some(task) = self.terminal_task.take() {
-                        task.abort();
-                    }
                     let api = actions::api_for(&self.home)
                         .map(|api| nexus_tui::terminal_api::TerminalApi(api.http));
                     let tx = self.terminal_tx.clone();
-                    self.terminal_task = Some(tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         use nexus_tui::terminal_panel::TerminalEvent;
                         let result: Result<(), String> = async {
                             let api = api.ok_or("Core is not reachable")?;
@@ -294,7 +292,8 @@ impl Interactive {
                         if let Err(error) = result {
                             let _ = tx.send(TerminalEvent::Ended { generation, error });
                         }
-                    }));
+                    });
+                    self.terminal_tasks.insert(generation, task);
                 }
                 Effect::Quit => return Ok(Applied::halt(dirty)),
                 Effect::Suspend => {
@@ -521,7 +520,7 @@ impl Interactive {
     }
 
     fn shutdown(&mut self) {
-        if let Some(task) = self.terminal_task.take() {
+        for (_, task) in self.terminal_tasks.drain() {
             task.abort();
         }
         if let Some(handle) = self.capture.take() {
@@ -630,7 +629,7 @@ async fn run(
         loading_cue: None,
         program_status: nexus_tui::program_status::Tracker::default(),
         terminal_tx,
-        terminal_task: None,
+        terminal_tasks: std::collections::HashMap::new(),
     };
 
     let mut tick = tokio::time::interval(frames::TICK_INTERVAL);
@@ -805,12 +804,12 @@ const KEY_SETTLE: Duration = Duration::from_millis(350);
 struct DumpTerminal {
     tx: mpsc::UnboundedSender<nexus_tui::terminal_panel::TerminalEvent>,
     rx: mpsc::UnboundedReceiver<nexus_tui::terminal_panel::TerminalEvent>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    tasks: std::collections::HashMap<u64, tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for DumpTerminal {
     fn drop(&mut self) {
-        if let Some(task) = self.task.take() {
+        for (_, task) in self.tasks.drain() {
             task.abort();
         }
     }
@@ -841,8 +840,8 @@ async fn pump(
                         let _ = tx.send(actions::run(api, call).await);
                     });
                 }
-                Effect::TerminalStop => {
-                    if let Some(task) = terminal.task.take() {
+                Effect::TerminalStop(generation) => {
+                    if let Some(task) = terminal.tasks.remove(&generation) {
                         task.abort();
                     }
                 }
@@ -851,13 +850,10 @@ async fn pump(
                     client,
                     generation,
                 } => {
-                    if let Some(task) = terminal.task.take() {
-                        task.abort();
-                    }
                     let api = actions::api_for(home)
                         .map(|api| nexus_tui::terminal_api::TerminalApi(api.http));
                     let tx = terminal.tx.clone();
-                    terminal.task = Some(tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         use nexus_tui::terminal_panel::TerminalEvent;
                         let result: Result<(), String> = async {
                             let api = api.ok_or("Core is not reachable")?;
@@ -886,7 +882,8 @@ async fn pump(
                         if let Err(error) = result {
                             let _ = tx.send(TerminalEvent::Ended { generation, error });
                         }
-                    }));
+                    });
+                    terminal.tasks.insert(generation, task);
                 }
                 _ => {}
             }
@@ -979,7 +976,11 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
         app.set_size(w, h);
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut terminal = DumpTerminal { tx, rx, task: None };
+        let mut terminal = DumpTerminal {
+            tx,
+            rx,
+            tasks: std::collections::HashMap::new(),
+        };
         let home = discovery::home().unwrap_or_default();
         for token in &args.keys {
             // A frame first, so keys that need the last layout (scrolling,

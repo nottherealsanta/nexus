@@ -89,3 +89,42 @@ def test_builtin_bodies_do_not_describe_tools():
         assert "{{tools}}" not in agent.prompt
         for name in ("read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "session"):
             assert f"`{name}`" not in agent.prompt
+
+
+@pytest.mark.parametrize("name, fragments", [
+    ("orchestrate", (
+        "not as a mandatory pipeline",
+        "# Focus the scout",
+        "# Plan only when needed",
+        "# Assign bounded builds",
+        "**Owned files / boundaries**",
+        "disjoint edit ownership",
+        "Check the actual diff and evidence against each acceptance criterion",
+        "Do not silently change the model or provider",
+    )),
+    ("scout", (
+        "not an exhaustive repository survey",
+        "A tool budget is a ceiling, not a target",
+        "**Validation**",
+        "suggested commands are not executed tests",
+        "**Open questions and next step**",
+    )),
+    ("plan", (
+        "do not repeat broad discovery",
+        "owned files / boundaries",
+        "acceptance criteria",
+        "without overlapping edits",
+        "Stop when the plan is actionable; do not implement it",
+    )),
+    ("build", (
+        "# Delegated assignments",
+        "inspect the current edit targets",
+        "Do not edit another worker's files",
+        "report it to the parent early",
+        "Suggested checks are not completed checks",
+    )),
+])
+def test_builtin_workflow_contracts(name, fragments):
+    agent = agents.parse(agents.BUILTIN_DIR / f"{name}.md", "builtin")
+    for fragment in fragments:
+        assert fragment in agent.prompt

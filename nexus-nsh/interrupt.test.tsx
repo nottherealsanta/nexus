@@ -26,6 +26,15 @@ const network = {
 };
 
 describe("interrupt", () => {
+  test("the stop button sends an interrupt", async () => {
+    const app = await open("./ComposerFixture.tsx", { network, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:stop");
+    await app.press("id:stop");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/interrupt")));
+  });
+
   test("returns steers and queued messages to the composer on new lines", async () => {
     const app = await open("./ComposerFixture.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:session-ses_1");

@@ -203,6 +203,10 @@ pub struct Model {
     /// Views of recently viewed sessions, most recent first, at most
     /// `VIEW_CACHE`. Events reach them as they reach the selected view.
     pub cached: Vec<SelectedView>,
+    /// Sessions other than the selected one that a visible tab shows (plan
+    /// 45): their views are kept, never evicted, and their history is
+    /// loaded and reloaded after a resync.
+    pub pinned: Vec<String>,
     /// Set when the selected session was deleted by an event; the UI should
     /// say so and move on. Cleared by `select`.
     pub selected_deleted: Option<String>,
@@ -230,7 +234,7 @@ impl Model {
         if let Some(old) = self.selected.take() {
             self.cached.retain(|v| v.session_id != old.session_id);
             self.cached.insert(0, old);
-            self.cached.truncate(VIEW_CACHE);
+            self.trim_cache();
         }
         self.selected =
             session_id.map(
@@ -242,6 +246,63 @@ impl Model {
                     },
                 },
             );
+    }
+
+    /// Keep at most `VIEW_CACHE` unpinned cached views (oldest go first).
+    fn trim_cache(&mut self) {
+        let pinned = &self.pinned;
+        let mut kept = 0;
+        self.cached.retain(|v| {
+            if pinned.contains(&v.session_id) {
+                return true;
+            }
+            kept += 1;
+            kept <= VIEW_CACHE
+        });
+    }
+
+    /// Hold views for these sessions (besides the selected one) so their
+    /// timelines can show live. Returns the ids newly pinned.
+    pub fn pin(&mut self, ids: &[String]) -> Vec<String> {
+        let mut fresh = Vec::new();
+        for id in ids {
+            if !self.sessions.contains_key(id)
+                || self.selected.as_ref().is_some_and(|v| &v.session_id == id)
+            {
+                continue;
+            }
+            if !self.cached.iter().any(|v| &v.session_id == id) {
+                self.cached.push(SelectedView {
+                    session_id: id.clone(),
+                    ..Default::default()
+                });
+            }
+            if !self.pinned.contains(id) {
+                fresh.push(id.clone());
+            }
+        }
+        self.pinned = ids.to_vec();
+        self.trim_cache();
+        fresh
+    }
+
+    /// Make `session_id` the selected view for a moment, so code that reads
+    /// "the viewed session" can read another. `None` when it already is, or
+    /// has no view; otherwise hand the token to `swap_out`.
+    pub fn swap_in(&mut self, session_id: &str) -> Option<(usize, Option<SelectedView>)> {
+        if self.selected.as_ref().is_some_and(|v| v.session_id == session_id) {
+            return None;
+        }
+        let at = self.cached.iter().position(|v| v.session_id == session_id)?;
+        let view = self.cached.remove(at);
+        Some((at, self.selected.replace(view)))
+    }
+
+    pub fn swap_out(&mut self, token: (usize, Option<SelectedView>)) {
+        let (at, old) = token;
+        if let Some(view) = std::mem::replace(&mut self.selected, old) {
+            self.cached.insert(at.min(self.cached.len()), view);
+        }
     }
 
     /// The selected or a cached view of `session_id`.
@@ -272,6 +333,7 @@ impl Model {
     pub fn apply_snapshot(&mut self, s: Snapshot) {
         let wanted = self.selected.as_ref().map(|v| v.session_id.clone());
         let cached = std::mem::take(&mut self.cached);
+        let pinned = std::mem::take(&mut self.pinned);
         *self = Model {
             generation: Some(s.watermark.generation.clone()),
             last_id: s.watermark.head,
@@ -288,6 +350,10 @@ impl Model {
             }
             self.sessions.insert(session.id.clone(), session);
         }
+        self.pinned = pinned
+            .into_iter()
+            .filter(|id| self.sessions.contains_key(id))
+            .collect();
         // Pending waits come only from the snapshot: stale ones are discarded.
         self.approvals = s.approvals.into_iter().map(|a| (a.id.clone(), a)).collect();
         self.questions = s.questions.into_iter().map(|q| (q.id.clone(), q)).collect();
@@ -788,6 +854,40 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn pinned_views_survive_the_cache_limit_and_a_snapshot_and_swap_in_and_out() {
+        let mut m = model();
+        let mut other = m.sessions[SESSION].clone();
+        other.id = "pinned".into();
+        m.sessions.insert("pinned".into(), other);
+        assert_eq!(m.pin(&["pinned".to_owned(), "unknown".to_owned()]), vec!["pinned"]);
+        assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
+        // Selecting many others does not evict it.
+        for n in 0..(VIEW_CACHE + 3) {
+            let id = format!("s{n}");
+            let mut s = m.sessions[SESSION].clone();
+            s.id = id.clone();
+            m.sessions.insert(id.clone(), s);
+            m.select(Some(&id));
+        }
+        assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
+        // A snapshot keeps the pin and its view.
+        m.apply_snapshot(serde_json::from_str(SNAPSHOT).unwrap());
+        assert_eq!(m.pinned, Vec::<String>::new(), "a session the snapshot lacks is unpinned");
+        // Swapping a view in makes it the selected one, and back.
+        let mut m = model();
+        let mut other = m.sessions[SESSION].clone();
+        other.id = "pinned".into();
+        m.sessions.insert("pinned".into(), other);
+        m.pin(&["pinned".to_owned()]);
+        let token = m.swap_in("pinned").expect("a pinned view");
+        assert_eq!(m.selected.as_ref().unwrap().session_id, "pinned");
+        m.swap_out(token);
+        assert_eq!(m.selected.as_ref().unwrap().session_id, SESSION);
+        assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
+        assert!(m.swap_in(SESSION).is_none(), "the selected view needs no swap");
     }
 
     fn model() -> Model {

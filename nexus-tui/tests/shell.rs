@@ -57,52 +57,87 @@ fn project_rail_pins_add_above_settings_with_sidebar_open_or_closed() {
     }
 }
 
+fn terminal_resource(id: &str, name: &str, status: &str, controller: Option<&str>) -> nexus_tui::terminal_api::TerminalResource {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "name": name, "workspace": "/tmp", "status": status,
+        "controller": controller, "rows": 24, "cols": 80
+    }))
+    .unwrap()
+}
+
+/// A terminal tab the way a created terminal gets one: listed, then opened in the focused group.
+fn open_terminal(app: &mut nexus_tui::app::App, id: &str, name: &str, status: &str) {
+    draw(app, 120, 36);
+    app.terminal_panel
+        .terminals
+        .push(terminal_resource(id, name, status, None));
+    app.terminal_created(id.to_owned());
+}
+
+fn created(app: &mut nexus_tui::app::App, id: &str, name: &str) {
+    use nexus_tui::actions::{ActionDone, Done};
+    let call = app
+        .effects
+        .iter()
+        .rev()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::TerminalCreate { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("create requested");
+    app.apply_done(ActionDone {
+        call,
+        result: Ok(Done {
+            terminal: Some(terminal_resource(id, name, "running", None)),
+            ..Done::default()
+        }),
+    });
+}
+
 #[test]
-fn terminal_command_opens_a_bottom_dock() {
+fn terminal_command_opens_a_new_terminal_in_a_split_below() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
     app.execute("terminal.open");
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalCreate { workspace, .. }) if !workspace.is_empty())));
+    created(&mut app, "t1", "Build");
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(app.terminal_open);
+    // There is no dock: the terminal is a tab of a group below the session's.
+    assert_eq!(app.groups().group_count(), 2);
     assert!(app.regions.panel.is_none());
-    let dock = app.regions.terminal.unwrap();
-    assert_eq!(dock.y, app.regions.composer.bottom());
-    assert!(rows[dock.y as usize].contains("Terminals (0)"));
-    let toolbar = &rows[dock.y as usize];
-    for glyph in ["+", "✎", "×", "[Take control]", "⧉", "▾"] {
+    let body = app.regions.terminal.expect("the terminal's body");
+    let session_group = app.ui.groups.rects[0].1;
+    assert!(body.y > session_group.bottom(), "{body:?} below {session_group:?}");
+    assert_eq!(app.active_tab().unwrap().kind, nexus_tui::groups::Kind::Terminal);
+    let strip = &rows[(body.y - 1) as usize];
+    assert!(strip.contains("Build"), "{strip:?}");
+    let toolbar = &rows[body.y as usize];
+    for glyph in ["✎", "[Attach]", "[Take control]", "⧉"] {
         assert!(toolbar.contains(glyph), "missing {glyph} in {toolbar:?}");
     }
-    assert!(!toolbar.contains("Close panel"), "{toolbar:?}");
-    assert!(rows[(dock.y + 2) as usize].contains("Loading terminals…"));
-    app.terminal_panel.loading = false;
-    let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[(dock.y + 2) as usize].contains("No terminal selected. Use + to create one."));
+    for gone in ["Terminals (", "Hide terminal panel", "Close panel"] {
+        assert!(!rows.join("\n").contains(gone), "{gone}");
+    }
+    // The shortcut again focuses that tab instead of making another.
+    app.execute("terminal.open");
+    assert_eq!(app.groups().group_count(), 2);
 }
 
 #[test]
 fn terminal_toolbar_tooltips_follow_the_pointer() {
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Build", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Build", "running");
+    draw(&mut app, 120, 36);
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(!rows.join("\n").contains("New terminal"));
-
+    assert!(!rows.join("\n").contains("Rename terminal"));
     for (target, label) in [
-        (Target::TerminalNew, "New terminal"),
         (Target::TerminalRename, "Rename terminal"),
-        (Target::TerminalCloseSelected, "Close terminal"),
         (Target::TerminalTakeControl, "Take control"),
         (Target::TerminalCopy, "Copy output"),
-        (Target::TerminalPanelClose, "Hide terminal panel"),
-        (Target::TerminalTab(0), "Build, running"),
-        (Target::TerminalClose(0), "Close Build"),
     ] {
         let rect = app
             .hits
@@ -120,7 +155,17 @@ fn terminal_toolbar_tooltips_follow_the_pointer() {
             "missing tooltip {label:?} in:\n{shown}"
         );
     }
-
+    let menu = app
+        .hits
+        .rect_of(&Target::GroupMenu(app.groups().focused))
+        .expect("the group menu glyph");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: menu.x + 1,
+        row: menu.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(draw(&mut app, 120, 36).1.join("\n").contains("Group actions"));
     let rect = app.hits.rect_of(&Target::TerminalTakeControl).unwrap();
     app.terminal_controlled = true;
     app.handle_mouse(MouseEvent {
@@ -134,34 +179,31 @@ fn terminal_toolbar_tooltips_follow_the_pointer() {
 }
 
 #[test]
-fn terminal_dock_matches_the_shared_scenario() {
+fn terminal_tabs_match_the_shared_scenario() {
     let scenario: serde_json::Value =
         serde_json::from_str(include_str!("../../interface/scenarios/terminal-dock.json")).unwrap();
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
-    app.execute("terminal.open");
-    app.terminal_panel.loading = false;
+    draw(&mut app, 160, 48);
     for terminal in scenario["terminals"].as_array().unwrap() {
-        app.terminal_panel
-            .terminals
-            .push(serde_json::from_value(terminal.clone()).unwrap());
+        let resource: nexus_tui::terminal_api::TerminalResource =
+            serde_json::from_value(terminal.clone()).unwrap();
+        let id = resource.id.clone();
+        app.terminal_panel.terminals.push(resource);
+        app.terminal_created(id);
     }
-    app.terminal_panel.selected = app.terminal_panel.terminals.first().map(|t| t.id.clone());
     let shown = draw(&mut app, 160, 48).1.join("\n");
-    for fact in scenario["expect"].as_array().unwrap() {
-        let fact = fact.as_str().unwrap();
-        assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
-    }
-    for fact in scenario["absent"].as_array().unwrap() {
-        let fact = fact.as_str().unwrap();
+    // The scenario's dock-era facts (`Terminals (1)`, the New / Close / Hide
+    // actions) are gone; its terminal is a tab, and the agent's job is not one.
+    assert!(shown.contains("Build"), "{shown}");
+    for fact in ["Background job ready", "No terminal selected", "Close panel"] {
         assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
     }
-    // The agent's background job is not a terminal: the dock holds only the user's.
     assert_eq!(app.terminal_panel.terminals.len(), 1);
     if let Ok(dir) = std::env::var("NEXUS_TERMINAL_DOCK_SHOTS") {
         let buffer = draw(&mut app, 144, 44).0;
         let (fg, bg) = nexus_tui::svg::page_colors(false);
         std::fs::write(
-            format!("{dir}/tui-dock.svg"),
+            format!("{dir}/tui-terminal-tab.svg"),
             nexus_tui::svg::to_svg(&buffer, fg, bg),
         )
         .unwrap();
@@ -169,46 +211,68 @@ fn terminal_dock_matches_the_shared_scenario() {
 }
 
 #[test]
-fn terminal_open_lists_and_new_creates_in_current_workspace() {
+fn terminal_list_drops_gone_tabs_and_new_creates_in_current_workspace() {
     use nexus_tui::actions::{ActionDone, Done};
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    let call = app
-        .effects
-        .iter()
-        .find_map(|effect| match effect {
-            Effect::Api(call @ ApiCall::TerminalList { .. }) => Some(call.clone()),
-            _ => None,
-        })
-        .expect("list requested");
+    draw(&mut app, 120, 36);
+    // The terminal list is read when a restored layout has terminal tabs to check.
+    let call = ApiCall::TerminalList {
+        project: app.current_project().unwrap(),
+    };
+    // A restored layout names a terminal that has since been closed.
+    app.ui
+        .groups
+        .layout
+        .open(nexus_tui::groups::Tab::terminal("closed"));
     app.apply_done(ActionDone {
         call,
         result: Ok(Done {
             terminals: Some([("closed", "closed"), ("exited", "exited"), ("live", "running")].into_iter().map(|(id, status)| {
-                serde_json::from_value(serde_json::json!({"id":id,"name":"Terminal","workspace":"/tmp","status":status,"controller":null,"rows":24,"cols":80})).unwrap()
+                terminal_resource(id, "Terminal", status, None)
             }).collect()),
             ..Done::default()
         }),
     });
     assert_eq!(app.terminal_panel.terminals.len(), 2);
-    assert_eq!(app.terminal_panel.selected.as_deref(), Some("live"));
+    assert!(!app
+        .groups()
+        .contains(&nexus_tui::groups::Tab::terminal("closed")));
+    // Nothing opens by itself: terminals are tabs the user opened.
+    assert!(app.terminal_panel.selected.is_none());
     app.execute("terminal.new");
     assert!(app.effects.iter().any(|effect| matches!(effect, Effect::Api(ApiCall::TerminalCreate { workspace, .. }) if !workspace.is_empty())));
+}
+
+#[test]
+fn splitting_a_terminal_tab_creates_a_new_terminal_in_the_new_group() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    open_terminal(&mut app, "t1", "One", "running");
+    draw(&mut app, 160, 48);
+    let before = app.groups().group_count();
+    app.effects.clear();
+    app.execute("layout.split_right");
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalCreate { .. }))));
+    created(&mut app, "t2", "Two");
+    draw(&mut app, 160, 48);
+    assert_eq!(app.groups().group_count(), before + 1);
+    assert_eq!(
+        app.active_tab(),
+        Some(nexus_tui::groups::Tab::terminal("t2"))
+    );
+    // The first terminal's tab is still there, in its own group.
+    assert!(app
+        .groups()
+        .contains(&nexus_tui::groups::Tab::terminal("t1")));
 }
 
 #[test]
 fn selecting_terminal_attaches_and_renders_stream_output() {
     use nexus_tui::terminal_panel::TerminalEvent;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Shell", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    press(&mut app, &["down", "enter"]);
+    open_terminal(&mut app, "t1", "Shell", "running");
     assert!(app
         .effects
         .iter()
@@ -226,15 +290,7 @@ fn selecting_terminal_attaches_and_renders_stream_output() {
 fn terminal_exit_revokes_input_and_updates_tab_immediately() {
     use nexus_tui::terminal_panel::TerminalEvent;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Shell", "workspace":"/tmp", "status":"running",
-            "controller":"client", "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    press(&mut app, &["down", "enter"]);
+    open_terminal(&mut app, "t1", "Shell", "running");
     app.terminal_controlled = true;
     app.terminal_panel
         .input_queue
@@ -247,21 +303,17 @@ fn terminal_exit_revokes_input_and_updates_tab_immediately() {
     assert!(app.terminal_panel.input_queue.is_empty());
     assert_eq!(app.terminal_panel.terminals[0].status, "exited");
     assert_eq!(app.terminal_panel.terminals[0].controller, None);
+    // The tab's dot is the ended one.
+    let (_, rows) = draw(&mut app, 120, 36);
+    let body = app.regions.terminal.unwrap();
+    assert!(rows[(body.y - 1) as usize].contains("○"), "{:?}", rows[(body.y - 1) as usize]);
 }
 
 #[test]
 fn terminal_attachment_automatically_requests_control() {
     use nexus_tui::terminal_panel::TerminalEvent;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    press(&mut app, &["down", "enter"]);
+    open_terminal(&mut app, "t1", "Terminal", "running");
     assert!(app.terminal_focused);
     let generation = app.terminal_panel.generation;
     app.terminal_event(TerminalEvent::Attached {
@@ -274,15 +326,7 @@ fn terminal_attachment_automatically_requests_control() {
 #[test]
 fn terminal_rename_edits_the_selected_tab() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Terminal", "running");
     app.execute("terminal.rename");
     app.ui.edit.as_mut().unwrap().buf.set_text("Build");
     press(&mut app, &["enter"]);
@@ -290,18 +334,11 @@ fn terminal_rename_edits_the_selected_tab() {
 }
 
 #[test]
-fn closing_running_terminal_requires_confirmation() {
+fn closing_a_running_terminal_tab_asks_and_then_terminates() {
+    use nexus_tui::actions::{ActionDone, Done};
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.terminals.push(
-        serde_json::from_value(serde_json::json!({
-            "id":"t1", "name":"Terminal", "workspace":"/tmp", "status":"running",
-            "controller":null, "rows":24, "cols":80
-        }))
-        .unwrap(),
-    );
-    app.terminal_panel.selected = Some("t1".into());
-    app.execute("terminal.close");
+    open_terminal(&mut app, "t1", "Terminal", "running");
+    app.execute("layout.tab_close");
     let dialog = app.ui.dialog.as_ref().unwrap();
     assert_eq!(dialog.title, "Close running terminal?");
     assert_eq!(dialog.confirm, "Close terminal");
@@ -310,10 +347,32 @@ fn closing_running_terminal_requires_confirmation() {
         .iter()
         .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { .. }))));
     app.execute("alert.confirm");
+    let call = app
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Api(call @ ApiCall::TerminalClose { id }) if id == "t1" => Some(call.clone()),
+            _ => None,
+        })
+        .expect("the terminal is terminated");
+    // The tab goes with the terminal.
+    app.apply_done(ActionDone {
+        call,
+        result: Ok(Done::default()),
+    });
+    assert!(!app
+        .groups()
+        .contains(&nexus_tui::groups::Tab::terminal("t1")));
+    assert!(app.terminal_panel.selected.is_none());
+    // An exited terminal closes without the question.
+    open_terminal(&mut app, "t2", "Done", "exited");
+    app.effects.clear();
+    app.execute("layout.tab_close");
+    assert!(app.ui.dialog.is_none());
     assert!(app
         .effects
         .iter()
-        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { id }) if id == "t1")));
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { id }) if id == "t2")));
 }
 
 #[test]
@@ -321,9 +380,7 @@ fn terminal_copy_requires_selection_and_explicit_action() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use nexus_tui::terminal_panel::TerminalEvent;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.selected = Some("t1".into());
-    app.terminal_selected = true;
+    open_terminal(&mut app, "t1", "Terminal", "running");
     let generation = app.terminal_panel.generation;
     app.terminal_event(TerminalEvent::Frame { generation, frame: serde_json::json!({"version":1,"seq":1,"type":"output","data":"SGVsbG8bXTUyO2M7YzJWamNtVjAHRQ=="}) });
     draw(&mut app, 120, 36);
@@ -347,12 +404,11 @@ fn terminal_copy_requires_selection_and_explicit_action() {
 }
 
 #[test]
-fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
+fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_the_strip() {
     use nexus_tui::actions::{ActionDone, Done};
     use nexus_tui::terminal_panel::TerminalFocus;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Terminal", "running");
     app.terminal_panel.attachment = Some("a1".into());
     app.terminal_controlled = true;
     app.terminal_focused = true;
@@ -387,8 +443,7 @@ fn terminal_input_waits_for_ack_and_ctrl_bracket_returns_to_list() {
 fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Terminal", "running");
     app.terminal_panel.attachment = Some("a1".into());
     app.terminal_controlled = true;
     app.terminal_focused = true;
@@ -406,44 +461,34 @@ fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
 }
 
 #[test]
-fn terminal_toggle_key_closes_without_sending_and_leaves_ctrl_space_to_the_shell() {
+fn terminal_toggle_key_focuses_the_terminal_tab_without_sending_and_leaves_ctrl_space_to_the_shell() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nexus_tui::terminal_panel::TerminalFocus;
-    use nexus_tui::ui::Focus;
 
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    open_terminal(&mut app, "t1", "Terminal", "running");
     let focus_terminal = |app: &mut nexus_tui::app::App| {
-        app.terminal_panel.selected = Some("t1".into());
         app.terminal_panel.attachment = Some("a1".into());
         app.terminal_controlled = true;
         app.terminal_focused = true;
         app.terminal_panel.focus = TerminalFocus::Screen;
         app.effects.clear();
     };
-    app.execute("terminal.open");
     focus_terminal(&mut app);
 
     // Ctrl+Space is the shell's NUL, not a Nexus shortcut, even though a
     // legacy terminal may report Ctrl+` that way.
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
-    assert!(app.terminal_open);
+    assert!(app.terminal_live());
     assert!(app
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Api(ApiCall::TerminalInput { bytes, .. }) if bytes == &[0])));
 
     for key in ["ctrl+`", "ctrl+shift+`", "ctrl+~"] {
-        app.effects.clear();
+        focus_terminal(&mut app);
+        let groups = app.groups().group_count();
         press(&mut app, &[key]);
-        assert!(!app.terminal_open, "{key} closes the dock");
-        assert!(!app.terminal_focused, "{key} leaves the terminal screen");
-        assert_eq!(app.ui.focus, Focus::Composer, "{key} returns focus");
-        assert!(
-            app.effects
-                .iter()
-                .any(|e| matches!(e, Effect::TerminalStop)),
-            "{key} detaches"
-        );
         assert!(
             !app.effects
                 .iter()
@@ -456,32 +501,36 @@ fn terminal_toggle_key_closes_without_sending_and_leaves_ctrl_space_to_the_shell
                 .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { .. }))),
             "{key} does not terminate the terminal"
         );
-        press(&mut app, &[key]);
-        assert!(app.terminal_open, "{key} opens the dock again");
-        focus_terminal(&mut app);
+        assert!(
+            !app.effects.iter().any(|e| matches!(e, Effect::TerminalStop(_))),
+            "{key} keeps the terminal attached"
+        );
+        assert!(app.terminal_live(), "{key} focuses the most recent terminal tab");
+        assert_eq!(app.groups().group_count(), groups, "{key} opens no second terminal");
     }
 }
 
 #[test]
-fn terminal_list_r_releases_control() {
+fn terminal_tab_c_takes_and_r_releases_control_when_the_strip_has_the_keys() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Terminal", "running");
     app.terminal_panel.attachment = Some("a1".into());
     app.terminal_controlled = true;
+    app.terminal_focused = false;
     app.effects.clear();
     press(&mut app, &["r"]);
     assert!(app.effects.iter().any(|effect| matches!(
         effect,
         Effect::Api(ApiCall::TerminalControl { acquire: false, .. })
     )));
+    press(&mut app, &["enter"]);
+    assert!(app.terminal_focused);
 }
 
 #[test]
-fn terminal_resize_tracks_panel_geometry_only_under_control() {
+fn terminal_resize_tracks_pane_geometry_only_under_control() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
-    app.execute("terminal.open");
-    app.terminal_panel.selected = Some("t1".into());
+    open_terminal(&mut app, "t1", "Terminal", "running");
     app.terminal_panel.attachment = Some("a1".into());
     draw(&mut app, 120, 36);
     app.effects.clear();
@@ -492,7 +541,15 @@ fn terminal_resize_tracks_panel_geometry_only_under_control() {
         .any(|e| matches!(e, Effect::Api(ApiCall::TerminalResize { .. }))));
     app.terminal_controlled = true;
     app.terminal_resize();
-    assert!(app.effects.iter().any(|e| matches!(e, Effect::Api(ApiCall::TerminalResize { rows, cols, .. }) if *rows > 0 && *cols > 0)));
+    let first = app.effects.iter().find_map(|e| match e {
+        Effect::Api(ApiCall::TerminalResize { rows, cols, .. }) => Some((*rows, *cols)),
+        _ => None,
+    });
+    let (rows, cols) = first.expect("a resize under control");
+    assert!(rows > 0 && cols > 0);
+    // The pane's own size: the body less the toolbar row.
+    let body = app.regions.terminal.unwrap();
+    assert_eq!((rows, cols), (body.height - 1, body.width));
 }
 
 fn joined(rows: &[String]) -> String {
@@ -1389,7 +1446,10 @@ fn files_list_open_read_and_return_to_timeline() {
     });
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(joined(&rows).contains("the file contents"));
+    // Esc leaves a file alone (it is a tab); closing the tab returns to the session.
     press(&mut app, &["esc"]);
+    assert!(app.ui.file_open);
+    press(&mut app, &["alt+x"]);
     assert!(!app.ui.file_open);
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(joined(&rows).contains("Hello"));
@@ -1533,17 +1593,20 @@ fn a_stale_save_keeps_the_text_and_a_reload_replaces_it() {
 }
 
 #[test]
-fn esc_closes_a_clean_editor_and_asks_before_dropping_changes() {
+fn closing_a_clean_editor_tab_is_immediate_and_esc_leaves_it_open() {
     let mut app = open_file_view("one\n");
     press(&mut app, &["esc"]);
+    assert!(app.ui.file_open, "Esc no longer closes a file");
+    press(&mut app, &["alt+x"]);
     assert!(app.ui.file_edit.is_none() && !app.ui.file_open);
     let mut app = open_file_view("one\n");
     typing(&mut app, "x");
-    press(&mut app, &["esc"]);
+    press(&mut app, &["alt+x"]);
     assert!(app.ui.dialog.is_some() && app.ui.file_edit.is_some());
-    press(&mut app, &["enter"]);
-    assert!(app.ui.file_edit.is_some());
-    press(&mut app, &["esc", "right", "enter"]);
+    // Cancel (the last button) keeps the text and the tab.
+    press(&mut app, &["left", "enter"]);
+    assert!(app.ui.dialog.is_none() && app.ui.file_edit.is_some());
+    press(&mut app, &["alt+x", "right", "enter"]);
     assert!(app.ui.file_edit.is_none() && !app.ui.file_open);
 }
 
@@ -1592,7 +1655,7 @@ fn editor_find_cycles_matches_and_ends_before_closing() {
     assert!(app.ui.file_search.is_none() && app.ui.file_open);
     assert!(!app.ui.file_edit.as_ref().unwrap().dirty());
     press(&mut app, &["esc"]);
-    assert!(!app.ui.file_open);
+    assert!(app.ui.file_open, "a second Esc leaves the file tab alone");
 }
 
 #[test]
@@ -2665,6 +2728,21 @@ fn at_completion_asks_core_shows_paths_and_keeps_going_inside_directories() {
 }
 
 #[test]
+fn at_completion_at_the_caret_preserves_the_rest_of_the_draft() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "see @45 afterwards");
+    for _ in 0.." afterwards".len() {
+        press(&mut app, &["left"]);
+    }
+    reply(&mut app, "45", 30, &["plans/45-tabs-and-splits.md"]);
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        app.composer_ref().text(),
+        "see @plans/45-tabs-and-splits.md  afterwards"
+    );
+}
+
+#[test]
 fn short_at_replies_are_padded_from_the_empty_query_listing() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     typing(&mut app, "@mian");
@@ -2675,6 +2753,30 @@ fn short_at_replies_are_padded_from_the_empty_query_listing() {
     let rows = rows_of(&app);
     assert_eq!(rows.len(), 10);
     assert_eq!(rows[0], "src/main.rs");
+}
+
+#[test]
+fn file_completion_matches_the_shared_ranking_scenario() {
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/file-completion.json"
+    ))
+    .unwrap();
+    let strings = |name: &str| -> Vec<String> {
+        scenario[name]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        nexus_tui::completion::file_menu(
+            scenario["query"].as_str().unwrap(),
+            &strings("hits"),
+            &strings("pool")
+        ),
+        strings("expected")
+    );
 }
 
 #[test]
@@ -2835,7 +2937,7 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
     app.execute("app.settings");
     let (_, rows) = draw(&mut app, 120, 50);
     let all = joined(&rows);
-    for needle in ["Appearance", "Providers", "Agents", "12 sections"] {
+    for needle in ["Appearance", "Providers", "Agents", "13 sections"] {
         assert!(all.contains(needle), "missing {needle:?}: {all}");
     }
     // The Providers pane.
@@ -3213,29 +3315,37 @@ fn tabs_replace_the_title_open_close_and_switch() {
     other.title = "Second task".into();
     app.state.model.sessions.insert(other.id.clone(), other);
     let (_, rows) = draw(&mut app, 120, 36);
+    let g = app.groups().focused;
+    let strip = app.ui.groups.rects[0].1.y as usize;
     assert!(
-        rows[0].contains("New session"),
-        "the open session has a tab: {}",
+        rows[strip].contains("New session"),
+        "the open session has a tab in the group's strip: {}",
+        rows[strip]
+    );
+    assert!(rows[strip].contains('+'), "{}", rows[strip]);
+    assert!(rows[strip].contains('⋯'), "{}", rows[strip]);
+    assert!(
+        !rows[0].contains("New session") || !rows[0].contains('+'),
+        "the header no longer holds the tabs: {}",
         rows[0]
     );
-    assert!(rows[0].contains('+'), "{}", rows[0]);
     app.open_session("second");
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(
-        rows[0].contains("New session") && rows[0].contains("Second task"),
+        rows[strip].contains("New session") && rows[strip].contains("Second task"),
         "{}",
-        rows[0]
+        rows[strip]
     );
     // Clicking the other tab switches to it.
-    let first = app.hits.rect_of(&Target::SessionTab(0)).expect("first tab");
+    let first = app.hits.rect_of(&Target::GroupTab(g, 0)).expect("first tab");
     click(&mut app, first.x + 2, first.y);
     assert_eq!(app.viewed_id(), Some(SESSION));
     // Closing a tab keeps its session and moves to the neighbour.
+    draw(&mut app, 120, 36);
     let close = app
         .hits
-        .rect_of(&Target::SessionTabClose(0))
+        .rect_of(&Target::GroupTabClose(g, 0))
         .expect("close");
-    draw(&mut app, 120, 36);
     click(&mut app, close.x, close.y);
     assert_eq!(app.viewed_id(), Some("second"));
     assert!(app.state.model.sessions.contains_key(SESSION));
@@ -3244,13 +3354,17 @@ fn tabs_replace_the_title_open_close_and_switch() {
     press(&mut app, &["alt+x"]);
     assert!(app.viewed_id().is_none());
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[0].contains("New session"), "{}", rows[0]);
+    assert!(
+        rows.iter().skip(1).take(2).any(|r| r.contains("New session")),
+        "{}",
+        rows[strip]
+    );
 }
 
 #[test]
-fn header_tabs_follow_the_chrome_band_styles() {
-    // D02: the viewed tab is bold primary on the page surface, joined to the
-    // page; other tabs are muted on the band; `+` ends the strip.
+fn group_tabs_follow_the_chrome_band_styles() {
+    // D02: the focused group's active tab is bold primary on the page surface,
+    // joined to the page; other tabs are muted on the band; `+` ends the strip.
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut other = app.state.model.sessions[SESSION].clone();
     other.id = "other".into();
@@ -3258,21 +3372,19 @@ fn header_tabs_follow_the_chrome_band_styles() {
     app.state.model.sessions.insert(other.id.clone(), other);
     app.ui.tabs = vec![SESSION.to_owned(), "other".to_owned()];
     let (buf, rows) = draw(&mut app, 160, 40);
+    let strip = app.ui.groups.rects[0].1.y;
+    let row = &rows[strip as usize];
     let band = Color::Rgb(0x14, 0x14, 0x14);
     let page = Color::Rgb(0x0b, 0x0b, 0x0b);
-    let at = |needle: &str| col_of(&rows[0], needle) as u16;
-    let viewed = &buf[(at(app.state.model.sessions[SESSION].title.as_str()), 0)];
+    let at = |needle: &str| col_of(row, needle) as u16;
+    let viewed = &buf[(at(app.state.model.sessions[SESSION].title.as_str()), strip)];
     assert_eq!(viewed.bg, page, "the viewed tab sits on the page surface");
     assert!(viewed.modifier.contains(ratatui::style::Modifier::BOLD));
-    let others = &buf[(at("Other session"), 0)];
+    let others = &buf[(at("Other session"), strip)];
     assert_eq!(others.bg, band, "other tabs sit on the band");
     assert!(!others.modifier.contains(ratatui::style::Modifier::BOLD));
     assert_ne!(viewed.fg, others.fg, "viewed is primary, others muted");
-    assert!(
-        rows[0].contains(" + ") || rows[0].contains('+'),
-        "{:?}",
-        rows[0]
-    );
+    assert!(row.contains('+'), "{row:?}");
     // the strip starts at the centre column, not over the sidebar
     let centre = app.regions.centre.x;
     assert!(at("Other session") > centre);
@@ -3358,9 +3470,12 @@ fn sidebar_search_shortcut_tracks_the_right_edge_when_resized() {
 fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     let mut app = subagent_fixture();
     let (_, rows) = draw(&mut app, 160, 40);
-    // the tab row names the root only; the child has no tab
-    assert!(rows[0].contains("Root task"), "{:?}", rows[0]);
-    assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
+    // the group's strip names the root only; the child has no tab, and the
+    // header's breadcrumb names the chain
+    let strip = app.ui.groups.rects[0].1.y as usize;
+    assert!(rows[strip].contains("Root task"), "{:?}", rows[strip]);
+    assert!(!rows[strip].contains("Child task"), "{:?}", rows[strip]);
+    assert!(rows[0].contains("Child task"), "{:?}", rows[0]);
     assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
     // The one heading row names the viewed child on the left and its four metadata
     // values on the right; there is no second subagent-tab row.
@@ -3368,7 +3483,7 @@ fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     assert_eq!(rail.width, 4);
     assert_eq!(rail.height, app.regions.centre.height);
     assert_eq!(rail.right(), app.regions.centre.x);
-    assert_eq!(rail.y, app.regions.heading.y);
+    assert_eq!(rail.y, app.regions.centre.y, "the rail spans the strip row too");
     let heading = centre_row(&app, &rows, app.regions.heading.y);
     assert!(heading.contains("Child task"), "{heading:?}");
     assert!(!heading.contains("Root task"), "{heading:?}");
@@ -3476,14 +3591,13 @@ fn the_root_back_rail_reserves_the_full_session_height_without_overlapping_conte
         assert!(region.x >= rail.right(), "content never overlaps the rail");
     }
 
-    // The composer remains the page's bottom edge and the rail stops above the dock.
-    app.terminal_open = true;
+    // A terminal group below does not change the rail: it belongs to the session page.
+    open_terminal(&mut app, "t1", "Build", "running");
     draw(&mut app, 160, 40);
-    let rail = app.regions.back.expect("rail with the dock");
-    let dock = app.regions.terminal.expect("terminal dock");
-    assert_eq!(rail.bottom(), dock.y, "the rail ends where the dock starts");
-    assert_eq!(app.regions.composer.bottom(), dock.y);
-    assert!(app.regions.timeline.bottom() <= dock.y);
+    app.execute("layout.focus_up");
+    draw(&mut app, 160, 40);
+    let rail = app.regions.back.expect("rail with the terminal group");
+    assert_eq!(rail.height, centre.height);
 }
 
 #[test]
@@ -3542,44 +3656,6 @@ fn a_viewed_fork_reads_fork_in_the_heading_metadata() {
     assert!(heading.contains("Child task"), "{heading:?}");
     assert!(heading.contains("Fork"), "{heading:?}");
     assert!(!heading.contains("Build"), "{heading:?}");
-}
-
-#[test]
-fn a_scrolling_tab_title_never_paints_over_the_close_or_status_slot() {
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
-    app.state.model.sessions.get_mut(SESSION).unwrap().title =
-        "A deliberately long session title that keeps scrolling past its tab".into();
-    app.theme.opts.reduced_motion = false;
-    draw(&mut app, 160, 40);
-    let tab = app
-        .hits
-        .rect_of(&Target::SessionTab(0))
-        .expect("active tab");
-    let close = app
-        .hits
-        .rect_of(&Target::SessionTabClose(0))
-        .expect("close slot");
-    app.mouse = Some((tab.x + 2, tab.y));
-    app.ui.tab_hover = Some((0, 0));
-    for frame in [20usize, 100] {
-        app.frame = frame;
-        let (buf, _) = draw(&mut app, 160, 40);
-        assert_eq!(buf[(close.x, close.y)].symbol(), "×");
-        for x in close.x..tab.right() {
-            let symbol = buf[(x, close.y)].symbol();
-            assert!(
-                symbol == "×" || symbol.trim().is_empty(),
-                "frame {frame}: {symbol:?} in the close slot"
-            );
-        }
-        // The status glyph before the title is still its own cell.
-        assert!(buf[(tab.x + 1, tab.y)].symbol().trim().len() <= 4);
-    }
-    // Reduced motion leaves the title still and still keeps the close slot intact.
-    app.theme.opts.reduced_motion = true;
-    app.frame = 500;
-    let (buf, _) = draw(&mut app, 160, 40);
-    assert_eq!(buf[(close.x, close.y)].symbol(), "×");
 }
 
 // ---- the composer card (DESIGN_PLAN.md D11) ---------------------------------
@@ -4825,33 +4901,40 @@ fn the_files_root_header_and_indent_guides_follow_d16() {
 }
 
 #[test]
-fn the_file_view_is_a_modal_at_every_width() {
+fn a_file_is_a_tab_of_the_focused_group_at_every_width() {
     let mut app = open_file_view("hello\nworld\n");
     for (w, h) in [(160, 48), (120, 36), (80, 24)] {
         let (_, rows) = draw(&mut app, w, h);
-        let panel = app.regions.panel.expect("the file panel");
-        assert_eq!(panel, nexus_tui::layout::panel_rect(app.regions.area));
-        assert!(panel.x > 0 && panel.right() < w, "{w}");
-        assert_eq!((panel.y, panel.height), (0, h), "full height at {w}");
-        assert!(rows[panel.y as usize].contains("Back"), "{w}");
-        assert!(rows[panel.y as usize].contains("hello.txt"), "{w}");
-        // The page keeps its place underneath and outside clicks close the modal.
-        assert_eq!(app.hits.at(0, h - 1), Some(&Target::PanelBack), "{w}");
+        let panel = app.regions.panel.expect("the focused group's body");
+        let group = app.ui.groups.rects[0].1;
+        assert_eq!(panel, nexus_tui::layout::group_body(group), "{w}");
+        assert!(panel.x > 0 && panel.right() <= w, "{w}");
+        // The file's tab is in the strip; there is no modal frame or Back.
+        assert!(rows[group.y as usize].contains("hello.txt"), "{w}");
+        assert!(!rows.join("\n").contains("Back"), "{w}");
+        assert!(app.hits.at(0, h - 1) != Some(&Target::PanelBack), "{w}");
+        // The sidebar stays where it was.
+        assert!(app.regions.left.is_some() || w < 100, "{w}");
     }
+    assert!(app
+        .groups()
+        .contains(&nexus_tui::groups::Tab::file("hello.txt")));
     let before = app.composer_ref().text();
     press(&mut app, &["z"]);
     assert_eq!(
         app.composer_ref().text(),
         before,
-        "typing stays out of the page behind"
+        "typing stays out of the composer"
     );
-    press(&mut app, &["esc"]);
-    assert!(
-        app.ui.dialog.is_some(),
-        "typed changes require confirmation"
-    );
+    press(&mut app, &["alt+x"]);
+    let dialog = app.ui.dialog.as_ref().expect("typed changes require confirmation");
+    assert_eq!(dialog.title, "Save changes to hello.txt?");
+    // Save, Discard, Cancel: Discard closes the tab and drops the text.
     press(&mut app, &["right", "enter"]);
-    assert!(!app.ui.file_open, "discard closes the modal");
+    assert!(!app.ui.file_open, "discard closes the tab");
+    assert!(!app
+        .groups()
+        .contains(&nexus_tui::groups::Tab::file("hello.txt")));
 }
 
 #[test]
@@ -4907,7 +4990,8 @@ fn a_covered_timeline_shows_its_waiting_badge() {
         data: Ok(serde_json::json!({"content": "hello\n", "revision": "rev1"})),
     });
     let (_, rows) = draw(&mut app, 120, 36);
-    let top = rows[app.regions.panel.unwrap().y as usize].clone();
+    // The covered page's badge sits at the right end of the focused group's strip.
+    let top = rows[app.regions.panel.unwrap().y as usize - 1].clone();
     assert!(top.contains("2 waiting"), "{top:?}");
 }
 
@@ -5166,11 +5250,13 @@ fn the_wheel_scrolls_the_editor_and_a_click_places_the_cursor() {
 }
 
 #[test]
-fn the_file_modal_is_full_height() {
+fn a_file_fills_its_group_below_the_strip() {
     let mut app = open_named_file_view("hello.md", "# Title\n");
     draw(&mut app, 160, 40);
     let panel = app.regions.panel.expect("the file panel");
-    assert_eq!((panel.y, panel.height), (0, 40));
+    let group = app.ui.groups.rects[0].1;
+    assert_eq!(panel.y, group.y + 1, "under the strip");
+    assert_eq!(panel.bottom(), 40, "to the bottom of the window");
 }
 
 #[test]
@@ -5306,10 +5392,12 @@ fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
         "{head:?}"
     );
     assert!(!head.contains("An exceedingly"), "{head:?}");
-    // the wide header still has tabs
+    // the wide layout has the tab in the group's strip, not the header
     app.set_size(120, 36);
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(rows[0].contains('\u{d7}'), "{:?}", rows[0]);
+    let strip = app.ui.groups.rects[0].1.y as usize;
+    assert!(rows[strip].contains('\u{d7}'), "{:?}", rows[strip]);
+    assert!(!rows[0].contains('\u{d7}'), "{:?}", rows[0]);
 }
 
 #[test]

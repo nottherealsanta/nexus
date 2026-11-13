@@ -232,7 +232,8 @@ impl CodeEditor {
             KeyCode::Enter => self.editor.apply(InsertNewline),
             KeyCode::Tab => self.editor.apply(Indent),
             KeyCode::BackTab => self.editor.apply(UnIndent),
-            KeyCode::Char(c) if !ctrl => self.editor.apply(InsertText {
+            // Alt+key is a shortcut (alt+x closes the tab), not text.
+            KeyCode::Char(c) if !ctrl && !alt => self.editor.apply(InsertText {
                 text: c.to_string(),
             }),
             _ => return false,

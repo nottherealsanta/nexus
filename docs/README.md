@@ -22,6 +22,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [loop.md](loop.md) | The agent loop: steps, tool execution, errors, approval |
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
+| [layout.md](layout.md) | Tabs, groups and splits in the TUI and NSH: layout tree, tab kinds, open/split/join/drag/close, restore, narrow widths, keys |
 | [inspector.md](inspector.md) | The session inspector web page: four levels of detail down to raw events |
 | [manager.md](manager.md) | The Manager: a voice agent above all sessions; hidden episodes, tools, authority guards, retrieval, cards, navigation, the scripted model |
 | [manager-design.md](manager-design.md) | The Manager's design: voices, context, tools, attention, authority, the stage and cards, milestones (status in PLAN.md) |

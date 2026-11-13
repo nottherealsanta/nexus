@@ -1,7 +1,7 @@
 // Regression coverage for the shared timeline reading column: the new-session
 // starting context and the started session use the same column, card and inset.
 import { describe, expect, open, test } from "nsh/test";
-import { ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, TURN_INSET, USER_BAND_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
+import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, TURN_INSET, USER_BAND_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
 import { iconGlyphs } from "./src/ui/kit";
 import { sidebarGlyphs, verbGlyphs, structure } from "./src/gen/theme";
 import { contextGrid, defaultLeftSidebarWidth, rightSidebarWidth, workspaceTabCells } from "./src/ui/geometry";
@@ -83,13 +83,22 @@ describe("timeline reading column", () => {
     for (const glyph of Object.values(iconGlyphs)) expect(glyph.length > 0).toBe(true);
   });
 
+  test("activity icons compensate for empty SVG space to match the chevron strokes", () => {
+    expect(activityIconSize("chevron-right")).toBe(14);
+    expect(activityIconSize("code")).toBe(14);
+    expect(activityIconSize("shell")).toBe(12);
+    expect(activityIconSize("session")).toBe(11);
+    expect(activityIconSize("edit")).toBe(10);
+    expect(activityIconSize("diamond")).toBe(9);
+  });
+
   test("cards, prose and activity rows share one text edge", () => {
     expect(CARD_INSET).toBe("px-2");
     expect(TEXT_INDENT).toBe("pl-2");
     expect(TEXT_INSET).toBe("px-2");
     expect(TURN_INSET).toBe("pl-4");
     expect(USER_BAND_INSET).toBe("pl-4 pr-2");
-    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-1");
+    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-1 items-center");
   });
 
   test("the new-session starting context renders in the timeline's shared column and card", async () => {
@@ -138,10 +147,11 @@ describe("timeline reading column", () => {
     expect(app.texts().some((t) => t.includes(long.title))).toBe(true);
   });
 
-  test("a narrow header keeps a title instead of squeezing fixed-width tabs", async () => {
+  test("a narrow window keeps the group strip with its fixed-width New session tab", async () => {
     const app = await open("./App.tsx", { network: network([], null), width: 640, height: 384, platform: "web" });
-    await app.waitFor("id:narrow-workspace-title");
-    expect(app.shows("id:new-session-tab-add")).toBe(false);
+    await app.waitFor("id:group-strip-g1");
+    await app.waitFor("id:new-session-tab");
+    expect(app.shows("id:narrow-workspace-title")).toBe(false);
     expect(app.shows("id:send")).toBe(true);
   });
 });

@@ -19,7 +19,7 @@ import { playNotificationCue } from "./cues";
 import { listenNotificationPresses, notifySession } from "./os-notify";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 
-export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
+export type CentreView = "session" | "new_session" | "settings" | "editor";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
 
 export const model = new Model();
@@ -215,7 +215,7 @@ export const flowStage = signal<null | "sessions" | "projects">(null);
 export const flowSession = signal<string | null>(null);
 export const flowProject = signal<string | null>(null);
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
-export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string; bracketActions?: boolean; scrollBody?: boolean }>(null);
+export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; /** A third choice between Cancel and the primary action (Discard beside Save). */ alt?: { label: string; run: () => Promise<void> | void; testID?: string }; busy?: boolean; error?: string; bracketActions?: boolean; scrollBody?: boolean }>(null);
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
@@ -847,17 +847,19 @@ function handleGlobalEvent(e: import("./core/api").CoreEvent) {
   }
   if (e.type === "git.changed" && leftTab() === "git") void loadGitPage();
   if (e.type === "files.changed") {
-    const f = openFile();
     const d = e.data as { project_id?: string; workspace?: string; path?: string; paths?: string[]; revision?: string; polling?: boolean; all?: boolean; omitted?: number };
     if (d.project_id === currentProject() && (!d.workspace || d.workspace === model.projects.get(d.project_id!)?.path)
         && currentClientView().panel === "files") {
       void loadFiles();
       for (const path of filesExpanded()) void loadFiles(path);
     }
-    const root = f?.session ? model.sessions.get(f.session)?.directory : model.projects.get(f?.project ?? "")?.path;
-    if (f && !f.saving && d.project_id === f.project && (!d.workspace || d.workspace === root)
-        && (d.path === f.path || d.paths?.includes(f.path) || d.polling || d.all || (d.omitted ?? 0) > 0)
-        && (!d.revision || d.revision !== f.revision)) void refreshChangedFile();
+    const touches = (f: OpenFile) => {
+      const root = f.session ? model.sessions.get(f.session)?.directory : model.projects.get(f.project ?? "")?.path;
+      return !f.saving && d.project_id === f.project && (!d.workspace || d.workspace === root)
+        && (d.path === f.path || !!d.paths?.includes(f.path) || !!d.polling || !!d.all || (d.omitted ?? 0) > 0)
+        && (!d.revision || d.revision !== f.revision);
+    };
+    if (Object.values(fileBuffers()).some(touches)) void refreshChangedFile(touches);
   }
   if (e.type === "skills.changed" && pendingSkillInstalls) deferredSkillsChanged = true;
   const alert = globalEventToast(e.type, e.data, globalToastState);
@@ -872,19 +874,38 @@ export const fileOperation = signal<{ action: string; path: string } | null>(nul
 export const fileTree = signal<{ project: string | null; dirs: Record<string, FileDir> }>({ project: null, dirs: {} });
 /** Expanded directories of the Files tree, by project-relative path. Kept while the tab is open. */
 export const filesExpanded = signal<ReadonlySet<string>>(new Set());
-/** The open project file. `draft` is set while editing (K10): the text in the editor, against `revision` as read. */
+/** One project file's buffer. `draft` is set while editing (K10): the text in the editor, against `revision` as read. */
 export type OpenFile = { path: string; content?: string; revision?: string; error?: string; draft?: string; saving?: boolean; stale?: boolean; project?: string; session?: string };
-export const openFile = signal<OpenFile | null>(null);
-/** A file is open in the right-hand panel. */
-export const panelOpen = computed(() => openFile() !== null);
-/** The file panel's find bar is open (cmd+f / editor.find). */
+/** One buffer per file, shared by every tab that shows it (plan 45). Keyed by the file tab's id. */
+export const fileBuffers = signal<Record<string, OpenFile>>({});
+/** A file tab's id: the project and the project-relative path. */
+export const fileTabId = (project: string, path: string) => `${project}:${path}`;
+export const splitFileTabId = (id: string) => { const i = id.indexOf(":"); return { project: id.slice(0, i), path: id.slice(i + 1) }; };
+/** The file tab the focused group shows, if it shows one: the file commands (save, find, preview) act on it. */
+export const currentFileId = signal<string | null>(null);
+/** The buffer of the focused group's file tab. */
+export const openFile = computed<OpenFile | null>(() => { const id = currentFileId(); return id ? fileBuffers()[id] ?? null : null; });
+const putBuffer = (id: string, f: OpenFile | null) => fileBuffers.update((all) => {
+  if (f) return { ...all, [id]: f };
+  const { [id]: _gone, ...rest } = all;
+  return rest;
+});
+/** Forget a buffer (its last tab closed). */
+export const dropBuffer = (id: string) => { putBuffer(id, null); sourceMode.update((s) => { const { [id]: _g, ...rest } = s; return rest; }); };
+/** The file panel's find bar is open (cmd+f / editor.find) on the current file. */
 export const fileFindOpen = signal(false);
-/** The source of a Markdown file is shown instead of its rendered preview. */
-export const fileSource = signal(false);
+const sourceMode = signal<Record<string, boolean>>({});
+/** The source of a Markdown file is shown instead of its rendered preview (per file; the setter acts on the current one). */
+export const fileSource = Object.assign(() => !!sourceMode()[currentFileId() ?? ""], {
+  set: (on: boolean) => { const id = currentFileId(); if (id) sourceMode.update((s) => ({ ...s, [id]: on })); },
+});
+export const fileSourceOf = (id: string) => !!sourceMode()[id];
+export const setFileSource = (id: string, on: boolean) => sourceMode.update((s) => ({ ...s, [id]: on }));
 export const isMarkdownPath = (path?: string) => !!path && /\.(md|markdown)$/i.test(path);
-/** The open file is Markdown, so it can be read as prose. */
+/** The current file is Markdown, so it can be read as prose. */
 export const markdownFile = () => isMarkdownPath(openFile()?.path);
-export const fileDirty = () => { const f = openFile(); return !!f && f.draft !== undefined && f.draft !== f.content; };
+export const bufferDirty = (id: string | null | undefined) => { const f = id ? fileBuffers()[id] : undefined; return !!f && f.draft !== undefined && f.draft !== f.content; };
+export const fileDirty = () => bufferDirty(currentFileId());
 export type GitChange = { path: string; status: string; old_path?: string; staged: boolean; unstaged: boolean; added?: number; removed?: number };
 export type GitPageData = { worktree: string; branch: string; changes: GitChange[]; branches: { name: string; local: boolean; current: boolean; upstream?: string }[] };
 export const gitPage = signal<{ project: string; worktree?: string; data?: GitPageData; error?: string } | null>(null);
@@ -905,17 +926,25 @@ export function gitFolders(changes: GitChange[]) {
   return [...folders].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, files]) => ({ name, files }));
 }
 export const selectedGitFile = signal<{ path: string; group: "Staged" | "Unstaged" | "Untracked" } | null>(null);
-export const gitDiff = signal<{ path: string; group: string; text?: string; clipped?: boolean; error?: string } | null>(null);
-export async function openGitDiff() {
-  const project = currentProject(), selected = selectedGitFile(); if (!project || !selected) return;
+/** A Git change shown as a diff tab: its text, read from Core. */
+export type GitDiff = { path: string; group: string; text?: string; clipped?: boolean; error?: string };
+export const gitDiffs = signal<Record<string, GitDiff>>({});
+/** A diff tab's id: the project, group and path. */
+export const gitDiffId = (project: string, group: string, path: string) => `${project}:${group}:${path}`;
+/** Read the selected change's diff into its buffer and return the diff tab's id (the caller opens the tab). */
+export function openGitDiff(): string | null {
+  const project = currentProject(), selected = selectedGitFile(); if (!project || !selected) return null;
   const { path, group } = selected;
-  gitDiff.set({ path, group });
-  if (group === "Untracked") { gitDiff.set({ path, group, text: "Untracked file: Git has no diff for it yet." }); return; }
-  try {
-    const data = await request<{ staged: string; unstaged: string; staged_clipped?: boolean; unstaged_clipped?: boolean }>("GET", `/api/project/${project}/git/diff`, { query: { path, worktree: currentWorktree()?.path } });
-    if (gitDiff()?.path === path && gitDiff()?.group === group) gitDiff.set({ path, group, text: group === "Staged" ? data.staged : data.unstaged, clipped: group === "Staged" ? data.staged_clipped : data.unstaged_clipped });
-  } catch (e) { if (gitDiff()?.path === path && gitDiff()?.group === group) gitDiff.set({ path, group, error: String(e) }); }
+  const id = gitDiffId(project, group, path);
+  const put = (d: GitDiff) => gitDiffs.update((all) => ({ ...all, [id]: d }));
+  put({ path, group });
+  if (group === "Untracked") { put({ path, group, text: "Untracked file: Git has no diff for it yet." }); return id; }
+  void request<{ staged: string; unstaged: string; staged_clipped?: boolean; unstaged_clipped?: boolean }>("GET", `/api/project/${project}/git/diff`, { query: { path, worktree: currentWorktree()?.path } })
+    .then((data) => put({ path, group, text: group === "Staged" ? data.staged : data.unstaged, clipped: group === "Staged" ? data.staged_clipped : data.unstaged_clipped }))
+    .catch((e) => put({ path, group, error: String(e) }));
+  return id;
 }
+export const dropGitDiff = (id: string) => gitDiffs.update((all) => { const { [id]: _g, ...rest } = all; return rest; });
 export const gitInput = signal<{ title: string; submit: (value: string) => void } | null>(null);
 let gitPageRequest = 0;
 export async function loadGitPage() {
@@ -951,68 +980,80 @@ export function toggleFileDir(path: string) {
   filesExpanded.set(new Set([...open, path]));
   if (!fileTree().dirs[path]) void loadFiles(path);
 }
-let fileOpenRequest = 0;
-export async function showFile(path: string) {
-  const project = currentProject(), session = undefined;
-  if (!project) return;
-  const seq = ++fileOpenRequest;
-  openFile.set({ path, project, session }); centre.set("file"); drawer.set(null); fileFindOpen.set(false); fileSource.set(true);
+const fileOpenRequests = new Map<string, number>();
+/**
+ * Read a file into its buffer (one per file; reading it again for a second tab is a no-op). Returns the tab id.
+ * The caller puts the tab in the layout; a failed read leaves the error in the buffer.
+ */
+export async function showFile(path: string, projectId = currentProject()): Promise<string | null> {
+  const project = projectId, session = undefined;
+  if (!project) return null;
+  const id = fileTabId(project, path);
+  if (fileBuffers()[id]) return id;
+  const seq = (fileOpenRequests.get(id) ?? 0) + 1;
+  fileOpenRequests.set(id, seq);
+  putBuffer(id, { path, project, session }); drawer.set(null); sourceMode.update((s) => ({ ...s, [id]: true }));
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
-    if (seq === fileOpenRequest) openFile.set({ path, project, session, content: data.content, revision: data.revision, draft: data.content });
-  } catch (e) { if (seq === fileOpenRequest) openFile.set({ path, project, session, error: String(e) }); }
+    if (fileOpenRequests.get(id) === seq && fileBuffers()[id]) putBuffer(id, { path, project, session, content: data.content, revision: data.revision, draft: data.content });
+  } catch (e) { if (fileOpenRequests.get(id) === seq && fileBuffers()[id]) putBuffer(id, { path, project, session, error: String(e) }); }
+  return id;
 }
 let fileRefreshPending = false, fileRefreshAgain = false;
-/** A disk invalidation refreshes clean text; it never replaces an unsaved draft. */
-async function refreshChangedFile() {
+/** A disk invalidation refreshes clean text; it never replaces an unsaved draft. Every open buffer is checked. */
+async function refreshChangedFile(only?: (f: OpenFile) => boolean) {
   fileRefreshAgain = true;
   if (fileRefreshPending) return;
   fileRefreshPending = true;
   try {
     while (fileRefreshAgain) {
       fileRefreshAgain = false;
-      const f = openFile(); if (!f?.project || f.saving) continue;
-      try {
-        const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
-        const cur = openFile();
-        if (!cur || cur.project !== f.project || cur.session !== f.session || cur.path !== f.path || cur.saving || cur.revision !== f.revision) continue;
-        if (data.revision === cur.revision) continue;
-        if (cur.draft !== undefined && cur.draft !== cur.content) {
-          if (!cur.stale) toast("warning", "The file changed on disk: reload before saving");
-          openFile.set({ ...cur, stale: true });
-        } else openFile.set({ ...cur, content: data.content, revision: data.revision, draft: cur.draft !== undefined ? data.content : undefined, stale: false, error: undefined });
-      } catch (error) {
-        const cur = openFile();
-        if (cur?.project === f.project && cur?.path === f.path && cur?.session === f.session) openFile.set({ ...cur, stale: true, error: String(error) });
+      for (const [id, f] of Object.entries(fileBuffers())) {
+        if (!f.project || f.saving || (only && !only(f))) continue;
+        try {
+          const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
+          const cur = fileBuffers()[id];
+          if (!cur || cur.saving || cur.revision !== f.revision) continue;
+          if (data.revision === cur.revision) continue;
+          if (cur.draft !== undefined && cur.draft !== cur.content) {
+            if (!cur.stale) toast("warning", "The file changed on disk: reload before saving");
+            putBuffer(id, { ...cur, stale: true });
+          } else putBuffer(id, { ...cur, content: data.content, revision: data.revision, draft: cur.draft !== undefined ? data.content : undefined, stale: false, error: undefined });
+        } catch (error) {
+          const cur = fileBuffers()[id];
+          if (cur) putBuffer(id, { ...cur, stale: true, error: String(error) });
+        }
       }
     }
   } finally { fileRefreshPending = false; }
 }
 
-/** Read the open file again; `keepEdit` leaves the editor open on the fresh text (reload), else a clean editor follows the file. */
-export async function reloadFile() {
-  const f = openFile(); if (!f?.project) return;
+/** Read a file again; a clean editor follows the file, an edit keeps editing on the fresh text. */
+export async function reloadFile(id = currentFileId()) {
+  const f = id ? fileBuffers()[id] : undefined; if (!id || !f?.project) return;
   const editing = f.draft !== undefined;
   try {
     const data = await request<{ content: string; revision?: string }>("GET", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session } });
-    if (openFile()?.path === f.path) openFile.set({ ...f, content: data.content, revision: data.revision, draft: editing ? data.content : undefined, stale: false, error: undefined });
+    if (fileBuffers()[id]) putBuffer(id, { ...f, content: data.content, revision: data.revision, draft: editing ? data.content : undefined, stale: false, error: undefined });
   } catch (e) { toast("error", `Reload failed: ${e instanceof Error ? e.message : String(e)}`); }
 }
-export function setDraft(text: string) { const f = openFile(); if (f && f.draft !== undefined) openFile.set({ ...f, draft: text }); }
-/** `PUT …/file` with the revision the file was read at; a stale write keeps the text and says so. */
-export async function saveFile() {
-  const f = openFile(); if (!f || f.draft === undefined || f.saving || !f.project || !fileDirty()) return;
-  openFile.set({ ...f, saving: true });
+export function setDraft(text: string, id = currentFileId()) { const f = id ? fileBuffers()[id] : undefined; if (id && f && f.draft !== undefined) putBuffer(id, { ...f, draft: text }); }
+/** `PUT …/file` with the revision the file was read at; a stale write keeps the text and says so. Resolves true once saved. */
+export async function saveFile(id = currentFileId()): Promise<boolean> {
+  const f = id ? fileBuffers()[id] : undefined; if (!id || !f || f.draft === undefined || f.saving || !f.project || !bufferDirty(id)) return false;
+  putBuffer(id, { ...f, saving: true });
   try {
     const done = await request<{ revision: string }>("PUT", `/api/project/${f.project}/file`, { query: { path: f.path, session: f.session }, body: { content: f.draft, expected_revision: f.revision } });
-    const cur = openFile();
-    if (cur?.path === f.path) openFile.set({ ...cur, content: f.draft, revision: done.revision, saving: false, stale: false });
+    const cur = fileBuffers()[id];
+    if (cur) putBuffer(id, { ...cur, content: f.draft, revision: done.revision, saving: false, stale: false });
     toast("success", "Saved");
+    return true;
   } catch (e) {
-    const cur = openFile();
+    const cur = fileBuffers()[id];
     const stale = e instanceof ApiError && e.code === "stale_file";
-    if (cur?.path === f.path) openFile.set({ ...cur, saving: false, stale: stale || cur.stale });
+    if (cur) putBuffer(id, { ...cur, saving: false, stale: stale || cur.stale });
     toast(stale ? "warning" : "error", stale ? "The file changed on disk. Reload it; your text stays." : `Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
   }
 }
 

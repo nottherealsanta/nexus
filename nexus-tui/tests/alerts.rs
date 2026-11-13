@@ -347,7 +347,11 @@ fn a_banner_is_one_row_at_the_top_of_the_page_above_the_timeline() {
     let (_, rows) = draw(&mut app, 120, 36);
     let banner = app.regions.banner;
     assert_eq!(banner.height, 1);
-    assert_eq!(banner.y, app.regions.centre.y + app.regions.heading.height);
+    // The page starts under the group's strip row.
+    assert_eq!(
+        banner.y,
+        app.regions.centre.y + 1 + app.regions.heading.height
+    );
     assert_eq!(
         app.regions.timeline.y,
         before.y + 1,

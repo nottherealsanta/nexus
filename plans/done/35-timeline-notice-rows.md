@@ -48,6 +48,13 @@ in a dialog (`timeline.tsx` ~984).
   session (as clicking the subagent's start row does), plus `esc close`. Same modal in both clients; it replaces
   NSH's plain text dialog for this notice.
 
+## 35.3 Left alignment and icon scale (2026-11-13)
+
+- [x] Group headings, thoughts, tools, child cards and notices share one left icon column and label edge in both desktop clients; remove the expanded-member tree prefix, retaining indented output.
+- [x] Optically size NSH tool/thought SVGs (9–14 px, shell 12 px) so their visible strokes match the 14 px group chevrons; terminal glyphs remain one cell.
+- [x] Alignment regressions, full TUI suite, NSH layout/thought/shared scenarios and web build pass.
+- [x] Paired light-theme screenshots inspected on the same isolated scripted Core: NSH browser captures and TUI `--dump-frame` SVG/PNG at 145×110 (`/tmp/nexus-align.IDxa1Q/shots/`). NSH shell/code scaling was checked again after the user’s follow-up screenshot.
+
 ## Checks
 
 - [x] A shared scenario in `interface/scenarios/` with a background subagent and its done notice, a single-thought row and

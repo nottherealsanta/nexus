@@ -148,11 +148,11 @@ otherwise the first loaded agent allowed as a root is used (normally
 
 | Agent | Mode | Tools | For |
 | --- | --- | --- | --- |
-| `orchestrate` | primary | every `build` tool + `session` | Breaks a task down, delegates the long-running pieces to sub agents, checks the results, reports. The only agent with the `session` tool. Its prompt says to do quick, well-understood work itself (writing up a plan whose content it has, a small edit, a single command, finishing after a child fails on a provider error) and delegate long-running work, to continue an existing child with `message_session` when new work belongs to its task (including after an interruption), and to start a new child only for unrelated work. |
-| `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
+| `orchestrate` | primary | every `build` tool + `session` | Coordinates an adaptive scout → optional plan → bounded builds → verification workflow. Does small, understood work directly; reuses existing briefs and children. The only agent with the `session` tool. |
+| `build` (default) | all | all | Writes and edits code, runs and checks it. Delegated work stays within assigned ownership and acceptance criteria, surfaces blockers or scope growth early, and returns exact validation results. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
-| `scout` | subagent | read, grep, glob, ls, code (50 tool calls per turn) | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
-| `plan` | subagent | all | Designs a change. Its prompt allows writing Markdown plan files only, never code. This is advice in the prompt, not enforced by the harness. |
+| `scout` | subagent | read, grep, glob, ls, code (50 tool calls per turn) | Focused evidence gathering: current behavior, paths and quotes, dependencies, constraints, likely edit locations, validation commands, and blocking uncertainties. Stops when the next step is supported, not when every file or the tool budget is exhausted. |
+| `plan` | subagent | all | Uses the scout brief, verifies critical assumptions, and resolves design choices into bounded work items with dependencies, ownership, acceptance criteria and validation. May write Markdown plan files only, never code; this is prompt advice, not harness enforcement. |
 
 So a root session runs `orchestrate` or `build`, and a sub agent runs
 `build`, `quick`, `scout` or `plan`. Prompts are advice: bash is not sandboxed,
@@ -164,6 +164,36 @@ The scout tool budget counts both outer calls and calls nested inside `code`.
 Once exhausted, tools are disabled for the rest of the turn and the scout is asked
 for a partial report. The budget resets on the next turn and applies to sessions
 named `scout`, including overrides and existing sessions. Forks retain their own budgets.
+
+### Adaptive orchestration
+
+The built-in prompts guide this flow; the runtime does not force stages or automatically launch agents:
+
+1. **Route by need.** The orchestrator identifies the outcome and completion criteria. Small, understood work stays
+   direct. Unfamiliar, substantial work starts with a focused scout unless a sufficient current brief already exists.
+   Investigation-only or plan-only requests do not authorize implementation.
+2. **Scout enough to act.** The brief separates facts from hypotheses, names likely edit locations and checks, and
+   identifies uncertainties that could change the approach. Follow-ups fill specific gaps rather than repeat broad
+   discovery. Scouts cannot run shell tests; suggested validation commands are not test results.
+3. **Plan conditionally.** Use a planner for architectural trade-offs, migrations, coupled cross-client changes or
+   dependent work items; skip it for an obvious localized fix or an actionable existing plan. The planner consumes the
+   brief and verifies critical assumptions rather than starting discovery over.
+4. **Build bounded outcomes.** Each assignment carries the outcome, evidence, owned files / boundaries, dependencies,
+   acceptance criteria, validation and expected return. Independent work may run in parallel only with disjoint edit
+   ownership; shared integration points have one owner. Builders inspect current targets, run focused checks and
+   surface blockers or unexpected scope growth early.
+5. **Accept the result.** The orchestrator checks the actual diff and evidence against the criteria, coordinates one
+   integration pass after edits settle, and reports unmet or unverified criteria honestly. An independent review is
+   optional, not another required stage. Existing children handle corrections through `message_session`; changed
+   requirements trigger a scope/ownership check instead of an ever-growing assignment. Interrupted work stays paused
+   until resumption is wanted. Provider failures are not solved by adding stages or silently changing models.
+
+This changes prompts only, not model pools, permissions, tool budgets or scheduling. New sessions pick it up unless
+a global/project override replaces the built-in file. Existing sessions keep their frozen prompts; an explicit agent
+switch reloads the current files. No running session is rewritten automatically. Offline prompt checks protect the
+instructions and existing snapshot/child tests check the harness boundary; they do not prove model compliance or a
+speed/quality improvement. Observation criteria and the session-review baseline are in
+[plan 46](../plans/46-adaptive-orchestration.md).
 
 The session JSON reports the result and where it came from: `model` and
 `model_source` (`session`, `agent`, `parent` or `none`), and `effort` and

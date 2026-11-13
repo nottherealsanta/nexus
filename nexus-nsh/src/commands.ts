@@ -1,4 +1,4 @@
-import { loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput, openGitDiff } from "./store";
+import { loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput } from "./store";
 import { PHONE_UNAVAILABLE, desktopOnly } from "./mobile";
 import { btw, closeBtw, startBtw } from "./btw";
 import type { UsageProvider } from "./store";
@@ -34,7 +34,11 @@ import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects 
 import type { ProjectStatus } from "./project-rail";
 import { askVoiceDownload, askVoiceRemove, refreshVoiceOnSettingsOpen, voiceCommandReason } from "./voice-settings";
 import { terminalEvidenceAction } from "./terminal-evidence";
-import { beginRenameTerminal, closeTerminalPanel, controlTerminal, focusTerminalList, newTerminal, openTerminal, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalRename, terminalSelected } from "./terminal-panel";
+import { beginRenameTerminal, controlTerminal, focusTerminalList, requestTerminalClose, requestTerminalCopy, terminalAvailable, terminalControlled, terminalFocused, terminalOpen, terminalRename, terminalSelected } from "./terminal-panel";
+import {
+  canFocus, canJoinDown, canJoinRight, cancelLayoutDrag, closeFocusedTab, closeGroupTabs, focusDirection, focusedGroupId, hasActiveTab, joinFocused, layoutDrag, layoutEnabled, moveActive, multipleGroups, newTerminalTab, openDiffTab, openFileTab, openSessionTab,
+  openGroupMenu, openTerminalTab, showNewTab, splitFocused, stepTabInFocused,
+} from "./layout-state";
 
 export interface Cmd {
   id: string; title: string; category: string; slash?: string; keys?: { tui?: string; nsh?: string };
@@ -127,6 +131,14 @@ function evalTerm(t: string): boolean {
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
     case "terminal.open": return terminalOpen();
+    case "layout.tab_active": return layoutEnabled && hasActiveTab();
+    case "layout.split_multiple": return layoutEnabled && multipleGroups();
+    case "layout.can_join_right": return layoutEnabled && canJoinRight();
+    case "layout.can_join_down": return layoutEnabled && canJoinDown();
+    case "layout.has_left": return layoutEnabled && canFocus("left");
+    case "layout.has_right": return layoutEnabled && canFocus("right");
+    case "layout.has_up": return layoutEnabled && canFocus("up");
+    case "layout.has_down": return layoutEnabled && canFocus("down");
     case "terminal.selected": return !!terminalSelected();
     case "terminal.focused": return terminalFocused();
     case "terminal.controlled": return terminalControlled();
@@ -171,8 +183,8 @@ async function showUsage() {
 }
 
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
-on("terminal.open", openTerminal);
-on("terminal.new", newTerminal);
+on("terminal.open", openTerminalTab);
+on("terminal.new", () => newTerminalTab());
 on("terminal.rename", beginRenameTerminal);
 on("terminal.close", requestTerminalClose);
 on("terminal.copy", requestTerminalCopy);
@@ -180,6 +192,24 @@ on("terminal.attach", () => terminalEvidenceAction.run?.());
 on("terminal.focus_list", focusTerminalList);
 on("terminal.acquire", () => controlTerminal("acquire"));
 on("terminal.release", () => controlTerminal("release"));
+// Tabs and splits (plan 45, docs/layout.md).
+on("layout.split_right", () => splitFocused("right"));
+on("layout.split_down", () => splitFocused("down"));
+on("layout.join_right", () => joinFocused("right"));
+on("layout.join_down", () => joinFocused("down"));
+for (const dir of ["left", "right", "up", "down"] as const) {
+  on(`layout.focus_${dir}`, () => { focusDirection(dir); });
+  on(`layout.move_${dir}`, () => moveActive(dir));
+}
+on("layout.tab_close", closeFocusedTab);
+on("layout.group_close", () => closeGroupTabs(focusedGroupId()));
+on("layout.open_to_side", () => {
+  const file = selectedFileEntry(), change = selectedGitFile(), row = focusedSidebarRow();
+  if (leftTab() === "files" && file?.kind === "file") openFileTab(file.path, true);
+  else if (leftTab() === "git" && change) openDiffTab(true);
+  else if (row?.kind === "session") openSessionTab(row.id, true);
+});
+on("layout.group_menu", openGroupMenu);
 
 /** Copies text to the system clipboard and confirms it (the timeline's message copy). */
 export function copyText(text: string, done: string) { void Clipboard.writeText(text).then(() => toast("success", done)); }
@@ -208,7 +238,7 @@ function tab(t: "sessions" | "files" | "git") {
 
 export function newSession() {
   rememberNewSession(currentProject());
-  model.select(null); centre.set("new_session");
+  model.select(null); centre.set("new_session"); showNewTab();
   const project = currentProject();
   if (project) { loadComposerData(project); loadProjectWorktrees(project); }
   if (isNarrow()) drawer.set(null);
@@ -622,7 +652,7 @@ on("sidebar.tab.sessions", () => tab("sessions"));
 on("sidebar.tab.files", () => tab("files"));
 on("sidebar.tab.git", () => tab("git"));
 on("git.refresh", () => loadGitPage(), true);
-on("git.open_diff", () => openGitDiff(), true);
+on("git.open_diff", () => openDiffTab(), true);
 for (const action of ["stage", "unstage"] as const) on(`git.${action}`, async () => {
   const project = currentProject(), file = selectedGitFile(); if (!project || !file) return;
   try { await request("POST", `/api/project/${project}/git/action`, { body: { action, paths: [file.path], worktree: currentWorktree()?.path }, key: newKey() }); await loadGitPage(); }
@@ -659,9 +689,9 @@ on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.se
 on("composer.focus", () => focusComposer.fn());
 on("composer.paste", () => pasteClipboard.fn());
 on("session.new", newSession);
-on("session.tab_close", () => { const id = rootOf(viewed()?.id); if (id) closeTab(id); });
-on("session.tab_next", () => stepTab(1));
-on("session.tab_prev", () => stepTab(-1));
+on("session.tab_close", closeFocusedTab);
+on("session.tab_next", () => stepTabInFocused(1));
+on("session.tab_prev", () => stepTabInFocused(-1));
 on("nav.back", () => { const parent = viewed()?.parent_id; if (parent) void selectSession(parent); });
 /** A viewed subagent's heading back control and Left gesture jump to its root; Esc stays on the parent. */
 export function backToRoot() {
@@ -696,20 +726,13 @@ on("session.search", () => openSessionSearch());
 on("session.worktree_info", () => { const s = viewed(); if (s) { loadSessionWorktrees(s.id); worktreeInfoOpen.set(true); } });
 on("editor.find", () => { if (openFile()) { if (markdownFile()) fileSource.set(true); fileFindOpen.set(true); } });
 on("editor.preview", () => { if (openFile() && markdownFile()) { fileSource.set(!fileSource()); fileFindOpen.set(false); } });
-on("editor.save", () => saveFile(), true);
+on("editor.save", () => { void saveFile(); }, true);
 on("editor.reload", () => {
   if (!fileDirty()) { void reloadFile(); return; }
   confirmDialog.set({ title: "Reload file", body: "Reading the file again replaces your unsaved changes.", confirm: "Reload", destructive: true, run: async () => { confirmDialog.set(null); await reloadFile(); } });
 });
-/** Esc closes a clean file; an unsaved draft asks before it is discarded. */
-function closeEditor() {
-  const leave = () => {
-    fileFindOpen.set(false);
-    openFile.set(null); centre.set(viewed() ? "session" : "new_session");
-  };
-  if (!fileDirty()) { leave(); return; }
-  confirmDialog.set({ title: "Discard changes", body: "The file has unsaved changes. Leaving the editor drops them.", confirm: "Discard", destructive: true, run: () => { confirmDialog.set(null); leave(); } });
-}
+/** `editor.close` closes the focused group's file tab (asking first when it has unsaved changes). */
+function closeEditor() { if (openFile()) closeFocusedTab(); }
 on("editor.close", closeEditor);
 on("app.usage", () => void showUsage());
 /** Ctrl+R: this project's earlier prompts (Core lists them newest first), each once; choosing one replaces the draft. */
@@ -1114,8 +1137,8 @@ const hasModifier = (k: string) => /(^|\+)(cmd|ctrl|alt)(\+|$)/.test(k) || /^f\d
 export function escape() {
   if (btw()) { closeBtw(); return "btw"; }
   if (terminalFocused()) return null;
+  if (layoutDrag()) { cancelLayoutDrag(); return "layout_drag"; }
   if (terminalOpen() && terminalRename()) { terminalRename.set(false); return "terminal_rename"; }
-  if (terminalOpen() && !confirmDialog() && !term("overlay.open")) { closeTerminalPanel(); return "terminal"; }
   const drag = railDrag();
   if (drag) { railDrag.set({ ...drag, cancelled: true }); return "rail_drag"; }
   if (inspector()) { closeInspector(); return "inspector"; }
@@ -1148,7 +1171,8 @@ export function escape() {
       if (rule.id === "alert") { void run("alert.dismiss"); return rule.id; }
       if (rule.id === "interrupt") { void run("session.interrupt"); return rule.id; }
       if (rule.id === "back") { const s = viewed(); if (s?.parent_id) void selectSession(s.parent_id); return rule.id; }
-      if (rule.id === "editor") { closeEditor(); return rule.id; }
+      // A file is a tab now, not a modal: Esc leaves it open (the find bar closes above).
+      if (rule.id === "editor") continue;
       void run(rule.action);
       return rule.id;
     }

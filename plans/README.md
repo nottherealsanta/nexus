@@ -33,6 +33,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
+| 46 | [Adaptive orchestration and handoffs](46-adaptive-orchestration.md) | **prompts landed 11-13**; 60 offline tests pass | Observe scope, acceptance and repeated discovery on subsequent user tasks; improvement not yet measured |
+| 45 | [Everything is a tab: editor groups and splits](45-tabs-and-splits.md) | **new** (decisions taken 11-13) | Manifest + docs, then the TUI layout core |
 | 44 | [Tooling and prompts from a session review](44-session-review-tooling.md) | **landed 2026-11-12** except background-job pipe status | Re-run its measurement queries after a week of use; revisit triggers are in the file |
 | 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |

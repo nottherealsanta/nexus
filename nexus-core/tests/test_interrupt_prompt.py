@@ -17,6 +17,18 @@ from test_inputs_integration import (  # noqa: F401  (setup_inputs is a fixture)
 from nexus.llmhub.types import ToolCall
 
 
+async def test_keyed_interrupt_stops_a_streaming_turn(setup_inputs):
+    runtime, client, provider, workspace = setup_inputs
+    session_id = await _session(client, workspace)
+    provider.pause_before_done = True
+    await client.post(f"/api/session/{session_id}/prompt", json={"text": "long"})
+    await asyncio.wait_for(provider.entered.wait(), 3)
+    response = await asyncio.wait_for(client.post(
+        f"/api/session/{session_id}/interrupt", headers={"idempotency-key": "stop-test"}), 1)
+    assert response.status_code == 204
+    assert session_id not in runtime.turns
+
+
 async def test_interrupt_mode_cancels_a_waiting_approval_and_runs_the_message(env):
     rt, client, provider, workspace = env.rt, env.client, env.provider, env.workspace
     root = await _create(client, workspace, permission="ask")

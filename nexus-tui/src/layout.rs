@@ -15,11 +15,6 @@ use crate::ui::{Side, Target};
 pub const NARROW_BELOW: u16 = 100;
 /// The medium breakpoint of D17. The right sidebar starts closed at every width.
 pub const RIGHT_OPEN_FROM: u16 = 120;
-/// The file and diff modal: the window's full height, at most this many
-/// columns of content, and a cell of frame and this margin either side when
-/// the window has room.
-pub const PANEL_MAX_WIDTH: u16 = 120;
-pub const PANEL_MARGIN_X: u16 = 4;
 /// From this width the sidebars are 34 / 36 cells and the reading column is
 /// centred (D17); below it they are 28 / 30.
 pub const WIDE_FROM: u16 = 160;
@@ -44,9 +39,6 @@ pub struct Flags {
     pub drawer: Option<Side>,
     /// Stored full width of the left sidebar; 0 means the default.
     pub left_width: u16,
-    /// A file or diff is open, in a modal over the whole window.
-    pub panel_open: bool,
-    pub terminal_open: bool,
     /// A subagent is viewed: reserve a four-cell root-back strip at the centre's left.
     pub session_child: bool,
 }
@@ -89,11 +81,13 @@ pub struct Regions {
     /// Docked sidebars (wide layouts only).
     pub left: Option<Rect>,
     pub right: Option<Rect>,
-    /// The file or diff modal's content, centred over everything.
+    /// The focused group's body while its active tab is a file or diff (set
+    /// by the renderer from the layout tree; `None` otherwise).
     pub panel: Option<Rect>,
     /// A drawer drawn over the centre (narrow layouts), with its side.
     pub drawer: Option<(Side, Rect)>,
-    /// The centre content, right of the root-back strip when one is reserved.
+    /// The centre content, right of the root-back strip when one is reserved:
+    /// the area the layout tree (groups of tabs) fills.
     pub centre: Rect,
     /// The four-cell full-height root-back strip, subagent views only.
     pub back: Option<Rect>,
@@ -102,6 +96,7 @@ pub struct Regions {
     pub timeline: Rect,
     pub waiting: Rect,
     pub composer: Rect,
+    /// The body of the group showing the live terminal screen (renderer-set).
     pub terminal: Option<Rect>,
     // Header anchors: leading toggle, trailing toggle, notification bell, title.
     pub toggle_left: Rect,
@@ -171,23 +166,6 @@ pub fn right_width(total: u16) -> u16 {
     }
 }
 
-/// Where the file and diff modal's content sits: centred, keeping its margins
-/// and a cell of frame while the window has room, else the whole window.
-pub fn panel_rect(area: Rect) -> Rect {
-    let frame = 2 * (PANEL_MARGIN_X + 1);
-    let width = if area.width > frame + MIN_CENTRE {
-        (area.width - frame).min(PANEL_MAX_WIDTH)
-    } else {
-        area.width
-    };
-    r(
-        area.x + (area.width - width) / 2,
-        area.y,
-        width,
-        area.height,
-    )
-}
-
 fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
     Rect::new(x, y, w, h)
 }
@@ -228,13 +206,7 @@ impl Regions {
                 right = Some(r(x + w, body_y, rw, body_h));
             }
         }
-        let dock_height = if flags.terminal_open {
-            (body_h / 3).max(3).min(body_h.saturating_sub(6))
-        } else {
-            0
-        };
-        let centre = r(x, body_y, w, body_h - dock_height);
-        let terminal = (dock_height > 0).then(|| r(x, centre.bottom(), w, dock_height));
+        let centre = r(x, body_y, w, body_h);
         let back = flags
             .session_child
             .then(|| r(centre.x, centre.y, 4.min(centre.width), centre.height));
@@ -247,7 +219,6 @@ impl Regions {
             ),
             None => centre,
         };
-        let panel = flags.panel_open.then(|| panel_rect(area));
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
             let dw = drawer_width(side, area.width - (page_x - area.x));
@@ -258,34 +229,10 @@ impl Regions {
             (side, rect)
         });
 
-        let mut h = heights(centre.width);
-        let max_extra = centre.height.saturating_sub(3);
-        let mut left_rows = max_extra;
-        for v in [
-            &mut h.composer,
-            &mut h.heading,
-            &mut h.banner,
-            &mut h.waiting,
-        ] {
-            *v = (*v).min(left_rows);
-            left_rows -= *v;
-        }
-        let heading = r(centre.x, centre.y, centre.width, h.heading);
-        let banner = r(centre.x, centre.y + h.heading, centre.width, h.banner);
-        let composer = r(
-            centre.x,
-            centre.y + centre.height - h.composer,
-            centre.width,
-            h.composer,
-        );
-        let waiting = r(centre.x, composer.y - h.waiting, centre.width, h.waiting);
-        let timeline_y = banner.y + banner.height;
-        let timeline = r(
-            centre.x,
-            timeline_y,
-            centre.width,
-            waiting.y.saturating_sub(timeline_y),
-        );
+        // One group fills the centre by default: its strip is the first row.
+        let body = group_body(centre);
+        let (heading, banner, timeline, waiting, composer) =
+            session_rects(body, heights(body.width));
 
         // Header: [ toggle ] [ title ............ ] [ bell ] [ toggle ]
         let toggle_width = if rail.is_some() { RAIL_WIDTH } else { 3 };
@@ -331,7 +278,7 @@ impl Regions {
             rail,
             left,
             right,
-            panel,
+            panel: None,
             drawer,
             centre,
             back,
@@ -340,13 +287,71 @@ impl Regions {
             timeline,
             waiting,
             composer,
-            terminal,
+            terminal: None,
             toggle_left,
             toggle_right,
             bell,
             manager,
             title,
         }
+    }
+}
+
+/// A group's body: its rect below the one-row tab strip.
+pub fn group_body(group: Rect) -> Rect {
+    let strip = group.height.min(1);
+    r(group.x, group.y + strip, group.width, group.height - strip)
+}
+
+/// The session page inside `body`: heading, banner, timeline, waiting card and
+/// composer, clamped so the timeline keeps at least three rows.
+pub fn session_rects(body: Rect, mut h: Heights) -> (Rect, Rect, Rect, Rect, Rect) {
+    let max_extra = body.height.saturating_sub(3);
+    let mut left_rows = max_extra;
+    for v in [
+        &mut h.composer,
+        &mut h.heading,
+        &mut h.banner,
+        &mut h.waiting,
+    ] {
+        *v = (*v).min(left_rows);
+        left_rows -= *v;
+    }
+    let heading = r(body.x, body.y, body.width, h.heading);
+    let banner = r(body.x, body.y + h.heading, body.width, h.banner);
+    let composer = r(
+        body.x,
+        body.y + body.height - h.composer,
+        body.width,
+        h.composer,
+    );
+    let waiting = r(body.x, composer.y - h.waiting, body.width, h.waiting);
+    let timeline_y = banner.y + banner.height;
+    let timeline = r(
+        body.x,
+        timeline_y,
+        body.width,
+        waiting.y.saturating_sub(timeline_y),
+    );
+    (heading, banner, timeline, waiting, composer)
+}
+
+impl Regions {
+    /// Lay the session page into `body` (the focused group's body), or take it
+    /// away (`None`) when the focused group shows a file, diff or terminal.
+    pub fn retarget_session(&mut self, body: Option<Rect>, heights: impl Fn(u16) -> Heights) {
+        let (heading, banner, timeline, waiting, composer) = match body {
+            Some(b) => session_rects(b, heights(b.width)),
+            None => {
+                let none = r(self.centre.x, self.centre.y, 0, 0);
+                (none, none, none, none, none)
+            }
+        };
+        self.heading = heading;
+        self.banner = banner;
+        self.timeline = timeline;
+        self.waiting = waiting;
+        self.composer = composer;
     }
 }
 
@@ -435,29 +440,26 @@ mod tests {
     }
 
     #[test]
-    fn an_open_panel_is_a_centred_modal_over_an_unchanged_page() {
-        let mut f = flags(true, true);
-        let closed = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
-        f.panel_open = true;
-        let g = Regions::compute(Rect::new(0, 0, 160, 40), f, heights);
-        assert_eq!(
-            g.centre, closed.centre,
-            "the page keeps its layout underneath"
-        );
-        assert_eq!(g.right, closed.right);
-        let panel = g.panel.unwrap();
-        assert_eq!(panel.width, PANEL_MAX_WIDTH);
-        assert_eq!(panel.x, (160 - PANEL_MAX_WIDTH) / 2);
-        assert_eq!(panel.y, 0, "the modal is full height");
-        assert_eq!(panel.height, 40);
+    fn the_centre_is_one_group_whose_strip_is_its_first_row() {
+        let g = Regions::compute(Rect::new(0, 0, 160, 40), flags(true, true), heights);
+        let body = group_body(g.centre);
+        assert_eq!(body.y, g.centre.y + 1);
+        assert_eq!(body.height, g.centre.height - 1);
+        assert_eq!(g.heading.y, body.y, "the page starts under the strip");
+        assert_eq!(g.composer.bottom(), g.centre.bottom());
+        assert!(g.panel.is_none() && g.terminal.is_none(), "no dock or modal");
     }
 
     #[test]
-    fn a_small_window_gives_the_panel_all_of_it() {
-        let mut f = flags(true, true);
-        f.panel_open = true;
-        let g = Regions::compute(Rect::new(0, 0, 40, 10), f, heights);
-        assert_eq!(g.panel.unwrap(), g.area);
+    fn the_session_page_retargets_into_another_group_or_goes_away() {
+        let mut g = Regions::compute(Rect::new(0, 0, 160, 40), flags(true, true), heights);
+        let body = Rect::new(60, 5, 50, 20);
+        g.retarget_session(Some(body), heights);
+        assert_eq!(g.composer.bottom(), body.bottom());
+        assert_eq!((g.timeline.x, g.timeline.width), (60, 50));
+        g.retarget_session(None, heights);
+        assert_eq!((g.timeline.width, g.timeline.height), (0, 0));
+        assert_eq!((g.composer.width, g.composer.height), (0, 0));
     }
 
     #[test]

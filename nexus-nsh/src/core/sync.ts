@@ -210,6 +210,7 @@ export class Sync {
       // `server.connected` must not read it a second time as well.
       this.reloadOnConnect = false;
       if (m.selected) void this.loadSelected().catch(() => {});
+      this.reloadWatched();
     }
     if (epoch !== this.epoch) throw new ApiError(0, "superseded");
     this.abort = new AbortController();
@@ -281,6 +282,7 @@ export class Sync {
           this.lastStreamId = id;
           this.reloadOnConnect = false;
           if (m.selected && newStream) void this.loadSelected().catch(() => {});
+          if (newStream) this.reloadWatched();
           continue;
         }
         if (f.event === "bus.overflow") { this.needSnapshot = true; throw new ApiError(0, "event stream overflow", "overflow"); }
@@ -306,12 +308,30 @@ export class Sync {
    * not read: live events cover the running turn, summaries cover the rest.
    */
   async loadSelected(): Promise<void> {
-    const m = this.host.model;
-    const id = m.selected?.sessionId;
+    const id = this.host.model.selected?.sessionId;
     if (!id) return;
-    const wanted = () => m.selected?.sessionId === id;
     this.host.contextChanged?.(id);
     this.host.inputsChanged?.(id);
+    await this.loadView(id, () => this.host.model.selected?.sessionId === id);
+  }
+
+  /** Sessions an unfocused group shows (plan 45): their views are pinned and their history read, as the TUI's `Watch`. */
+  private watched: string[] = [];
+  watch(ids: string[]) {
+    const fresh = ids.filter((id) => !this.watched.includes(id));
+    this.watched = [...ids];
+    for (const id of fresh) void this.loadWatched(id).catch(() => {});
+  }
+  /** Watched views may have missed events (a reconnect or a snapshot): read them again. */
+  private reloadWatched() { for (const id of this.watched) void this.loadWatched(id).catch(() => {}); }
+  private loadWatched(id: string) {
+    const m = this.host.model;
+    return this.loadView(id, () => this.watched.includes(id) && m.viewOf(id) !== null);
+  }
+
+  /** Read a session's history into its (selected or cached) view while `wanted` holds. */
+  private async loadView(id: string, wanted: () => boolean): Promise<void> {
+    const m = this.host.model;
     const [msgPage, starting, turns] = await Promise.all([
       request<any>("GET", `/api/session/${id}/message`, { query: { limit: MESSAGE_PAGE } }),
       request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),

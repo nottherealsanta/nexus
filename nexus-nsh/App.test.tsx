@@ -490,6 +490,22 @@ describe("history", () => {
     expect(m.cached.some((v) => v.sessionId === "ses_1")).toBe(false);
   });
 
+  test("pinned views survive the cache limit, and withView reads one as the selected view and puts it back", () => {
+    const m = live(new Model());
+    for (const id of ["pinned", "ses_x"]) m.sessions.set(id, { id, project_id: "prj_1" } as any);
+    m.select("ses_x");
+    expect(m.pin(["pinned", "unknown", "ses_x"])).toEqual(["pinned"]);
+    for (let n = 0; n < VIEW_CACHE + 3; n++) m.select(`ses_${n}`);
+    expect(m.cached.some((v) => v.sessionId === "pinned")).toBe(true);
+    m.applyEvent({ ...ev(1, "message.added", { id: "mp", session_id: "pinned", seq: 1, role: "user", parts: [{ type: "text", text: "hi" }], created: 1 }), session_id: "pinned" });
+    expect(m.withView("pinned", () => [m.selected!.sessionId, m.selected!.messages.length])).toEqual(["pinned", 1]);
+    expect(m.selected!.sessionId).toBe(`ses_${VIEW_CACHE + 2}`);
+    expect(m.withView("ses_nowhere", () => 1)).toBe(null);
+    m.pin([]);
+    m.select("ses_y");
+    expect(m.cached.length).toBe(VIEW_CACHE);
+  });
+
   test("history replaces a held running turn that the fetch read closed", () => {
     const m = live(new Model());
     m.select("ses_1");

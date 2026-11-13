@@ -5,7 +5,6 @@ import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, 
 import { dockHeight } from "../core/manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
-import type { FileEntry } from "../store";
 import { compactApproval } from "../mobile";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
@@ -21,7 +20,8 @@ import { DiffView, diffItems } from "./diff";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
 import { activityOffsetPercent, activityPhase } from "./activity-motion";
 import { RetryNotices } from "./retry-notices";
-import { openTerminal, refreshTerminals, restoreTerminalDock, terminalAvailable, terminalFocused, terminalItems, terminalOpen } from "../terminal-panel";
+import { refreshTerminals, terminalAvailable, terminalFocused, terminalItems, terminalOpen } from "../terminal-panel";
+import { openTerminalTab } from "../layout-state";
 
 import { imageDrafts, readImage } from "../images";
 import { isBigPaste, makePaste, normalisePaste, pasteDrafts, pasteLabel, prunePastes } from "../pastes";
@@ -29,6 +29,7 @@ import { cancelDictation, stopDictation } from "../dictation";
 import { formatBytes } from "../dictation-logic";
 import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "../voice-state";
 import { PhoneApprovalChoices } from "./mobile/approval";
+import { fileCandidates, fileMenu } from "../file-completion";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // the Working row on the line below it while busy, the completion layer floating over the timeline from its top edge and the project strip below.
@@ -38,19 +39,16 @@ const pendingSelection = signal<{ session: string; id: string } | null>(null);
 const selected = signal(0);
 /** The completion token the user closed with Esc; it reopens when the token changes. */
 const dismissed = signal<string | null>(null);
-const atListing = signal<{ key: string; entries: FileEntry[] } | null>(null);
-let atSeq = 0;
-/** The listing being fetched: model bumps re-run the effect and must not ask again meanwhile. */
-let atAsking = "";
+const atListing = signal<{ scope: string; cache: { prefix: string; paths: string[] }[]; pool: string[] | null }>({ scope: "", cache: [], pool: null });
+const atAsking = new Set<string>();
 const MENU_LIMIT = 8;
 
 type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string; file?: { name: string; dir: string; folder: boolean } };
-type Completion = { kind: "slash" | "file"; query: string; dir: string; rows: CompletionRow[] };
+type Completion = { kind: "slash" | "file"; query: string; dir: string; prefix: string; rows: CompletionRow[] };
 
-/** `/` completes commands when the draft is a single word; `@` completes project paths at the end of the draft. */
-function completionFor(text: string): Completion | null {
-  if (text.includes("\n")) return null;
-  if (/^\/\S*$/.test(text)) {
+/** `/` completes a first-word command; `@` completes the token at the caret. */
+function completionFor(text: string, prefix: string): Completion | null {
+  if (prefix === text && /^\/\S*$/.test(text)) {
     const query = text.slice(1).toLowerCase();
     const rows = commands
       .filter((c: Cmd) => !!c.slash && c.slash.toLowerCase().startsWith(query))
@@ -58,24 +56,27 @@ function completionFor(text: string): Completion | null {
         const a = availability(c);
         return { key: c.id, value: `/${c.slash}`, help: c.title, hint: keyLabel(c) ?? undefined, muted: a.ok ? undefined : a.reason, accept: `/${c.slash} ` };
       });
-    return { kind: "slash", query, dir: "", rows };
+    return { kind: "slash", query, dir: "", prefix, rows };
   }
-  const at = text.match(/(?:^|\s)@([^\s]*)$/);
+  const at = !text.startsWith("!") && prefix.match(/(?:^|\s)@([^\s]*)$/);
   if (at) {
     const query = at[1];
     const slash = query.lastIndexOf("/");
     const dir = slash < 0 ? "" : query.slice(0, slash + 1);
-    const base = query.slice(dir.length).toLowerCase();
+    const scope = JSON.stringify([currentProject(), viewed()?.id ?? null]);
     const listing = atListing();
-    const entries = listing && listing.key.endsWith(`|${dir}`) ? listing.entries : [];
-    const rows = entries
-      .filter((e) => !e.ignored && e.name.toLowerCase().startsWith(base))
-      .sort((a, b) => (a.kind === "directory" ? 0 : 1) - (b.kind === "directory" ? 0 : 1) || a.name.localeCompare(b.name))
-      .map((e): CompletionRow => {
-        const isDir = e.kind === "directory";
-        return { key: e.name, value: `@${dir}${e.name}${isDir ? "/" : ""}`, help: isDir ? "directory" : e.kind, file: { name: `${e.name}${isDir ? "/" : ""}`, dir, folder: isDir }, accept: `@${dir}${e.name}${isDir ? "/" : " "}` };
+    const hits = listing.scope === scope ? fileCandidates(listing.cache, prefix) : null;
+    const paths = hits ? fileMenu(query, hits, listing.pool) : [];
+    const rows = paths
+      .map((path): CompletionRow => {
+        const isDir = path.endsWith("/");
+        const trimmed = isDir ? path.slice(0, -1) : path;
+        const split = trimmed.lastIndexOf("/");
+        const name = trimmed.slice(split + 1) + (isDir ? "/" : "");
+        const parent = split < 0 ? "" : trimmed.slice(0, split + 1);
+        return { key: path, value: `@${path}`, help: isDir ? "directory" : "file", file: { name, dir: parent, folder: isDir }, accept: `@${path}${isDir ? "" : " "}` };
       });
-    return { kind: "file", query, dir, rows };
+    return { kind: "file", query, dir, prefix, rows };
   }
   return null;
 }
@@ -240,17 +241,32 @@ function EditableComposer() {
 
   // Completion: the rows for the draft, the keys while it is open, and the file listing for `@`.
   // Memoised so a keystroke that leaves completion closed (the usual one) wakes nothing that depends on it.
-  const completion = computed(() => completionFor(text()));
+  const caret = signal({ start: 0, end: 0 });
+  const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
+  const completion = computed(() => {
+    const at = caretAt();
+    return at < 0 ? null : completionFor(text(), text().slice(0, at));
+  });
   const open = computed(() => {
     const c = completion();
-    return !!c && c.rows.length > 0 && dismissed() !== text();
+    return !!c && c.rows.length > 0 && dismissed() !== (c.kind === "file" ? `@${c.query}` : c.prefix);
+  });
+  let lastCompletionToken = "";
+  effect(() => {
+    const c = completion();
+    const token = c ? (c.kind === "file" ? `@${c.query}` : c.prefix) : "";
+    if (token !== lastCompletionToken) { lastCompletionToken = token; dismissed.set(null); selected.set(0); }
   });
   const accept = (row: CompletionRow) => {
     const c = completion();
     if (!c) return;
     const t = text();
-    const next = c.kind === "file" ? t.slice(0, t.length - (c.query.length + 1)) + row.accept : row.accept;
+    const start = c.prefix.length - (c.query.length + 1);
+    const next = c.kind === "file" ? t.slice(0, start) + row.accept + t.slice(c.prefix.length) : row.accept;
+    const position = c.kind === "file" ? start + row.accept.length : row.accept.length;
     draft.update((d) => ({ ...d, [key()]: next }));
+    caret.set({ start: position, end: position });
+    try { ref?.setSelection(position, position); } catch { /* the platform keeps the caret */ }
     selected.set(0);
   };
   effect(() => {
@@ -268,8 +284,6 @@ function EditableComposer() {
   const recalled = computed(() => { const r = recall(); const e = promptHistory().entries; return r && e[r.at] === text() ? r : null; });
   // The caret as the input reports it (UTF-16 units, clamped to the draft a replacement shortened);
   // a selection takes no arrow.
-  const caret = signal({ start: 0, end: 0 });
-  const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
   const onFirstLine = computed(() => { const at = caretAt(); return at >= 0 && !text().slice(0, at).includes("\n"); });
   const onLastLine = computed(() => { const at = caretAt(); return at >= 0 && !text().slice(at).includes("\n"); });
   const draftEmpty = computed(() => !(draft()[draftKey()] ?? "").length);
@@ -368,13 +382,25 @@ function EditableComposer() {
     const project = currentProject();
     if (!c || c.kind !== "file" || !project) return;
     const session = viewed()?.id;
-    const k = `${project}|${session ?? ""}|${c.dir}`;
-    if (untracked(() => atListing()?.key) === k || atAsking === k) return;
-    const seq = ++atSeq;
-    atAsking = k;
-    const done = (entries: FileEntry[]) => { if (seq === atSeq) { atAsking = ""; atListing.set({ key: k, entries }); } };
-    void request<{ entries: FileEntry[] }>("GET", `/api/project/${project}/files`, { query: { path: c.dir.replace(/\/$/, ""), session } })
-      .then((d) => done(d.entries ?? []), () => done([]));
+    const scope = JSON.stringify([project, session ?? null]);
+    if (untracked(() => atListing().scope) !== scope) atListing.set({ scope, cache: [], pool: null });
+    const ask = (query: string, limit: number, prefix: string | null) => {
+      const k = JSON.stringify([scope, prefix, limit]);
+      if (atAsking.has(k)) return;
+      atAsking.add(k);
+      void request<{ paths: string[] }>("GET", `/api/project/${project}/files/search`, { query: { q: query, limit, directories: "1", session } })
+        .then((data) => {
+          const state = untracked(() => atListing());
+          if (state.scope !== scope) return;
+          if (prefix === null) atListing.set({ ...state, pool: data.paths ?? [] });
+          else if (untracked(() => completion()?.prefix) === prefix) {
+            atListing.set({ ...state, cache: [...state.cache.filter((entry) => entry.prefix !== prefix), { prefix, paths: data.paths ?? [] }].slice(-64) });
+          }
+        }).catch(() => {}).finally(() => { atAsking.delete(k); });
+    };
+    const state = untracked(() => atListing());
+    if (!state.pool) ask("", 100, null);
+    if (!state.cache.some((entry) => entry.prefix === c.prefix)) ask(c.query, 30, c.prefix);
   });
 
   const agentName = () => capitalize(agent());
@@ -500,7 +526,7 @@ function EditableComposer() {
                     </Each>
                     <View class="flex-row items-center gap-3.5 h-[30px] pt-1 px-2.5 mt-1 border-t border-border">
                       <Text class={T.meta}><Text class="text-foreground-secondary font-medium">↑↓</Text> move</Text>
-                      <Text class={T.meta}><Text class="text-foreground-secondary font-medium">tab</Text> accept</Text>
+                      <Text class={T.meta}><Text class="text-foreground-secondary font-medium">{files() ? "tab/enter" : "tab"}</Text> accept</Text>
                       <Text class={T.meta}><Text class="text-foreground-secondary font-medium">esc</Text> close</Text>
                       <View class="flex-1" />
                       <Text class={T.meta}>{`${at() + 1} of ${c().rows.length}`}</Text>
@@ -510,9 +536,9 @@ function EditableComposer() {
               );
             }}
           </If>
-          <View class={`w-full bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-3"} border ${open() ? "border-border" : "border-transparent"}`} testID="composer-surface">
+          <View class={`w-full bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-2"} border ${open() ? "border-border" : "border-transparent"}`} testID="composer-surface">
           <RetryNotices />
-          <View class={phone ? "h-2" : "h-4"} testID="composer-top-padding" />
+          <View class={phone ? "h-2" : "h-5"} testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
@@ -532,6 +558,11 @@ function EditableComposer() {
               // A standalone `/command` runs the highlighted one, as if typed and sent (the TUI does the same).
               const c = open() ? completion() : null;
               const t = text();
+              if (c?.kind === "file") {
+                const row = c.rows[Math.min(selected(), c.rows.length - 1)];
+                if (row) accept(row);
+                return;
+              }
               if (c && c.kind === "slash" && !/\s/.test(t)) {
                 const row = c.rows[Math.min(selected(), c.rows.length - 1)];
                 if (row && runSlashCommand(row.value)) {
@@ -549,7 +580,8 @@ function EditableComposer() {
             onKeyPress={(e: { key: string }) => {
               if (String(e.key).toLowerCase() !== "escape") return;
               if (dictationPhase() !== "idle") { cancelDictation(); return; }
-              if (open()) dismissed.set(text());
+              const c = completion();
+              if (open() && c) dismissed.set(c.kind === "file" ? `@${c.query}` : c.prefix);
             }}
             onContentSizeChange={(s) => h.set(Math.min(220, Math.max(phone ? 28 : 22, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + (phone ? 4 : 0))))}
             style={{ height: h(), ...UI_FONT }}
@@ -557,7 +589,7 @@ function EditableComposer() {
           />
           <If when={phone}>{actions()}</If>
           </View>
-          <View class={phone ? "h-2" : "h-1.5"} />
+          <View class={phone ? "h-2" : "h-2.5"} />
           <View class={`flex-row items-center gap-1 min-w-0 ${phone ? "min-h-8" : "min-h-[30px]"}`}>
             <View class="flex-1 min-w-0 flex-row items-center gap-1">
               <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
@@ -880,7 +912,7 @@ function LocationStrip(p: { working: boolean }) {
   const stripWidth = signal(0);
   const worktreeHover = signal(false);
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
-  effect(() => { bashJobs(); if (terminalAvailable && currentProject()) { void refreshTerminals(); void restoreTerminalDock(); } });
+  effect(() => { bashJobs(); if (terminalAvailable && currentProject()) { void refreshTerminals(); } });
   // The agent's running bash jobs; user terminals are counted by their own button.
   const runningShells = () => viewResources().jobs.filter(j => j.status === "running").length;
   const session = () => { m(); return viewed(); };
@@ -970,7 +1002,7 @@ function LocationStrip(p: { working: boolean }) {
           </Button>
         </If>
         <If when={runningShells() > 0 && !phone}><Button onPress={() => openResources("shells")} accessibilityLabel={`${runningShells()} shell`} testID="location-background-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary tabular-nums">{`${runningShells()} shell`}</Text></Button></If>
-        <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminal()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
+        <If when={terminalAvailable && terminalItems().length > 0 && !phone}><Button onPress={() => void openTerminalTab()} selected={terminalOpen()} accessibilityLabel={`${terminalItems().length} terminal shell`} testID="location-shell" class={`rounded-(--radius) bg-muted px-2 min-h-6 justify-center hover:bg-secondary ${FOCUS}`}><Text class="font-(family-name:--font-code) text-xs leading-4 text-foreground-secondary tabular-nums">{`${terminalItems().length} terminal shell`}</Text></Button></If>
         </View>
         <View class={`flex-1 min-w-0 flex-row items-center overflow-hidden ${phone ? "justify-start pl-1" : "w-0 justify-end"}`}><If when={p.working}><WorkingRow /></If></View>
       </View>

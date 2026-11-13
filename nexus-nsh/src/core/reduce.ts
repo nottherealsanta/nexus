@@ -85,6 +85,8 @@ export class Model {
   selected: SelectedView | null = null;
   /** Views of recently viewed sessions, most recent first, at most `VIEW_CACHE`. */
   cached: SelectedView[] = [];
+  /** Sessions shown by drawn, unfocused groups (plan 45): their cached views are kept past `VIEW_CACHE`. */
+  pinned: string[] = [];
   /** Set when the selected session was deleted by an event. */
   selectedDeleted: string | null = null;
   /** Sessions a `session.archived` event archived: the view closes their tabs (every source). */
@@ -99,9 +101,43 @@ export class Model {
     this.selectedDeleted = null;
     if ((this.selected?.sessionId ?? null) === id) return;
     const old = this.selected;
-    if (old) this.cached = [old, ...this.cached.filter((v) => v.sessionId !== old.sessionId)].slice(0, VIEW_CACHE);
+    if (old) this.cached = [old, ...this.cached.filter((v) => v.sessionId !== old.sessionId)];
     const at = id ? this.cached.findIndex((v) => v.sessionId === id) : -1;
     this.selected = !id ? null : at >= 0 ? this.cached.splice(at, 1)[0] : emptyView(id);
+    this.trimCache();
+  }
+
+  /** Keep at most `VIEW_CACHE` unpinned cached views (oldest go first). */
+  private trimCache() {
+    let kept = 0;
+    this.cached = this.cached.filter((v) => this.pinned.includes(v.sessionId) || ++kept <= VIEW_CACHE);
+  }
+
+  /** Hold views for these sessions (besides the selected one) so their timelines can show live. Returns the ids newly pinned. */
+  pin(ids: string[]): string[] {
+    const fresh: string[] = [];
+    for (const id of ids) {
+      if (!this.sessions.has(id) || this.selected?.sessionId === id) continue;
+      if (!this.cached.some((v) => v.sessionId === id)) this.cached.push(emptyView(id));
+      if (!this.pinned.includes(id)) fresh.push(id);
+    }
+    this.pinned = [...ids];
+    this.trimCache();
+    return fresh;
+  }
+
+  /**
+   * Run `fn` with `id`'s view as the selected one, so code that reads "the viewed session" reads another (the
+   * timeline of an unfocused group). Synchronous only; the selected view is put back before it returns.
+   */
+  withView<T>(id: string, fn: () => T): T | null {
+    if (this.selected?.sessionId === id) return fn();
+    const at = this.cached.findIndex((v) => v.sessionId === id);
+    if (at < 0) return null;
+    const view = this.cached[at];
+    const old = this.selected, oldDeleted = this.selectedDeleted;
+    this.selected = view;
+    try { return fn(); } finally { this.selected = old; this.selectedDeleted = oldDeleted; }
   }
 
   /** The selected or a cached view of `id`. */

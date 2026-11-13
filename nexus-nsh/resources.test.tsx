@@ -120,11 +120,16 @@ describe("kernels and shells", () => {
     await app.waitFor("id:resource-job-job_1");
   });
 
-  test("a running job never appears in the dock; the shell indicator opens the jobs list", async () => {
+  test("a running job never appears in a terminal tab; the terminal indicator opens a terminal tab", async () => {
+    const created = {...terminalDock.terminals[0], project_id: project.id, session_id: session.id, id: "term_new", created: 1, ended: null, exit_code: null, signal: null};
+    let made = false;
+    const listed = terminalDock.terminals.map(t => ({...t, project_id: project.id, session_id: session.id}));
     const app = await open("./App.tsx", {
       network: { ...network,
         "GET */api/bash*": { body: [{...terminalDock.background_job, session_id: session.id, root: session.id}] },
-        "GET */api/terminal*": { body: terminalDock.terminals.map(t => ({...t, project_id: project.id, session_id: session.id})) },
+        "GET */api/terminal*": () => ({ body: made ? [...listed, created] : listed }),
+        "POST */api/terminal": () => { made = true; return { body: created }; },
+        "POST */api/terminal/term_new/attach": { body: { attachment_id: "a1" } },
       }, width: 1280, height: 900, platform: "web",
     });
     await app.waitFor("id:session-ses_1");
@@ -134,8 +139,9 @@ describe("kernels and shells", () => {
     expect(app.texts().join("\n")).toContain("1 shell");
     expect(app.texts().join("\n")).toContain("1 terminal shell");
     await app.press("id:location-shell");
+    // No terminal tab exists yet, so the indicator opens a new terminal in a split below (docs/terminals.md).
     await app.waitFor("id:terminal-panel");
-    for (const fact of terminalDock.expect) expect(app.texts().join("\n")).toContain(fact);
+    expect(app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/terminal"))).toBe(true);
     for (const fact of terminalDock.absent) expect(app.texts().join("\n").includes(fact)).toBe(false);
   });
 });

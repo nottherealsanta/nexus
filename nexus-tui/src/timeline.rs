@@ -28,9 +28,7 @@ const ACCENT: &str = "interactive.accent";
 /// Assistant prose starts 3 cells in, aligned with the user text after the
 /// fold marker and its space (DESIGN_PLAN.md D04).
 const ASSISTANT_INDENT: usize = 3;
-/// Activity rows (groups, thoughts, tool calls) start 2 cells in; the two cells
-/// the tool rows already spent on their box or tree glyph stay, so a group's
-/// chevron sits above its members' glyphs (user choice, 2026-10-29).
+/// Groups, members, child cards and notices share one icon column and label edge.
 const ACTIVITY_INDENT: usize = 3;
 
 #[derive(Clone)]
@@ -3150,8 +3148,8 @@ impl Builder<'_> {
             let last = activity.len() - 1;
             for (index, item) in activity.iter().enumerate() {
                 match item {
-                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p, None),
-                    Activity::StreamingThought(text) => self.streaming_reasoning_block(None, text),
+                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p),
+                    Activity::StreamingThought(text) => self.streaming_reasoning_block(text),
                     Activity::Tool { .. } => unreachable!(),
                 }
                 if index < last {
@@ -3344,7 +3342,7 @@ impl Builder<'_> {
             block.default_open = Some(default_open);
         }
         if open {
-            // Keep the tree contiguous: block() normally adds a separating row.
+            // Keep members contiguous: block() normally adds a separating row.
             self.out.pop();
             let skipped = if clip_live {
                 activity.len().saturating_sub(5)
@@ -3361,11 +3359,10 @@ impl Builder<'_> {
                     self.meta(),
                 )]);
             }
-            for (index, item) in activity.iter().enumerate().skip(skipped) {
-                let tree = Some(index + 1 == activity.len());
+            for item in activity.iter().skip(skipped) {
                 match item {
-                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p, tree),
-                    Activity::StreamingThought(text) => self.streaming_reasoning_block(tree, text),
+                    Activity::Thought(m, i, p) => self.reasoning_block(m, *i, p),
+                    Activity::StreamingThought(text) => self.streaming_reasoning_block(text),
                     Activity::Tool { id, name, args } => self.tool_block(
                         &format!("tool:{id}"),
                         self.turn,
@@ -3375,7 +3372,6 @@ impl Builder<'_> {
                         results,
                         traces,
                         waiting,
-                        tree,
                     ),
                 }
                 self.out.pop();
@@ -3387,13 +3383,7 @@ impl Builder<'_> {
 
     /// `▸ Thought · preview` (D07). Open: the summary in italics
     /// behind a `│` rail. Encrypted: labelled, with no expansion.
-    fn reasoning_block(
-        &mut self,
-        m: &crate::api::Message,
-        pi: usize,
-        p: &Value,
-        tree: Option<bool>,
-    ) {
+    fn reasoning_block(&mut self, m: &crate::api::Message, pi: usize, p: &Value) {
         let key = format!("reason:{}:{pi}", m.id);
         let summary = json_str(&p["summary"]);
         let encrypted = summary.trim().is_empty();
@@ -3401,34 +3391,13 @@ impl Builder<'_> {
         let label = self.t.role("reasoning").label.clone();
         let muted = self.meta();
         let italic = muted.add_modifier(Modifier::ITALIC);
-        let tree_style = self.st("border.default", CANVAS);
         let rail = self.st("border.default", CANVAS);
         let vbar = self.t.structure("rail").to_owned();
         self.block(key, BlockKind::Reasoning, self.turn, !encrypted, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
-            let prefix = match tree {
-                Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
-                Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
-                // A lone thought is one item: its own icon replaces the fold.
-                None => format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" }),
-            };
+            let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
             let mut head = vec![
-                Span::styled(
-                    prefix.clone(),
-                    if tree.is_some() { tree_style } else { muted },
-                ),
-                Span::styled(
-                    if tree.is_some() {
-                        if b.t.opts.ascii {
-                            "o "
-                        } else {
-                            "◇ "
-                        }
-                    } else {
-                        ""
-                    },
-                    muted,
-                ),
+                Span::styled(prefix, muted),
                 Span::styled(label.clone(), muted.add_modifier(Modifier::BOLD)),
             ];
             if !open {
@@ -3463,37 +3432,19 @@ impl Builder<'_> {
 
     /// The thought still arriving: the reasoning row of `reasoning_block`,
     /// open by default so the live text shows.
-    fn streaming_reasoning_block(&mut self, tree: Option<bool>, text: &str) {
+    fn streaming_reasoning_block(&mut self, text: &str) {
         let key = "reason:streaming".to_owned();
         let open = self.is_open(&key, true);
         let label = self.t.role("reasoning").label.clone();
         let muted = self.meta();
         let italic = muted.add_modifier(Modifier::ITALIC);
-        let tree_style = self.st("border.default", CANVAS);
         let rail = self.st("border.default", CANVAS);
         let vbar = self.t.structure("rail").to_owned();
         self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
-            let prefix = match tree {
-                Some(true) => format!("{pad}{} ", b.t.structure("tree_end")),
-                Some(false) => format!("{pad}{} ", b.t.structure("tree_mid")),
-                // A lone thought is one item: its own icon replaces the fold.
-                None => format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" }),
-            };
+            let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
             let mut head = vec![
-                Span::styled(prefix, if tree.is_some() { tree_style } else { muted }),
-                Span::styled(
-                    if tree.is_some() {
-                        if b.t.opts.ascii {
-                            "o "
-                        } else {
-                            "◇ "
-                        }
-                    } else {
-                        ""
-                    },
-                    muted,
-                ),
+                Span::styled(prefix, muted),
                 Span::styled(label, muted.add_modifier(Modifier::BOLD)),
             ];
             if !open {
@@ -3543,7 +3494,6 @@ impl Builder<'_> {
         results: &HashMap<String, Done>,
         traces: &HashMap<String, ToolTrace>,
         waiting: &HashMap<String, String>,
-        tree: Option<bool>,
     ) {
         let open = self.is_open(key, self.app.ui.detail == crate::ui::Detail::High);
         let raw = self.is_open(&format!("{key}:raw"), false);
@@ -3650,16 +3600,6 @@ impl Builder<'_> {
             let strong = b.st("border.strong", CANVAS);
             let ascii = b.t.opts.ascii;
             let box_open = open && !rows.is_empty();
-            let (prefix, prefix_style) = if box_open {
-                (if ascii { "+" } else { "\u{250c}" }.to_owned(), strong)
-            } else {
-                let glyph = match tree {
-                    Some(true) => b.t.structure("tree_end"),
-                    Some(false) => b.t.structure("tree_mid"),
-                    None => b.t.fold(open),
-                };
-                (glyph.to_owned(), b.st("border.default", CANVAS))
-            };
             let verb = match name.as_str() {
                 "bash" => "Shell",
                 "read" => "Read",
@@ -3695,10 +3635,7 @@ impl Builder<'_> {
                 (crate::paint::verb_glyph(&name, ascii).to_owned(), b.meta())
             };
             let mut left = vec![
-                Span::styled(
-                    format!("{}{prefix} ", " ".repeat(ACTIVITY_INDENT)),
-                    prefix_style,
-                ),
+                Span::raw(" ".repeat(ACTIVITY_INDENT)),
                 Span::styled(format!("{glyph} "), glyph_style),
                 Span::styled(verb.to_owned(), b.primary()),
             ];
@@ -3989,17 +3926,11 @@ impl Builder<'_> {
         };
         let agent = child
             .as_ref()
-            .filter(|_| follow)
             .map_or(agent, |c| c.agent.clone());
         // A fork is labelled (and coloured as) `fork`, not the parent's agent
         // it runs as.
         let agent = if child.as_ref().is_some_and(|c| c.fork.is_some()) {
             "fork".to_owned()
-        } else if let Some(label) = child
-            .as_ref()
-            .and_then(|c| c.extra.get("worker").and_then(|w| w["label"].as_str()))
-        {
-            label.to_owned() // a ZMX child is always labelled
         } else {
             agent
         };
@@ -4045,6 +3976,9 @@ impl Builder<'_> {
         let sep = self.sep().to_owned();
         let meta = child.as_ref().map_or_else(String::new, |c| {
             let mut bits: Vec<String> = Vec::new();
+            if let Some(label) = c.extra.get("worker").and_then(|w| w["label"].as_str()) {
+                bits.push(label.to_owned());
+            }
             let mut model = c.model.clone().filter(|m| !m.is_empty() && m != "default");
             if let Some(effort) = c.extra.get("effort").and_then(Value::as_str) {
                 if !effort.is_empty() && effort != "none" && effort != "default" {
@@ -4078,7 +4012,7 @@ impl Builder<'_> {
         };
         let secondary = if stale { self.meta() } else { secondary };
         let mut head = vec![
-            Span::raw("   "),
+            Span::raw(" ".repeat(ACTIVITY_INDENT)),
             Span::raw(" "),
             Span::raw(" "),
             Span::styled(
@@ -4128,7 +4062,10 @@ impl Builder<'_> {
             String::new()
         };
         let plain = |text: String, style: Style| TLine {
-            spans: vec![Span::raw("     "), Span::styled(text, style)],
+            spans: vec![
+                Span::raw(" ".repeat(ACTIVITY_INDENT + 2)),
+                Span::styled(text, style),
+            ],
             bg: None,
             rail: None,
             focus: false,

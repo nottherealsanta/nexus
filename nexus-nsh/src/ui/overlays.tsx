@@ -5,7 +5,7 @@ import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./moda
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
 import { availability, closeLearnChecklist, commands, copyText, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, gitDiff, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen, phone, phonePage } from "../store";
+import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen, phone, phonePage } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar, NewSessionButton, ProjectSelector, SessionsTab } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -264,6 +264,7 @@ export function Confirm() {
             </View>
             <View class="flex-row justify-end gap-2">
               <Btn label={d().bracketActions ? "[Cancel]" : "Cancel"} initial onPress={() => run("alert.cancel")} disabled={!!d().busy} testID="confirm-cancel" />
+              <If when={d().alt}>{(alt) => <Btn label={alt().label} kind="danger" testID={alt().testID ?? "confirm-alt"} disabled={!!d().busy} onPress={() => void runAlt()} />}</If>
               <Btn label={d().bracketActions ? (d().busy ? "[Working…]" : `[${d().confirm}]`) : d().confirm} kind={d().destructive ? "danger" : "primary"} testID="confirm-ok" busy={!!d().busy && !d().bracketActions} disabled={!!d().busy}
                 onPress={() => void runConfirm()} />
             </View>
@@ -281,6 +282,12 @@ function ConfirmKeys() {
   // A destructive confirm has Cancel as its default (D13): Enter cancels, Delete is a deliberate press.
   keymap.bind("enter", () => { const d = confirmDialog(); if (d && !d.busy && Date.now() - opened > 400) { if (d.destructive) void run("alert.cancel"); else void runConfirm(); } }, { when: "always" });
   return <View />;
+}
+async function runAlt() {
+  const d = confirmDialog(); if (!d?.alt) return;
+  confirmDialog.update((x) => x && { ...x, busy: true, error: undefined });
+  try { await d.alt.run(); if (confirmDialog()?.run === d.run) confirmDialog.set(null); }
+  catch (e) { confirmDialog.update((x) => x && { ...x, busy: false, error: e instanceof ApiError ? e.message : String(e) }); }
 }
 async function runConfirm() {
   const d = confirmDialog(); if (!d) return;
@@ -473,15 +480,7 @@ function RenameSessionBody() {
 
 
 export function FileOperationDialog() {
-  return <><If when={fileOperation()}><FileOperationBody /></If><If when={gitInput()}><GitInputBody /></If><If when={gitDiff()}><GitDiffBody /></If></>;
-}
-function GitDiffBody() {
-  const close = () => gitDiff.set(null);
-  return <Modal size="large" label={`Git diff: ${gitDiff()?.path ?? ""}`} testID="git-diff-dialog" onCancel={close} onOpenChange={(open) => { if (!open) close(); }}><View class="gap-3">
-    <ModalTitle title={`${gitDiff()?.group ?? ""}: ${gitDiff()?.path ?? ""}`} />
-    <Scroll style={{ height: 400 }}><Text class={`${T.mono} text-foreground`}>{gitDiff()?.error ?? gitDiff()?.text ?? "Loading diff…"}</Text><If when={!!gitDiff()?.clipped}><Text class={T.meta}>Diff clipped</Text></If></Scroll>
-    <View class="flex-row justify-end"><Btn label="Close" onPress={close} testID="git-diff-close" /></View>
-  </View></Modal>;
+  return <><If when={fileOperation()}><FileOperationBody /></If><If when={gitInput()}><GitInputBody /></If></>;
 }
 function GitInputBody() {
   const input = gitInput()!, value = signal("");

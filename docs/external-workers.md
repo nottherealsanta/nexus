@@ -2,8 +2,9 @@
 
 ZMX mode runs a **child session** on the real `claude` CLI (Claude Code, in an interactive PTY) or the real `agy` CLI
 (Antigravity, headless stream-json). The CLI runs its own loop, tools, permissions, settings, MCP servers, plugins and
-sign-in. Nexus starts it, records what it can observe as ordinary turns and messages, and shows the child labelled
-`ZMX · Claude Code` or `ZMX · Antigravity` in both clients.
+sign-in. Nexus starts it and records what it can observe as ordinary turns and messages. In both clients, the parent
+card shows the agent name on the first line and `ZMX · Claude Code` or `ZMX · Antigravity` in the metadata below.
+The child's heading retains the ZMX label.
 
 It is **off by default**, **subagents only** (never a root session or the Manager), and Nexus **never answers a CLI
 prompt**: trust, sign-in and permission prompts end the turn as `needs_attention` with the command the user must run.

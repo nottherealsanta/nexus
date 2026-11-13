@@ -1,0 +1,7 @@
+{
+  "query": "mian",
+  "prefix": "see @mian",
+  "hits": ["src/main.rs"],
+  "pool": ["docs/readme.md", "src/min.rs", "src/mian-extra.rs", "lib/a.rs", "lib/b.rs", "lib/c.rs", "lib/d.rs", "lib/e.rs", "lib/f.rs", "lib/g.rs", "lib/h.rs"],
+  "expected": ["src/main.rs", "src/mian-extra.rs", "docs/readme.md", "src/min.rs", "lib/a.rs", "lib/b.rs", "lib/c.rs", "lib/d.rs", "lib/e.rs", "lib/f.rs"]
+}

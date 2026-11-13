@@ -1,22 +1,20 @@
-import { Scroll, Text, View, platform, signal, effect } from "nsh";
-import { titleBar } from "nsh/desktop";
-import { Button, Dialog, DiffView as CodeDiffView, Editor, Input, TextView, type EditorRef } from "nsh/base";
+import { Scroll, Text, View, signal, effect } from "nsh";
+import { Button, DiffView as CodeDiffView, Editor, Input, TextView, type EditorRef } from "nsh/base";
 import { Btn, FOCUS, IconButton, PROSE, T } from "./kit";
-import { availability, byId, escape, keyLabel, run, waitItems } from "../commands";
-import { config, fileDirty, fileFindOpen, fileSource, isNarrow, markdownFile, openFile, setDraft, width } from "../store";
-import { SCRIM } from "./modal";
+import { availability, byId, keyLabel } from "../commands";
+import { bufferDirty, currentFileId, fileBuffers, fileFindOpen, fileSourceOf, gitDiffs, isMarkdownPath, reloadFile, saveFile, setDraft, setFileSource } from "../store";
 import { CodeFence, MermaidFence } from "./timeline";
 import { closedFenceSources } from "../mermaid";
+import { focusedGroupId } from "../layout-state";
 
 const hint = (id: string) => { const c = byId.get(id); return c ? keyLabel(c) : null; };
 /** The built-in code editor's font. It measures its text in this family, so set it here. */
 const FONT = "Monaspace Argon";
-/** The modal is the window's full height, this wide at most, and keeps this margin either side. */
-const MODAL_MAX = 1100;
-const MODAL_MARGIN = 32;
-/** One editable project-file modal; Markdown preview and diff retain the same draft. */
-export function FilePanel() {
-  const f = () => openFile();
+/** One file tab's body (plan 45): the editor over the file's shared buffer, with the Markdown / Mermaid preview toggle. */
+export function FilePane(p: { id: string; group: string }) {
+  const f = () => fileBuffers()[p.id];
+  // The same file can be open in two groups: only the focused group's pane is the one the file commands act on.
+  const current = () => currentFileId() === p.id && focusedGroupId() === p.group;
   const editing = () => f()?.draft !== undefined;
   const diff = signal(false);
   const query = signal("");
@@ -25,9 +23,11 @@ export function FilePanel() {
   const found = signal<{ count: number; current?: number | null; error?: string | null }>({ count: 0 });
   let editor!: EditorRef;
   const showDiff = () => diff() && editing();
-  const preview = () => markdownFile() && !fileSource();
-  effect(() => { if (!fileFindOpen() && !preview() && !showDiff()) editor?.focus(); });
-  const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : fileDirty() ? "● modified" : editing() ? "saved" : "");
+  const markdown = () => isMarkdownPath(f()?.path);
+  const preview = () => markdown() && !fileSourceOf(p.id);
+  const findOpen = () => current() && fileFindOpen();
+  effect(() => { if (current() && !fileFindOpen() && !preview() && !showDiff()) editor?.focus(); });
+  const status = () => (f()?.saving ? "saving…" : f()?.stale ? "changed on disk · reload" : bufferDirty(p.id) ? "● modified" : editing() ? "saved" : "");
   const can = (id: string) => availability(byId.get(id)!).ok;
   const loaded = () => editing() || f()?.content !== undefined;
   const matchCount = () => {
@@ -37,42 +37,21 @@ export function FilePanel() {
     if (r.current == null) return `${r.count} ${r.count === 1 ? "match" : "matches"}`;
     return `${r.current + 1} of ${r.count}`;
   };
-  // Below this the modal takes the whole window, traffic lights included: its header makes room
-  // for them and drags the window, as the app's own band does.
-  const full = () => isNarrow();
-  const modalWidth = () => Math.min(MODAL_MAX, width() - 2 * MODAL_MARGIN);
-  // Full height, the header shares the top band with the traffic lights when
-  // they reach into it: it makes room for them and drags the window.
-  const lights = () => {
-    if (platform.os !== "macos") return 0;
-    const left = full() ? 0 : (width() - modalWidth()) / 2;
-    return Math.max(0, titleBar().left - left);
-  };
-  const headerStyle = () => (lights() ? { paddingLeft: lights() + 8 } : {});
   return (
-    <Dialog open closeOnEscape={false} onCancel={() => escape()} onOpenChange={({ open }) => { if (!open) void run("editor.close"); }}
-      animation={config()?.values?.ui?.reduced_motion ? "none" : "fade"} backdropClass={SCRIM} testID="file-panel-shell"
-      style={full() ? {} : { width: modalWidth(), boxShadow: "0 12px 40px rgb(0 0 0 / 0.4)" }}
-      class={full() ? "absolute inset-0 bg-background" : "absolute left-0 right-0 top-0 bottom-0 mx-auto border-x border-border bg-background overflow-hidden"}>
     <View class="flex-1 min-h-0 flex-col" testID="file-panel">
-      <View class="flex-row items-center gap-2 px-3 min-h-11 border-b border-border bg-sidebar" style={headerStyle()}
-        {...(lights() ? { desktop: { windowDrag: true } } : {})}>
-        <IconButton icon="arrow-left" label="Back to the session" onPress={() => void run("editor.close")} testID="file-back" />
+      <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border bg-sidebar">
         <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`} testID="file-path">{f()?.path ?? ""}</Text>
-        <If when={waitItems().length > 0}>
-          <Text class="text-[12px] leading-4 font-medium text-warning" testID="file-panel-waiting">{`${waitItems().length} waiting`}</Text>
-        </If>
         <If when={!!status()}><Text class={`${T.meta} ${f()?.stale ? "text-warning" : ""}`} testID="file-status">{status()}</Text></If>
-        <If when={markdownFile()}>
-          <Btn label={fileSource() ? "Preview" : "Source"} kind="ghost" onPress={() => void run("editor.preview")} testID="file-preview" />
+        <If when={markdown()}>
+          <Btn label={fileSourceOf(p.id) ? "Preview" : "Source"} kind="ghost" onPress={() => { setFileSource(p.id, !fileSourceOf(p.id)); if (current()) fileFindOpen.set(false); }} testID="file-preview" />
         </If>
         <If when={editing()}>
           <Btn label={diff() ? "Text" : "Diff"} kind="ghost" onPress={() => diff.set(!diff())} testID="file-diff" />
-          <Btn label="Reload" kind="ghost" onPress={() => void run("editor.reload")} testID="file-reload" />
-          <Btn label={hint("editor.save") ? `Save ${hint("editor.save")}` : "Save"} kind="primary" onPress={() => void run("editor.save")} disabled={!can("editor.save")} reason={availability(byId.get("editor.save")!).reason} busy={!!f()?.saving} testID="file-save" />
+          <Btn label="Reload" kind="ghost" onPress={() => void reloadFile(p.id)} testID="file-reload" />
+          <Btn label={hint("editor.save") ? `Save ${hint("editor.save")}` : "Save"} kind="primary" onPress={() => void saveFile(p.id)} disabled={!bufferDirty(p.id) || !!f()?.saving} reason={availability(byId.get("editor.save")!).reason} busy={!!f()?.saving} testID="file-save" />
         </If>
       </View>
-      <If when={fileFindOpen() && !preview()}>
+      <If when={findOpen() && !preview()}>
         <View class="px-3 py-1 gap-1 border-b border-border bg-sidebar" testID="file-find">
         <View class="flex-row items-center gap-2 min-h-8">
           <Input autoFocus value={query()} onChange={({ value }) => query.set(value)} onSubmit={() => editor?.run("findNext")}
@@ -102,7 +81,7 @@ export function FilePanel() {
           <If when={!loaded()} else={
             <If when={preview()} else={
               <If when={showDiff()} else={
-                <Editor ref={(r) => { editor = r; if (!fileFindOpen()) r.focus(); }} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value)} readOnly={!editing()} softWrap
+                <Editor ref={(r) => { editor = r; if (current() && !fileFindOpen()) r.focus(); }} value={f()?.draft ?? f()?.content ?? ""} onChange={({ value }) => setDraft(value, p.id)} readOnly={!editing()} softWrap
                   search={{ query: query(), caseSensitive: caseSensitive() }} onSearchChange={({ result }) => found.set(result)}
                   language={f()?.path} fontFamily={FONT} accessibilityLabel={`Editing ${f()?.path ?? "file"}`}
                   class="flex-1 min-h-0 bg-background" testID="file-editor" />
@@ -126,6 +105,19 @@ export function FilePanel() {
         </If>
       </View>
     </View>
-    </Dialog>
+  );
+}
+
+/** A Git change's diff tab. */
+export function DiffPane(p: { id: string }) {
+  const d = () => gitDiffs()[p.id];
+  return (
+    <View class="flex-1 min-h-0 flex-col" testID="diff-panel">
+      <View class="flex-row items-center gap-2 px-3 min-h-9 border-b border-border bg-sidebar">
+        <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`} testID="diff-path">{`${d()?.group ?? ""}: ${d()?.path ?? ""}`}</Text>
+        <If when={!!d()?.clipped}><Text class={T.meta}>Diff clipped</Text></If>
+      </View>
+      <Scroll class="flex-1"><Text style={{ userSelect: "text" }} class={`${T.mono} text-foreground px-4 py-3`} testID="diff-text">{d()?.error ?? d()?.text ?? "Loading diff…"}</Text></Scroll>
+    </View>
   );
 }

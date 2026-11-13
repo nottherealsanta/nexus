@@ -11,7 +11,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::Frame;
 use serde_json::Value;
-use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::{now_secs, App, GitGroup, GitSideRow, WaitKind, QUESTION_LOCK};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
@@ -20,6 +19,8 @@ use crate::state::ConnectionState;
 use crate::text::{self, truncate, truncate_middle, width};
 use crate::theme::Theme;
 use crate::ui::*;
+
+mod groups_ui;
 
 const CANVAS: &str = "surface.canvas";
 const PANEL: &str = "surface.panel";
@@ -146,20 +147,88 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         app.ui.splash.render(buf, area, splash_frame, &palette);
         return;
     }
+    // The tree of groups follows the project, the sessions and the focused tab.
+    app.groups_reconcile();
     let flags = Flags {
         left_open: app.ui.left_open,
         right_open: app.ui.right_open,
         drawer: app.ui.drawer,
         left_width: app.ui.left_width,
-        panel_open: app.ui.file_open || app.ui.diff_open.is_some(),
-        terminal_open: app.terminal_open,
         session_child: app.viewed().is_some_and(|s| s.parent_id.is_some())
             && app.ui.view == View::Session,
     };
-    let regions = {
+    let mut regions = {
         let a: &App = app;
         Regions::compute(area, flags, |w| heights(a, w))
     };
+    // Lay the groups into the centre, and the focused tab's page into its body.
+    let tree = regions.centre;
+    let visible = app.ui.groups.layout.visible(tree);
+    let focused_id = app.ui.groups.layout.focused_group().id;
+    let focused_body = visible
+        .iter()
+        .find(|(g, _)| *g == focused_id)
+        .map(|(_, r)| crate::layout::group_body(*r));
+    let collapsed = app.ui.groups.layout.collapsed(tree);
+    let session_page = app.session_focused();
+    let active_kind = app.ui.groups.layout.active_tab().map(|t| t.kind);
+    {
+        let a: &App = app;
+        regions.retarget_session(focused_body.filter(|_| session_page), |w| heights(a, w));
+    }
+    if matches!(active_kind, Some(crate::groups::Kind::File | crate::groups::Kind::Diff)) {
+        regions.panel = focused_body;
+    }
+    // The group showing the attached terminal: the focused one, else any other.
+    let live_terminal = app
+        .ui
+        .groups
+        .layout
+        .groups()
+        .into_iter()
+        .filter(|g| {
+            g.active_tab().is_some_and(|t| {
+                t.kind == crate::groups::Kind::Terminal
+                    && app.terminal_panel.selected.as_deref() == Some(t.id.as_str())
+            })
+        })
+        .max_by_key(|g| g.id == focused_id)
+        .map(|g| g.id);
+    regions.terminal = live_terminal.and_then(|id| {
+        visible
+            .iter()
+            .find(|(g, _)| *g == id)
+            .map(|(_, r)| crate::layout::group_body(*r))
+    });
+    // Unfocused groups show their session's own timeline, read-only.
+    let mut wanted: Vec<(String, u16)> = Vec::new();
+    for (gid, rect) in &visible {
+        if *gid == focused_id {
+            continue;
+        }
+        let id = app
+            .ui
+            .groups
+            .layout
+            .group(*gid)
+            .and_then(|g| g.active_tab())
+            .filter(|t| t.kind == crate::groups::Kind::Session && !t.id.is_empty())
+            .map(|t| t.id.clone());
+        if let Some(id) = id {
+            let w = crate::layout::group_body(*rect).width.saturating_sub(2);
+            app.background_timeline(&id, w as usize);
+            wanted.push((id, w));
+        }
+    }
+    app.ui.groups.bg.retain(|k, _| wanted.contains(k));
+    app.ui.groups.area = tree;
+    app.ui.groups.rects = visible.clone();
+    app.ui.groups.dividers = if collapsed {
+        Vec::new()
+    } else {
+        app.ui.groups.layout.dividers(tree)
+    };
+    app.ui.groups.hidden = app.ui.groups.layout.hidden(tree);
     if let Some(item) = app.wait_focused().filter(|w| w.kind == WaitKind::Question) {
         let rows = wait_rows(app, regions.waiting.width, usize::MAX, "…").len();
         let available = (regions.waiting.height as usize).saturating_sub(1);
@@ -168,11 +237,15 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         draft.scroll = draft.scroll.min(draft.scroll_max);
     }
     let mut hits = HitMap::default();
+    let tab_rects;
+    let tab_tips: Vec<(Rect, String)>;
     let mut timeline_screen = None;
     let mut metrics = (0usize, 0usize, None::<usize>);
-    let timeline = {
+    let timeline = if session_page {
         let a: &App = app;
         Some(a.timeline_for(regions.timeline.width.saturating_sub(2) as usize))
+    } else {
+        None
     };
     if let Some(t) = &timeline {
         app.note_live_groups(t);
@@ -185,7 +258,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         };
         let buf = frame.buffer_mut();
         clear(buf, area, cx.st(PRIMARY, CANVAS));
-        let tab_tip = draw_header(&cx, buf, &regions, &mut hits);
+        draw_header(&cx, buf, &regions, &mut hits);
         if let Some(l) = regions.left {
             draw_left(
                 &cx,
@@ -244,9 +317,15 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         if let Some(back) = regions.back {
             draw_session_back(&cx, buf, back, &mut hits);
         }
-        draw_heading(&cx, buf, regions.heading);
-        draw_banner(&cx, buf, regions.banner, &mut hits);
-        // The session stays drawn under the settings modal and under a narrow panel.
+        // Group strips and the bodies of everything but the focused session page.
+        let drawn = groups_ui::draw_groups(&cx, buf, &regions, &mut hits);
+        tab_rects = drawn.tab_rects;
+        tab_tips = drawn.tips;
+        if session_page {
+            draw_heading(&cx, buf, regions.heading);
+            draw_banner(&cx, buf, regions.banner, &mut hits);
+        }
+        // The session stays drawn under the settings modal.
         if let Some(t) = &timeline {
             metrics = draw_timeline(&cx, buf, regions.timeline, &mut hits, t);
             let mut screen = Buffer::empty(regions.timeline);
@@ -262,15 +341,16 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 }
             }
         }
-        draw_waiting(&cx, buf, regions.waiting, &mut hits);
-        draw_composer(&cx, buf, regions.composer, &mut hits);
-        if let Some(dock) = regions.terminal {
-            draw_terminal_dock(&cx, buf, dock, &mut hits);
+        if session_page {
+            draw_waiting(&cx, buf, regions.waiting, &mut hits);
+            draw_composer(&cx, buf, regions.composer, &mut hits);
         }
         if let Some(behind) = metrics.2 {
             draw_jump(&cx, buf, regions.composer, behind, &mut hits);
         }
-        draw_completion(&cx, buf, &regions, &mut hits);
+        if session_page {
+            draw_completion(&cx, buf, &regions, &mut hits);
+        }
         if let Some(rail) = regions.rail {
             // Beside the rail, over the sidebar when it is open.
             let limit = Rect::new(
@@ -302,12 +382,6 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
             for y in r.y..r.bottom() {
                 put(buf, ex, y, cx.t.structure("rail"), cx.st(MUTED, PANEL), 1);
             }
-        }
-        if let Some(p) = regions.panel {
-            // A modal: the page dims, and a click outside it closes it.
-            paint::scrim(cx.t, buf, area);
-            hits.add(area, Target::PanelBack);
-            draw_panel(&cx, buf, p, area, &mut hits);
         }
         if let Some(e) = &a.ui.edit {
             let title = match &e.target {
@@ -348,7 +422,19 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 area,
                 &d.title,
                 &d.body,
-                Some((&d.cancel, &d.confirm, d.danger, d.button)),
+                Some((
+                    &d.cancel,
+                    &d.confirm,
+                    d.danger,
+                    d.button,
+                    matches!(
+                        d.action,
+                        crate::ui::Confirmed::CloseDirty { .. }
+                            | crate::ui::Confirmed::CloseDirtyGroup { .. }
+                    )
+                    .then(|| a.manifest.ui_text("layout.unsaved.discard", &[]))
+                    .as_deref(),
+                )),
                 match &d.action {
                     crate::ui::Confirmed::AttachTerminalEvidence { offset, .. } => Some(*offset),
                     _ => None,
@@ -372,8 +458,10 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 &mut hits,
             );
         }
-        if let Some((anchor, label)) = &tab_tip {
-            draw_tooltip(&cx, buf, *anchor, label, &mut hits);
+        if a.ui.overlay.is_none() && a.ui.dialog.is_none() {
+            for (anchor, label) in &tab_tips {
+                draw_tooltip(&cx, buf, *anchor, label, &mut hits);
+            }
         }
     }
     // The splash wipes into the first live frame: cells right of the curtain
@@ -387,6 +475,7 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         frame.set_cursor_position(p);
     }
     app.hits = hits;
+    app.ui.groups.tab_rects = tab_rects;
     app.timeline_screen = timeline_screen;
     app.regions = regions;
     app.ui.timeline_total = metrics.0;
@@ -945,7 +1034,7 @@ fn draw_header(
     buf: &mut Buffer,
     g: &Regions,
     hits: &mut HitMap,
-) -> Option<(Rect, String)> {
+) {
     let base = cx.st(SECONDARY, SIDEBAR);
     clear(buf, g.header, base);
     let focus_bar = cx.t.structure("focus_bar");
@@ -1066,14 +1155,11 @@ fn draw_header(
         g.title.height,
     );
     if tr.width < 3 {
-        return None;
+        return;
     }
-    if cx.app.narrow() {
-        draw_crumb(cx, buf, tr);
-        None
-    } else {
-        draw_tabs(cx, buf, tr, hits)
-    }
+    // The session tabs live in the groups' strips (plan 45); the header keeps
+    // the breadcrumb and the run status.
+    draw_crumb(cx, buf, tr);
 }
 
 /// The narrow header (DESIGN_PLAN.md D17): the toggles stay at the corners and
@@ -1123,274 +1209,6 @@ fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
     );
 }
 
-/// The session tabs (DESIGN_PLAN.md D02): `{glyph} {title} ×` per open
-/// session. The viewed tab is bold primary on the page surface so it reads as
-/// joined to the page below; the others are muted on the chrome band. `+` ends
-/// the strip. A viewed sub agent shows `root › child`. The run status sits
-/// at the centre column's right edge. A hovered title too long for its tab
-/// scrolls until its end is visible; reduced motion instead shows the full
-/// title in a tooltip.
-fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) -> Option<(Rect, String)> {
-    let a = cx.app;
-    let status = header_status(cx);
-    let status_w = status.as_ref().map_or(0, |(s, _)| width(s) + 2);
-    if let Some((s, style)) = &status {
-        let sx = tr.right().saturating_sub(width(s) as u16 + 1);
-        put(buf, sx, tr.y, s, *style, width(s) as u16);
-    }
-    let ids = a.tab_ids();
-    let viewed = a.viewed_root();
-    let settings = a.ui.view == View::Settings;
-    // A tab for what is on screen without a session: the new-session screen or Settings.
-    let extra = if settings {
-        Some("Settings")
-    } else if viewed.is_none() {
-        Some("New session")
-    } else {
-        None
-    };
-    let ascii = cx.t.opts.ascii;
-    struct Tab {
-        index: Option<usize>,
-        /// Breadcrumb parts (root first); one part for a plain title.
-        parts: Vec<String>,
-        active: bool,
-        id: Option<String>,
-    }
-    let title_of = |id: &str| {
-        a.state
-            .model
-            .sessions
-            .get(id)
-            .map_or_else(|| id.to_owned(), |s| s.title.clone())
-    };
-    let mut tabs: Vec<Tab> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let active = !settings && viewed.as_deref() == Some(id.as_str());
-            let parts = vec![title_of(id)];
-            Tab {
-                index: Some(i),
-                parts,
-                active,
-                id: Some(id.clone()),
-            }
-        })
-        .collect();
-    if let Some(label) = extra {
-        tabs.push(Tab {
-            index: None,
-            parts: vec![label.to_owned()],
-            active: true,
-            id: None,
-        });
-    }
-    let sep = format!(" {} ", cx.t.structure("breadcrumb"));
-    // The shown text of each part within `max` cells: earlier crumbs shrink
-    // first, the last part keeps at least six.
-    let shown = |t: &Tab, max: usize| -> Vec<String> {
-        let n = t.parts.len();
-        if n == 1 {
-            return vec![truncate(&t.parts[0], max, cx.ell())];
-        }
-        let seps = width(&sep) * (n - 1);
-        let early = (max.saturating_sub(seps + 6) / (n - 1)).clamp(3, 10);
-        let mut out: Vec<String> = t.parts[..n - 1]
-            .iter()
-            .map(|p| truncate(p, early, cx.ell()))
-            .collect();
-        let used: usize = out.iter().map(|p| width(p)).sum::<usize>() + seps;
-        out.push(truncate(
-            &t.parts[n - 1],
-            max.saturating_sub(used).max(6),
-            cx.ell(),
-        ));
-        out
-    };
-    let title_w = |t: &Tab, max: usize| {
-        let p = shown(t, max);
-        p.iter().map(|s| width(s)).sum::<usize>() + width(&sep) * (p.len() - 1)
-    };
-    // The room: leave the `+` and the status.
-    let avail = (tr.width as usize).saturating_sub(status_w + 4);
-    let cell = |t: &Tab, max: usize| 5 + title_w(t, max) + usize::from(t.id.is_some()) * 2;
-    // One width for every tab — roots, children and New session — so the strip
-    // keeps the same rhythm whatever the titles say.
-    let tab_width = |tabs: &[Tab], max: usize| tabs.iter().map(|t| cell(t, max)).max().unwrap_or(0);
-    let mut max_title = 28usize;
-    let total = |tabs: &[Tab], max: usize| tabs.len() * (tab_width(tabs, max) + 1);
-    while max_title > 8 && total(&tabs, max_title) > avail {
-        max_title -= 2;
-    }
-    // Still too many: drop the tabs farthest from the active one.
-    let mut dropped_left = false;
-    while tabs.len() > 1 && total(&tabs, max_title) > avail {
-        let active = tabs.iter().position(|t| t.active).unwrap_or(0);
-        if active > 0 {
-            tabs.remove(0);
-            dropped_left = true;
-        } else {
-            tabs.pop();
-        }
-    }
-    let mut x = tr.x + 1;
-    if dropped_left {
-        x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, SIDEBAR), 1) + 1;
-    }
-    let w = tab_width(&tabs, max_title) as u16;
-    let mut tip = None;
-    for t in &tabs {
-        if x + w > tr.right() {
-            break;
-        }
-        let rect = Rect::new(x, tr.y, w, 1);
-        let bg = if t.active { CANVAS } else { SIDEBAR };
-        let base = cx.st(if t.active { PRIMARY } else { MUTED }, bg);
-        clear(buf, rect, base);
-        let mut cx_x = x + 1;
-        if let Some(id) = &t.id {
-            let (g, gs) = session_glyph(cx, id, bg);
-            cx_x = put(buf, cx_x, tr.y, &g, gs, 1) + 1;
-        }
-        let title_max = max_title
-            .min(w.saturating_sub(5 + u16::from(t.id.is_some()) * 2) as usize)
-            .max(6);
-        // The title owns this region only: status, padding and the close slot are outside it.
-        let title_start = cx_x;
-        let title_end = title_start.saturating_add(title_max as u16);
-        let parts = shown(t, title_max);
-        let last = parts.len() - 1;
-        let hovered = t.index.is_some() && cx.hovered(rect);
-        let overflow = parts.len() == 1 && width(&t.parts[0]) > title_max;
-        let scroll = if overflow && hovered && !cx.t.opts.reduced_motion {
-            t.index
-                .zip(cx.app.ui.tab_hover)
-                .filter(|(i, (hover, _))| i == hover)
-                .map_or(0, |(_, (_, started))| {
-                    marquee_cells(
-                        cx.app.frame.saturating_sub(started),
-                        width(&t.parts[0]) - title_max,
-                    )
-                })
-        } else {
-            0
-        };
-        if overflow && hovered && cx.t.opts.reduced_motion {
-            tip = Some((rect, t.parts[0].clone()));
-        }
-        if let (Some(i), Some(_)) = (t.index, &t.id) {
-            hits.add(rect, Target::SessionTab(i));
-        }
-        for (pi, part) in parts.iter().enumerate() {
-            let style = if pi == last && t.active {
-                base.add_modifier(Modifier::BOLD)
-            } else {
-                base
-            };
-            let text = if pi == last && scroll > 0 {
-                truncate(
-                    &scroll_cells(&t.parts[0], scroll),
-                    title_end.saturating_sub(cx_x) as usize,
-                    cx.ell(),
-                )
-            } else {
-                part.clone()
-            };
-            cx_x = put(
-                buf,
-                cx_x,
-                tr.y,
-                &text,
-                style,
-                title_end.saturating_sub(cx_x),
-            );
-            if pi < last {
-                cx_x = put(
-                    buf,
-                    cx_x,
-                    tr.y,
-                    &sep,
-                    base.patch(cx.t.fg(MUTED)),
-                    title_end.saturating_sub(cx_x),
-                );
-            }
-        }
-        if let (Some(i), Some(_)) = (t.index, &t.id) {
-            let close = Rect::new(rect.right().saturating_sub(3), tr.y, 2, 1);
-            let hot = cx.hovered(close);
-            put(
-                buf,
-                close.x,
-                tr.y,
-                if ascii { "x" } else { "\u{00d7}" },
-                if hot {
-                    base.patch(cx.t.fg(PRIMARY)).add_modifier(Modifier::BOLD)
-                } else {
-                    base.patch(cx.t.fg(MUTED))
-                },
-                1,
-            );
-            hits.add(close, Target::SessionTabClose(i));
-        }
-        x += w + 1;
-    }
-    // new session
-    if x + 2 <= tr.right() {
-        let rect = Rect::new(x, tr.y, 3, 1);
-        let style = if cx.hovered(rect) {
-            cx.st(PRIMARY, SIDEBAR)
-        } else {
-            cx.st(MUTED, SIDEBAR)
-        };
-        clear(buf, rect, style);
-        put(buf, x + 1, tr.y, "+", style, 1);
-        hits.add(rect, Target::NewSession);
-    }
-    tip
-}
-
-/// Cells a hovered tab title has scrolled after `elapsed` frames: a short hold
-/// at each end, then one cell per frame until the whole title has shown.
-fn marquee_cells(elapsed: usize, overflow: usize) -> usize {
-    const HOLD: usize = 8;
-    let cycle = overflow + HOLD * 2;
-    let at = elapsed % cycle.max(1);
-    if at < HOLD {
-        0
-    } else if at < HOLD + overflow {
-        at - HOLD
-    } else {
-        overflow
-    }
-}
-
-/// The tail of `s` from cell `offset` on, with a blank cell where a wide glyph
-/// would be cut in half.
-fn scroll_cells(s: &str, offset: usize) -> String {
-    if offset == 0 {
-        return s.to_owned();
-    }
-    let mut used = 0;
-    let mut out = String::new();
-    for grapheme in s.graphemes(true) {
-        let cell = width(grapheme);
-        if used + cell <= offset {
-            used += cell;
-            continue;
-        }
-        if used < offset {
-            out.push_str(&" ".repeat(offset - used));
-            used = offset;
-        }
-        out.push_str(grapheme);
-        used += cell;
-    }
-    out
-}
-
-/// The status mark in front of a session tab, also used by the session
-/// switcher so both carry the same icon.
 fn session_glyph(cx: &Cx, id: &str, bg: &str) -> (String, Style) {
     let a = cx.app;
     let ascii = cx.t.opts.ascii;
@@ -2579,322 +2397,6 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
     }
 }
 
-fn draw_terminal_dock(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
-    clear(buf, r, cx.st(PRIMARY, CANVAS));
-    let a = cx.app;
-    let ascii = cx.t.opts.ascii;
-    let terminals = &a.terminal_panel.terminals;
-    let selected = a
-        .terminal_panel
-        .selected
-        .as_ref()
-        .and_then(|id| terminals.iter().position(|t| &t.id == id));
-    let control = if a.terminal_controlled {
-        (
-            "[Release control]",
-            "Release control",
-            Target::TerminalReleaseControl,
-        )
-    } else {
-        (
-            "[Take control]",
-            "Take control",
-            Target::TerminalTakeControl,
-        )
-    };
-    let (rename, copy, hide) = if ascii {
-        ("[r]", "=", "v")
-    } else {
-        ("\u{270e}", cx.t.control("copy"), cx.t.fold(true))
-    };
-    // The shared toolbar order: New, Rename, Close, Control, Copy, Hide.
-    let actions: Vec<(String, &str, Target, bool)> = vec![
-        (
-            cx.t.control("plus").to_owned(),
-            "New terminal",
-            Target::TerminalNew,
-            true,
-        ),
-        (
-            rename.to_owned(),
-            "Rename terminal",
-            Target::TerminalRename,
-            selected.is_some(),
-        ),
-        (
-            cx.t.structure("close").to_owned(),
-            "Close terminal",
-            Target::TerminalCloseSelected,
-            selected.is_some(),
-        ),
-        (
-            control.0.to_owned(),
-            control.1,
-            control.2,
-            selected.is_some(),
-        ),
-        (
-            "[Attach]".to_owned(),
-            "Attach selected output",
-            Target::TerminalAttach,
-            selected.is_some(),
-        ),
-        (
-            copy.to_owned(),
-            "Copy output",
-            Target::TerminalCopy,
-            selected.is_some(),
-        ),
-        (
-            hide.to_owned(),
-            "Hide terminal panel",
-            Target::TerminalPanelClose,
-            true,
-        ),
-    ];
-    let widths: Vec<u16> = actions
-        .iter()
-        .map(|(label, ..)| width(label) as u16 + 2)
-        .collect();
-    let total: u16 = widths.iter().sum();
-    let icons_start = r.right().saturating_sub(total).max(r.x);
-    let header = format!("Terminals ({})", terminals.len());
-    let title_room = icons_start.saturating_sub(r.x).max(1);
-    let title = truncate(&header, title_room as usize, cx.ell());
-    put(buf, r.x, r.y, &title, cx.st(PRIMARY, CANVAS), title_room);
-    let hint = if a.terminal_focused {
-        "Ctrl+] tabs"
-    } else {
-        "Enter open  c take control  r release  Esc close"
-    };
-    let hint_x = r.x.saturating_add(width(&title) as u16 + 2);
-    let hint_room = icons_start.saturating_sub(hint_x.saturating_add(2));
-    if hint_room >= 8 {
-        put(
-            buf,
-            hint_x,
-            r.y,
-            &truncate(hint, hint_room as usize, cx.ell()),
-            cx.st(MUTED, CANVAS),
-            hint_room,
-        );
-    }
-    // Pointer tooltips are collected while drawing and painted last.
-    let mut tips: Vec<(Rect, String)> = Vec::new();
-    let mut x = icons_start;
-    for ((label, tip, target, enabled), width) in actions.into_iter().zip(widths) {
-        if x >= r.right() {
-            break;
-        }
-        let width = width.min(r.right().saturating_sub(x));
-        let rect = Rect::new(x, r.y, width, 1);
-        let hot = cx.hovered(rect);
-        let style = if !enabled {
-            cx.st(MUTED, CANVAS)
-        } else if hot {
-            cx.st(PRIMARY, RAISED)
-        } else {
-            cx.st(ACCENT, CANVAS)
-        };
-        if hot {
-            clear(buf, rect, style);
-        }
-        put(buf, x, r.y, &format!(" {label} "), style, width);
-        hits.add(rect, target);
-        tips.push((rect, tip.to_owned()));
-        x = x.saturating_add(width);
-    }
-    if r.height < 2 {
-        return;
-    }
-    let tab_y = r.y + 1;
-    // Keep the names readable, then shrink them before scrolling to the
-    // selected tab. A `…` marks tabs scrolled off either side.
-    let tab_width = |terminal: &crate::terminal_api::TerminalResource, name_max: usize| {
-        let dot = if terminal.status == "running" {
-            "●"
-        } else {
-            "○"
-        };
-        width(dot) as u16 + 1 + width(&truncate(&terminal.name, name_max, cx.ell())) as u16 + 4
-    };
-    let name_cap = if terminals.is_empty() {
-        6
-    } else {
-        (r.width as usize / terminals.len())
-            .saturating_sub(8)
-            .clamp(6, 48)
-    };
-    let mut name_max = name_cap;
-    let total = |max: usize| -> u16 {
-        terminals
-            .iter()
-            .map(|terminal| tab_width(terminal, max) + 1)
-            .sum()
-    };
-    while name_max > 6 && total(name_max) > r.width {
-        name_max -= 2;
-    }
-    let mut start = 0usize;
-    if let Some(selected) = selected {
-        while start < selected {
-            let span: u16 = terminals[start..=selected]
-                .iter()
-                .map(|terminal| tab_width(terminal, name_max) + 1)
-                .sum();
-            if span <= r.width {
-                break;
-            }
-            start += 1;
-        }
-    }
-    let mut x = r.x;
-    if start > 0 {
-        x = put(buf, x, tab_y, cx.ell(), cx.st(MUTED, CANVAS), r.width) + 1;
-    }
-    let mut shown = start;
-    for (index, terminal) in terminals.iter().enumerate().skip(start) {
-        let tab_w = tab_width(terminal, name_max);
-        if x.saturating_add(tab_w) > r.right() {
-            break;
-        }
-        let rect = Rect::new(x, tab_y, tab_w, 1);
-        let active = selected == Some(index);
-        let background = if active { RAISED } else { CANVAS };
-        let base = cx
-            .st(if active { PRIMARY } else { SECONDARY }, background)
-            .add_modifier(if active {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
-        clear(buf, rect, base);
-        let dot = if terminal.status == "running" {
-            "●"
-        } else {
-            "○"
-        };
-        let dot_style = cx.st(
-            if terminal.status == "running" {
-                PRIMARY
-            } else {
-                MUTED
-            },
-            background,
-        );
-        put(buf, x + 1, tab_y, dot, dot_style, 1);
-        let name = truncate(&terminal.name, name_max, cx.ell());
-        put(
-            buf,
-            x + 1 + width(dot) as u16 + 1,
-            tab_y,
-            &name,
-            base,
-            rect.right().saturating_sub(x + 2 + width(dot) as u16),
-        );
-        let hit = Rect::new(x, tab_y, tab_w.saturating_sub(2), 1);
-        hits.add(hit, Target::TerminalTab(index));
-        let close = Rect::new(x + tab_w.saturating_sub(2), tab_y, 1, 1);
-        let close_hot = cx.hovered(close);
-        let close_style = if close_hot {
-            cx.st("status.error", background)
-        } else {
-            cx.st(MUTED, background)
-        };
-        put(buf, close.x, tab_y, cx.t.structure("close"), close_style, 1);
-        hits.add(close, Target::TerminalClose(index));
-        tips.push((hit, format!("{}, {}", terminal.name, terminal.status)));
-        tips.push((close, format!("Close {}", terminal.name)));
-        x = x.saturating_add(tab_w + 1);
-        shown = index + 1;
-    }
-    if shown < terminals.len() {
-        let label = format!("{} {} more", cx.ell(), terminals.len() - shown);
-        if x < r.right() {
-            put(
-                buf,
-                x,
-                tab_y,
-                &truncate(&label, r.right().saturating_sub(x) as usize, cx.ell()),
-                cx.st(MUTED, CANVAS),
-                r.right().saturating_sub(x),
-            );
-        }
-    }
-    let read_only = selected.is_some() && !a.terminal_controlled;
-    if selected.is_some() && r.height > 2 {
-        let screen = crate::terminal_panel::screen_area(r, read_only, a.terminal_panel.screen.gap);
-        a.terminal_panel.screen.render(screen, buf);
-        if let Some(selection) = &a.terminal_panel.selection {
-            if selection.dragged() && selection.area == screen {
-                selection.highlight(buf);
-            }
-        }
-        if read_only {
-            let label = "Read-only — [Take control] to type.";
-            put(
-                buf,
-                r.x,
-                r.y + 2,
-                label,
-                cx.st("status.warning", CANVAS),
-                screen.width,
-            );
-            let rect = Rect::new(r.x, r.y + 2, (width(label) as u16).min(r.width), 1);
-            hits.add(rect, Target::TerminalTakeControl);
-            tips.push((rect, "Take control".to_owned()));
-        }
-        if a.terminal_panel.screen.gap {
-            put(
-                buf,
-                r.x,
-                r.y + 2 + u16::from(read_only),
-                crate::terminal_screen::GAP_NOTICE,
-                cx.st("status.warning", CANVAS),
-                screen.width,
-            );
-        }
-    } else if r.height > 2 {
-        if a.terminal_panel.loading {
-            put(
-                buf,
-                r.x,
-                r.y + 2,
-                "Loading terminals…",
-                cx.st(MUTED, CANVAS),
-                r.width,
-            );
-        } else {
-            let prefix = "No terminal selected. Use ";
-            let x = put(buf, r.x, r.y + 2, prefix, cx.st(MUTED, CANVAS), r.width);
-            let plus = cx.t.control("plus");
-            let x = put(buf, x, r.y + 2, plus, cx.st(ACCENT, CANVAS), r.width);
-            put(
-                buf,
-                x,
-                r.y + 2,
-                " to create one.",
-                cx.st(MUTED, CANVAS),
-                r.right().saturating_sub(x),
-            );
-            if x > r.x + width(prefix) as u16 {
-                let rect = Rect::new(x.saturating_sub(1), r.y + 2, 1, 1);
-                hits.add(rect, Target::TerminalNew);
-                tips.push((rect, "New terminal".to_owned()));
-            }
-        }
-    }
-    if a.ui.overlay.is_none() && a.ui.dialog.is_none() && a.ui.edit.is_none() {
-        if let Some((mx, my)) = a.mouse {
-            if let Some((anchor, label)) =
-                tips.iter().rev().find(|(rect, _)| contains(*rect, mx, my))
-            {
-                draw_tooltip(cx, buf, *anchor, label, hits);
-            }
-        }
-    }
-}
-
 /// A one-row floating tooltip, above the hovered control when the screen has
 /// room. It is painted last and swallows a click so it cannot activate what it
 /// covers.
@@ -2941,53 +2443,6 @@ fn draw_tooltip(cx: &Cx, buf: &mut Buffer, anchor: Rect, label: &str, hits: &mut
 /// The file/diff panel. Wide, it sits beside the timeline; narrow, it covers
 /// the whole window (the composer included). When it hides a live session's
 /// approvals or question, the header says so.
-fn draw_panel(cx: &Cx, buf: &mut Buffer, r: Rect, area: Rect, hits: &mut HitMap) {
-    // A cell of frame on the panel surface, when the window leaves room for it.
-    let frame = Rect::new(
-        r.x.saturating_sub(1),
-        r.y.saturating_sub(1),
-        r.width + 2,
-        r.height + 2,
-    )
-    .intersection(area);
-    clear(buf, frame, cx.st(PRIMARY, PANEL));
-    hits.add(frame, Target::Swallow);
-    clear(buf, r, cx.st(PRIMARY, CANVAS));
-    if cx.app.ui.diff_open.is_some() {
-        draw_diff_view(cx, buf, r, true, hits);
-    } else if cx.app.ui.file_open {
-        draw_file_view(cx, buf, r, true, hits);
-    }
-    // The modal must not hide a request that needs the user.
-    let waiting = cx.app.wait_items();
-    if !waiting.is_empty() {
-        let label = if cx.t.opts.ascii {
-            format!("! {} waiting", waiting.len())
-        } else {
-            format!("\u{26a0} {} waiting", waiting.len())
-        };
-        let w = width(&label) as u16;
-        let x = r.right().saturating_sub(w + 1);
-        // Clear what the file view put at the right of its title row (the range).
-        put(
-            buf,
-            x,
-            r.y,
-            &" ".repeat(w as usize + 1),
-            cx.st(PRIMARY, CANVAS),
-            w + 1,
-        );
-        put(
-            buf,
-            x,
-            r.y,
-            &label,
-            cx.st("status.warning", CANVAS).add_modifier(Modifier::BOLD),
-            w,
-        );
-    }
-}
-
 /// The read-only file view (DESIGN_PLAN.md D16), on the page surface: a header
 /// row with the `~` path (the basename bold) and the shown line range at the
 /// right, a blank row, the numbered text behind a `│` gutter, and a bottom
@@ -3811,7 +3266,13 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     let inner = rr.width.saturating_sub(4);
                     // The time yields when the title would be squeezed too far.
                     let show_age = inner >= aw + 1 + 6;
-                    let room = if show_age { inner - aw - 1 } else { inner };
+                    let room = if close.is_some() {
+                        inner.saturating_sub(3)
+                    } else if show_age {
+                        inner - aw - 1
+                    } else {
+                        inner
+                    };
                     draw_session_title(cx, buf, (rr.x + 3, y), room, s, style, bg);
                     if let Some(x) = close {
                         let hot = cx.hovered(x);
@@ -7555,7 +7016,7 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let mut x = area.x + 3;
     for (i, (k, label)) in [
         ("\u{2191}\u{2193}", "move"),
-        ("tab", "accept"),
+        (if file { "tab/enter" } else { "tab" }, "accept"),
         ("esc", "close"),
     ]
     .iter()
@@ -8720,9 +8181,15 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
     match &o.kind {
         OverlayKind::Inspector(i) => draw_inspector(cx, buf, area, i, hits),
         OverlayKind::Palette(p) => {
-            let anchor = (p.mode == PaletteMode::RowMenu)
-                .then(|| hits.rect_of(&Target::SideRow(cx.app.cursor(cx.app.ui.tab))))
-                .flatten();
+            let anchor = match p.mode {
+                PaletteMode::RowMenu => {
+                    hits.rect_of(&Target::SideRow(cx.app.cursor(cx.app.ui.tab)))
+                }
+                PaletteMode::GroupMenu => {
+                    hits.rect_of(&Target::GroupMenu(cx.app.ui.groups.layout.focused))
+                }
+                _ => None,
+            };
             match anchor {
                 Some(row) => draw_row_menu(cx, buf, area, row, p, hits),
                 None => draw_palette(cx, buf, area, p, hits),
@@ -9434,6 +8901,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Turns => "Go to turn",
         PaletteMode::History => "Prompt history",
         PaletteMode::RowMenu => "Actions",
+        PaletteMode::GroupMenu => "Group actions",
     };
     let m = modal(cx, buf, area, b, title, hits);
     let base = cx.st(PRIMARY, RAISED);
@@ -9454,7 +8922,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::LearnScope => "choose where the skills go",
             PaletteMode::Turns => "type to find a turn",
             PaletteMode::History => "type to find an earlier prompt",
-            PaletteMode::RowMenu => "choose an action",
+            PaletteMode::RowMenu | PaletteMode::GroupMenu => "choose an action",
         };
         put(
             buf,
@@ -10959,7 +10427,8 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
     hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
 }
 
-type Buttons<'a> = Option<(&'a str, &'a str, bool, usize)>;
+/// (cancel, confirm, danger, focused button, an extra middle answer).
+type Buttons<'a> = Option<(&'a str, &'a str, bool, usize, Option<&'a str>)>;
 
 /// A confirm or blocking dialog: title, body, and `[ Cancel ]` (the safe
 /// default, on the selection band when focused) beside the confirm button
@@ -11014,17 +10483,22 @@ fn draw_dialog(
         );
     }
     match buttons {
-        Some((cancel, confirm, danger, focus)) => {
+        Some((cancel, confirm, danger, focus, third)) => {
             let by = m.body.bottom().saturating_sub(1);
-            let labels = [(cancel, false), (confirm, danger)];
+            // Button indices: 0 cancel, 1 confirm, 2 the extra answer. With an
+            // extra one the order reads Save, Discard, Cancel.
+            let labels: Vec<(&str, bool, usize)> = match third {
+                Some(extra) => vec![(confirm, danger, 1), (extra, true, 2), (cancel, false, 0)],
+                None => vec![(cancel, false, 0), (confirm, danger, 1)],
+            };
             let total: u16 = labels
                 .iter()
-                .map(|(l, _)| width(l) as u16 + 4 + 2)
+                .map(|(l, _, _)| width(l) as u16 + 4 + 2)
                 .sum::<u16>()
                 .saturating_sub(2);
             // right-aligned on the inner edge; each button is `[ label ]`
             let mut x = m.x + m.w.saturating_sub(total);
-            for (i, (label, is_danger)) in labels.into_iter().enumerate() {
+            for (label, is_danger, i) in labels {
                 let token = if is_danger { "status.error" } else { PRIMARY };
                 let s = format!("[ {label} ]");
                 let sw = width(&s) as u16;
@@ -11110,17 +10584,6 @@ mod tests {
     }
 
     #[test]
-    fn a_tab_title_marquee_only_moves_what_overflows() {
-        assert_eq!(marquee_cells(0, 0), 0);
-        assert_eq!(marquee_cells(700, 0), 0);
-        assert_eq!(marquee_cells(8, 10), 0, "a short hold at the start");
-        assert_eq!(marquee_cells(9, 10), 1, "then one cell per frame");
-        assert_eq!(marquee_cells(18, 10), 10, "the end holds the last part");
-        assert_eq!(marquee_cells(25, 10), 10);
-        assert_eq!(marquee_cells(26, 10), 0, "then starts over");
-    }
-
-    #[test]
     fn heading_metadata_keeps_order_and_falls_back_compactly() {
         let parts = [
             "Scout".to_owned(),
@@ -11141,10 +10604,4 @@ mod tests {
         assert_eq!(heading_metadata(&parts, 0, " · ", "·", "…"), "");
     }
 
-    #[test]
-    fn scrolled_titles_never_split_a_wide_glyph() {
-        assert_eq!(scroll_cells("abcdef", 0), "abcdef");
-        assert_eq!(scroll_cells("abcdef", 2), "cdef");
-        assert_eq!(scroll_cells("a界b", 2), " 界b");
-    }
 }

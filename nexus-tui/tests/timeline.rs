@@ -508,7 +508,18 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
         .iter()
         .find(|b| b.key == "reason:a:1")
         .unwrap();
-    assert!(line_text(&expanded.lines[thought.start]).contains("◇ Thought"));
+    assert!(line_text(&expanded.lines[thought.start]).starts_with("   ◇ Thought"));
+    for block in expanded.blocks.iter().filter(|b| {
+        matches!(b.kind, BlockKind::Group | BlockKind::Tool | BlockKind::Reasoning | BlockKind::Child)
+    }) {
+        let row = line_text(&expanded.lines[block.start]);
+        let indent = if block.kind == BlockKind::Child { 5 } else { 3 };
+        assert_eq!(
+            row.chars().take_while(|c| *c == ' ').count(),
+            indent,
+            "{}: {row:?}", block.key
+        );
+    }
     assert!(expanded.blocks.iter().any(|b| b.key == "tool:c2"));
 }
 
@@ -639,10 +650,8 @@ fn live_group_announces_clipping_and_explicit_expansion_restores_members() {
                 .collect()
         })
         .collect();
-    // Members hang off a `├─` / `╰─` tree; a running one shows the spinner in
-    // place of its verb glyph.
-    assert!(tool_rows.first().unwrap().starts_with("   ├─ ◐ Read"));
-    assert!(tool_rows.last().unwrap().starts_with("   ╰─ ◐ Read"));
+    // Members share the group icon column; a running one replaces its verb with a spinner.
+    assert!(tool_rows.iter().all(|row| row.starts_with("   ◐ Read")));
     let tools: Vec<_> = t
         .blocks
         .iter()
@@ -1898,7 +1907,7 @@ fn tool_detail_is_the_old_box_with_a_raw_toggle() {
         .iter()
         .map(|l| line_text(l))
         .collect();
-    assert!(rows[0].trim_start().starts_with("┌ $ Shell"), "{rows:?}");
+    assert!(rows[0].starts_with("   $ Shell"), "{rows:?}");
     let name = t.lines[tool.start]
         .spans
         .iter()
@@ -1919,7 +1928,6 @@ fn tool_detail_is_the_old_box_with_a_raw_toggle() {
         "last row closes the box: {rows:?}"
     );
     let strong = a.theme.fg("border.strong").fg;
-    assert_eq!(t.lines[tool.start].spans[0].style.fg, strong);
     assert_eq!(t.lines[tool.start + 1].spans[0].style.fg, strong);
     // Raw shows the exact arguments and the result.
     a.execute("tool.raw_toggle");
@@ -2017,7 +2025,7 @@ fn the_sticky_header_pins_the_band_and_the_next_band_pushes_it_up() {
             .expect("pinned band");
         // the session title lives in its tab; the timeline starts under the header and
         // the blank root heading row
-        let want = a.regions.header.height + a.regions.heading.height;
+        let want = a.regions.centre.y + 1 + a.regions.heading.height;
         assert_eq!(pin.y, want, "{w}x{h}: under the header");
         let rows = &drawn[pin.y as usize..(pin.y + pin.height) as usize];
         assert_eq!(rows.len(), 4, "3 text rows and the shade row: {rows:?}");
@@ -2965,6 +2973,43 @@ fn a_session_without_fork_has_no_fork_block_and_old_json_still_reads() {
     let t = nexus_tui::timeline::build(&a, &a.theme, 0, 100);
     assert!(!t.blocks.iter().any(|b| b.key.starts_with("fork:")));
     assert!(all_text(&t).contains("parent prompt"));
+}
+
+#[test]
+fn a_zmx_child_card_names_the_agent_and_puts_the_worker_in_metadata() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let scenario: serde_json::Value =
+        serde_json::from_str(include_str!("../../interface/scenarios/zmx-parent-card.json"))
+            .unwrap();
+    let mut a = app();
+    let mut messages = scenario["messages"].clone();
+    for message in messages.as_array_mut().unwrap() {
+        message["session_id"] = serde_json::json!(SESSION);
+    }
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(messages).unwrap();
+    view.scratch.clear();
+    let mut child = a.state.model.sessions[SESSION].clone();
+    let data = &scenario["child"];
+    child.id = data["id"].as_str().unwrap().into();
+    child.parent_id = Some(SESSION.into());
+    child.parent_call_id = Some(data["parent_call_id"].as_str().unwrap().into());
+    child.agent = data["agent"].as_str().unwrap().into();
+    child.model = Some(data["model"].as_str().unwrap().into());
+    child.created = data["created"].as_f64().unwrap();
+    child.updated = data["updated"].as_f64().unwrap();
+    child.extra.insert("worker".into(), data["worker"].clone());
+    a.state.model.sessions.insert(child.id.clone(), child);
+    let t = build(&a, &a.theme, 0, 100);
+    let card = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Child)
+        .unwrap();
+    let head = line_text(&t.lines[card.start]);
+    let meta = line_text(&t.lines[card.start + 1]);
+    assert!(head.contains(scenario["head"].as_str().unwrap()), "{head}");
+    assert!(meta.contains(scenario["meta"].as_str().unwrap()), "{meta}");
 }
 
 #[test]

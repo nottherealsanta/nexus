@@ -74,7 +74,21 @@ pub enum TerminalEvent {
     },
 }
 
+/// A terminal that is visible in a group but does not have the keys: it stays
+/// attached and streams into its own screen, read-only (plan 45).
+pub struct Parked {
+    pub id: String,
+    pub generation: u64,
+    pub attachment: Option<String>,
+    pub screen: TerminalScreen,
+    pub next_input: u64,
+}
+
 pub struct TerminalPanel {
+    /// Terminals shown in unfocused groups, each with its own stream.
+    pub parked: Vec<Parked>,
+    /// The last generation handed out; generations never repeat.
+    pub gen_counter: u64,
     pub terminals: Vec<TerminalResource>,
     pub selected: Option<String>,
     pub focus: TerminalFocus,
@@ -97,13 +111,22 @@ pub struct TerminalPanel {
     pub selecting: bool,
 }
 
+impl TerminalPanel {
+    /// A generation no other attachment has had.
+    pub fn next_generation(&mut self) -> u64 {
+        self.gen_counter = self.gen_counter.max(self.generation) + 1;
+        self.gen_counter
+    }
+}
+
 pub fn screen_area(
     dock: ratatui::layout::Rect,
     read_only: bool,
     gap: bool,
 ) -> ratatui::layout::Rect {
-    // One header row (title, hint and actions) and one tab row above the screen.
-    let top = (2 + u16::from(read_only) + u16::from(gap)).min(dock.height);
+    // One toolbar row (hint and actions) above the screen; the tab itself is
+    // in the group's strip.
+    let top = (1 + u16::from(read_only) + u16::from(gap)).min(dock.height);
     ratatui::layout::Rect::new(dock.x, dock.y + top, dock.width, dock.height - top)
 }
 
@@ -236,6 +259,8 @@ fn cursor_key(final_byte: u8, application_cursor: bool) -> Vec<u8> {
 impl Default for TerminalPanel {
     fn default() -> Self {
         Self {
+            parked: Vec::new(),
+            gen_counter: 0,
             terminals: Vec::new(),
             selected: None,
             focus: TerminalFocus::List,

@@ -7,8 +7,11 @@
 //! ```json
 //! {"ui": {"left_width": 44, "left_rail": false, "left_open": true, "right_open": true, "scrollbar": true},
 //!  "theme": {"mode": "dark", "monochrome": false, "animations": true},
-//!  "notifications": {"sound": true}}
+//!  "notifications": {"sound": true},
+//!  "layouts": {"<project>\u{1f}<worktree>": {"root": {"node": "group", "id": 1, "tabs": [], "active": 0}, "focused": 1, "next_id": 2}}}
 //! ```
+//!
+//! `layouts` is the tab layout of each project worktree (plan 45, `groups`).
 //!
 //! Every field is optional. A missing, unreadable or corrupt file is ignored,
 //! and a save failure never disturbs the UI. Flags and environment override
@@ -16,10 +19,13 @@
 //! `App::persist_prefs`). Writes are atomic: a temporary file at mode 0600,
 //! then a rename.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::groups::Layout;
 
 pub const FILE: &str = "tui.json";
 
@@ -69,6 +75,24 @@ pub struct Prefs {
     pub ui: UiPrefs,
     pub theme: ThemePrefs,
     pub notifications: NotificationsPrefs,
+    /// The tab layout of each project worktree (plan 45), keyed by
+    /// `groups::key`. A layout that fails to parse is dropped, not the file.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "tolerant_layouts"
+    )]
+    pub layouts: BTreeMap<String, Layout>,
+}
+
+/// Each saved layout on its own: one that is damaged is skipped.
+fn tolerant_layouts<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, Layout>, D::Error> {
+    let raw = BTreeMap::<String, serde_json::Value>::deserialize(d).unwrap_or_default();
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| serde_json::from_value(v).ok().map(|l| (k, l)))
+        .collect())
 }
 
 pub fn path(home: &Path) -> PathBuf {
@@ -128,6 +152,17 @@ pub fn merge_changes(stored: &mut Prefs, seen: &Prefs, now: &Prefs) {
     field!(theme.monochrome);
     field!(theme.animations);
     field!(notifications.sound);
+    // Layouts merge per key: another run's other projects survive.
+    for (key, layout) in &now.layouts {
+        if seen.layouts.get(key) != Some(layout) {
+            stored.layouts.insert(key.clone(), layout.clone());
+        }
+    }
+    for key in seen.layouts.keys() {
+        if !now.layouts.contains_key(key) {
+            stored.layouts.remove(key);
+        }
+    }
 }
 
 /// Which display options the command line or environment already decided.
@@ -166,6 +201,7 @@ mod tests {
                 animations: Some(false),
             },
             notifications: NotificationsPrefs { sound: Some(false) },
+            layouts: BTreeMap::new(),
         }
     }
 
@@ -186,6 +222,47 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn layouts_round_trip_merge_per_key_and_skip_damaged_ones() {
+        use crate::groups::{Layout, Side, Tab};
+        use ratatui::layout::Rect;
+        let d = dir("layouts");
+        let mut layout = Layout::new();
+        layout.open(Tab::session("s1"));
+        layout
+            .split(Side::Right, Tab::file("a.rs"), Rect::new(0, 0, 100, 30))
+            .unwrap();
+        let mut prefs = sample();
+        prefs
+            .layouts
+            .insert(crate::groups::key("p", Some("/w")), layout.clone());
+        save(&d, &prefs).unwrap();
+        assert_eq!(load(&d).layouts, prefs.layouts);
+        // A damaged layout is skipped; the rest of the file survives.
+        let text = std::fs::read_to_string(path(&d))
+            .unwrap()
+            .replace("\"node\": \"split\"", "\"node\": 7");
+        std::fs::write(path(&d), text).unwrap();
+        let back = load(&d);
+        assert!(back.layouts.is_empty());
+        assert_eq!(back.ui.left_width, Some(44));
+        // Merging copies only the layouts this run changed or removed.
+        let mut stored = Prefs::default();
+        stored.layouts.insert("other".into(), layout.clone());
+        stored.layouts.insert("mine".into(), Layout::new());
+        let mut seen = Prefs::default();
+        seen.layouts.insert("mine".into(), Layout::new());
+        let mut now = Prefs::default();
+        now.layouts.insert("mine".into(), layout.clone());
+        merge_changes(&mut stored, &seen, &now);
+        assert_eq!(stored.layouts["mine"], layout);
+        assert!(
+            stored.layouts.contains_key("other"),
+            "another run's project stays"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 

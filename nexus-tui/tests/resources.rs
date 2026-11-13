@@ -77,7 +77,7 @@ fn strip_counts_and_modal_list() {
     let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
     click(&mut app, chip.x, chip.y);
     let shown = draw(&mut app, 160, 50).1.join("\n");
-    assert!(!app.terminal_open, "{shown}");
+    assert!(app.groups().group_count() == 1 && app.terminal_shell_count() == 0, "{shown}");
     assert!(!shown.contains("Kernels (1)"), "{shown}");
     assert!(
         shown.contains("Background shells (1 live, 2 kept)"),
@@ -89,6 +89,7 @@ fn strip_counts_and_modal_list() {
 #[test]
 fn background_and_terminal_shells_are_separate_and_clickable() {
     let mut app = with_resources();
+    draw(&mut app, 160, 50);
     app.terminal_panel.terminals.push(
         serde_json::from_value(json!({
             "id": "t1", "name": "Shell", "workspace": "/tmp", "status": "running",
@@ -96,6 +97,13 @@ fn background_and_terminal_shells_are_separate_and_clickable() {
         }))
         .unwrap(),
     );
+    app.ui
+        .groups
+        .placements
+        .push_back(nexus_tui::app::tabs::Placement::Split(nexus_tui::groups::Side::Down));
+    app.terminal_created("t1".into());
+    // The session page (and its strip) is the focused group's.
+    app.execute("layout.focus_up");
     let (_, rows) = draw(&mut app, 160, 50);
     let shown = rows.join("\n");
     assert!(shown.contains("1 shell"), "{shown}");
@@ -112,7 +120,7 @@ fn background_shell_opens_the_jobs_list_without_a_kernel() {
     assert!(rows.join("\n").contains("1 shell"));
     let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
     click(&mut app, chip.x, chip.y);
-    assert!(!app.terminal_open);
+    assert!(!app.terminal_tab_focused());
     assert!(draw(&mut app, 160, 50)
         .1
         .join("\n")
@@ -122,6 +130,7 @@ fn background_shell_opens_the_jobs_list_without_a_kernel() {
 #[test]
 fn a_running_job_and_a_user_terminal_are_counted_separately() {
     let mut app = with_resources();
+    draw(&mut app, 160, 50);
     app.terminal_panel.terminals.push(
         serde_json::from_value(json!({
             "id":"t1", "name":"sleep 30", "workspace":"/tmp", "status":"running",
@@ -129,6 +138,13 @@ fn a_running_job_and_a_user_terminal_are_counted_separately() {
         }))
         .unwrap(),
     );
+    app.ui
+        .groups
+        .placements
+        .push_back(nexus_tui::app::tabs::Placement::Split(nexus_tui::groups::Side::Down));
+    app.terminal_created("t1".into());
+    // The user's terminal is a tab; focus goes back to the session to click its chip.
+    app.execute("layout.focus_up");
     assert_eq!(app.resource_counts().1, 1);
     assert_eq!(app.terminal_shell_count(), 1);
     let (_, rows) = draw(&mut app, 160, 50);
@@ -137,7 +153,8 @@ fn a_running_job_and_a_user_terminal_are_counted_separately() {
     assert!(shown.contains("1 shell"), "{shown}");
     let chip = app.hits.rect_of(&Target::ComposerTerminals).unwrap();
     click(&mut app, chip.x, chip.y);
-    assert!(app.terminal_open);
+    // The chip does what Ctrl+` does: the terminal's tab is in front.
+    assert!(app.terminal_tab_focused());
 }
 
 #[test]

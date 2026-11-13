@@ -108,13 +108,13 @@ Confirmation appends without replacing selected draft text. Cancel changes nothi
 new output never updates an existing preview or draft. Switching drafts before
 confirmation fails visibly rather than attaching to another session.
 
-Closed resources are hidden and opening the dock prefers a running terminal.
+Closed resources are omitted from the restored layout.
 Exit immediately disables input and updates the tab; a late control acknowledgment
 cannot make an ended terminal writable again.
 
-Desktop and web expose Core-owned terminals in a bottom dock toggled by the terminal shell indicator in the activity strip or by ``Ctrl+` `` (``Ctrl+Shift+` `` / `Ctrl+~` are the same physical key); the separate **kernel** indicator has no count. The toggle works while the terminal screen has focus, is never sent to the shell, and hiding returns focus to the composer. Tabs show each terminal's name and status, with **×** to close it. The compact toolbar offers new, rename, close, take/release control, copy output and hide, in that order; hover an icon for its label. The xterm.js screen is embedded in a WebView and is not part of the session or model context. Hiding the dock detaches; closing a terminal terminates it, with confirmation if running. Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
+Desktop and web show Core-owned terminals as **tabs** in the layout's groups ([docs/layout.md](../docs/layout.md); the bottom dock is gone). The terminal shell indicator in the activity strip and ``Ctrl+` `` (``Ctrl+Shift+` `` / `Ctrl+~` are the same physical key) focus the most recent terminal tab, or open a new terminal in a split below the focused group when none exists; the separate **kernel** indicator has no count. The shortcut works while the terminal screen has focus and is never sent to the shell. A terminal tab shows a running or exited dot, its name and **×**; double-click the tab or use the pencil to rename. The pane toolbar offers rename, take/release control, attach selected output and copy output; hover an icon for its label. A new terminal comes from the group menu (**New terminal**) or the palette. The xterm.js screen is embedded in a WebView and is not part of the session or model context. There is no hiding: closing a terminal tab terminates it, with confirmation if running; splitting a terminal tab creates a new terminal in the new group. Every visible terminal pane is attached and live (one controller per terminal in `src/terminal-panel.ts`); a tab that is not its group's active one is detached and replays when shown again. Terminal screens live in one flat layer keyed by terminal id (`src/ui/groups.tsx`), so moving a terminal tab between groups, including by drag, moves the mounted WebView: no remount, no reattach, no replay (by construction; the web run was not measured). Opening a terminal attempts to take control; a read-only terminal offers **Take control**. A discarded-history notice means replay is lossy. Output cannot write the clipboard: select text and use **Copy output**.
 
-Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the tabs; the WebView's key guard also intercepts the dock toggle spellings above and reports them to NSH instead of xterm, so they cannot reach the shell. Browser and OS reserved shortcuts remain platform-owned. A legacy terminal that collapses ``Ctrl+` `` into NUL looks like Ctrl+Space; NSH leaves that key to the shell rather than hijacking it. Native focus and input routing require a real macOS verification.
+Keyboard routing assumes the focused WebView receives keys after NSH's keymap has been overridden with pass-through bindings. The web renderer uses a sandboxed iframe; the macOS host has a native key monitor that consumes matching shortcuts before dispatch, so simply ignoring shortcut callbacks is not sufficient. Ctrl+] moves focus to the group's tab strip; the WebView's key guard also intercepts the toggle spellings above and reports them to NSH instead of xterm, so they cannot reach the shell. Browser and OS reserved shortcuts remain platform-owned. A legacy terminal that collapses ``Ctrl+` `` into NUL looks like Ctrl+Space; NSH leaves that key to the shell rather than hijacking it. Native focus and input routing require a real macOS verification.
 
 ## Native hosts
 
@@ -218,11 +218,13 @@ running. Activity groups are 28 px rows with the TUI's content: counts in first-
 order (edits count the files they touch), `+N −M` beside the summary from
 edits that were neither failed nor denied, and `· N denied`; a failed member keeps its `✕`, first error line and a muted `failed`,
 and the folded heading never counts failures. A live group reads `Working` with a shimmer, and a group that has just finished
-flashes its chevron the accent, unless animations are off. Members hang on a tree line with verb
-icons (the status glyph replaces the icon while running, failed, denied or waiting) and read
+flashes its chevron the accent, unless animations are off. Group headers, thoughts, tools, child cards and notices
+share one left icon column and label edge, without a member tree or extra indentation. Tool and thought icons
+are optically sized to match the chevrons (9–14 px SVG canvases; shell 12 px and code 14 px).
+Members use verb icons (the status glyph replaces the icon while running, failed, denied or waiting) and read
 `Shell  make  exit 2 · 1.2s`: the argument comes from the same field per tool as in the TUI, a failed
 call adds its first error line, and read, edit, write, code and ask carry their summary. An open
-member's detail sits behind the tree line with `raw` on its row: `$ command` rows, then the last 8 output rows
+member's detail stays indented with `raw` on its row: `$ command` rows, then the last 8 output rows
 behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
 a tail, 100 lines each or 30 and 20 at high detail. Code instead shows its cell source and marks its output hidden; raw reveals the result. Thoughts show `◇ Thought · preview`, with the body behind a rail, and no time;
 the one-line preview strips raw Markdown emphasis. A thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group, and shows the diamond where a group would show its chevron.
@@ -252,7 +254,7 @@ rows, indented under the chevron as a group's members are. The `[Nexus fork]` ta
 keeps the folded row with the same wording.
 
 A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
-`ZMX · Claude Code` or `ZMX · Antigravity` on its parent's child card and in its heading. Its timeline
+with its agent name on the parent's child card, with `ZMX · Claude Code` or `ZMX · Antigravity` in the metadata below and in its heading. Its timeline
 opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
 `Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
 own subagents show read-only inside the calling tool's card. As in the TUI.
@@ -314,10 +316,10 @@ sidebar is open). Below the band the 44 px right rail (Session) opens the panel 
 the current-project selection, session rows, search fields, prose tables and modals are all
 square, like the TUI's cell grid; only circular status dots, spinners, image remove controls
 and meters keep their shape. A box rule runs a hairline along a box's straight
-sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag the file panel's left edge to resize it from 360 px up to what leaves the timeline 480 px. The reading column fills the available centre width. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
+sides; a filled box needs no border. Drag the right edge of the docked left sidebar to resize it between 180 and 480 px (initially 264 px). Drag a divider between groups to resize them (each pane keeps at least 200 × 120 px). The reading column fills the available centre width. The new-session starting-context card uses the same full-width reading column, insets and card as the timeline's starting context, so the layout does not move when the session starts; the timeline shows its starting-context sections directly without a summary header.
 Over the docked left sidebar its left slot holds the 32 px toggle and
 the Sessions and Files icons (they follow the sidebar's open state; narrow, they
-are in the drawer with labels). The session tabs use one fixed tab box
+are in the drawer with labels). Every group's tab strip (session, file, diff and terminal tabs) uses one fixed tab box
 (208 × 28 px, 176 × 40 narrow), so a root and New session keep the same width
 and a long title ellipsises inside its tab.
 Hovering a title too wide for its tab scrolls it to its end inside a fixed title
@@ -358,7 +360,7 @@ ends with context usage. The location strip is its own row under the controls at
 muted home-shortened path and branch on the left, centered gray indicators for a live
 kernel, running background shells and terminal shells when present. The kernel and
 background-shell indicators (the agent's running bash jobs) open separate detail lists;
-terminal shells (the user's terminals) open the dock.
+terminal shells (the user's terminals) focus the last terminal tab.
 In the Shells modal, ↑/↓ select a shell and `s` (or its `[stop]` / **Stop** action) stops a running one (`DELETE /api/bash/{id}`). A linked
 worktree adds a bundled fork icon (muted, primary on hover) with the tooltip `Worktree session`; clicking it
 opens the small **Worktree** modal with the copyable worktree path, branch and main-checkout path, and a
@@ -368,8 +370,10 @@ current context occupancy in the agent's colour. Draft context is marked as an e
 While a session runs, a Working row right-aligned below the composer, on the path line, shimmers the
 word and shows the elapsed time (`Working · 12s`), as in the TUI; with an empty draft the send button
 becomes Stop. Typing `/` opens a completion layer floating over the timeline on the composer's top
-edge (commands, with their key hints; 8 rows, then it scrolls); `@` completes project paths from
-Core's file listing. Tab accepts, Enter runs a slash command, Esc closes. Ctrl+X arms the
+edge (commands, with their key hints; 8 rows, then it scrolls); `@` at the caret completes project
+paths from Core's recursive file search, retaining prefix results while it searches and padding short
+lists from the same empty-query pool as the TUI. Tab or Enter accepts a file or directory without
+sending; a directory keeps completion open. Enter runs a slash command, and Esc closes. Ctrl+X arms the
 manifest's leader aliases for three seconds: then M, N, O/B, G, S, L, T, R, V,
 Shift+N or ? runs model, new session, sessions, agent, settings, sidebar, effort,
 reconnect, dictation, notifications or shortcuts. Before a session exists, the agent/model/effort pickers and slash commands
@@ -473,11 +477,10 @@ every project, inactive ones marked, and choosing an inactive one restores it, a
 The Files tab is the TUI's expanding tree: one Core listing per directory read, folders expand and collapse in place
 with the shared fold glyphs and two cells of indent per depth, `.git` is never listed, and a file's Git letter sits at
 the row's end. Expanded folders keep their state across tab switches and reset when the project changes; the pane's
-header names the project and the checkout branch. Files open in a full-height modal, centred across the dimmed page, with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`;
-below 1100 px it fills the window. Markdown files (`.md`, `.markdown`) open as rendered prose (Mermaid fences drawn as in the timeline), and the header's
+header names the project and the checkout branch. Files open as tabs in the focused group (Ctrl/Cmd+click, the row menu or **Open to the side** puts one in the group to the right), with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`; one buffer serves every tab of a file, a dot marks unsaved changes and closing asks Save / Discard / Cancel. Markdown files (`.md`, `.markdown`) open as rendered prose (Mermaid fences drawn as in the timeline), and the header's
 Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
-Esc closes the bar before the panel. Links in assistant prose, Markdown previews,
+Esc closes the bar; it never closes the file tab. Links in assistant prose, Markdown previews,
 new-session prose and context details open in the browser.
 
 The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a
@@ -587,6 +590,8 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). A phone shows `ui/mobile/connect.tsx` instead. |
 | `src/ui/mobile/` | The phone client's UI: `shell.tsx` (tabs, conversation header, edge swipe, drawer), `sessions.tsx` (sections, rows), `sheets.tsx`/`sheet.tsx` (row menu, project switcher), `approval.tsx`, `settings.tsx` (connection card, grouped list), `connect.tsx` (pairing), `state.ts`. Pure rules (sections, transport, pairing links, health) are in `src/mobile.ts`. |
 | `src/ui/splash.tsx` | The launch splash: logo, five milestone stages, 30-segment bar and the fade into the first live frame. |
+| `src/layout.ts`, `src/layout-state.ts` | The layout tree (pure: splits, groups, tabs, ratios, minimum 200 × 120 px, focus by geometry, join, move, restore, serialisation) and its live state: signals, persistence in `Storage` per project and worktree (`nexus.layout.<project>.<worktree>`), reconciliation with sessions, files and terminals, every action. Tests: `layout.test.ts`, `layout-ui.test.tsx`. |
+| `src/ui/groups.tsx` | The tab area: group boxes with strips and bodies, the terminal layer, dividers, the group menu, drag and drop zones. |
 | `src/ui/*` | Header, sidebars, the right panel and its icon rail, the docked composer (completion, Working row, location strip, activity bar) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 

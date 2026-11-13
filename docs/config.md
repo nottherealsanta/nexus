@@ -183,7 +183,10 @@ browser the `browser_exec` and `browser_screenshot` tools drive. Off: browser-us
 Chromium on a temporary profile, never your Chrome. On: your own Chrome, with its tabs
 and sign-ins, once Chrome's remote debugging is on. Core reads it at every browser call,
 and a change replaces a session's running browser at its next call
-([tools.md](tools.md#browser-tools)).
+([tools.md](tools.md#browser-tools)). Settings > Browser also shows whether the browser
+tools can run on this machine (`GET /api/browser`); with the setting on, Google Chrome
+must be installed, and Chrome's remote debugging switch, which Nexus cannot read, must
+be on.
 
 ## `[voice]` and `[speech]`
 

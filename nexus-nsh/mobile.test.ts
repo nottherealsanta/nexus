@@ -17,7 +17,7 @@ describe("mobile client rules", () => {
     expect(sections.flatMap((s: any) => (s.row ?? []).map((r: any) => r.id))).not.toContain("appearance.editor");
   });
   test("hides desktop surfaces but retains session interactions", () => {
-    for (const id of ["terminal.open", "inspector.open", "file.open", "session.resources", "project.overview", "palette.open"]) expect(desktopOnly(id)).toBe(true);
+    for (const id of ["terminal.open", "inspector.open", "file.open", "session.resources", "project.overview", "palette.open", "layout.split_right", "layout.tab_close", "layout.group_menu"]) expect(desktopOnly(id)).toBe(true);
     for (const id of ["session.new", "waiting.allow_once", "waiting.deny", "waiting.submit_answers"]) expect(desktopOnly(id)).toBe(false);
     expect(["user", "assistant", "older", "tool", "context", "thought"].filter((kind) => phoneRow({ kind }))).toEqual(["user", "assistant", "older"]);
     expect(phoneRow({ kind: "diag", tone: "error" })).toBe(true);

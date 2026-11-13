@@ -27,7 +27,16 @@ export const TEXT_INDENT = "pl-2";
 export const TURN_INSET = "pl-4";
 export const USER_BAND_INSET = "pl-4 pr-2";
 /** The activity row's chevron slot starts on the shared turn text edge. */
-export const ACTIVITY_CHEVRON = "w-4 shrink-0 -ml-1";
+export const ACTIVITY_CHEVRON = "w-4 shrink-0 -ml-1 mr-1 items-center";
+
+/** Match visible strokes, not SVG canvases: code and shell have more empty space. */
+export function activityIconSize(name: string): number {
+  if (name.startsWith("chevron-") || name === "code") return 14;
+  if (name === "shell") return 12;
+  if (name === "session") return 11;
+  if (name === "edit" || name === "search") return 10;
+  return 9;
+}
 
 export function TimelineColumn(p: { class?: string; style?: Record<string, string | number>; testID?: string; children?: JSX.Element; onLayout?: (b: any) => void }) {
   return (

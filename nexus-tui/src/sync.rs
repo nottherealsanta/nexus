@@ -177,6 +177,9 @@ pub enum Command {
     /// View this session: load its history (in the background while the
     /// stream is live) and include it in later snapshots. No resync.
     Select(Option<String>),
+    /// Sessions besides the selected one that visible tabs show: their
+    /// history is loaded now and again after every resync (plan 45).
+    Watch(Vec<String>),
     /// What the user is looking at: project, session and panel ids only. Kept
     /// across reconnects and reported after the next `server.connected`.
     View(ClientView),
@@ -294,6 +297,9 @@ struct Ctx {
     inputs: Option<String>,
     /// A selected session whose history has not been loaded yet.
     history: Option<String>,
+    /// Watched sessions and those whose history is still to load.
+    watch: Vec<String>,
+    watch_load: Vec<String>,
     config_patch: Option<(String, String, Value)>,
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
@@ -322,6 +328,15 @@ impl Ctx {
                 self.history = s.clone();
                 self.selected = s;
                 self.newest_turn = None;
+            }
+            Command::Watch(ids) => {
+                for id in &ids {
+                    if !self.watch.contains(id) && !self.watch_load.contains(id) {
+                        self.watch_load.push(id.clone());
+                    }
+                }
+                self.watch_load.retain(|id| ids.contains(id));
+                self.watch = ids;
             }
             Command::View(view) => {
                 self.view = Some(view);
@@ -630,6 +645,8 @@ pub async fn run(
         draft: None,
         inputs: None,
         history: None,
+        watch: Vec::new(),
+        watch_load: Vec::new(),
         config_patch: None,
         worktrees: None,
         project_worktrees: Vec::new(),
@@ -728,6 +745,13 @@ pub async fn run(
                             cx.send(SyncMsg::History(Box::new(h)));
                         }
                     }
+                    // Watched views may have missed events: read them again.
+                    cx.watch_load = cx.watch.clone();
+                    for sid in std::mem::take(&mut cx.watch_load) {
+                        if let Some(h) = load_history(&api, &sid).await {
+                            cx.send(SyncMsg::History(Box::new(h)));
+                        }
+                    }
                 }
                 Err(e) => {
                     pending = Some(cause);
@@ -772,6 +796,11 @@ pub async fn run(
 
         // A selection made while reconnecting, with no snapshot this pass.
         if let Some(sid) = cx.history.take() {
+            if let Some(h) = load_history(&api, &sid).await {
+                cx.send(SyncMsg::History(Box::new(h)));
+            }
+        }
+        for sid in std::mem::take(&mut cx.watch_load) {
             if let Some(h) = load_history(&api, &sid).await {
                 cx.send(SyncMsg::History(Box::new(h)));
             }
@@ -1454,6 +1483,14 @@ async fn stream(
                         // History loads beside the stream, which keeps applying
                         // events; the reducer merges both in either order.
                         if let Some(sid) = cx.history.take() {
+                            let (api, out) = (api.clone(), cx.out.clone());
+                            tokio::spawn(async move {
+                                if let Some(h) = load_history(&api, &sid).await {
+                                    let _ = out.send(SyncMsg::History(Box::new(h)));
+                                }
+                            });
+                        }
+                        for sid in std::mem::take(&mut cx.watch_load) {
                             let (api, out) = (api.clone(), cx.out.clone());
                             tokio::spawn(async move {
                                 if let Some(h) = load_history(&api, &sid).await {

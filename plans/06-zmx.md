@@ -9,6 +9,8 @@ labelled, no Nexus permissions inside it, never answers a CLI prompt (it ends as
 
 ## Status (re-audited 2026-11-12)
 
+On 11-13, both parent child cards were changed to show the agent name first and the ZMX vendor label in the metadata line; shared scenario tests cover the wording. Paired screenshots remain to be captured.
+
 All offline work is done. Commits `306670ac`, `5dee5561` and `5cf811c8` (merged from `plans/zmx`) added subagent sidechains,
 worker records and orphans, recovery text, `nexus doctor` rows, agy usage, sanitized fixtures recorded from real runs
 (Claude Code 2.1.322, agy 1.5.0), race tests, client scenarios for every M3 state, and resume after an interrupt. On

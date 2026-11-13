@@ -42,6 +42,7 @@ const network = {
   "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
   "GET */api/session/ses_0": { body: original },
   "GET */api/session/ses_1": { body: session },
+  "GET */api/session/*/input": { body: { inputs: [], held: false } },
   "GET */api/session/*": { body: session },
 };
 
@@ -51,7 +52,7 @@ describe("Built-in editor (K10)", () => {
   // Native builds (the macOS run) start at the Connect screen without a saved
   // address; the web build ignores this key and uses its same-origin host.
   const core = { "nexus.core": "http://core.test" };
-  test("a file opens in a modal that wraps long lines and leaves the page underneath", async () => {
+  test("a file opens as a tab in the group that wraps long lines and leaves the session tab beside it", async () => {
     const app = await open("./App.tsx", { network, storage: core, width: 1500, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
@@ -59,9 +60,10 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-entry-hello.txt");
     await app.press("id:file-entry-hello.txt");
     await app.waitFor("id:file-panel");
-    expect(app.shows("id:file-panel-resize")).toBe(false);
+    expect(app.shows("id:file-panel-shell")).toBe(false);
     expect(app.shows("id:left-sidebar")).toBe(true);
-    await app.press("id:file-back");
+    expect(app.shows("id:session-tab-ses_1")).toBe(true);
+    await app.press("id:tab-close-file:prj_1:hello.txt");
     await app.waitFor("id:file-panel", { state: "gone" });
   });
 
@@ -179,7 +181,7 @@ describe("Built-in editor (K10)", () => {
     expect(app.shows("text:● modified")).toBe(true);
   });
 
-  test("Back closes a clean file panel", async () => {
+  test("closing a clean file tab needs no prompt", async () => {
     const app = await open("./App.tsx", { network, storage: core, width: 1100, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
@@ -187,7 +189,7 @@ describe("Built-in editor (K10)", () => {
     await app.waitFor("id:file-entry-hello.txt");
     await app.press("id:file-entry-hello.txt");
     await app.waitFor("id:file-panel");
-    await app.press("id:file-back");
+    await app.press("id:tab-close-file:prj_1:hello.txt");
     await app.waitFor("id:file-panel", { state: "gone" });
   });
 
@@ -376,11 +378,14 @@ describe("Git sidebar", () => {
     }, width: 1500, height: 768, platform: "web" });
     await app.waitFor("text:Refactor loader");
     await app.press("id:tab-git");
+    await app.waitFor("id:git-folder-./");
+    await app.press("id:git-folder-./");
     await app.waitFor("id:git-unstaged-hello.txt");
     expect(app.shows("id:git-untracked-new.txt")).toBe(true);
+    // A change opens as a diff tab in the focused group, not a modal.
     await app.press("id:git-unstaged-hello.txt");
-    await app.waitFor("id:git-diff-dialog");
-    await app.press("id:git-diff-close");
+    await app.waitFor("id:diff-panel");
+    expect(app.shows("id:git-diff-dialog")).toBe(false);
     await app.keyboard.press("mod+p");
     await app.type("id:palette-input", "Stage");
     await app.keyboard.press("enter");
@@ -463,7 +468,8 @@ describe("one editor mode and replacement", () => {
     await app.waitFor("text:● modified");
     await app.keyboard.press("mod+z");
     await app.waitFor("text:saved");
+    // Esc leaves a file tab open: a file is a tab, not a modal.
     await app.keyboard.press("escape");
-    await app.waitFor("id:file-panel", { state: "gone" });
+    expect(app.shows("id:file-panel")).toBe(true);
   });
 });

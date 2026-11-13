@@ -9,8 +9,9 @@ import { availability, byId, commands, keyLabel, moveProject, newSession, run, s
 import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
-import { fileTree, filesExpanded, loadFiles, openFile, showFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, openGitDiff, gitOpen, toggleGitFolder, gitSummary, gitFolders, gitGroups, inGitGroup } from "../store";
+import { fileTree, filesExpanded, loadFiles, openFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, gitOpen, toggleGitFolder, gitSummary, gitFolders, gitGroups, inGitGroup } from "../store";
 import { fileRows } from "../file-tree";
+import { openDiffTab, openFileTab, openSessionTab, sideClick, trackMods } from "../layout-state";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 import { ProjectMcpPanel } from "./project-mcp";
@@ -91,9 +92,9 @@ function GitTab() {
         <Each of={gitFolders(changes())} key={(f) => f.name}>{(folder) => <View>
           <Button testID={`git-folder-${folder().name}`} accessibilityLabel={uiText("git.folder", { name: folder().name, count: folder().files.length })} onPress={() => toggleGitFolder(folder().name)} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{gitOpen().has(folder().name) ? "▾" : "▸"}</Text><Text class={TS.base}>{folder().name}</Text><Text class={T.meta}>{`${folder().files.length}`}</Text></Button>
           <If when={gitOpen().has(folder().name)}>
-            <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); void openGitDiff(); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
+            <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <View {...trackMods}><ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={(e: any) => { selectedGitFile.set({ path: change().path, group: group() }); openDiffTab(sideClick(e)); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
               <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
-            </ContextMenu>}</Each>}</Each>
+            </ContextMenu></View>}</Each>}</Each>
           </If>
         </View>}</Each>
       </If>
@@ -428,7 +429,6 @@ function SessionRow(p: { s: () => Session }) {
   const n = () => childCount(s().id);
   const att = () => { m(); return attention(s().id); };
   const flowCursor = () => flowStage() === "sessions" && flowSession() === s().id;
-  const two = () => true;
   return (
     <ContextMenu
       open={sidebarRowMenu()?.kind === "session" && sidebarRowMenu()?.id === s().id}
@@ -444,8 +444,8 @@ function SessionRow(p: { s: () => Session }) {
         <View role="button"
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
-          onPress={() => { dismissSessionSearch(); focusedSidebarRow.set(ref()); if (phone) drawer.set(null); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${att() ? "needs your input" : sessionRunning(s()) ? "running" : "idle"}`}
-          class={`group/row relative px-2 hover:bg-accent ${phone ? "rounded-(--radius-card)" : "rounded-(--radius)"} ${sel() ? "bg-active hover:bg-active" : flowCursor() ? "bg-selection" : ""} ${phone ? "min-h-[76px] px-3 py-3 pr-14" : isNarrow() ? (two() ? "min-h-[64px] py-2" : "min-h-11 justify-center") : (two() ? "h-16 py-2" : "h-8 justify-center")} ${FOCUS}`}
+          onPress={(e: any) => { dismissSessionSearch(); focusedSidebarRow.set(ref()); if (phone) drawer.set(null); if (!phone && sideClick(e)) openSessionTab(s().id, true); else void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${att() ? "needs your input" : sessionRunning(s()) ? "running" : "idle"}`}
+          class={`group/row relative px-2 hover:bg-accent ${phone ? "rounded-(--radius-card)" : "rounded-(--radius)"} ${sel() ? "bg-active hover:bg-active" : flowCursor() ? "bg-selection" : ""} ${phone ? "min-h-[76px] px-3 py-3 pr-14" : isNarrow() ? "min-h-[64px] py-2" : "h-16 py-2"} ${FOCUS}`}
         >
           <If when={sel() && !phone}><ActiveBar testID={`session-active-${s().id}`} /></If>
           <If when={flowCursor()}><FocusEdge testID={`session-cursor-${s().id}`} /></If>
@@ -464,7 +464,6 @@ function SessionRow(p: { s: () => Session }) {
               </View>
             </If>
           </View>
-          <If when={two()}>
             <View class={`flex-row items-center gap-1 h-6 ${phone ? "" : "pl-6 pr-7"}`} testID={`session-line-${s().id}`}>
               <If when={phone}><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`text-[13px] leading-5 min-w-0 ${att() ? "text-warning" : "text-muted-foreground"}`}>{att() ? "Needs your input" : projectName(s().project_id)}</Text></If>
               <If when={!phone && place()}><Text style={{ numberOfLines: 1 }} testID={`session-place-${s().id}`} class={`${T.meta} min-w-0`}>{place()}</Text></If>
@@ -473,7 +472,6 @@ function SessionRow(p: { s: () => Session }) {
               <View class="flex-1" />
               <If when={!phone && n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
             </View>
-          </If>
           <If when={!phone && !s().archived}><Button onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id).then(() => run("session.archive")); }}
             accessibilityLabel={`Archive ${s().title || "Untitled"}`} testID={`row-archive-${s().id}`}
             class={`absolute right-1.5 top-1 size-6 ${touch ? "" : "opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
@@ -543,8 +541,8 @@ function FilesTab() {
         <If when={root()?.error}><Text class={`${T.sec} px-2`}>{root()!.error!}</Text></If>
         <If when={!root()?.error && rows().length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
         <Each of={rows()} key={(row) => row.path}>{(row) =>
-          <View style={{ paddingLeft: 8 + row().depth * 16 }} onFocus={() => selectedFileEntry.set({ path: row().path, kind: row().kind })}>
-          <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={() => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") void showFile(r.path); }}
+          <View style={{ paddingLeft: 8 + row().depth * 16 }} {...trackMods} onFocus={() => selectedFileEntry.set({ path: row().path, kind: row().kind })}>
+          <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={(e: any) => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") openFileTab(r.path, sideClick(e)); }}
             accessibilityLabel={row().name} testID={`file-entry-${row().path}`}
             class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-selection" : ""} ${FOCUS}`}>
             <View class="w-3.5 shrink-0 items-center justify-center">
@@ -557,6 +555,7 @@ function FilesTab() {
             </View>
           </Button>}>
             <Each of={commands.filter((c) => c.id.startsWith("files.") && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
+            <If when={row().kind === "file"}><MenuItem onSelect={() => openFileTab(row().path, true)} testID="file-open-to-side" class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{uiText("layout.menu.open_to_side")}</Text></MenuItem></If>
           </ContextMenu>
           </View>
         }</Each>

@@ -30,4 +30,8 @@ site, and the default mode was checked to report "this server's own Chromium on 
 profile, not your Chrome". Driving the user's Chrome (`use_my_chrome` on) was not
 exercised.
 
+What a machine needs: `uvx` and a Chrome, Chromium or Edge (or the Chromium
+`browser-use install` downloads). `nexus doctor`, `GET /api/browser` and Settings >
+Browser say whether both are there.
+
 Logs: `~/.nexus/logs/browser/<session>.log`.

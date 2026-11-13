@@ -25,6 +25,8 @@ use crate::sync::{Command as SyncCommand, SyncMsg};
 use crate::theme::{Mode, Theme, Tier};
 use crate::ui::*;
 
+pub mod tabs;
+
 /// Work the event loop performs on the shell's behalf.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -33,7 +35,8 @@ pub enum Effect {
         client: String,
         generation: u64,
     },
-    TerminalStop,
+    /// Stop the stream task of this attachment generation.
+    TerminalStop(u64),
     Quit,
     Suspend,
     Sync(SyncCommand),
@@ -96,7 +99,22 @@ pub const WIRED: &[&str] = &[
     "terminal.new",
     "terminal.acquire",
     "terminal.release",
-    "terminal.focus_list",
+    "layout.split_right",
+    "layout.split_down",
+    "layout.join_right",
+    "layout.join_down",
+    "layout.focus_left",
+    "layout.focus_right",
+    "layout.focus_up",
+    "layout.focus_down",
+    "layout.move_left",
+    "layout.move_right",
+    "layout.move_up",
+    "layout.move_down",
+    "layout.tab_close",
+    "layout.group_close",
+    "layout.open_to_side",
+    "layout.group_menu",
     "palette.open",
     "app.help_keys",
     "app.quit",
@@ -814,8 +832,11 @@ pub struct FirstPin {
 }
 
 pub struct Ui {
-    /// Sessions opened as header tabs, in the order they were opened.
+    /// Sessions opened as tabs, in the order they were opened. Where each
+    /// tab sits is `groups` (plan 45).
     pub tabs: Vec<String>,
+    /// The layout tree of groups of tabs, its drags and its unsaved buffers.
+    pub groups: tabs::GroupsUi,
     pub detail: crate::ui::Detail,
     pub draft: Draft,
     pub first_prompts: HashMap<String, PendingFirstPrompt>,
@@ -1097,6 +1118,7 @@ impl App {
             return;
         };
         let id = terminal.id.clone();
+        let (rows, cols) = (terminal.rows, terminal.cols);
         if self.terminal_panel.selected.as_deref() == Some(&id)
             && self.terminal_panel.attachment.is_some()
         {
@@ -1104,7 +1126,17 @@ impl App {
             self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
             return;
         }
-        self.terminal_panel.generation += 1;
+        if self.terminal_panel.selected.is_some() {
+            // Another terminal (or this one, again) was attached: let it go
+            // (kept streaming when another group still shows it).
+            if self.terminal_panel.selected.as_deref() != Some(&id) {
+                self.park_selected();
+            } else {
+                self.effects
+                    .push(Effect::TerminalStop(self.terminal_panel.generation));
+            }
+        }
+        self.terminal_panel.generation = self.terminal_panel.next_generation();
         self.terminal_panel.reconnect_at = None;
         self.terminal_panel.acquire_on_attach = true;
         self.terminal_controlled = false;
@@ -1115,8 +1147,7 @@ impl App {
         self.terminal_panel.control_busy = false;
         self.terminal_panel.size = None;
         self.terminal_panel.selection = None;
-        self.terminal_panel.screen =
-            crate::terminal_screen::TerminalScreen::new(terminal.rows, terminal.cols);
+        self.terminal_panel.screen = crate::terminal_screen::TerminalScreen::new(rows, cols);
         self.terminal_panel.selected = Some(id.clone());
         self.terminal_panel.attachment = None;
         self.terminal_selected = true;
@@ -1159,7 +1190,7 @@ impl App {
     }
 
     pub fn terminal_resize(&mut self) {
-        if !self.terminal_open || !self.terminal_controlled || self.terminal_panel.resize_busy {
+        if !self.terminal_controlled || self.terminal_panel.resize_busy {
             return;
         }
         let (Some(r), Some(id), Some(attachment)) = (
@@ -1192,22 +1223,26 @@ impl App {
 
     pub fn terminal_event(&mut self, event: crate::terminal_panel::TerminalEvent) {
         use crate::terminal_panel::TerminalEvent;
+        if self.parked_event(&event) {
+            return;
+        }
         match event {
             TerminalEvent::Attached {
                 generation,
                 attachment,
-            } if generation == self.terminal_panel.generation && self.terminal_open => {
+            } if generation == self.terminal_panel.generation => {
                 self.terminal_panel.attachment = Some(attachment);
                 if self.terminal_panel.acquire_on_attach {
                     self.execute("terminal.acquire");
                 }
             }
             TerminalEvent::Frame { generation, frame }
-                if generation == self.terminal_panel.generation && self.terminal_open =>
+                if generation == self.terminal_panel.generation =>
             {
                 if let Err(error) = self.terminal_panel.screen.apply(&frame) {
                     self.toast(Level::Error, format!("Terminal stream: {error}"));
-                    self.effects.push(Effect::TerminalStop);
+                    self.effects
+                        .push(Effect::TerminalStop(self.terminal_panel.generation));
                     self.terminal_panel.attachment = None;
                     self.terminal_controlled = false;
                     self.terminal_panel.input_queue.clear();
@@ -1231,7 +1266,7 @@ impl App {
                 }
             }
             TerminalEvent::Ended { generation, error }
-                if generation == self.terminal_panel.generation && self.terminal_open =>
+                if generation == self.terminal_panel.generation =>
             {
                 let was_attached = self.terminal_panel.attachment.take().is_some();
                 self.terminal_controlled = false;
@@ -1295,6 +1330,7 @@ impl App {
             terminal_controlled: false,
             ui: Ui {
                 tabs: Vec::new(),
+                groups: tabs::GroupsUi::default(),
                 detail: crate::ui::Detail::default(),
                 draft: Draft::default(),
                 first_prompts: HashMap::new(),
@@ -3071,8 +3107,16 @@ impl App {
         }
     }
 
+    /// The terminals the user has open: one per terminal tab, wherever it sits.
     pub fn terminal_shell_count(&self) -> usize {
-        self.terminal_panel.terminals.len()
+        self.ui
+            .groups
+            .layout
+            .tabs()
+            .into_iter()
+            .filter(|t| t.kind == crate::groups::Kind::Terminal)
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     pub fn side_entries(&self) -> Vec<SideEntry> {
@@ -3385,7 +3429,7 @@ impl App {
             }
             "panel.file" => self.ui.file_open,
             "panel.diff" => self.ui.diff_open.is_some(),
-            "terminal.open" => self.terminal_open,
+            "terminal.open" => self.terminal_tab_focused(),
             "terminal.selected" => self.terminal_selected,
             "terminal.focused" => self.terminal_focused,
             "terminal.controlled" => self.terminal_controlled,
@@ -3398,6 +3442,7 @@ impl App {
             "alert.open" => self.ui.focus == Focus::Alert,
             "drawer.open" => self.ui.drawer.is_some(),
             "layout.narrow" => self.narrow(),
+            n if n.starts_with("layout.") => return self.layout_term(n),
             "connection.lost" => matches!(
                 self.state.connection,
                 ConnectionState::Reconnecting { .. }
@@ -4071,11 +4116,10 @@ impl App {
         let Some(project) = self.current_project() else {
             return;
         };
-        if self.edit_blocks() {
-            return;
-        }
+        self.stash_edit();
+        self.terminal_focused = false;
+        self.groups_note_open(tabs::diff_tab(&row.path, row.group));
         self.ui.file_open = false;
-        self.ui.file_edit = None;
         self.ui.diff_scroll = 0;
         self.state.diff = None;
         if row.group != GitGroup::Untracked {
@@ -4207,7 +4251,7 @@ impl App {
                 for (i, c) in self.manifest.command.iter().enumerate().filter(|(_, c)| {
                     c.for_tui()
                         && c.placement.iter().any(|p| p == "row_menu")
-                        && c.id.starts_with(if files {
+                        && (c.id.starts_with(if files {
                             "files."
                         } else if git {
                             "git."
@@ -4215,9 +4259,14 @@ impl App {
                             "project."
                         } else {
                             "session."
-                        })
+                        }) || (c.id == "layout.open_to_side" && !projects))
                 }) {
-                    let Some(score) = fuzzy(&q, &c.title) else {
+                    let label = if c.id == "layout.open_to_side" {
+                        self.manifest.ui_text("layout.menu.open_to_side", &[])
+                    } else {
+                        c.title.clone()
+                    };
+                    let Some(score) = fuzzy(&q, &label) else {
                         continue;
                     };
                     scored.push((
@@ -4225,10 +4274,36 @@ impl App {
                         i,
                         PaletteItem {
                             kind: PaletteKind::Command(c.id.clone()),
-                            label: c.title.clone(),
+                            label,
                             hint: c.tui_key().unwrap_or("").to_owned(),
                             category: c.category.clone(),
                             reason: self.availability(c).err(),
+                        },
+                    ));
+                }
+            }
+            PaletteMode::GroupMenu => {
+                for (i, (label, id)) in self.group_menu_items().into_iter().enumerate() {
+                    let Some(score) = fuzzy(&q, &label) else {
+                        continue;
+                    };
+                    let command = self.manifest.command(&id);
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Command(id.clone()),
+                            label,
+                            hint: command
+                                .and_then(|c| c.leader.first())
+                                .map(|l| format!("ctrl+x {l}"))
+                                .unwrap_or_default(),
+                            category: "navigation".into(),
+                            // New terminal is always offered here; the others
+                            // explain themselves when they cannot apply.
+                            reason: command
+                                .filter(|c| c.id.starts_with("layout."))
+                                .and_then(|c| self.availability(c).err()),
                         },
                     ));
                 }
@@ -5702,24 +5777,14 @@ impl App {
         family
     }
 
-    /// Close a tab (the session stays); the neighbouring tab, or the new
-    /// session screen, takes over when it was the one in view.
+    /// Close a session's tab everywhere (the session stays); the focused
+    /// group's next tab, or the new-session screen, takes over when it was
+    /// the one in view.
     pub fn close_tab(&mut self, id: &str) {
-        let ids = self.tab_ids();
-        let Some(at) = ids.iter().position(|t| t == id) else {
-            return;
-        };
-        self.ui.tabs.retain(|t| t != id);
-        if self.viewed_root().as_deref() != Some(id) {
+        if !self.tab_ids().iter().any(|t| t == id) {
             return;
         }
-        let next = ids
-            .get(at + 1)
-            .or_else(|| at.checked_sub(1).and_then(|i| ids.get(i)));
-        match next.cloned() {
-            Some(next) => self.open_session(&next),
-            None => self.show_new_session(),
-        }
+        self.close_tabs(&[id.to_owned()]);
     }
 
     /// Close the tab of every archived session in the tree, including a root
@@ -5747,41 +5812,23 @@ impl App {
             .collect()
     }
 
-    /// Close `doomed` tabs everywhere, then move off the viewed one to the first
-    /// live visible neighbour (following, then preceding), or the empty state.
+    /// Close `doomed` tabs everywhere, then move off the viewed one to a
+    /// live session tab (the focused group's neighbour first), or the empty state.
     fn close_tabs(&mut self, doomed: &[String]) {
         if doomed.is_empty() {
             return;
         }
-        let visible = self.tab_ids();
-        let viewed = self.viewed_root();
-        let next = viewed.as_ref().and_then(|id| {
-            if !doomed.contains(id) {
-                return None;
-            }
-            let at = visible.iter().position(|tab| tab == id)?;
-            // A snapshot can close several roots at once: take the first live tab.
-            visible
-                .iter()
-                .skip(at + 1)
-                .chain(visible.iter().take(at).rev())
-                .find(|tab| !doomed.contains(tab))
-                .cloned()
-                .map(Some)
-                .or(Some(None))
-        });
-        self.ui.tabs.retain(|id| !doomed.contains(id));
-        let Some(next) = next else {
-            return;
-        };
-        match next {
-            Some(next) => self.open_session(&next),
-            None => self.show_new_session(),
-        }
+        self.groups_close_sessions(doomed);
+        self.groups_sync_live();
     }
 
     /// Show the new-session screen: no session is created until a message is sent.
     fn show_new_session(&mut self) {
+        self.groups_note_open(crate::groups::Tab::session(String::new()));
+        self.show_new_session_live();
+    }
+
+    fn show_new_session_live(&mut self) {
         if let Some(project) = &self.ui.project {
             self.ui
                 .last_project_session
@@ -5809,71 +5856,26 @@ impl App {
         self.scroll_session = None;
     }
 
-    fn step_tab(&mut self, step: isize) {
-        let ids = self.tab_ids();
-        let Some(at) = self
-            .viewed_root()
-            .and_then(|id| ids.iter().position(|t| *t == id))
-        else {
-            return;
-        };
-        let to = (at as isize + step).rem_euclid(ids.len() as isize) as usize;
-        if to != at {
-            let id = ids[to].clone();
-            self.open_session(&id);
-        }
-    }
-
-    /// Unsaved editor text blocks leaving the file: say so and report true.
+    /// Leaving the file no longer loses its unsaved text: the buffer is kept
+    /// aside for its tab (plan 45). Never blocks.
     fn edit_blocks(&mut self) -> bool {
-        let dirty = self.ui.file_edit.as_ref().is_some_and(FileEdit::dirty);
-        if dirty {
-            self.toast(
-                Level::Warning,
-                "Unsaved changes in the editor: save (ctrl+s) or discard (esc) first",
-            );
-        }
-        dirty
+        self.stash_edit();
+        false
     }
 
-    /// Close the file or diff panel. Unsaved text asks first; a search ends first.
+    /// Close the focused file or diff tab. A search ends first; unsaved text asks.
     fn close_panel(&mut self) {
-        if self.terminal_open {
-            if self.terminal_panel.input_busy {
-                self.toast(
-                    Level::Warning,
-                    "Terminal input outcome may be indeterminate after detaching",
-                );
-            }
-            self.terminal_open = false;
-            self.terminal_panel.generation += 1;
-            self.terminal_panel.attachment = None;
-            self.terminal_panel.selected = None;
-            self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
-            self.terminal_focused = false;
-            self.terminal_selected = false;
-            self.terminal_controlled = false;
-            self.ui.focus = Focus::Composer;
-            self.terminal_panel.input_queue.clear();
-            self.terminal_panel.control_busy = false;
-            self.terminal_controlled = false;
-            self.terminal_panel.input_queue.clear();
-            self.effects.push(Effect::TerminalStop);
-            return;
-        }
         if self.ui.file_search.take().is_some() {
             if let Some(edit) = &self.ui.file_edit {
                 edit.buf.clear_marks();
             }
             return;
         }
-        match self.ui.file_edit.as_ref().map(FileEdit::dirty) {
-            Some(true) => self.ask_discard_edit(),
-            Some(false) | None => {
-                self.ui.file_edit = None;
-                self.ui.file_open = false;
-                self.ui.diff_open = None;
-            }
+        if self
+            .active_tab()
+            .is_some_and(|t| matches!(t.kind, crate::groups::Kind::File | crate::groups::Kind::Diff))
+        {
+            self.layout_close_active();
         }
     }
 
@@ -5884,10 +5886,16 @@ impl App {
         crate::render::composer_inner_with(composer, images, pastes)
     }
 
+    /// Show a session as a tab of the focused group and make it the viewed one.
     pub fn open_session(&mut self, id: &str) {
-        if self.viewed_id() != Some(id) && self.edit_blocks() {
-            return;
+        if let Some(root) = self.root_session(id) {
+            self.groups_note_open(crate::groups::Tab::session(root));
         }
+        self.open_session_live(id);
+    }
+
+    pub(crate) fn open_session_live(&mut self, id: &str) {
+        self.stash_edit();
         if let Some(root) = self.root_session(id) {
             if !self.ui.tabs.contains(&root) {
                 self.ui.tabs.push(root.clone());
@@ -5993,6 +6001,8 @@ impl App {
 
     fn select_project_announcing(&mut self, id: &str, announce: bool) {
         self.ui.project = Some(id.to_owned());
+        // This project's tabs are the layout from here on.
+        self.groups_enter_project();
         self.ui.cursor.insert(Tab::Sessions, 0);
         self.ui.drawer = None;
         self.ui.files_project_root = true;
@@ -6395,11 +6405,14 @@ impl App {
                         }
                     }
                     "file" | "symlink" => {
+                        self.stash_edit();
+                        self.terminal_focused = false;
                         self.ui.diff_open = None;
                         self.ui.file_open = true;
                         self.ui.file_scroll = 0;
                         self.ui.file_source = false;
                         self.ui.file_search = None;
+                        self.groups_note_open(crate::groups::Tab::file(row.path.clone()));
                         self.request_files(row.path.clone(), true);
                         self.ui.focus = Focus::Timeline;
                     }
@@ -6411,42 +6424,8 @@ impl App {
 
     pub fn execute(&mut self, id: &str) {
         match id {
-            "terminal.open" => {
-                if self.terminal_open {
-                    self.close_panel();
-                    return;
-                }
-                if self.edit_blocks() {
-                    return;
-                }
-                let Some(project) = self.current_project() else {
-                    return;
-                };
-                self.terminal_open = true;
-                self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
-                self.ui.file_open = false;
-                self.ui.diff_open = None;
-                self.terminal_panel.terminals.clear();
-                self.terminal_panel.cursor = 0;
-                self.terminal_panel.loading = true;
-                self.api(ApiCall::TerminalList { project });
-            }
-            "terminal.new" => {
-                if self.terminal_panel.creating || self.terminal_panel.loading {
-                    return;
-                }
-                if let (Some(project), Some(workspace)) =
-                    (self.current_project(), self.files_root())
-                {
-                    self.terminal_panel.creating = true;
-                    self.api(ApiCall::TerminalCreate {
-                        project,
-                        workspace,
-                        session: self.files_session(),
-                        client: self.terminal_panel.client_id.clone(),
-                    });
-                }
-            }
+            "terminal.open" => self.terminal_open_command(),
+            "terminal.new" => self.terminal_new_command(),
             "terminal.rename" => {
                 if let Some(terminal) = self
                     .terminal_panel
@@ -6513,30 +6492,7 @@ impl App {
                     }
                 }
             }
-            "terminal.close" => {
-                if let Some(terminal) = self
-                    .terminal_panel
-                    .terminals
-                    .iter()
-                    .find(|t| Some(&t.id) == self.terminal_panel.selected.as_ref())
-                {
-                    let id = terminal.id.clone();
-                    if terminal.status == "running" {
-                        self.ui.dialog = Some(Dialog {
-                            title: "Close running terminal?".into(),
-                            body: vec![],
-                            cancel: "Cancel".into(),
-                            confirm: "Close terminal".into(),
-                            danger: true,
-                            action: Confirmed::CloseTerminal(id),
-                            button: 0,
-                            restore: self.restore_point(),
-                        });
-                    } else {
-                        self.api(ApiCall::TerminalClose { id });
-                    }
-                }
-            }
+            "terminal.close" => self.layout_close_active(),
             "terminal.acquire" | "terminal.release" => {
                 if self.terminal_panel.control_busy {
                     return;
@@ -6559,6 +6515,7 @@ impl App {
                 }
             }
             "terminal.focus_list" => {
+                // Ctrl+] hands the keys back from the screen to the group.
                 self.terminal_focused = false;
                 self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
             }
@@ -7032,13 +6989,10 @@ impl App {
                 }
             }
             "timeline.detail_cycle" => self.set_detail(self.ui.detail.step(1)),
-            "session.tab_close" => {
-                if let Some(id) = self.viewed_id().map(str::to_owned) {
-                    self.close_tab(&id);
-                }
-            }
-            "session.tab_next" => self.step_tab(1),
-            "session.tab_prev" => self.step_tab(-1),
+            "session.tab_close" => self.layout_close_active(),
+            "session.tab_next" => self.layout_step(1),
+            "session.tab_prev" => self.layout_step(-1),
+            id if id.starts_with("layout.") && self.execute_layout(id) => {}
             "tool.show_all_output" => {
                 if let Some(b) = self
                     .ui
@@ -7466,6 +7420,34 @@ impl App {
         }
     }
 
+    /// A dialog button chosen: 0 cancels, 1 confirms, and 2 (the unsaved
+    /// prompt's Discard) is the third answer.
+    fn dialog_button(&mut self, button: usize) {
+        if button == 2 {
+            match self.ui.dialog.take() {
+                Some(Dialog {
+                    action: Confirmed::CloseDirty { group, tab },
+                    restore,
+                    ..
+                }) => {
+                    self.apply_restore(restore);
+                    self.answer_close_dirty(group, tab, 2);
+                }
+                Some(Dialog {
+                    action: Confirmed::CloseDirtyGroup { group },
+                    restore,
+                    ..
+                }) => {
+                    self.apply_restore(restore);
+                    self.answer_close_group_dirty(group, 2);
+                }
+                other => self.ui.dialog = other,
+            }
+            return;
+        }
+        self.confirm_dialog(button == 1);
+    }
+
     fn confirm_dialog(&mut self, yes: bool) {
         if self.blocking().is_some() {
             return; // a blocking dialog cannot be dismissed
@@ -7473,6 +7455,11 @@ impl App {
         let Some(d) = self.ui.dialog.take() else {
             return;
         };
+        // Cancelling the running-terminal prompt of a group close abandons the close.
+        if !yes && matches!(d.action, Confirmed::CloseTerminal(_)) {
+            self.ui.groups.close_group_resume = None;
+            self.ui.groups.close_group_asked.clear();
+        }
         self.apply_restore(d.restore);
         if yes {
             match d.action {
@@ -7569,10 +7556,8 @@ impl App {
                     }
                 }
                 switch @ Confirmed::Switch { .. } => self.do_switch(switch),
-                Confirmed::DiscardEdit => {
-                    self.ui.file_edit = None;
-                    self.ui.file_open = false;
-                }
+                Confirmed::CloseDirty { group, tab } => self.answer_close_dirty(group, tab, 1),
+                Confirmed::CloseDirtyGroup { group } => self.answer_close_group_dirty(group, 1),
                 Confirmed::ReloadEdit => self.reload_file(),
                 Confirmed::DeleteSession(id) => {
                     if self.writable() {
@@ -7976,7 +7961,7 @@ impl App {
             .set(self.timeline_revision.get().wrapping_add(1));
     }
 
-    fn timeline_cache_key(&self, width: usize, animated: bool, clocked: bool) -> u64 {
+    pub(crate) fn timeline_cache_key(&self, width: usize, animated: bool, clocked: bool) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.timeline_revision.get().hash(&mut h);
@@ -8757,7 +8742,7 @@ impl App {
                 acquire,
                 ..
             } => {
-                if generation == self.terminal_panel.generation && self.terminal_open {
+                if generation == self.terminal_panel.generation {
                     self.terminal_panel.control_busy = false;
                     match done.result {
                         Ok(_) => {
@@ -8781,7 +8766,7 @@ impl App {
                 return;
             }
             ApiCall::TerminalInput { generation, .. } => {
-                if generation == self.terminal_panel.generation && self.terminal_open {
+                if generation == self.terminal_panel.generation {
                     self.terminal_panel.input_busy = false;
                     match done.result {
                         Ok(_) => {
@@ -8792,7 +8777,8 @@ impl App {
                             self.terminal_controlled = false;
                             self.terminal_panel.input_queue.clear();
                             self.terminal_panel.attachment = None;
-                            self.effects.push(Effect::TerminalStop);
+                            self.effects
+                                .push(Effect::TerminalStop(self.terminal_panel.generation));
                             self.toast(
                                 Level::Error,
                                 format!("Terminal input outcome indeterminate: {error}"),
@@ -8808,7 +8794,7 @@ impl App {
                 cols,
                 ..
             } => {
-                if generation == self.terminal_panel.generation && self.terminal_open {
+                if generation == self.terminal_panel.generation {
                     self.terminal_panel.resize_busy = false;
                     match done.result {
                         Ok(_) => {
@@ -8821,8 +8807,7 @@ impl App {
                 return;
             }
             ApiCall::TerminalList { project } => {
-                if self.current_project().as_deref() == Some(project.as_str()) && self.terminal_open
-                {
+                if self.current_project().as_deref() == Some(project.as_str()) {
                     self.terminal_panel.loading = false;
                     match done.result {
                         Ok(result) => {
@@ -8832,16 +8817,7 @@ impl App {
                                 .into_iter()
                                 .filter(|item| item.status != "closed")
                                 .collect();
-                            if !self.terminal_panel.terminals.is_empty() {
-                                let index = self
-                                    .terminal_panel
-                                    .terminals
-                                    .iter()
-                                    .position(|item| item.status == "running")
-                                    .unwrap_or(0);
-                                self.terminal_panel.cursor = index + 1;
-                                self.terminal_select(index);
-                            }
+                            self.terminals_listed();
                         }
                         Err(error) => {
                             self.toast(Level::Error, format!("Could not list terminals: {error}"))
@@ -8853,20 +8829,20 @@ impl App {
             ApiCall::TerminalCreate { project, .. } => {
                 self.terminal_panel.creating = false;
                 match done.result {
-                    Ok(result)
-                        if self.current_project().as_deref() == Some(project.as_str())
-                            && self.terminal_open =>
-                    {
+                    Ok(result) if self.current_project().as_deref() == Some(project.as_str()) => {
                         if let Some(terminal) = result.terminal {
+                            let id = terminal.id.clone();
                             self.terminal_panel.terminals.push(terminal);
-                            self.terminal_panel.cursor = self.terminal_panel.terminals.len();
-                            self.terminal_select(self.terminal_panel.cursor - 1);
+                            self.terminal_created(id);
                         }
                     }
                     Err(error) => {
+                        self.ui.groups.placements.pop_front();
                         self.toast(Level::Error, format!("Could not create terminal: {error}"))
                     }
-                    _ => {}
+                    _ => {
+                        self.ui.groups.placements.pop_front();
+                    }
                 }
                 return;
             }
@@ -8894,18 +8870,18 @@ impl App {
                 match done.result {
                     Ok(_) => {
                         self.terminal_panel.terminals.retain(|t| t.id != id);
+                        self.drop_parked(&id);
                         if self.terminal_panel.selected.as_deref() == Some(&id) {
-                            self.effects.push(Effect::TerminalStop);
-                            self.terminal_panel.generation += 1;
+                            self.effects
+                                .push(Effect::TerminalStop(self.terminal_panel.generation));
+                            self.terminal_panel.generation = self.terminal_panel.next_generation();
                             self.terminal_panel.selected = None;
                             self.terminal_panel.attachment = None;
                             self.terminal_selected = false;
                             self.terminal_focused = false;
                             self.terminal_controlled = false;
-                            if !self.terminal_panel.terminals.is_empty() {
-                                self.terminal_select(0);
-                            }
                         }
+                        self.terminal_gone(&id);
                     }
                     Err(error) => {
                         self.toast(Level::Error, format!("Could not close terminal: {error}"))
@@ -9104,8 +9080,14 @@ impl App {
                         edit.stale = false;
                     }
                     self.toast(Level::Success, "Saved");
+                    if let ApiCall::SaveFile { path, .. } = &done.call {
+                        self.groups_saved(path);
+                    }
                 }
-                Err(error) => self.toast(Level::Error, format!("Save failed: {error}")),
+                Err(error) => {
+                    self.ui.groups.close_after_save = None;
+                    self.toast(Level::Error, format!("Save failed: {error}"))
+                }
             }
             return;
         }
@@ -10025,14 +10007,7 @@ impl App {
             self.ui.dictation.phase,
             crate::dictation::Phase::Recording | crate::dictation::Phase::Stopping
         );
-        let hovered_tab = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
-            Some(Target::SessionTab(i)) => Some(*i),
-            _ => None,
-        });
-        if hovered_tab != self.ui.tab_hover.map(|(i, _)| i) {
-            self.ui.tab_hover = hovered_tab.map(|i| (i, self.frame));
-            changed = true;
-        }
+        self.groups_reconcile();
         let animated = !self.theme.opts.reduced_motion
             && (recording
                 || !self.state.model.running.is_empty()
@@ -10042,7 +10017,6 @@ impl App {
                     .sessions
                     .values()
                     .any(|s| s.status.as_deref() == Some("busy"))
-                || self.ui.tab_hover.is_some()
                 || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
@@ -10355,20 +10329,6 @@ impl App {
         self.request_files(path, true);
     }
 
-    fn ask_discard_edit(&mut self) {
-        let restore = self.restore_point();
-        self.ui.dialog = Some(Dialog {
-            title: "Discard changes".into(),
-            body: vec!["The file has unsaved changes. Leaving the editor drops them.".into()],
-            cancel: "Keep editing".into(),
-            confirm: "Discard".into(),
-            danger: true,
-            action: Confirmed::DiscardEdit,
-            button: 0,
-            restore,
-        });
-    }
-
     fn ask_reload_edit(&mut self) {
         let restore = self.restore_point();
         self.ui.dialog = Some(Dialog {
@@ -10389,7 +10349,7 @@ impl App {
             return;
         };
         if self.ui.file_edit.is_none() {
-            if self.ui.file_open {
+            if self.ui.file_open && !self.restore_stashed_edit(data["revision"].as_str()) {
                 self.start_edit();
             }
             return;
@@ -10656,26 +10616,25 @@ impl App {
     }
 
     fn handle_key_inner(&mut self, ev: KeyEvent) {
-        // The dock toggle works even while the terminal screen owns the keys,
-        // and is never handed to the shell. Other shortcuts still belong to
-        // the terminal while its screen has focus.
-        let terminal_toggle = keys::name(&ev)
-            .is_some_and(|name| self.lookup("global", &name).as_deref() == Some("terminal.open"));
-        if self.terminal_open
-            && terminal_toggle
-            && self.ui.overlay.is_none()
-            && self.ui.dialog.is_none()
-            && self.ui.edit.is_none()
-        {
-            self.execute("terminal.open");
+        // A drag in progress ends with Esc, wherever the keys would go.
+        if ev.code == KeyCode::Esc && self.ui.groups.drag.is_some() && self.cancel_drag() {
             return;
         }
-        if self.terminal_open
+        // The terminal shortcut works even while the terminal screen owns the
+        // keys, and is never handed to the shell. Other shortcuts still belong
+        // to the terminal while its screen has focus.
+        let terminal_toggle = keys::name(&ev)
+            .is_some_and(|name| self.lookup("global", &name).as_deref() == Some("terminal.open"));
+        let screen_owns = self.terminal_live()
             && self.terminal_focused
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
-            && self.ui.edit.is_none()
-        {
+            && self.ui.edit.is_none();
+        if screen_owns && terminal_toggle {
+            self.execute("terminal.open");
+            return;
+        }
+        if screen_owns {
             if ev.code == KeyCode::Char(']') && ev.modifiers.contains(KeyModifiers::CONTROL) {
                 self.terminal_focused = false;
                 self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::List;
@@ -10688,33 +10647,24 @@ impl App {
             return;
         }
         let Some(name) = keys::name(&ev) else { return };
-        if self.terminal_open
+        // A terminal tab in front whose screen does not have the keys: c / r take
+        // and release control, Enter hands the keys to the screen.
+        if self.terminal_live()
             && self.ui.overlay.is_none()
             && self.ui.edit.is_none()
             && self.ui.dialog.is_none()
-            && name == "esc"
-        {
-            self.close_panel();
-            return;
-        }
-        if self.terminal_open
-            && self.ui.overlay.is_none()
-            && self.ui.edit.is_none()
-            && self.ui.dialog.is_none()
+            && self.shortcut_leader.is_none()
         {
             match name.as_str() {
-                "up" => self.terminal_panel.cursor = self.terminal_panel.cursor.saturating_sub(1),
-                "down" => {
-                    self.terminal_panel.cursor =
-                        (self.terminal_panel.cursor + 1).min(self.terminal_panel.terminals.len())
+                "c" => return self.execute("terminal.acquire"),
+                "r" => return self.execute("terminal.release"),
+                "enter" => {
+                    self.terminal_focused = true;
+                    self.terminal_panel.focus = crate::terminal_panel::TerminalFocus::Screen;
+                    return;
                 }
-                "enter" if self.terminal_panel.cursor == 0 => self.execute("terminal.new"),
-                "c" => self.execute("terminal.acquire"),
-                "r" => self.execute("terminal.release"),
-                "enter" => self.terminal_select(self.terminal_panel.cursor - 1),
                 _ => {}
             }
-            return;
         }
         if name != "ctrl+c" {
             self.ctrl_c = None;
@@ -10857,13 +10807,13 @@ impl App {
             return;
         }
         if name == "esc" {
-            if (self.ui.diff_open.is_some() || self.ui.file_open)
+            if self.ui.file_search.is_some()
                 && self.ui.overlay.is_none()
                 && self.ui.dialog.is_none()
                 && self.ui.edit.is_none()
             {
-                // The first Esc ends a search, then leaves the editor (asking first when
-                // dirty); the next one closes the file.
+                // Esc ends a search. It no longer closes the file: a file is a
+                // tab (close it with its ×, Alt+X or Ctrl+X W).
                 self.close_panel();
                 return;
             }
@@ -10959,9 +10909,10 @@ impl App {
             self.run_command("nav.root");
             return;
         }
-        // Typing never reaches the page behind the file or diff modal.
+        // Typing never reaches the page behind a focused file or diff.
         if (self.ui.file_open || self.ui.diff_open.is_some())
             && self.ui.overlay.is_none()
+            && self.shortcut_leader.is_none()
             && keys::printable(&ev).is_some()
         {
             return;
@@ -10974,6 +10925,10 @@ impl App {
             }
             if let Some(started) = self.shortcut_leader.take() {
                 if started.elapsed().as_secs() < 3 {
+                    if let Some(command) = self.layout_leader(&name) {
+                        self.run_command(&command);
+                        return;
+                    }
                     let command = match name.as_str() {
                         "n" if matches!(ev.code, KeyCode::Char('N')) => Some("notifications.open"),
                         "m" => Some("model.change"),
@@ -11104,6 +11059,10 @@ impl App {
     pub fn escape(&mut self) {
         let rules = self.manifest.keymap.escape.clone();
         for rule in rules {
+            // A file is a tab now: Esc no longer closes it (plan 45).
+            if rule.action == "editor.close" {
+                continue;
+            }
             if rule.when.iter().all(|t| self.holds(t)) {
                 self.execute(&rule.action);
                 return;
@@ -11164,12 +11123,24 @@ impl App {
         match name {
             "left" | "right" | "tab" | "shift+tab" | "h" | "l" => {
                 if let Some(d) = self.ui.dialog.as_mut() {
-                    d.button = 1 - d.button.min(1);
+                    if matches!(
+                        d.action,
+                        Confirmed::CloseDirty { .. } | Confirmed::CloseDirtyGroup { .. }
+                    ) {
+                        // Save, Discard, Cancel.
+                        let order = [1usize, 2, 0];
+                        let at = order.iter().position(|b| *b == d.button).unwrap_or(0);
+                        let back = matches!(name, "left" | "shift+tab" | "h");
+                        let to = (at + if back { 2 } else { 1 }) % 3;
+                        d.button = order[to];
+                    } else {
+                        d.button = 1 - d.button.min(1);
+                    }
                 }
             }
             "enter" => {
-                let yes = self.ui.dialog.as_ref().is_some_and(|d| d.button == 1);
-                self.confirm_dialog(yes);
+                let button = self.ui.dialog.as_ref().map_or(0, |d| d.button);
+                self.dialog_button(button);
             }
             _ => {
                 if let Some(cmd) = self.lookup("global", name).filter(|c| c == "app.quit") {
@@ -15052,6 +15023,7 @@ impl App {
             notifications: NotificationsPrefs {
                 sound: Some(self.ui.sound),
             },
+            layouts: self.layouts_to_save(),
         }
     }
 
@@ -15092,6 +15064,7 @@ impl App {
         if let Some(sound) = prefs.notifications.sound {
             self.ui.sound = sound;
         }
+        self.load_layouts(prefs.layouts.clone());
         let mut options = self.theme.opts;
         self.theme_system = !over.mode && !matches!(prefs.theme.mode.as_deref(), Some("dark" | "light"));
         if !over.mode {
@@ -15279,7 +15252,10 @@ impl App {
         if self.manager_mouse(&ev) {
             return;
         }
-        if self.terminal_open
+        if self.groups_mouse(&ev) {
+            return;
+        }
+        if self.terminal_live()
             && self.terminal_focused
             && self.terminal_controlled
             && self.ui.overlay.is_none()
@@ -15315,7 +15291,7 @@ impl App {
         }
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.terminal_open
+                if self.terminal_live()
                     && self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.edit.is_none()
@@ -15439,7 +15415,12 @@ impl App {
                     return;
                 }
                 if let Some(t) = self.hits.at(ev.column, ev.row).cloned() {
+                    // Ctrl+click on a session, file or changed-file row opens it to the side.
+                    let side = ev.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(t, Target::SideRow(_));
+                    self.ui.groups.side_open = side;
                     self.click(t);
+                    self.ui.groups.side_open = false;
                 }
                 // Typing always lands in the composer unless a modal is up; a
                 // click leaves it there (a waiting card or alert keeps its keys).
@@ -15765,25 +15746,13 @@ impl App {
                 self.execute("sidebar.right.toggle");
             }
             Target::Title => self.run_command("session.rename"),
-            Target::SessionTab(i) => {
-                let Some(id) = self.tab_ids().get(i).cloned() else {
-                    return;
-                };
-                if self.viewed_root().as_deref() == Some(id.as_str())
-                    && self.viewed().is_some_and(|v| v.parent_id.is_none())
-                    && self.ui.view == View::Session
-                {
-                    self.run_command("session.rename");
-                } else {
-                    self.open_session(&id);
-                }
-            }
+            Target::GroupTab(g, i) => self.group_tab_click(g, i),
+            Target::GroupTabClose(g, i) => self.group_tab_close_click(g, i),
+            Target::GroupNew(g) => self.group_new_session(g),
+            Target::GroupMenu(g) => self.open_group_menu(g),
+            Target::GroupBody(g) => self.group_focus_click(g),
+            Target::GroupDivider(_) => {}
             Target::SessionRootBack => self.run_command("nav.root"),
-            Target::SessionTabClose(i) => {
-                if let Some(id) = self.tab_ids().get(i).cloned() {
-                    self.close_tab(&id);
-                }
-            }
             Target::ArchiveSession(session) => {
                 if let Some(i) = self.side_entries().iter().position(|e| e.id == session) {
                     self.ui.focus = Focus::Sidebar;
@@ -15972,25 +15941,10 @@ impl App {
                 });
             }
             Target::ComposerTerminals => self.execute("terminal.open"),
-            Target::TerminalNew => self.execute("terminal.new"),
             Target::TerminalRename => self.execute("terminal.rename"),
-            Target::TerminalCloseSelected => self.execute("terminal.close"),
             Target::TerminalReleaseControl => self.execute("terminal.release"),
-            Target::TerminalPanelClose => self.close_panel(),
             Target::TerminalCopy => self.execute("terminal.copy"),
             Target::TerminalAttach => self.execute("terminal.attach"),
-            Target::TerminalTab(index) => {
-                self.terminal_panel.cursor = index + 1;
-                self.terminal_select(index);
-            }
-            Target::TerminalClose(index) => {
-                if let Some(terminal) = self.terminal_panel.terminals.get(index) {
-                    let previous = self.terminal_panel.selected.clone();
-                    self.terminal_panel.selected = Some(terminal.id.clone());
-                    self.execute("terminal.close");
-                    self.terminal_panel.selected = previous;
-                }
-            }
             Target::TerminalTakeControl => self.execute("terminal.acquire"),
             Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::PanelBack => self.close_panel(),
@@ -16088,7 +16042,7 @@ impl App {
                 if let Some(d) = self.ui.dialog.as_mut() {
                     d.button = i;
                 }
-                self.confirm_dialog(i == 1);
+                self.dialog_button(i);
             }
             Target::SettingsRow(i) => {
                 self.ui.settings_nav_focus = false;
@@ -16181,7 +16135,7 @@ impl App {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        if self.terminal_open
+        if self.terminal_live()
             && self.terminal_focused
             && self.ui.overlay.is_none()
             && self.ui.dialog.is_none()
