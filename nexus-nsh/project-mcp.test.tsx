@@ -1,4 +1,4 @@
-// Project MCP files in the Projects view: enabled entries start automatically with a
+// Project MCP files in the new-session view: enabled entries start automatically with a
 // new session, so the panel shows current status and non-secret configuration facts only.
 import { describe, expect, open, test } from "nsh/test";
 import { configMeta, configShape, duplicateLabel, stateLabel } from "./src/project-mcp";
@@ -79,7 +79,7 @@ describe("project MCP configuration facts", () => {
   });
 });
 
-describe("project MCP in the Projects view", () => {
+describe("project MCP in the new-session view", () => {
   test("the panel shows status, configuration and the auto-run warning without approval controls", async () => {
     const web = row({
       server: "web", transport: "http", command: undefined, arg_count: undefined,

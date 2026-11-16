@@ -14,7 +14,6 @@ import { fileRows } from "../file-tree";
 import { openDiffTab, openFileTab, openSessionTab, sideClick, trackMods } from "../layout-state";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
-import { ProjectMcpPanel } from "./project-mcp";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectActivity, projectCounts, projectLabels, projectStatus, railCount, railProjects } from "../project-rail";
 import { defaultLeftSidebarWidth } from "./geometry";
 import { PhoneSessions } from "./mobile/sessions";
