@@ -7,7 +7,8 @@ const messages = [
 ];
 const sse = (frames: string) => `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n${frames}`;
 const frame = (id: number, type: string, data: unknown) => `id: ${id}\nevent: ${type}\ndata: ${JSON.stringify({ id, type, session_id: "ses_1", cursor: `log_t:${id}`, data })}\n\n`;
-const base = (extra: Record<string, unknown> = {}, events = "") => ({
+type Network = Exclude<NonNullable<Parameters<typeof open>[1]>["network"], "live" | null | undefined>;
+const base = (extra: Network = {}, events = "") => ({
   "GET */__nexus/host": { body: { host: "test", canStart: false } },
   "GET */api/info": { body: { name: "nexus", version: "0.10.0.dev0", pid: 1 } },
   "GET */api/snapshot*": { body: { watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" }, projects: [{ id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 }], sessions: [session], running: [], approvals: [], questions: [], selected: null } },
@@ -26,7 +27,7 @@ const base = (extra: Record<string, unknown> = {}, events = "") => ({
   "GET */api/session/*": { body: session },
   ...extra,
 });
-const openSession = async (network: Record<string, unknown>) => {
+const openSession = async (network: Network) => {
   const app = await open("./App.tsx", { network, width: 1100, height: 800, platform: "web" });
   await app.waitFor("id:splash", { state: "gone" });
   await app.press("id:session-ses_1");

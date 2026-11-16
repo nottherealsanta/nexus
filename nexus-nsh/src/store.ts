@@ -750,7 +750,7 @@ const host: SyncHost = {
       void selectSession(d.to);
     }
   },
-  eventSeen(e) { settlePending(e.type, e.session_id, e.data); },
+  eventSeen(e) { settlePending(e.type, e.session_id ?? undefined, e.data); },
   globalEvent(e) {
     if (e.type === "voice.progress") receiveVoiceProgress(e.data);
     else if (e.type.startsWith("manager.")) managerHooks.event?.(e);

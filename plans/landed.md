@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **NSH pending-turn typecheck (11-16, plan 37 follow-up).** Corrected the fixture network type and nullable event session ID; NSH check and five pending-turn tests pass. Timing measurements remain open.
+
 - **Plan 34 deferral (11-16).** Moved retry-on-connectivity-change to backlog 9.16; the child-card, inspector and parent-wait verification remain open.
 
 - **Timeline left alignment (11-13, plan 35 follow-up).** Both desktop clients align activity headers/members, child cards and notices in one icon/label column, retaining indented output; NSH tool/thought icons shrink to chevron visual size. TUI suite, NSH layout/thought/shared scenarios and web build pass; paired light screenshots inspected on one isolated scripted Core.
