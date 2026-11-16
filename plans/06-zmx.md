@@ -43,10 +43,13 @@ Tests on 11-12: `test_zmx_workers.py`, `test_zmx_claude.py`, `test_zmx_runtime.p
   effort `default` where NSH shows the agent's `low`, and the TUI turn footer shows `provider/model` where NSH shows the
   bare model.
 - [x] **Decisions Z1/Z2** confirmed by the user on 11-12 (subagents only; per-vendor control); in [decisions.md](decisions.md) Made.
-- [~] **M0 live spikes.** Recorded so far (fixtures in `nexus-core/tests/fixtures/workers/`): a Claude 2.1.322
-  transcript and its `subagents/agent-*.jsonl` + `.meta.json` link (`toolUseId`); agy 1.5.0 two-turn stream with
-  `--conversation`, a denial, `--mode plan` ending as a plan, and `/usage`. Still unanswered: api-request rebuild,
-  `--append-system-prompt`, `StopFailure` payload, `--mcp-config`, `-p` vs interactive quota, hidden requests.
+- [~] **M0 live spikes (synced 2026-11-16, offline).** The boxes in [zmx-design.md](zmx-design.md) section 6 now say what the
+  fixtures and the 11-12 live runs answer (Claude 2.1.322 transcript with `api-request-*` entries and `subagents/`; agy
+  1.5.0 turns, denial, plan mode and `/usage`; flags and the agy exit grace from the live run). **Still needing a paid
+  real run (not approved in this pass):** compare a rebuilt `api-request` with a local capture; `message.id` and parallel
+  results; `--append-system-prompt`; the `StopFailure` payload and permission wording under `dontAsk` / `auto`;
+  `--mcp-config`; `claude -p` vs interactive quota; hidden requests (`ai-title`); agy `--mode auto` and its soft denial;
+  agy subagents; a real interrupt followed by `--resume`. The same list is in `reports/pre-release-2026-11/user-checklist.md`.
 - [x] **Real end-to-end check (11-12; user approved the live runs and the spend on 11-12).** Scratch `$NEXUS10_HOME`
   (`[zmx] claude_backend="zmx", antigravity=true`), scratch workspace under a directory Claude Code already trusts,
   parent `orchestrate` on `claude/claude-haiku-5-5`, children by project agents pinned with `model:`
@@ -94,3 +97,13 @@ Tests on 11-12: `test_zmx_workers.py`, `test_zmx_claude.py`, `test_zmx_runtime.p
     the text. Open: ask Anthropic and Google in writing, or keep the disclosure. Secondary reports (not checked against
     an official page) mention a separate Agent SDK/`claude -p` credit from 2026-06-15.
 - [x] Windows: the registry refuses non-POSIX and both clients show `zmx_unavailable` on the ZMX rows (`5dee5561`).
+
+## 2026-11-16 offline follow-ups
+
+- **TUI/NSH differences from the 11-12 captures, fixed.** (1) The effort label: a ZMX child shows its agent's `low` in
+  NSH (which reads the full session row) and showed `default` in the TUI (which kept the snapshot row's empty effort); the
+  TUI history load now takes `effort` and `effort_source` from the full row too (test
+  `the_full_session_row_supplies_the_effort_the_snapshot_row_lacks`). (2) The turn footer shows the catalog name or bare
+  model id in both clients when no request recorded a model; the TUI had shown `provider/model`.
+- **D5 confirmed:** the `opencode-antigravity-auth` route stays dropped; see zmx-design.md (it signs in with the user's Google
+  OAuth and calls Antigravity itself, which section 1 rules out).

@@ -444,7 +444,10 @@ impl Model {
             return;
         }
         if let (Some(full), Some(row)) = (h.session.take(), self.sessions.get_mut(&h.session_id)) {
-            for key in ["skills", "mcp"] {
+            // Snapshot rows omit `skills` and `mcp`, and carry the session's own `effort` where the full row
+            // carries the effort the next turn runs with (the agent file's or `agents.efforts`): NSH shows the
+            // full row, so the TUI takes these from it too (plan 06: `low`, not `default`).
+            for key in ["skills", "mcp", "effort", "effort_source"] {
                 if let Some(value) = full.extra.get(key) {
                     row.extra.insert(key.to_owned(), value.clone());
                 }

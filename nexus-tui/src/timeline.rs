@@ -2765,13 +2765,14 @@ impl Builder<'_> {
                 value,
             )]);
         } else if let Some(m) = session.and_then(|s| s.model.clone()) {
-            let short = m.rsplit('/').next().unwrap_or(&m).to_owned();
             if m != "default" && !m.is_empty() {
-                // A ref is `provider/model`; a lone bare id stays as it is.
-                bits.push(vec![Span::styled(
-                    if short.len() > 1 { m } else { short },
-                    value,
-                )]);
+                // The same catalog name, else the bare model id, as the footer shows for a recorded model (NSH's
+                // `modelName`; plan 06: a ZMX child showed `provider/model` here).
+                let short = crate::stats::catalog_entry(&self.app.state.models, &m)
+                    .and_then(|e| e["name"].as_str())
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| m.rsplit('/').next().unwrap_or(&m).to_owned(), str::to_owned);
+                bits.push(vec![Span::styled(short, value)]);
             }
         }
         let effort = meta.effort.clone().or_else(|| {

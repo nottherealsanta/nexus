@@ -31,7 +31,7 @@ Scope, decided by the user on 2026-11-04:
   the Claude credentials stay untouched. nexus01 had the same contract.
 - **This replaces the earlier direction in PLAN.md section 10**, which said to use the Agent SDK and
   `opencode-antigravity-auth` "rather than ZMX". That project was not read for this plan; going by its name it reuses
-  Antigravity's sign-in, which this plan rules out. Check that before confirming decision D5.
+  Antigravity's sign-in, which this plan rules out. Read 2026-11-16 (decision D5): it does reuse the user's Google OAuth, so the route stays dropped.
 
 ## 2. What nexus01 built
 
@@ -391,20 +391,39 @@ with the cheapest model. All tests use a scratch `$NEXUS10_HOME`. Never run `nex
 
 ### M0. Spikes (no product code)
 
-Answer these with real but small runs, and record each answer in this file with the CLI version:
+Answer these with real but small runs, and record each answer in this file with the CLI version. **Status 2026-11-16
+(offline sync; no live run in this pass):** `[x]` has an answer recorded from a fixture or from the 11-12 live runs
+(`reports/zmx-2026-11-12/live/`); `[~]` is partly answered; `[ ]` still needs a real run, which needs the user's approval
+(listed in `reports/pre-release-2026-11/user-checklist.md`).
 
-- [ ] Claude: can `api-request-*` entries rebuild a real request? Compare once against a local capture.
-- [ ] Claude: does one `message.id` always mean one API response? How do parallel results appear?
-- [ ] Claude: what happens to `--session-id`, `--resume --model`, `--append-system-prompt` and `--effort` in a PTY?
-- [ ] Claude: `StopFailure` payload; permission-prompt wording under `dontAsk` and `auto`.
-- [ ] Claude: does `--mcp-config` accept Nexus's server entries as they are?
-- [ ] Claude: do `claude -p` and interactive use count the same against the subscription? (Input to D3.)
-- [ ] Claude: the format of `subagents/agent-*.jsonl`, and how it links to the parent call.
-- [ ] Claude: which hidden requests does interactive use make (`ai-title`), and does `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` still apply?
-- [ ] agy 1.4.12: a real stream-json turn. Record `init`, `step_update`, `result`, reasoning, usage, tool steps and subagents.
-- [ ] agy: `--conversation` follow-up, `--settings` allow rule, `--print-timeout 0s`, whether `--mode plan` blocks writes.
-- [ ] agy: does `--mode auto` work on this account? What does a soft denial look like now?
-- [ ] Both: what an interrupt leaves behind, and whether `--resume` works after it.
+- [~] Claude 2.1.322: can `api-request-*` entries rebuild a real request? **Seen, not compared.** The recorded transcript
+  (`nexus-core/tests/fixtures/workers/claude-2.1.322/transcript.jsonl`) holds `api-request-shape`, `api-request-blob` and
+  `api-request` entries (1, 5 and 3 in one run). Nexus shows them as wire events and keeps the context declared incomplete
+  (`test_zmx_reliability.py`). The comparison with a local capture of the real request is open.
+- [~] Claude: does one `message.id` always mean one API response? How do parallel results appear? Three `assistant`
+  entries in the fixture; the 11-12 live run showed one tool call and result. Parallel results are **not** recorded.
+- [~] Claude: `--session-id`, `--resume --model`, `--effort` in a PTY. **Worked in the 11-12 live runs** (Claude Code
+  2.1.322: `--session-id` for the first turn, `--resume` after it, `--effort` passed; the worker requires these flags and
+  `nexus doctor` checks them). `--append-system-prompt` is **not confirmed**: Nexus labels the prompt in the first
+  message, as the fallback in section 4 says.
+- [ ] Claude: `StopFailure` payload; permission-prompt wording under `dontAsk` and `auto`. Not recorded.
+- [ ] Claude: does `--mcp-config` accept Nexus's server entries as they are? Not run.
+- [ ] Claude: do `claude -p` and interactive use count the same against the subscription? (Input to D3.) Cannot be
+  answered offline; the vendor-terms item in 06 is related.
+- [x] Claude: the format of `subagents/agent-*.jsonl`, and how it links to the parent call: recorded in
+  `claude-2.1.322/subagents/` (`agent-<id>.jsonl` plus `agent-<id>.meta.json` with the parent's `toolUseId`); parsed by
+  `SubagentReader` (`306670ac`).
+- [ ] Claude: which hidden requests does interactive use make (`ai-title`), and does
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` still apply? The fixture shows `atis-latch` entries; not measured.
+- [x] agy 1.5.0: a real stream-json turn, with `init`, `step_update`, `result`, reasoning, usage, tool steps:
+  `agy-1.5.0/turn1.ndjson`, `turn2.ndjson`, `usage.json` (the live `/usage` command). Subagents inside agy: not recorded.
+- [x] agy: `--conversation` follow-up (`turn2.ndjson`), a denial (`denial.ndjson`), `--mode plan` ends as a plan,
+  `--print-timeout 0s`; the 11-12 live run on agy 1.5.6 found it needs 0.6 to 2.2 s to exit after stdin closes (the exit
+  grace is now 10 s). `--settings` allow rule: not separately recorded.
+- [ ] agy: does `--mode auto` work on this account? What does a soft denial look like now? (`denial.ndjson` is the
+  `--mode plan` denial; `auto` is not recorded.)
+- [~] Both: what an interrupt leaves behind, and whether `--resume` works after it. Offline tests cover resume after an
+  interrupt (`5dee5561`); a real interrupt followed by `--resume` was not recorded.
 
 Done when: every box has an answer and a fixture, and section 4 is corrected where the spike disagrees with it.
 
@@ -509,5 +528,5 @@ Final full Core suite: **1387 passed, 1 skipped**; focused workers: **77 passed*
 | # | Decision | Default |
 | --- | --- | --- |
 | D3 | Claude Code by PTY only, or also evaluate `claude -p` stream-json? | PTY as in nexus01; measure in M0 and revisit only with evidence |
-| D5 | Confirm dropping the `opencode-antigravity-auth` route from PLAN.md section 10 | Drop it, once a read of that project confirms it reuses OAuth credentials, which contradicts section 1 |
+| D5 | Confirm dropping the `opencode-antigravity-auth` route from PLAN.md section 10 | **Confirmed 2026-11-16:** dropped. Read of the README ([NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth), 708 commits, v2.1.2): it signs in with "Google OAuth (Antigravity)" (`opencode auth login google`), keeps the user's Google accounts and quota state, and calls Antigravity's models itself; the README says "Unofficial plugin. Google may restrict accounts using third-party clients." That is credential reuse by a third-party client, which section 1 rules out and which the Antigravity terms (section 6, `plans/06-zmx.md`) name as a breach. ZMX runs the unmodified `agy` under the user's own sign-in and reads no credentials. |
 | D7 | Default permission for `allow` sessions: `auto`, or something stricter? | `auto`, disclosed. Never bypass |

@@ -3210,3 +3210,24 @@ fn a_message_with_null_strings_still_decodes() {
     assert_eq!(m.session_id, "");
     assert_eq!(m.notices.len(), 1);
 }
+
+// ---- plan 06: the TUI reads what the next turn runs with, as NSH does ------------------------------
+
+#[test]
+fn the_full_session_row_supplies_the_effort_the_snapshot_row_lacks() {
+    // A snapshot row carries the session's own effort (none for a ZMX child); the full row carries the effort the
+    // next turn runs with (the agent file's `low`). Both clients show the latter in the composer and the heading.
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    assert_eq!(app.current_effort(), "");
+    let full: nexus_tui::api::Session = serde_json::from_value(serde_json::json!({
+        "id": SESSION, "agent": "scout", "effort": "low", "effort_source": "agent", "skills": [], "mcp": []
+    }))
+    .unwrap();
+    app.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(nexus_tui::api::History {
+        session_id: SESSION.into(),
+        messages: app.messages().to_vec(),
+        session: Some(full),
+        ..Default::default()
+    })));
+    assert_eq!(app.current_effort(), "low");
+}
