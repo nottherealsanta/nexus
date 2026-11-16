@@ -1,4 +1,4 @@
-# 0.13.0 validation — 2026-11-16 (in progress)
+# 0.13.0 validation — 2026-11-16
 
 This is not a release approval. Plans 34 and 37 remain open, the full gate is incomplete, and the release PR has not been merged. Tests use scratch `NEXUS10_HOME`; no paid provider calls or real-home migration were performed.
 
@@ -30,3 +30,13 @@ One combined command initially failed because it used the nonexistent directory 
 ## Still open
 
 Plan 34 child-card state, Inspector Timing span and parent-wait test; plan 37 scripted timings; plans index; remaining gate checks and final results. Hand checks and carried-over non-blockers remain in `reports/pre-release-2026-11/user-checklist.md`.
+
+## Released as is (2026-11-16, user decision)
+
+The user asked to release 0.13 as it stood and to stop the test suite. The NSH full web suite was stopped before it
+finished, so it has no result. Plans 34 and 37 ship with their open items. PR #101 was squash-merged at `e05f1db5`
+after its `changes`, `lint`, `pr-title` and `ci-ok` checks passed (Core, TUI, NSH and Mermaid jobs were skipped).
+[Release workflow 43871610506](https://github.com/nottherealsanta/nexus/actions/runs/43871610506) passed: four TUI
+builds, Core wheel/sdist, attach; NSH web skipped as before. All eight assets are on
+[v0.13.0](https://github.com/nottherealsanta/nexus/releases/tag/v0.13.0); all seven payload hashes verify against
+`SHA256SUMS`, and the macOS arm64 TUI binary runs `--help`. The published installer was not run in an isolated home.
