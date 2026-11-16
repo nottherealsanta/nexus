@@ -28,7 +28,7 @@ test("the composer keeps the visible voice notice in the submitted context", asy
   await app.waitUntil(() => app.value("id:composer-input") === scenario.message);
   await app.waitUntil(() => app.texts().join(" ").includes(scenario.notice));
   await app.screenshot("/tmp/nexus-voice-transcript-nsh.png");
-  await app.press("id:send");
+  await app.submit("id:composer-input");
   await app.waitUntil(() => app.requests().some((r) => r.url.endsWith("/prompt")));
   const sent = app.requests().find((r) => r.url.endsWith("/prompt"))!;
   const body = typeof sent.body === "string" ? JSON.parse(sent.body) : sent.body;
