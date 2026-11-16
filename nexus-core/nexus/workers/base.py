@@ -155,7 +155,9 @@ async def bounded_lines(stream: asyncio.StreamReader, *, line_limit: int, total_
         yield bytes(pending)
 
 
-async def probe(executable: str, flag: str, *, env: dict[str, str], cwd: Path, timeout: float = PROBE_TIMEOUT_SECONDS) -> str:
+async def probe(executable: str, flag: str, *, env: dict[str, str], cwd: Path, timeout: float | None = None) -> str:
+    # Read the module constant at call time, not at definition time, so a test (or an operator patch) can shorten it.
+    timeout = PROBE_TIMEOUT_SECONDS if timeout is None else timeout
     process = await asyncio.create_subprocess_exec(
         executable, flag, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
