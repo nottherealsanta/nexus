@@ -135,7 +135,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   at the centre column's right edge; the notification count and right toggle are
   at the far right. The rail keeps its icons as a column. Sidebars and panels reserve
   consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. The left sidebar opens with a search row, then an UPPERCASE project header
-  (`⌥ branch` sub-groups for linked worktrees). Session rows show a mark slot, title and
+  (`⌥ branch` sub-groups for linked worktrees that hold two or more listed root sessions; a lone session shows no header, its second line names the branch. The TUI and NSH follow the same rule, and a filter change recounts). Session rows show a mark slot, title and
   time, then the agent in its colour, `⌥ branch` and the child count, and end with
   `+ New session`; the open session is bold on the selection band, focus is a `▌`
   on both lines, hover is a surface, and attention is marked. The right sidebar

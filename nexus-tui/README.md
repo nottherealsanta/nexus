@@ -128,7 +128,7 @@ connected client, whoever archived it (this client, another client, the Manager
 or Core's idle auto-archive); focus moves to the neighbouring tab, or the
 new-session screen when none is left. `/archive` performs the same archive.
 The pinned footer stays put as the list scrolls; the list has `⌥ branch  ~/…/dir`
-sub-groups for linked worktrees, and two-line rows (mark slot, title, time;
+sub-groups for linked worktrees that hold two or more listed sessions (one session shows only its row's `⌥ branch`; archived and scope filters recount), and two-line rows (mark slot, title, time;
 `⌥ branch`, `2 ↳`); `Settings` stays at the rail's foot.
 Drag its inner edge to resize it (20–60 columns); dragging below 14 columns closes it.
 Settings → Sidebar switches full / rail. The project

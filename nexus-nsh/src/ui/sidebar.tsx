@@ -269,7 +269,7 @@ function setSessionQuery(value: string) {
 const snippetOf = (id: string) => { const h = searchHits(); const q = sessionQuery().trim(); return h && h.q === q && !titleMatches(model.sessions.get(id)?.title ?? "") ? h.snippets.get(id) : undefined; };
 const titleMatches = (title: string) => title.toLowerCase().includes(sessionQuery().trim().toLowerCase());
 
-type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "session"; s: Session } | { key: string; kind: "new" } | { key: string; kind: "rule" };
+type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "worktree"; label: string; path: string } | { key: string; kind: "session"; s: Session } | { key: string; kind: "new" } | { key: string; kind: "rule" };
 /** All-projects scope groups sessions under their project; one project is a flat list. */
 function rowItems(): Item[] {
   const query = sessionQuery().trim().toLowerCase();
@@ -282,11 +282,26 @@ function rowItems(): Item[] {
       ...group.sessions.map((s) => ({ key: s.id, kind: "session" as const, s })),
     ]);
   }
-  // A rule separates the active sessions from the archived ones below them.
-  const withRule = (list: Session[]): Item[] => list.flatMap((s, i) => [
-    ...(i > 0 && s.archived && !list[i - 1].archived ? [{ key: `rule-${s.id}`, kind: "rule" as const }] : []),
-    { key: s.id, kind: "session" as const, s },
-  ]);
+  // A rule separates the active sessions from the archived ones below them. A linked worktree that
+  // holds two or more of the listed sessions gets a header (plan 39), as in the TUI.
+  const withRule = (list: Session[]): Item[] => {
+    const counts = new Map<string, number>();
+    for (const s of list) { const k = `${s.project_id}\0${worktreeRoot(s)}`; counts.set(k, (counts.get(k) ?? 0) + 1); }
+    const projects = new Map<string, Set<string>>();
+    for (const s of list) { const set = projects.get(s.project_id) ?? new Set<string>(); set.add(worktreeRoot(s)); projects.set(s.project_id, set); }
+    return list.flatMap((s, i) => {
+      const root = worktreeRoot(s);
+      const prev = list[i - 1];
+      const startsGroup = !prev || prev.project_id !== s.project_id || worktreeRoot(prev) !== root || (!!s.archived && !prev.archived);
+      const tree = worktreeOf(s);
+      const header = startsGroup && tree?.main === false && (projects.get(s.project_id)?.size ?? 0) > 1 && (counts.get(`${s.project_id}\0${root}`) ?? 0) > 1;
+      return [
+        ...(i > 0 && s.archived && !prev.archived ? [{ key: `rule-${s.id}`, kind: "rule" as const }] : []),
+        ...(header ? [{ key: `wt-${s.id}`, kind: "worktree" as const, label: tree.branch || root.replace(/\/$/, "").split("/").pop() || "worktree", path: root }] : []),
+        { key: s.id, kind: "session" as const, s },
+      ];
+    });
+  };
   if (!scopeAll() || (railShown() && !query)) return withRule(ses);
   const out: Item[] = [];
   for (const pr of model.projectsRecent()) {
@@ -297,13 +312,24 @@ function rowItems(): Item[] {
   }
   return out;
 }
+function worktreeOf(s: Session): any | null { return worktreeForDirectory(s.directory, projectWorktrees()[s.project_id]); }
+/** The checkout a session runs in: its worktree's path, else the project's. */
+function worktreeRoot(s: Session): string { return worktreeOf(s)?.path ?? model.projects.get(s.project_id)?.path ?? s.directory; }
 /** The session list as shown, for the keyboard flow's cursor. */
 export function rowSessions(): Session[] {
   m();
   const all = model.sessionsRecent().filter((s) => !s.parent_id);
   const p = currentProject();
-  return all.filter((s) => ((scopeAll() && (phone || !railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() || !s.archived))
-    .sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
+  const rows = all.filter((s) => ((scopeAll() && (phone || !railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() || !s.archived));
+  if (phone) return rows.sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
+  // Active before archived, then per project the main checkout, then linked worktrees by path (the
+  // TUI's order), so a worktree's sessions sit together; recency decides within a group.
+  const key = (s: Session) => [worktreeOf(s)?.main === false ? 1 : 0, worktreeRoot(s)] as const;
+  const order = model.projectsRecent().map((pr) => pr.id);
+  return rows.sort((a, b) => {
+    const [la, ra] = key(a), [lb, rb] = key(b);
+    return Number(!!a.archived) - Number(!!b.archived) || order.indexOf(a.project_id) - order.indexOf(b.project_id) || la - lb || (ra < rb ? -1 : ra > rb ? 1 : 0);
+  });
 }
 function sessionRunning(s: Session) { return s.status === "busy" || model.tree(s.id).some((id) => model.running.has(id)); }
 function childCount(id: string) { let n = 0; for (const s of model.sessions.values()) if (s.parent_id === id) n++; return n; }
@@ -403,7 +429,7 @@ export function SessionsTab() {
         </If>
       }>
         <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
-          {(x) => <If when={x().kind === "rule"} else={<If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${T.meta} font-medium`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View></If>}><View class="border-t border-border my-1" testID="session-archived-rule" /></If>}
+          {(x) => <SessionListItem x={x} />}
         </List>
       </If>
       </View>
@@ -416,6 +442,24 @@ function Chip(p: { label: string; on: boolean; onPress: () => void }) {
     <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 ${phone ? "min-h-10" : "min-h-6"} justify-center hover:bg-accent ${p.on ? "bg-selection" : ""} ${FOCUS}`}>
       <Text class={`${TS.base} ${p.on ? "text-foreground font-medium" : "text-muted-foreground"}`}>{p.label}</Text>
     </Button>
+  );
+}
+
+function SessionListItem(p: { x: () => Item }) {
+  const x = p.x;
+  return (
+    <If when={x().kind === "rule"} else={
+      <If when={x().kind === "header"} else={
+        <If when={x().kind === "worktree"} else={<SessionRow s={() => (x() as any).s as Session} />}>
+          <View class="px-2 pt-2 pb-0.5 flex-row items-center gap-2 min-w-0" testID="session-worktree-group">
+            <Text style={{ numberOfLines: 1 }} class={`${T.meta} shrink min-w-0`}>{`⌥ ${(x() as any).label}`}</Text>
+            <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`${T.meta} flex-1 min-w-0 text-right text-muted-foreground`}>{shortPath((x() as any).path, userHome())}</Text>
+          </View>
+        </If>
+      }>
+        <View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${T.meta} font-medium`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View>
+      </If>
+    }><View class="border-t border-border my-1" testID="session-archived-rule" /></If>
   );
 }
 

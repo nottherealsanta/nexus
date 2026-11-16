@@ -183,6 +183,9 @@ flag), serve `dist/Nexus`, and run `reports/mobile-2026-11-11/shots.mjs`. Headle
 Idiom: only `platform.idiom === "phone"` is the cut-down client; an iPad shows the desktop/web layout (no iPad app, user 2026-11-12). On the phone, long-pressing Send while a turn runs offers Queue / Interrupt and send.
 
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
+
+**Worktree headers (plan 39):** the Sessions list shows a `⌥ branch  path` header above a linked worktree's sessions only when two or more root sessions of that worktree are listed (archived filter and scope applied, so toggling "Show archived" recounts). A lone session shows just its row's `⌥ branch` line. The TUI follows the same rule. Test: `sidebar-worktree-header.test.tsx`.
+
 workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they

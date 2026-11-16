@@ -1920,6 +1920,13 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
     other.id = "worktree-session".into();
     other.directory = "/work/aaa".into();
     other.title = "Worktree task".into();
+    // A header needs two sessions in the worktree (plan 39).
+    let mut sibling = other.clone();
+    sibling.id = "worktree-sibling".into();
+    sibling.title = "Worktree sibling".into();
+    app.state.worktrees.insert("worktree-sibling".into(), serde_json::json!({"session_directory": "/work/aaa",
+            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}));
+    app.state.model.sessions.insert(sibling.id.clone(), sibling);
     app.state.model.sessions.insert(other.id.clone(), other);
     let index = app
         .side_entries()
@@ -1934,11 +1941,17 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
         app.apply_sync(SyncMsg::Event(event));
     }
     let entries = app.side_entries();
+    let at = entries.iter().position(|e| e.id == "worktree-session").unwrap();
     assert_eq!(entries[app.cursor(Tab::Sessions)].id, "worktree-session");
+    let header = entries
+        .iter()
+        .find(|e| e.tree.is_some())
+        .expect("the group's first session carries the header");
     assert_eq!(
-        entries[app.cursor(Tab::Sessions)].tree,
+        header.tree,
         Some(("feature".to_owned(), "/work/aaa".to_owned()))
     );
+    assert!(at < entries.len());
     assert!(entries
         .iter()
         .any(|entry| entry.id == SESSION && entry.project.is_none() && entry.tree.is_none()));
@@ -4040,12 +4053,18 @@ fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees()
     other.id = "worktree-session".into();
     other.directory = "/work/aaa".into();
     other.title = "Worktree task".into();
+    let mut sibling = other.clone();
+    sibling.id = "worktree-sibling".into();
+    sibling.title = "Worktree sibling".into();
+    app.state.model.sessions.insert(sibling.id.clone(), sibling);
     app.state.model.sessions.insert(other.id.clone(), other);
-    app.state.worktrees.insert(
-        "worktree-session".into(),
-        serde_json::json!({"session_directory": "/work/aaa",
-            "worktrees": [{"path": "/work/aaa", "branch": "feat/cache", "main": false}]}),
-    );
+    for id in ["worktree-session", "worktree-sibling"] {
+        app.state.worktrees.insert(
+            id.into(),
+            serde_json::json!({"session_directory": "/work/aaa",
+                "worktrees": [{"path": "/work/aaa", "branch": "feat/cache", "main": false}]}),
+        );
+    }
     app.ui.focus = Focus::Sidebar;
     let (_, rows) = draw(&mut app, 160, 40);
     let text = sidebar(&rows, 33);
@@ -6209,4 +6228,33 @@ fn git_tab_groups_by_top_level_folder_and_expands_on_enter() {
         !lines.join("\n").contains("src/x.rs"),
         "Enter on the folder collapses it"
     );
+}
+
+#[test]
+fn a_worktree_with_one_listed_session_has_no_header_until_the_archived_filter_adds_another() {
+    use nexus_tui::api::Frame;
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut only = app.state.model.sessions[SESSION].clone();
+    only.id = "worktree-only".into();
+    only.directory = "/work/aaa".into();
+    only.title = "Only one".into();
+    let mut old = only.clone();
+    old.id = "worktree-old".into();
+    old.title = "Archived one".into();
+    old.archived = true;
+    app.state.model.sessions.insert(only.id.clone(), only);
+    app.state.model.sessions.insert(old.id.clone(), old);
+    app.state.worktrees.insert("worktree-old".into(), serde_json::json!({"session_directory": "/work/aaa",
+            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}));
+    let value = serde_json::json!({"id": 221, "type": "worktree.listed", "session_id": "worktree-only", "cursor": "log_c915bfc9b6d826c4:221", "data": {
+        "session_directory": "/work/aaa", "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]
+    }});
+    if let Ok(Frame::Event(event)) = Frame::from_value("worktree.listed", None, &value) {
+        app.apply_sync(SyncMsg::Event(event));
+    }
+    app.ui.show_archived = false;
+    assert!(app.side_entries().iter().all(|e| e.tree.is_none()));
+    app.ui.show_archived = true;
+    assert!(app.side_entries().iter().any(|e| e.tree.is_some()));
 }

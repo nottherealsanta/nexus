@@ -3177,6 +3177,15 @@ impl App {
                 .or_default()
                 .insert(root(session));
         }
+        // A worktree with a single root session shows no group header: its row's
+        // second line already names the branch (plan 39). Counted after the
+        // archived and scope filters, so toggling archived recounts.
+        let mut per_root: HashMap<(String, String), usize> = HashMap::new();
+        for session in &sessions {
+            *per_root
+                .entry((session.project_id.clone(), root(session)))
+                .or_default() += 1;
+        }
         let mut last: Option<(String, String)> = None;
         sessions
             .into_iter()
@@ -3190,7 +3199,8 @@ impl App {
                 let linked = self
                     .session_worktree(s)
                     .is_some_and(|tree| tree["main"].as_bool() == Some(false));
-                let tree = (new_root && multiple && linked).then(|| {
+                let crowded = per_root.get(&group).is_some_and(|n| *n > 1);
+                let tree = (new_root && multiple && linked && crowded).then(|| {
                     let label = self
                         .session_worktree(s)
                         .and_then(|tree| tree["branch"].as_str())
