@@ -283,6 +283,18 @@ branch, flags and working-tree state. Worktree operations never move the
 session, so clients update worktree/git views without changing the session
 directory.
 
+## Files and Git events (global, not in a session)
+
+The leased watcher ([api.md](api.md#leased-workspace-watching)) and the file writer publish **global** events: they
+carry no `session_id`, so they never enter a session's timeline or its model context. Clients use them only to
+invalidate the Files tab, the Git tab and an open editor.
+
+| Event | Data | When |
+| --- | --- | --- |
+| `files.changed` | `project_id`, `workspace`, `source` (`disk` or the writer), `paths` (at most 256, workspace-relative), `omitted`, `polling?` | A debounced (250 ms) batch of changed files, Git-ignored paths removed; or a Nexus write. `omitted > 0` or `polling: true` means invalidate broadly. No file contents are carried. |
+| `git.changed` | `project_id`, `workspace`, `source`, `polling?` | `HEAD`, the index or refs changed (also with any `files.changed` batch), a Git action finished, or every 3 s while polling. |
+| `files.watch` | `project_id`, `workspace`, `source`, `status: "polling"`, `poll_seconds` | The native watcher could not start: clients show **Polling every 3 seconds**. |
+
 ## Archive events
 
 `session.archived` and `session.unarchived` mark a whole root tree's transition.

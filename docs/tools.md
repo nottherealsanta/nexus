@@ -137,6 +137,7 @@ model reads again. All Nexus file mutations in one daemon are serialized by one 
 passed to tools as `ToolContext.file_lock`). A multi-file patch validates every affected file before writing any.
 New-file writes use exclusive creation so a destination appearing at write time is not overwritten. Replacement edits
 preserve existing newline bytes. The `read` tool records nothing; the old `file_observation` table is dropped.
+The Files tab, the editor and the Git actions are user surfaces, not task tools: they use the file routes in [api.md](api.md#project-files-and-git), and no task or control tool reaches the Git action route ([daemon.md](daemon.md#files-git-and-the-editor-desktop-and-web-only)).
 
 **Enforcement boundary.** This protects the `edit` and `write` tools, direct and
 nested. Unrestricted `bash` can still write files without those tools, so the

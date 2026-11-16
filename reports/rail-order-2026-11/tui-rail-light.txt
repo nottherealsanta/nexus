@@ -1,0 +1,24 @@
+  ◧      [Sessions] [Files] [Git] New session                                                     □
+     │                                                                                         +  ⋯
+     │ + New session
+  B  │ ⌕ Search sessions ctrl+k
+ ─── │ ▣ Show archived              System prompt ~900
+     │──────────────────────────
+▏    │  No sessions yet. Type       AGENTS.md  unavailable or not read
+▏ C  │  in the composer to
+▏─── │  start one.                  Tools [0]
+     │
+     │                              Skills [0]  loading
+     │
+     │                              MCP [0]  loading
+     │
+     │                              total  ~900 tok
+     │
+     │
+  +  │
+     │                               Message to start a new session
+     │
+     │                               Build · … · default                                       0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/c
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

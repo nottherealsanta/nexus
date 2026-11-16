@@ -846,6 +846,21 @@ validates every file before writing any. There is no read-before-edit guard and 
 ([tools.md](tools.md#file-mutations)). The lock orders Nexus writers only: unrestricted `bash` and external
 processes can still write at any time.
 
+## Files, Git and the editor (desktop and web only)
+
+The Files tab, the file editor and the Git summary are desktop and web surfaces (never mobile). Core serves them without
+a session: directory listings, UTF-8 text reads (1 MiB cap, binary refused) and revision-checked writes under the
+project or one of its worktrees ([api.md](api.md#project-files-and-git)); `nexus/git_ops.py` runs the Git actions under
+one lock per repository (`GIT_TERMINAL_PROMPT=0`, no credential UI, `pull --ff-only`, push never forces, switch never
+stashes, `branch -d` local only), refuses them while the checkout has a live session unless the request says
+`confirmed_live`, and treats an action as an external effect (an unknown outcome after a crash is
+`mutation_outcome_unknown`, never replayed).
+
+`nexus/file_watch.py` watches a workspace only while a client holds a lease (60 s, renewed every 20 s by a visible
+Files tab or editor; 32 workspaces, 256 leases). It debounces 250 ms, skips Git-ignored paths, also watches a linked
+worktree's Git directory, and falls back to a 3 s poll when `watchfiles` cannot start. The events it publishes are global
+([stream-events.md](stream-events.md#files-and-git-events-global-not-in-a-session)); they carry paths, never contents.
+
 ## Questions
 
 The runtime keeps pending `ask` requests in memory, keyed by `qst_…`, with the

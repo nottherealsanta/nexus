@@ -114,7 +114,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [x] (verified 11-11: `tests/test_git_ops.py` 12 tests incl. `--ff-only` on a diverged branch with a bare remote, unmerged `branch -d` refusal, path confinement; `test_server.py` `worktree_live`; dirty-worktree refusal in the worktree tests) Core tests on temporary repos with a bare remote, no network: path confinement, refused dirty worktree,
   unmerged branch delete, `--ff-only` on a diverged branch, `worktree_live`.
 - [x] NSH `desktopTools` gating: superseded 2026-11-11 by the mobile cut-down client in AGENTS.md (mobile has only Sessions, Manager and Settings, so Files, Git and the editor are desktop/web only and need no per-tool gate; a ledger row is not needed for mobile omissions). Mac Catalyst idiom check goes with the mobile redesign.
-- [ ] Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
+- [x] (2026-11-16: `docs/stream-events.md` "Files and Git events", `docs/daemon.md` "Files, Git and the editor", `docs/tools.md` pointer; `api.md`, `development.md` (vendored crate), `NOTICE`, the capability matrix and the READMEs already covered the rest) Docs: `docs/api.md`, `docs/tools.md` (the freshness guard sees user edits; agent tools unchanged),
   `docs/daemon.md`, `docs/development.md` (vendored crate), `interface/manifest.toml`,
   `interface/design-language.md`, `interface/capability-matrix.md`, `nexus-tui/NOTICE`, `nexus-nsh/README.md`.
 - [x] Ledger rows: editor differences were already in the ledger (the `ratatui-code-editor` row); no Files or Git on iOS needs no row (AGENTS.md); silent Git actions row added 2026-11-11.
@@ -141,7 +141,7 @@ Desktop and web only; never mobile. Decisions: the editor stays small (highlight
 - [ ] **Per-dependency invalidation.** Events from non-selected sessions still rebuild the viewed timeline
   (correct but conservative); replace the single `timeline_revision` with explicit dependencies if profiling shows
   it matters.
-- [x] **Draw cost has grown.** Re-run 2026-11-11 (release, `--bench 160x48 --replay`, 200 messages, three runs, machine busy with load average ~7): paced draws 1.40, 1.42 and 1.53 ms mean (p95 1.7–2.1), chrome-only frames 0.37–0.39 ms, burst 1.39–1.49 ms. The 11-04 figures (4.09 ms and 1.73 ms) do not reproduce and are within ~25% of 10-31 (1.13–1.17 and 0.36), so no bisect. Rebuild and compare again before a release.
+- [x] **Draw cost has grown.** Re-run 2026-11-11 (release, `--bench 160x48 --replay`, 200 messages, three runs, machine busy with load average ~7): paced draws 1.40, 1.42 and 1.53 ms mean (p95 1.7–2.1), chrome-only frames 0.37–0.39 ms, burst 1.39–1.49 ms. The 11-04 figures (4.09 ms and 1.73 ms) do not reproduce and are within ~25% of 10-31 (1.13–1.17 and 0.36), so no bisect. Rebuild and compare again before a release. **Re-run 2026-11-16 (pre-0.13.0, release build, `NEXUS_TUI_REPLAY_MESSAGES=200 --bench 160x48 --replay`, four runs, load average ~3):** paced draws mean 1.12 to 1.14 ms (p95 1.16 to 1.19, max 5.8), chrome-only frames 0.35 to 0.38 ms, burst 1.12 to 1.19 ms (p95 1.45 to 1.62), RSS ~33.9 MB, 0 timeline builds on chrome frames. At or below the 11-11 figures (1.40 to 1.53, 0.37 to 0.39, 1.39 to 1.49): no regression.
 - [ ] Keep a scratch-Core PTY run for end-to-end terminal behavior and input latency; the replay bench
   (`nexus-tui --bench WxH --replay`) measures scheduling, layout and paint only.
 
@@ -357,6 +357,11 @@ The feature landed on 2026-11-06 (Core order, move API, drag and menu in both cl
   including a drag target. Update both READMEs, `docs/api.md`, `docs/daemon.md`, and the porting ledger if old
   Nexus behavior changes. Do not mark the work landed until it is verified.
   2026-11-11: Core, TUI and NSH suites above pass; READMEs/docs not re-audited and paired drag-target screenshots not captured.
+  **Audit 2026-11-16:** docs re-read: `docs/api.md` (move endpoint, rail order, mutation matrix row), `docs/daemon.md`
+  ("Rail order and status") and both READMEs (drag with a highlighted target, Esc and outside-rail cancel, `alt+up` / `alt+down`)
+  describe the shipped behaviour. Paired captures of the saved order (a passive project dimmed, an inactive one off the
+  rail) are in `reports/rail-order-2026-11/` (`tui-rail-*`, `nsh-rail-*`, dark and light). **Still not captured:** a drag
+  in progress (the headless web runner refuses a held drag; real Ghostty and a touch drag are on the user checklist).
 
 ## 9.13 Extensions, skills, MCP and hooks (old 9)
 
@@ -435,7 +440,7 @@ Decided 2026-11-04: finished sessions' events are compacted, announced by a `ses
   runs the in-place migrations: 0.3 s on the copy). Done when `nexus doctor` no longer reports different code and
   `/api/info` `retention_status` shows wire payloads expiring. Restarting also rotates the daemon token, which was
   printed into a tool log during this investigation.
-- [~] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. The legacy `stream_summary` and `turn_end` recovery fallbacks were removed 11-11 (0.12.0 shipped; recovery reads `turn.ended` and the `partial` checkpoint only; the recovery suites and the full Core suite pass). The `grep "from event"` done-test was not re-run. Full NSH visual verification remains blocked by the native dependency mismatch.
+- [~] **13.4 Move the remaining history readers onto state tables.** State tables and inspector Steps/Questions landed. The legacy `stream_summary` and `turn_end` recovery fallbacks were removed 11-11 (0.12.0 shipped; recovery reads `turn.ended` and the `partial` checkpoint only; the recovery suites and the full Core suite pass). **Done-test re-run 2026-11-16** (`grep -rn "from event" nexus-core/nexus`: 45 hits in `store.py`, `inspector_data.py`, `export.py`, `retention.py`, `payloads.py`). Classified: the hits in `store.py` for the log head, replay (`events_after`, `1572`, `1999`), the outbox/payload work (`796-1053`, `1946-1983`), retention and compaction (`1696-1799`, `retention.py`), counts (`2008`, `export.py`) and the trigger statements (`173-244`) are replay, outbox or maintenance. **Not yet on state tables, and still reading the event log:** `has_event` for the types without a state table (`session.status`, `turn.recovered`, `input.delivered`; the question, permission and bash types already read `wait_record` and `bash_job`), `event_for_message` (recovery, `message.added`), the one-time legacy lifecycle adoption (`store.py:1627`, runs once per legacy session), and the inspector's raw event browser and detail (`inspector_data.py:169`, `468`, `524`, by design: it is the event view). So the done-test is **not** met literally; these four are the remaining readers. Not re-run: the recovery suites with the `event` table emptied for terminal sessions. Full NSH visual verification remains blocked by the native dependency mismatch.
   Original scope: Question/permission asked/replied into a small
   `wait` table (also serving the inspector's Questions card); background jobs into a `bash_job` table, replacing
   `open_bash_jobs` / `unfinished_bash_jobs` (which also removes the cold-start full scan in section 6); `code_used`
