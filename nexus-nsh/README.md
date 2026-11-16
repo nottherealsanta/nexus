@@ -375,6 +375,8 @@ opens the small **Worktree** modal with the copyable worktree path, branch and m
 soft pulse in the agent's colour, a fifth of the width, gliding back and forth. At rest it fills to the
 current context occupancy in the agent's colour. Draft context is marked as an estimate.
 While a session runs, a Working row right-aligned below the composer, on the path line, shimmers the
+
+**Starting a turn (plan 37):** the same pending row, phases, queueing, refusal strip and Retry as the TUI (`pending-turn` row in the timeline; strip in `session-status.tsx`; state in `store.ts`, `pendingTurns`). Mobile shows the row too. Debug timing: set the `debug.timing` pref to `true` and read the `[nexus timing]` console lines (`timingLog` signal). Tests: `pending-turn.test.tsx`.
 word and shows the elapsed time (`Working · 12s`), as in the TUI; with an empty draft the send button
 becomes Stop. Typing `/` opens a completion layer floating over the timeline on the composer's top
 edge (commands, with their key hints; 8 rows, then it scrolls); `@` at the caret completes project

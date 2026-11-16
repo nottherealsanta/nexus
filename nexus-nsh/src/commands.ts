@@ -1,4 +1,4 @@
-import { loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput } from "./store";
+import { flushQueuedContinues, pendingTurns, setPending, setPendingFailed, timingMark, loadFiles, loadOlderMessages, phone, rememberNewSession, selectedFileEntry, fileOperation, filesExpanded, selectedGitFile, loadGitPage, gitInput } from "./store";
 import { PHONE_UNAVAILABLE, desktopOnly } from "./mobile";
 import { btw, closeBtw, startBtw } from "./btw";
 import type { UsageProvider } from "./store";
@@ -113,8 +113,8 @@ function evalTerm(t: string): boolean {
     case "has_session": return inSession;
     case "has_turns": return inSession && (model.selected?.messages.some((x) => x.role === "user") ?? false);
     case "session.idle": return inSession && ses!.status !== "busy";
-    case "session.busy": return inSession && ses!.status === "busy";
-    case "session.interrupted": return inSession && ses!.status !== "busy" && lastTurnIncomplete(model.selected?.messages ?? []);
+    case "session.busy": return inSession && (ses!.status === "busy" || !!pendingTurns()[ses!.id]);
+    case "session.interrupted": return inSession && ses!.status !== "busy" && !pendingTurns()[ses!.id] && lastTurnIncomplete(model.selected?.messages ?? []);
     case "session.archived": return inSession && !!ses!.archived;
     case "session.child": return inSession && !!ses!.parent_id;
     case "session.continued": return inSession && !!ses!.continued_from;
@@ -312,6 +312,13 @@ export async function sendPrompt(rawText: string, images: import("./images").Dra
       void selectSession(created.id);
       ses = created;
     }
+    const startsTurn = mode === "send" && ses!.status !== "busy";
+    if (startsTurn) {
+      // The same pending row as `/continue` (plan 37, D3), until Core's events show the turn.
+      setPendingFailed(ses!.id, null);
+      setPending(ses!.id, { started: Date.now(), queued: false, accepted: false, busySeen: false });
+      timingMark(ses!.id, "command"); timingMark(ses!.id, "sent");
+    }
     await request("POST", `/api/session/${ses!.id}/prompt`, {
       body: { text: raw, images, pastes: pastes.map(({ marker, text }) => ({ marker, text })), mode },
       key: newKey(),
@@ -332,6 +339,7 @@ export async function sendPrompt(rawText: string, images: import("./images").Dra
       if (pastes.length) pasteDrafts.update((d) => ({ ...d, [target]: [...pastes, ...(d[target] ?? [])] }));
       draft.update((d) => ({ ...d, [source]: (d[source] ?? "").trim() === raw ? "" : d[source] ?? "", [target]: [raw, d[target] ?? ""].filter(Boolean).join("\n") }));
     }
+    if (viewed()) setPending(viewed()!.id, null);
     toast("error", e instanceof ApiError ? e.message : String(e));
     return false;
   }
@@ -594,6 +602,8 @@ export function restorePendingParts(key: string, parts: any[]) {
 let restoredImages = 0;
 export async function interrupt() {
   const s = viewed(); if (!s) return;
+  // Esc on a start that was never sent just cancels it; one Core may already have is interrupted as usual.
+  if (pendingTurns()[s.id]?.queued) { setPending(s.id, null); toast("info", "Continue cancelled; nothing was sent"); return; }
   const key = draftKey();
   try { await request("POST", `/api/session/${s.id}/interrupt`, { key: newKey() }); }
   catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); return; }
@@ -606,11 +616,37 @@ export async function interrupt() {
     await loadInputs(s.id);
   } catch { /* the next refresh shows whatever is still queued */ }
 }
+/** `/continue`: the pending row shows at once; the call waits for Core while disconnected and is resent with the same key. */
 export async function continueSession() {
   const s = viewed(); if (!s) return;
-  try { await request("POST", `/api/session/${s.id}/continue`, { body: {}, key: newKey() }); }
-  catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
+  const key = pendingTurns()[s.id]?.key ?? newKey();
+  const started = pendingTurns()[s.id]?.started ?? Date.now();
+  setPendingFailed(s.id, null);
+  const queued = !live();
+  setPending(s.id, { started, queued, accepted: false, busySeen: false, key });
+  timingMark(s.id, "command");
+  if (!queued) await sendContinue(s.id, key);
 }
+async function sendContinue(id: string, key: string) {
+  timingMark(id, "sent");
+  try {
+    await request("POST", `/api/session/${id}/continue`, { body: {}, key });
+    const p = pendingTurns()[id];
+    if (p) setPending(id, { ...p, accepted: true });
+    timingMark(id, "202");
+  } catch (e) {
+    // A refusal removes the row at once and says why in the status strip, not only in a toast.
+    setPending(id, null);
+    setPendingFailed(id, e instanceof ApiError ? e.message : String(e));
+  }
+}
+flushQueuedContinues.fn = () => {
+  for (const [id, p] of Object.entries(pendingTurns())) {
+    if (!p.queued || !p.key) continue;
+    setPending(id, { ...p, queued: false });
+    void sendContinue(id, p.key);
+  }
+};
 
 export async function handoff() {
   const s = viewed(); if (!s) return;
@@ -801,7 +837,7 @@ on("session.archive", () => archive(), true);
 on("session.unarchive", () => archive(undefined, true), true);
 on("session.delete", () => askDelete(), true);
 on("session.interrupt", interrupt, true);
-on("session.continue", continueSession, true);
+on("session.continue", continueSession);
 on("session.handoff", handoff, true);
 export function openLinked(which: "continued_from" | "continued_to") {
   const id = viewed()?.[which];

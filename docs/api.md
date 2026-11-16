@@ -454,6 +454,14 @@ stored context. It is an explicit client action: reconnecting, reading a
 session, restarting the daemon and startup recovery never continue a session by
 themselves.
 
+Client behaviour (plan 37): the clients show a pending working row the moment the user
+runs `/continue` or sends, without waiting for the 202 or the `busy` event. While Core is
+not connected the call is queued and sent once connected with its one `Idempotency-Key`
+(the key makes a resend after a reconnect safe); a 409/400 removes the row and shows the
+reason; after 10 s without an answer the client offers Retry with the same key. The
+daemon checks only that the session stores a message (`Store.has_messages`, an indexed
+probe), not the whole conversation.
+
 The request contains no user text. The daemon sends the frozen system prompt and
 the saved messages exactly as they are, in order; it appends no synthetic user
 message such as "continue" or an empty message, and it rewrites no history. It

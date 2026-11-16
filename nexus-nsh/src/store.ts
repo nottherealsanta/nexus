@@ -43,6 +43,59 @@ function bumpStream() {
   streamFrame = setTimeout(() => { streamFrame = null; streamRev.update((n) => n + 1); }, 16);
 }
 export const connection = signal<ConnectionState>({ kind: "connecting" });
+
+// --- a turn the user started that Core has not shown yet (plan 37, D3) -------------------------
+/** `/continue` and sends show a pending working row at once; real events move it through its phases. */
+export type PendingTurn = {
+  started: number;
+  /** The call waits for Core to be connected; Esc cancels it. */
+  queued: boolean;
+  /** Core answered 202. */
+  accepted: boolean;
+  /** `session.status busy` arrived: now waiting for the model. */
+  busySeen: boolean;
+  /** `/continue` (resendable with its idempotency key) rather than a message send. */
+  key?: string;
+};
+export const pendingTurns = signal<Record<string, PendingTurn>>({});
+/** Why the last `/continue` was refused; the status strip shows it until the next turn starts. */
+export const pendingFailed = signal<Record<string, string>>({});
+export const PENDING_SLOW_MS = 10_000;
+export function setPending(id: string, p: PendingTurn | null) {
+  pendingTurns.update((all) => { const next = { ...all }; if (p) next[id] = p; else delete next[id]; return next; });
+}
+export function setPendingFailed(id: string, reason: string | null) {
+  pendingFailed.update((all) => { const next = { ...all }; if (reason) next[id] = reason; else delete next[id]; return next; });
+}
+/** Debug timing (`prefs["debug.timing"]`): command → sent → 202 → busy → first delta, per session. */
+export const timingLog = signal<{ session: string; line: string }[]>([]);
+const timingMarks = new Map<string, [string, number][]>();
+export function timingMark(id: string, step: string) {
+  if (prefs()["debug.timing"] !== true) return;
+  const now = Date.now();
+  if (step === "command") timingMarks.set(id, []);
+  const marks = timingMarks.get(id) ?? [];
+  marks.push([step, now]);
+  timingMarks.set(id, marks);
+  if (step === "first_delta") {
+    const line = marks.map(([name, at]) => `${name}=${at - marks[0][1]}ms`).join(" ");
+    timingLog.update((all) => [...all, { session: id, line }]);
+    console.info(`[nexus timing] ${id} ${line}`);
+  }
+}
+/** Move a pending turn along from a real event; the first output, a refusal or the end clears it. */
+export function settlePending(type: string, sid: string | undefined, data: any) {
+  if (!sid) return;
+  if (type === "session.status" && data?.status === "busy") setPendingFailed(sid, null);
+  const p = pendingTurns()[sid];
+  if (!p) return;
+  if (type === "session.status" && data?.status === "busy") { timingMark(sid, "busy"); setPending(sid, { ...p, busySeen: true }); }
+  else if (["text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done"].includes(type)) { timingMark(sid, "first_delta"); setPending(sid, null); }
+  else if (type === "turn.summary" || type === "session.error") setPending(sid, null);
+  else if (type === "session.status" && p.busySeen) setPending(sid, null);
+}
+/** Flush `/continue` calls queued while Core was not connected. Set by commands.ts. */
+export const flushQueuedContinues = { fn: (() => {}) as () => void };
 export const info = signal<Info | null>(null);
 export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
@@ -661,6 +714,7 @@ const host: SyncHost = {
   setConnection(c) {
     connection.set(c);
     if (c.kind === "live") {
+      flushQueuedContinues.fn();
       splashReach(4);
       splashFinish();
     } else if (c.kind === "offline" || c.kind === "auth_failed" || c.kind === "incompatible"
@@ -673,7 +727,7 @@ const host: SyncHost = {
   changed() { finishFirstPrompt(); bump(); reconcileSelection(); autoLoadOlder(); },
   streamed() { bumpStream(); },
   inspectorEvent(e) { inspectorHooks.event?.(e); receiveBtw(e); },
-  snapshotApplied() { inspectorHooks.invalidate?.(); splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
+  snapshotApplied() { pendingTurns.update((all) => Object.fromEntries(Object.entries(all).filter(([, p]) => !p.accepted || p.queued))); inspectorHooks.invalidate?.(); splashReach(2); reconcileSelection(); void loadConfig().catch(() => {}); void loadResources(); },
   configChanged() { void loadConfig().catch(() => {}); },
   resourcesChanged() { void loadResources(); },
   settingsEvent(e) {
@@ -696,6 +750,7 @@ const host: SyncHost = {
       void selectSession(d.to);
     }
   },
+  eventSeen(e) { settlePending(e.type, e.session_id, e.data); },
   globalEvent(e) {
     if (e.type === "voice.progress") receiveVoiceProgress(e.data);
     else if (e.type.startsWith("manager.")) managerHooks.event?.(e);
@@ -783,7 +838,7 @@ export function startApp() {
     sync.start();
     loadComposerData();
   }
-  setInterval(() => { const c = connection(); if (c.kind === "reconnecting") tick.set(Date.now()); }, 1000);
+  setInterval(() => { const c = connection(); if (c.kind === "reconnecting" || Object.keys(pendingTurns()).length) tick.set(Date.now()); }, 1000);
 }
 
 let inventorySeq = 0;

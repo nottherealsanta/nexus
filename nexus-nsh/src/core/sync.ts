@@ -67,6 +67,8 @@ export interface SyncHost {
   globalEvent?(event: CoreEvent): void;
   inspectorEvent?(event: CoreEvent): void;
   handoffEvent?(event: CoreEvent): void;
+  /** Every event, before it is applied (a pending turn start moves along from real events). */
+  eventSeen?(event: CoreEvent): void;
   /** A session stopped running: its own or every descendant turn is done. */
   sessionFinished?(id: string): void;
   /** An approval or question is newly waiting. */
@@ -244,6 +246,7 @@ export class Sync {
         if (ev.type.startsWith("input.") && ev.session_id) h.inputsChanged?.(ev.session_id);
         if (ev.type === "config.changed") h.configChanged?.();
         if (ev.type === "provider.login" || ev.type === "agents.changed") h.settingsEvent?.(ev);
+        h.eventSeen?.(ev);
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
         if (r === "applied") h.inspectorEvent?.(ev);

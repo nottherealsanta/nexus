@@ -748,6 +748,8 @@ shapes from the docs.
 
 ## The shell
 
+**Starting a turn (plan 37):** `/continue` and sends add a pending working row (`⠋ Waiting for Core · 2s`, then `Waiting for the model · 3s` once `session.status busy` arrives, or `Waiting for network · retrying in 8.0s` from plan 34) in the same frame, and the composer behaves as busy. It is driven by real events and goes away on the first output, a refusal or the turn ending. While Core is not connected the `/continue` call is queued and sent once with its one idempotency key; Esc cancels it before it is sent. A refusal (running turn, unfinished durable turn, ZMX, archived, empty) removes the row and the strip reads `× Continue refused · <reason>`; with no answer after 10 s the strip says `! No answer from Core yet` with `Retry` (same key). `NEXUS_TUI_TIMING=<file>` appends one line per turn start (`command=0ms sent=1ms 202=14ms busy=16ms first_delta=1840ms`). Tests: `tests/pending_turn.rs`.
+
 Anchors (INTERFACE_PLAN.md): left sidebar toggle at the header's leading edge,
 title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files

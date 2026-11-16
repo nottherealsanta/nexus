@@ -8,7 +8,7 @@ import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, foc
 import type { Cmd } from "../commands";
 import { compactApproval } from "../mobile";
 import {
-  agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
+  pendingTurns, agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   phone, projectWorktrees, sessionDraft, sessionWorktrees, currentWorktree, userHome, viewResources, viewed, waitIndex, toast, annotating,
   bashJobs, loadResources, resourceCounts, resourcesOpen, resourcesKind, composerFocused, questionLine, flowStage, flowProject,
 } from "../store";
@@ -177,7 +177,7 @@ function EditableComposer() {
     }
   };
   const ses = () => viewed();
-  const busy = () => { m(); return ses()?.status === "busy"; };
+  const busy = () => { m(); const s = ses(); return s?.status === "busy" || (!!s && !!pendingTurns()[s.id]); };
   // While this session waits on the user, the waiting card owns the row: `Working · 2m 01s` above it
   // would run into `waiting on you`.
   const working = () => { m(); return busy() && waitItems().length === 0; };
@@ -1559,7 +1559,7 @@ export function PeerComposer(p: { sid: string; onFocus: () => void }) {
   const ses = () => { m(); return model.sessions.get(p.sid) ?? null; };
   const text = () => draft()[p.sid] ?? "";
   const agent = () => ses()?.agent ?? "build";
-  const busy = () => ses()?.status === "busy";
+  const busy = () => ses()?.status === "busy" || !!pendingTurns()[p.sid];
   const modelName = () => {
     const s = ses();
     const ref = s?.model ? String(s.model) : (agentCatalog().agents.find((a) => a.name === agent())?.model || rememberedModel(s?.project_id ?? null, agent()) || "");

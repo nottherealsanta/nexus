@@ -10,7 +10,7 @@ import { disabledOf, startingSections, StartingContext, zmxSections } from "./ne
 import type { CtxSection } from "./newsession";
 import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import { pendingTurns, tick, config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
 import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -81,6 +81,7 @@ type RowKind =
       background: boolean; meta: string; outcome: string;
     }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone; count?: number }
+  | { key: string; kind: "pending"; text: string }
   /** A fork's inherited prefix: one foldable row over the messages copied from its parent. */
   | { key: string; kind: "fork"; parent: string; count: number; open: boolean }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
@@ -864,6 +865,27 @@ function streamRow(sid: string, part: "reasoning" | "text"): Row {
   return rows[part];
 }
 
+/**
+ * The phase of a turn start Core has not shown yet (plan 37), from real events: Core not connected or no
+ * answer yet, then busy with no output (the model), or the network wait plan 34 announces.
+ */
+export function pendingText(sid: string): string | null {
+  m();
+  streamRev();
+  tick();
+  const p = pendingTurns()[sid];
+  if (!p) return null;
+  const st = model.streaming.get(sid);
+  if (st && (st.text || st.reasoning)) return null;
+  const wait = [...(model.selected?.scratch ?? [])].reverse().find((e) => ["retry_scheduled", "retry_started", "step_start"].includes(e.type));
+  if (wait?.type === "retry_scheduled" && wait.data?.phase === "waiting_network") {
+    return `Waiting for network${typeof wait.data.delay === "number" ? ` · retrying in ${fmtDuration(wait.data.delay)}` : ""}`;
+  }
+  const secs = Math.max(0, Math.floor((Date.now() - p.started) / 1000));
+  if (p.queued) return "Waiting for Core · not connected";
+  return p.busySeen ? `Waiting for the model · ${secs}s` : `Waiting for Core · ${secs}s`;
+}
+
 function withStreaming(flat: Row[], st: { text: string; reasoning: string } | undefined, sid: string): Row[] {
   if (!st || (!st.reasoning && !st.text)) return flat;
   const out = [...flat];
@@ -1033,6 +1055,12 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
               </Button></View>
             );
           }}
+        </If>
+        <If when={r().kind === "pending"}>
+          <View class={`flex-row items-center gap-2 py-1.5 ${TURN_INSET}`} testID="pending-turn" accessible accessibilityLabel={(r() as Extract<Row, { kind: "pending" }>).text}>
+            <Status kind="running" />
+            <Shimmer text={(r() as Extract<Row, { kind: "pending" }>).text} reduced={!!config()?.values?.ui?.reduced_motion} testID="pending-turn-text" />
+          </View>
         </If>
         <If when={r().kind === "diag"}>
           {() => {
@@ -1647,8 +1675,14 @@ export function Timeline() {
     // A phone shows the session's status, the user's messages and the agent's replies, and nothing else.
     return (lastRows = keepIdentity(lastRows, phone ? all.filter(phoneRow) : all));
   });
+  const withPending = computed(() => {
+    const base = rows();
+    const sel = model.selected;
+    const text = sel ? pendingText(sel.sessionId) : null;
+    return text ? [...base, { key: `pending-${sel!.sessionId}`, kind: "pending" as const, text }] : base;
+  });
   const slots = listSlots<Row>();
-  const listRows = computed(() => slots(rows()));
+  const listRows = computed(() => slots(withPending()));
   const below = computed(() => newBelow(rows(), viewId()));
   // Follow state, as in the TUI: an open session and the jump follow the end, any scroll up leaves it, and only
   // scrolling back to the end returns to it. The list's `autoscrollToBottomThreshold` is not used: it pulled a reader

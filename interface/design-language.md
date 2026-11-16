@@ -50,6 +50,7 @@ the shared geometry; a complete footer, focus and provider/tool-grid review is s
 tracked in PLAN.md 8.0.
 
 Working uses the shared `[motion.shimmer]` recipe: a 12-frame pass at 125 ms per
+  A turn the user starts (`/continue`, a send) shows a pending working row at once (`Waiting for Core · Ns`, then `Waiting for the model · Ns`, or `Waiting for network · retrying in Ns`), driven by real events; a refusal shows its reason in the status strip, and 10 s without an answer adds `Retry`. Both clients, and mobile.
 frame (1.5 s), secondary text at rest and `text.highlight` at the crest (white in
 dark mode, dark in light mode). Both clients use the same travelling smoothstep
 curve and retain plain primary text when reduced motion is enabled.

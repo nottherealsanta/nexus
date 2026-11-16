@@ -67,7 +67,7 @@ export function desktopOnly(id: string): boolean {
  */
 export function phoneRow(row: { kind: string; tone?: string }): boolean {
   // A fork's inherited block stays, folded with the desktop's wording; open, its messages are filtered like any other.
-  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork") return true;
+  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork" || row.kind === "pending") return true;
   return row.kind === "diag" && row.tone === "error";
 }
 
