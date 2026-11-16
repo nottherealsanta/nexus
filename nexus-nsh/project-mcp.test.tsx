@@ -91,7 +91,6 @@ describe("project MCP in the Projects view", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
-    await app.keyboard.press("mod+3");
     await app.waitFor("id:project-mcp-server-docs");
 
     const panel = app.texts().join("\n");
@@ -131,7 +130,6 @@ describe("project MCP in the Projects view", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
-    await app.keyboard.press("mod+3");
     await app.waitFor("id:project-mcp-server-scan");
 
     const panel = app.texts().join("\n");
@@ -167,7 +165,6 @@ describe("project MCP in the Projects view", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
-    await app.keyboard.press("mod+3");
     await app.waitFor("id:project-mcp-server-shared");
 
     const panel = app.texts().join("\n");

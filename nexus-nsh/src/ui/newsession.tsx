@@ -11,6 +11,7 @@ import {
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
+import { ProjectMcpPanel } from "./project-mcp";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
 import { TimelineColumn } from "./reading-column";
@@ -500,6 +501,7 @@ export function NewSessionView() {
           <Scroll class="flex-1 min-h-0">
             <TimelineColumn class="items-center py-3" testID="new-session-column">
               <StartingContext sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
+              <View class="w-full px-4"><ProjectMcpPanel /></View>
               <If when={pendingFirstPrompt()}>
                 {() => <View class="w-full px-4 py-3 gap-2" testID="first-prompt-sending">
                   <Text class={T.sec}>You</Text>
