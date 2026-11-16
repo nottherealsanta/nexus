@@ -34,7 +34,6 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | # | File | State | Next step |
 | --- | --- | --- | --- |
 | 46 | [Adaptive orchestration and handoffs](46-adaptive-orchestration.md) | **prompts landed 11-13**; 60 offline tests pass | Observe scope, acceptance and repeated discovery on subsequent user tasks; improvement not yet measured |
-| 45 | [Everything is a tab: editor groups and splits](45-tabs-and-splits.md) | **new** (decisions taken 11-13) | Manifest + docs, then the TUI layout core |
 | 44 | [Tooling and prompts from a session review](44-session-review-tooling.md) | **landed 2026-11-12** except background-job pipe status | Re-run its measurement queries after a week of use; revisit triggers are in the file |
 | 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |
 | 39 | [Sessions list: no worktree header for a one-session worktree](39-single-session-worktree-header.md) | **new** | Find NSH's header; add the count rule in both |
@@ -48,7 +47,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 24 | [Harness workflow audit](24-harness-audit.md) | One observation item open | Observe larger heaps |
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
-Done: [26 launch splash](done/26-launch-splash.md), [47 questions in the composer slot](done/47-question-in-composer.md), [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
+Done: [45 tabs and splits](done/45-tabs-and-splits.md), [26 launch splash](done/26-launch-splash.md), [47 questions in the composer slot](done/47-question-in-composer.md), [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
 [22 remove `/continuation`](done/22-remove-continuation.md), [25 interrupt and send](done/25-interrupt-and-send.md), [33 right-sidebar Git removed](done/33-remove-git-from-right-sidebar.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md), [40 Git tab summary](done/40-git-tab-summary.md), [41 terminal separation](done/41-terminal-user-only.md),
 [32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md),

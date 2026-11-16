@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Layout demo                                                                                                       □
+     │                            · Layout demo ×                                     +  ⋯ │ · Layout demo ×                                     +  ⋯
+▏    │ + New session                                                                       │
+▏ A  │ ⌕ Search sessions ctrl+k     System prompt ~1.3K                                    │   System prompt ~1.3K
+▏  1 │ ▣ Show archived                                                                     │
+     │──────────────────────────    AGENTS.md  not found · /private/tmp/rl/a/AGENTS.md     │   AGENTS.md  not found · /private/tmp/rl/a/AGENTS.md
+     │▏  Layout demo        now                                                            │
+  B  │▏                             Tools [18] ~3.6K                                       │   Tools [18] ~3.6K
+ ─── │                                ● read                                               │     ● read
+     │                                ● grep                                               │     ● grep
+     │                                ● glob                                               │     ● glob
+  C  │                                ● ls                                                 │     ● ls
+ ─── │                                ● bash                                               │     ● bash
+     │                                ● bash_output                                        │     ● bash_output
+     │                                ● bash_kill                                          │     ● bash_kill
+     │                                ● edit                                               │     ● edit
+     │                                ● patch                                              │     ● patch
+     │                                ● write                                              │     ● write
+     │                                ● web_search                                         │     ● web_search
+     │                                ● web_fetch                                          │     ● web_fetch
+     │                                ● ask                                                │     ● ask
+     │                                ● code                                               │     ● code
+     │                                ● browser_exec                                       │     ● browser_exec
+     │                                ● browser_screenshot                                 │     ● browser_screenshot
+     │                                ● fork                                               │     ● fork
+     │                                ● expose_workspace_tools                             │     ● expose_workspace_tools
+     │                                                                                     │
+     │                              Skills [0]  none                                       │   Skills [0]  none
+     │                                                                                     │
+     │                              MCP [0]  none                                          │   MCP [0]  none
+     │                                                                                     │
+     │                              total  ~4,849 tok                                      │   total  ~4,849 tok
+     │                                                                                     │
+  +  │                                                                                     │
+     │                                \                                                    │    \
+     │                                                                                     │
+     │                                Build · … · default                                  │    Build · … · default                              0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a                                       │  /private/tmp/rl/a
+     │                                                                                     │   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

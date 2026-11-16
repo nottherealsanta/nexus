@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Layout demo                                                                                                       □
+     │                            · Layout demo ×                                                                                                +  ⋯
+▏    │ + New session
+▏ A  │ ⌕ Search sessions ctrl+k
+▏  1 │ ▣ Show archived
+     │──────────────────────────    System prompt ~1.3K
+     │▏  Layout demo        now
+  B  │▏                             AGENTS.md  not found · /private/tmp/rl/a/AGENTS.md
+ ─── │
+     │                              Tools [18] ~3.6K
+     │                                ● read                      ● bash_kill                 ● ask
+  C  │                                ● grep                      ● edit                      ● code
+ ─── │                                ● glob                      ● patch                     ● browser_exec
+     │                                ● ls                        ● write                     ● browser_screenshot
+     │                                ● bash                      ● web_search                ● fork
+     │                                ● bash_output               ● web_fetch                 ● expose_workspace_tools
+     │
+     │                              Skills [0]  none
+     │
+     │                              MCP [0]  none
+     │
+     │                              total  ~4,849 tok
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+  +  │
+     │                               Type a message…
+     │
+     │                               Build · … · default                                                                                         0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

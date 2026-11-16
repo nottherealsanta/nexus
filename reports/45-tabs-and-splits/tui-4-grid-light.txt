@@ -1,0 +1,44 @@
+  ◧      [Sessions] [Files] [Git] Layout demo                                                                                                       □
+     │                            · Layout demo ×                                     +  ⋯ │ · Layout demo ×                                     +  ⋯
+▏    │ + New session                  ● ask                                                │     ● ask
+▏ A  │ ⌕ Search sessions ctrl+k       ● code                                               │     ● code
+▏  1 │ ▣ Show archived                ● browser_exec                                       │     ● browser_exec
+     │──────────────────────────      ● browser_screenshot                                 │     ● browser_screenshot
+     │▏  Layout demo        now       ● fork                                               │     ● fork
+  B  │▏                               ● expose_workspace_tools                             │     ● expose_workspace_tools
+ ─── │                                                                                     │
+     │                              Skills [0]  none                                       │   Skills [0]  none
+     │                                                                                     │
+  C  │                              MCP [0]  none                                          │   MCP [0]  none
+ ─── │                                                                                     │
+     │                              total  ~4,849 tok                                      │   total  ~4,849 tok
+     │                                                                                     │
+     │                                                                                     │
+     │                                \                                                    │     \
+     │                                                                                     │
+     │                                Build · … · default                                  │     Build · … · default
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a                                       │  /private/tmp/rl/a
+     │                                                                                     │
+     │                           ──────────────────────────────────────────────────────────│──────────────────────────────────────────────────────────
+     │                            · Layout demo ×                                     +  ⋯ │ · Layout demo ×                                     +  ⋯
+     │                                                                                     │     ● ask
+     │                                ● code                                               │     ● code
+     │                                ● browser_exec                                       │     ● browser_exec
+     │                                ● browser_screenshot                                 │     ● browser_screenshot
+     │                                ● fork                                               │     ● fork
+     │                                ● expose_workspace_tools                             │     ● expose_workspace_tools
+     │                                                                                     │
+     │                              Skills [0]  none                                       │   Skills [0]  none
+     │                                                                                     │
+     │                              MCP [0]  none                                          │   MCP [0]  none
+     │                                                                                     │
+     │                              total  ~4,849 tok                                      │   total  ~4,849 tok
+     │                                                                                     │
+  +  │                                                                                     │
+     │                               \                                                     │     \
+     │                                                                                     │
+     │                               Build · … · default                              0    │     Build · … · default
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a                                       │  /private/tmp/rl/a
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   │

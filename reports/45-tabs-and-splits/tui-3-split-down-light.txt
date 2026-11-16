@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Layout demo                                                                                                       □
+     │                            · Layout demo ×                                                                                                +  ⋯
+▏    │ + New session                  ● glob                      ● patch                     ● browser_exec
+▏ A  │ ⌕ Search sessions ctrl+k       ● ls                        ● write                     ● browser_screenshot
+▏  1 │ ▣ Show archived                ● bash                      ● web_search                ● fork
+     │──────────────────────────      ● bash_output               ● web_fetch                 ● expose_workspace_tools
+     │▏  Layout demo        now
+  B  │▏                             Skills [0]  none
+ ─── │
+     │                              MCP [0]  none
+     │
+  C  │                              total  ~4,849 tok
+ ─── │
+     │
+     │                                Type a message…
+     │
+     │                                Build · … · default
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a
+     │
+     │                           ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+     │                            · Layout demo ×                                                                                                +  ⋯
+     │
+     │                                ● ls                        ● write                     ● browser_screenshot
+     │                                ● bash                      ● web_search                ● fork
+     │                                ● bash_output               ● web_fetch                 ● expose_workspace_tools
+     │
+     │                              Skills [0]  none
+     │
+     │                              MCP [0]  none
+     │
+     │                              total  ~4,849 tok
+     │
+  +  │
+     │                               Type a message…
+     │
+     │                               Build · … · default                                                                                         0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/rl/a
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

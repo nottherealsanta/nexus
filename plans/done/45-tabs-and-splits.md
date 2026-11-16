@@ -87,9 +87,11 @@ manifest entries are written; the table is the proposal.
   `alt+down` move tab, `w` close tab, `.` group menu; open to the side has no key (Ctrl/Cmd+click). None clashed with
   the taken set. Alt+X, Alt+[ and Alt+] stay on `session.tab_*` and act on the focused group. **Strings** are parked in
   `[layout.strings_pending]` because `check_manifest.py` rejects unused `[strings]` keys: each client moves keys into
-  `[strings]` when it first uses them. **Superseded, still present** (client agents remove with the modal/dock):
-  `[navigation.panel]` and its checker rule, `terminal.close`, `terminal.focus_list` list semantics, the `terminal.open`
-  dock toggle behaviour.
+  `[strings]` when it first uses them. **Superseded items, resolved 2026-11-16:** `[navigation.panel]` and its checker
+  rule are removed; `terminal.close` is the focused terminal tab's close (the same as `layout.tab_close`) and
+  `terminal.focus_list` is retitled "Leave terminal" (Ctrl+] hands the keys back to the group strip), both in both clients;
+  `[layout.strings_pending]` is gone (`layout.restore.dropped` was dropped: a restore removes dead tabs quietly, in both
+  clients, as the tests assert).
 - [x] **TUI layout core (2026-11-13).** `nexus-tui/src/groups.rs` (`layout.rs` is the existing screen geometry, so the
   tree has its own module): tree, split/join/move/close, drops, ratio clamping with the 20 x 5 minimum, focus by
   geometry, narrow collapse, restore; `prefs.rs` `layouts` keyed by project + worktree. 33 unit tests, one per operation
@@ -102,7 +104,7 @@ manifest entries are written; the table is the proposal.
   *session* tab shows its own read-only timeline (per-session pinned views, `Watch` history loads; the focused group
   alone has the composer; in-flight tool scratch is not carried). Layouts re-key when the viewed session's worktree
   changes. Esc no longer closes a file (matches NSH); the unsaved prompt covers a single tab (no group close exists
-  in the TUI, so `layout.unsaved.group` and `layout.restore.dropped` are unused there). **Not verified:** real Ghostty mouse drag
+  in the TUI before 11-13; `layout.group_close` now exists in both: TUI `app/tabs.rs`, NSH `commands.ts`). **Not verified:** real Ghostty mouse drag
   (only synthetic events in tests), paired TUI/NSH screenshots.
 - [x] **NSH layout core (2026-11-13).** `nexus-nsh/src/layout.ts` (pure tree: split / join / move / close / resize with
   a 200 x 120 px minimum, focus by geometry, narrow collapse, serialise / parse / restore) and `src/layout-state.ts`
@@ -112,9 +114,11 @@ manifest entries are written; the table is the proposal.
   dividers, the `⋯` menu, tab drag with drop zones and a highlight, Esc cancel, `layout.*` commands and leader keys,
   Ctrl+` and the shell indicator. Terminals live in one flat layer keyed by terminal id, so moving a terminal tab
   between groups keeps its mounted WebView (by construction; not measured in a browser). The header strip, the file
-  modal and the dock are gone. Tests: `layout-ui.test.tsx` (13). **Unverified:** the leader's arrow keys
-  (`left` ... `shift+right`) did not reach the keymap in the headless run (`\` and `-` do), Alt-drag copy, Esc during
-  a drag, Cmd/Ctrl+click read from the pointer's last mouse move, real-Chrome drag by hand.
+  modal and the dock are gone. Tests: `layout-ui.test.tsx` and `layout-input.test.tsx`. **Verified 2026-11-16:** the
+  leader's arrow keys work (`left`, `right`, `up`, `down`, `shift+right`, `shift+down` are exercised in `layout-ui.test.tsx`
+  after `ctrl+x`; the earlier note came from a headless run); Alt-drag copy, Esc during a drag and Ctrl/Cmd+click run headless
+  in `layout-input.test.tsx` (4 pass; `--target web` refuses held keys and drags, so `layout-ui` leaves them there). **Still
+  by hand:** a real-Chrome and real-Ghostty drag (user checklist).
 - [x] **Editor buffers, NSH half (2026-11-13).** One buffer per file in `store.ts` (`fileBuffers`), shared by every
   tab of it; dirty dot on the tab; closing a dirty tab asks Save / Discard / Cancel (the group variant,
   `closeGroupTabs`, exists but no control reaches it). The TUI half is its own item above.
@@ -132,11 +136,10 @@ manifest entries are written; the table is the proposal.
   forward (`sessionOpened`). TUI: `open_session` now focuses the group already showing the session instead of adding a
   second tab in the focused group. Tests: 8 in `layout-ui.test.tsx` ("several sessions side by side"), 5 in
   `tests/layout_tabs.rs`.
-- [ ] **Verification.** TUI `cargo test`, NSH focused tests (`node scripts/nsh-web.mjs test --target web …`), manifest
-  check. Paired TUI / NSH screenshots (both skills) for: one group; split right; split down; nested 2 × 2 with a
-  terminal; drag in progress with drop zones; join; narrow collapse; unsaved-close prompt. Drag tested by hand in real
-  Ghostty and NSH web.
-- [ ] Tick here, add the [landed.md](landed.md) line, move to [done/](done/).
+- [x] **Verification (2026-11-16).** TUI `cargo test` and NSH `layout-ui` / `layout-input` pass; manifest check clean. Paired
+  captures in `reports/45-tabs-and-splits/` (one group, split right, split down, 2 x 2, drag zones, join, narrow collapse,
+  unsaved prompt; dark and light; gaps listed in its README). **Hand drag in real Ghostty and real Chrome: user checklist.**
+- [x] Tick here, add the [landed.md](landed.md) line, move to [done/](done/).
 
 ## Open details (defaults applied unless the user says otherwise)
 

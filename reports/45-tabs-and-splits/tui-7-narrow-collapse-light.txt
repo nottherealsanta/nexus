@@ -1,0 +1,20 @@
+ □  Layout demo                       □
+ · Layout demo ×   1 group hidden  +  ⋯
+     ● browser_exec
+     ● browser_screenshot
+     ● fork
+     ● expose_workspace_tools
+
+   Skills [0]  none
+
+   MCP [0]  none
+
+   total  ~4,849 tok
+
+
+    \
+
+    Build · … · default            0
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  /private/tmp/rl/a
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
