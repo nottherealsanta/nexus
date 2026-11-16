@@ -98,7 +98,9 @@ describe("waiting card (D14)", () => {
     expect(app.shows("id:choice-mark-a")).toBe(true);
     expect(app.shows("id:choice-mark-b")).toBe(true);
     expect(app.shows("label:Which cache? mtime")).toBe(true);
-    expect(app.shows("label:Which cache? Free-text answer")).toBe(true);
+    // The context line is the composer's input now, not a field inside the card.
+    expect(app.shows("label:Add context to the answer")).toBe(true);
+    expect(app.shows("label:Which cache? Free-text answer")).toBe(false);
     expect(app.texts().includes("Extras?")).toBe(false);
     expect(app.texts().includes("( )")).toBe(false);
     expect(app.texts().includes("[ ]")).toBe(false);
@@ -110,7 +112,7 @@ describe("waiting card (D14)", () => {
     expect(app.shows("id:choice-mark-x")).toBe(true);
     expect(app.shows("id:choice-mark-y")).toBe(true);
     expect(app.shows("label:Extras? tests")).toBe(true);
-    expect(app.shows("label:Extras? Free-text answer")).toBe(true);
+    expect(app.shows("label:Add context to the answer")).toBe(true);
     await app.press("label:Extras? tests");
     await app.press("id:question-next");
     await app.waitFor("id:submit-answers");
@@ -129,7 +131,7 @@ describe("waiting card (D14)", () => {
     await app.keyboard.press("enter");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
     const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
-    expect(JSON.stringify(post.body ?? "")).toContain('"selected":["b"]');
+    expect(String(post.body ?? "")).toContain('"selected":["b"]');
   });
 
   test("long questions, option labels and previews remain in the scrollable card", async () => {

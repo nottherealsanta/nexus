@@ -510,14 +510,18 @@ fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
         .unwrap();
     assert!(line_text(&expanded.lines[thought.start]).starts_with("   ◇ Thought"));
     for block in expanded.blocks.iter().filter(|b| {
-        matches!(b.kind, BlockKind::Group | BlockKind::Tool | BlockKind::Reasoning | BlockKind::Child)
+        matches!(
+            b.kind,
+            BlockKind::Group | BlockKind::Tool | BlockKind::Reasoning | BlockKind::Child
+        )
     }) {
         let row = line_text(&expanded.lines[block.start]);
         let indent = if block.kind == BlockKind::Child { 5 } else { 3 };
         assert_eq!(
             row.chars().take_while(|c| *c == ' ').count(),
             indent,
-            "{}: {row:?}", block.key
+            "{}: {row:?}",
+            block.key
         );
     }
     assert!(expanded.blocks.iter().any(|b| b.key == "tool:c2"));
@@ -1361,19 +1365,35 @@ fn code_detail_shows_source_and_keeps_output_in_raw() {
                  "role": "tool", "parts": [{"type": "tool_result", "call_id": "call_code",
                  "output": "large result", "is_error": false}]}});
     for v in [call, result] {
-        if let Ok(nexus_tui::api::Frame::Event(e)) = nexus_tui::api::Frame::from_value("message.added", None, &v) {
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value("message.added", None, &v)
+        {
             a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
         }
     }
     rows(&mut a);
     a.ui.focus = Focus::Timeline;
-    a.ui.timeline_sel = a.blocks().iter().position(|b| b.kind == nexus_tui::timeline::BlockKind::Group);
+    a.ui.timeline_sel = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Group);
     a.execute("tool.expand_toggle");
     rows(&mut a);
-    a.ui.timeline_sel = a.blocks().iter().position(|b| b.kind == nexus_tui::timeline::BlockKind::Tool);
+    a.ui.timeline_sel = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Tool);
     a.execute("tool.expand_toggle");
-    let text = nexus_tui::timeline::build(&a, &a.theme, 0, 100).lines.iter().map(|line| line_text(line)).collect::<Vec<_>>().join("\n");
-    assert!(text.contains("third()") && text.contains("Output hidden · raw to view"), "{text}");
+    let text = nexus_tui::timeline::build(&a, &a.theme, 0, 100)
+        .lines
+        .iter()
+        .map(|line| line_text(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("third()") && text.contains("Output hidden · raw to view"),
+        "{text}"
+    );
     assert!(!text.contains("large result"), "{text}");
 }
 
@@ -1526,7 +1546,13 @@ fn following_anchors_and_jump_to_latest_hold_at_every_size() {
 }
 
 fn add_tool(a: &mut nexus_tui::app::App, n: i64, command: &str, output: &str) {
-    add_named_tool(a, n, "bash", serde_json::json!({"command": command}), output);
+    add_named_tool(
+        a,
+        n,
+        "bash",
+        serde_json::json!({"command": command}),
+        output,
+    );
 }
 
 fn add_named_tool(
@@ -2978,9 +3004,10 @@ fn a_session_without_fork_has_no_fork_block_and_old_json_still_reads() {
 #[test]
 fn a_zmx_child_card_names_the_agent_and_puts_the_worker_in_metadata() {
     use nexus_tui::timeline::{build, BlockKind};
-    let scenario: serde_json::Value =
-        serde_json::from_str(include_str!("../../interface/scenarios/zmx-parent-card.json"))
-            .unwrap();
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/zmx-parent-card.json"
+    ))
+    .unwrap();
     let mut a = app();
     let mut messages = scenario["messages"].clone();
     for message in messages.as_array_mut().unwrap() {
@@ -3117,7 +3144,6 @@ fn a_fork_call_renders_as_a_tool_row_in_the_parent() {
     assert!(line_text(&linked.lines[link.start]).contains("open fork"));
 }
 
-
 #[test]
 fn browser_tools_have_labels_subjects_and_the_web_glyph() {
     use nexus_tui::ui::Detail;
@@ -3130,10 +3156,22 @@ fn browser_tools_have_labels_subjects_and_the_web_glyph() {
         serde_json::json!({"code": "\nnew_tab('https://example.com')\nprint(page_info())"}),
         "ok",
     );
-    add_named_tool(&mut a, 2, "browser_screenshot", serde_json::json!({"full": true}), "img");
+    add_named_tool(
+        &mut a,
+        2,
+        "browser_screenshot",
+        serde_json::json!({"full": true}),
+        "img",
+    );
     let shown = rows(&mut a).join("\n");
-    assert!(shown.contains("↗ Browser") && shown.contains("new_tab('https://example.com')"), "{shown}");
+    assert!(
+        shown.contains("↗ Browser") && shown.contains("new_tab('https://example.com')"),
+        "{shown}"
+    );
     assert!(!shown.contains("browser_exec"), "{shown}");
-    assert!(shown.contains("Screenshot") && shown.contains("full page"), "{shown}");
+    assert!(
+        shown.contains("Screenshot") && shown.contains("full page"),
+        "{shown}"
+    );
     assert_eq!(nexus_tui::paint::verb_glyph("browser_exec", false), "↗");
 }

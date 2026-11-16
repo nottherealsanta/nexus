@@ -176,7 +176,10 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         let a: &App = app;
         regions.retarget_session(focused_body.filter(|_| session_page), |w| heights(a, w));
     }
-    if matches!(active_kind, Some(crate::groups::Kind::File | crate::groups::Kind::Diff)) {
+    if matches!(
+        active_kind,
+        Some(crate::groups::Kind::File | crate::groups::Kind::Diff)
+    ) {
         regions.panel = focused_body;
     }
     // The group showing the attached terminal: the focused one, else any other.
@@ -817,7 +820,6 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     let inner = composer_inner_with(
         composer_without_pending(g.composer, app.pending_inputs().len()),
         app.composer_ref().images.len(),
-        app.composer_ref().pastes().len(),
     );
     let (rows, (cr, cc)) = app.composer_view().layout(inner.width as usize);
     let input_height = inner.height as usize;
@@ -842,6 +844,21 @@ fn ask_input_cursor(app: &App, g: &Regions) -> Option<Position> {
     let c = app.ask_current()?;
     if c.sent || c.review() || !c.field() {
         return None;
+    }
+    if ask_docked(app) {
+        let inner = composer_inner_with(
+            composer_without_pending(g.composer, app.pending_inputs().len()),
+            0,
+        );
+        let (rows, (cr, cc)) = c.pick()?.input.layout(inner.width as usize);
+        let first = visible_first(rows.len(), cr, inner.height as usize);
+        if cr < first || cr - first >= inner.height as usize {
+            return None;
+        }
+        return Some(Position::new(
+            inner.x + cc as u16,
+            inner.y + (cr - first) as u16,
+        ));
     }
     let r = g.waiting;
     if r.height < 3 || r.width < 12 {
@@ -870,14 +887,13 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 // heights
 // ============================================================================
 
-/// The text area inside the card, below collapsed-paste cards and thumbnails.
-/// The mouse path must pass the draft's paste count to line up.
-pub(crate) fn composer_inner_with(r: Rect, images: usize, pastes: usize) -> Rect {
-    let r = composer_card(composer_content(r), images, pastes);
+/// The text area inside the card, below the attachment thumbnails.
+pub(crate) fn composer_inner_with(r: Rect, images: usize) -> Rect {
+    let r = composer_card(composer_content(r), images);
     Rect::new(
-        r.x + 5,
+        r.x + 4,
         r.y + 2,
-        r.width.saturating_sub(10),
+        r.width.saturating_sub(8),
         r.height.saturating_sub(6),
     )
 }
@@ -900,22 +916,10 @@ mod composer_geometry_tests {
     #[test]
     fn pending_cards_shift_the_input_and_respect_small_terminals() {
         let r = Rect::new(10, 20, 80, 14);
-        assert_eq!(
-            composer_inner_with(composer_without_pending(r, 0), 0, 0).y,
-            22
-        );
-        assert_eq!(
-            composer_inner_with(composer_without_pending(r, 1), 0, 0).y,
-            25
-        );
-        assert_eq!(
-            composer_inner_with(composer_without_pending(r, 8), 0, 0).y,
-            28
-        );
-        assert_eq!(
-            composer_inner_with(composer_without_pending(r, 1), 1, 0).y,
-            28
-        );
+        assert_eq!(composer_inner_with(composer_without_pending(r, 0), 0).y, 22);
+        assert_eq!(composer_inner_with(composer_without_pending(r, 1), 0).y, 25);
+        assert_eq!(composer_inner_with(composer_without_pending(r, 8), 0).y, 28);
+        assert_eq!(composer_inner_with(composer_without_pending(r, 1), 1).y, 28);
         let short = Rect::new(0, 0, 80, 10);
         assert_eq!(composer_without_pending(short, 1), short);
     }
@@ -935,8 +939,8 @@ fn composer_content(r: Rect) -> Rect {
 }
 
 /// Rows the composer's attachment strip needs above the card: each thumbnail
-/// is a square with its muted name on the row above, and each collapsed paste
-/// is a title row (`Pasted text · N lines · Show`) over a clipped first line.
+/// is a square with its muted name on the row above. A collapsed paste has no
+/// strip: its marker sits in the draft.
 fn composer_image_rows(width: u16, images: usize) -> u16 {
     if images == 0 {
         return 0;
@@ -951,23 +955,29 @@ fn composer_image_rows(width: u16, images: usize) -> u16 {
     (lines * (1 + crate::images::COMPOSER_THUMB_ROWS)) as u16
 }
 
-fn composer_paste_rows(pastes: usize) -> u16 {
-    (pastes as u16) * 2
-}
-
-fn composer_strip_rows(width: u16, images: usize, pastes: usize) -> u16 {
-    composer_paste_rows(pastes) + composer_image_rows(width, images)
-}
-
-fn composer_card(r: Rect, images: usize, pastes: usize) -> Rect {
-    let offset = composer_strip_rows(r.width, images, pastes).min(r.height.saturating_sub(7));
+fn composer_card(r: Rect, images: usize) -> Rect {
+    let offset = composer_image_rows(r.width, images).min(r.height.saturating_sub(7));
     Rect::new(r.x, r.y + offset, r.width, r.height - offset)
 }
 
 fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
-    let inner_w = w.saturating_sub(10) as usize;
-    let rows = app.composer_view().layout(inner_w).0.len().clamp(1, 8) as u16;
+    let inner_w = w.saturating_sub(8) as usize;
+    let docked = ask_docked(app);
+    let rows = match app
+        .ask_current()
+        .filter(|_| docked)
+        .and_then(|c| c.pick().cloned())
+    {
+        Some(pick) => pick.input.layout(inner_w).0.len(),
+        None => app.composer_view().layout(inner_w).0.len(),
+    }
+    .clamp(1, 8) as u16;
+    let images = if docked {
+        0
+    } else {
+        app.composer_ref().images.len()
+    };
     let (waiting, mut composer) = (
         waiting_height(app, w),
         rows + 7
@@ -976,11 +986,7 @@ fn heights(app: &App, w: u16) -> Heights {
             } else {
                 app.pending_inputs().len().min(4) as u16 + 2
             }
-            + composer_strip_rows(
-                w,
-                app.composer_ref().images.len(),
-                app.composer_ref().pastes().len(),
-            ),
+            + composer_image_rows(w, images),
     );
     if app.ask_current().is_some() && app.size.1 < 20 {
         composer = composer.min(3);
@@ -1029,12 +1035,7 @@ fn toggle_glyph(cx: &Cx, side: Side) -> String {
     .to_owned()
 }
 
-fn draw_header(
-    cx: &Cx,
-    buf: &mut Buffer,
-    g: &Regions,
-    hits: &mut HitMap,
-) {
+fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let base = cx.st(SECONDARY, SIDEBAR);
     clear(buf, g.header, base);
     let focus_bar = cx.t.structure("focus_bar");
@@ -2988,6 +2989,8 @@ enum SRow {
     Title(usize),
     Detail(usize),
     Spacer,
+    /// The rule between the active sessions and the archived ones.
+    Rule,
 }
 
 /// The title of a session row: the shimmer while it runs, an ellipsis when it
@@ -3035,7 +3038,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     if r.height < 3 {
         return;
     }
-    let new_session = Rect::new(r.x, r.bottom().saturating_sub(3), r.width, 1);
+    let new_session = Rect::new(r.x, r.y, r.width, 1);
     let mut new_style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(new_session) {
         new_style = new_style.patch(cx.st(PRIMARY, SIDEBAR));
@@ -3051,7 +3054,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         r.width.saturating_sub(3),
     );
     hits.add(new_session, Target::NewSession);
-    let search = Rect::new(r.x, r.bottom().saturating_sub(2), r.width, 1);
+    let search = Rect::new(r.x, r.y + 1, r.width, 1);
     let mut style = cx.st(MUTED, SIDEBAR);
     if cx.hovered(search) {
         style = style.patch(cx.st(PRIMARY, SIDEBAR));
@@ -3083,7 +3086,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     );
     put(buf, kx, search.y, key, style, kw);
     hits.add(search, Target::RailSearch);
-    let archive_y = r.bottom().saturating_sub(1);
+    let archive_y = r.y + 2;
     let archive = Rect::new(r.x, archive_y, r.width, 1);
     let archive_style = if a.ui.show_archived {
         cx.st(MULTI, SIDEBAR).add_modifier(Modifier::BOLD)
@@ -3110,10 +3113,19 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         r.width.saturating_sub(3),
     );
     hits.add(archive, Target::ArchivedFilter);
-    let list = Rect::new(r.x, r.y, r.width, r.height.saturating_sub(3));
-    if list.height == 0 {
+    if r.height <= 4 {
         return;
     }
+    let rule = Rect::new(r.x, r.y + 3, r.width, 1);
+    put(
+        buf,
+        rule.x,
+        rule.y,
+        &cx.t.structure("rule").repeat(rule.width as usize),
+        cx.st("border.default", SIDEBAR),
+        rule.width,
+    );
+    let list = Rect::new(r.x, r.y + 4, r.width, r.height - 4);
     let entries = a.side_entries();
     if entries.is_empty() {
         let msg = if a.state.model.projects.is_empty() {
@@ -3141,7 +3153,17 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     }
     // Headers scroll with their rows; each session is two lines and a spacer.
     let mut rows = Vec::new();
+    let archived_at = |i: usize| {
+        a.state
+            .model
+            .sessions
+            .get(&entries[i].id)
+            .is_some_and(|s| s.archived)
+    };
     for (i, e) in entries.iter().enumerate() {
+        if i > 0 && archived_at(i) && !archived_at(i - 1) {
+            rows.push(SRow::Rule);
+        }
         if e.project.is_some() {
             rows.push(SRow::Project(i));
         }
@@ -3165,6 +3187,16 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         let rr = Rect::new(list.x, y, list.width, 1);
         match *v {
             SRow::Spacer => {}
+            SRow::Rule => {
+                put(
+                    buf,
+                    rr.x,
+                    y,
+                    &cx.t.structure("rule").repeat(rr.width as usize),
+                    cx.st("border.default", SIDEBAR),
+                    rr.width,
+                );
+            }
             SRow::Project(i) => {
                 let name = entries[i].project.as_deref().unwrap_or("");
                 put(
@@ -3320,7 +3352,15 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                     if cx.hovered(Rect::new(rr.x, y.saturating_sub(1), rr.width, 2)) {
                         let button = Rect::new(inner_right.saturating_sub(2), y, 3, 1);
                         clear(buf, button, cx.st(MUTED, SIDEBAR).patch(bg));
-                        put(buf, button.x, y, cx.ell(), cx.st(if cx.hovered(button) { PRIMARY } else { MUTED }, SIDEBAR).patch(bg), 1);
+                        put(
+                            buf,
+                            button.x,
+                            y,
+                            cx.ell(),
+                            cx.st(if cx.hovered(button) { PRIMARY } else { MUTED }, SIDEBAR)
+                                .patch(bg),
+                            1,
+                        );
                         hits.add(rr, Target::SideRow(i));
                         hits.add(button, Target::SessionRowMenu(i));
                         continue;
@@ -5007,18 +5047,20 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                             }
                         }
                     }
-                    if !c.options().is_empty() {
+                    if !c.options().is_empty() && !ask_docked(app) {
                         rows.push(WRow::Blank);
                     }
-                    let field_w = inner.saturating_sub(2);
-                    let (lines, (row, _)) = c
-                        .pick()
-                        .map(|p| p.input.layout(field_w))
-                        .unwrap_or_else(|| (vec![String::new()], (0, 0)));
-                    let first = visible_first(lines.len(), row, ASK_INPUT_ROWS);
-                    let last = (first + ASK_INPUT_ROWS).min(lines.len());
-                    for (i, line) in lines.iter().enumerate().take(last).skip(first) {
-                        rows.push(WRow::Input(i, line.clone()));
+                    if !ask_docked(app) {
+                        let field_w = inner.saturating_sub(2);
+                        let (lines, (row, _)) = c
+                            .pick()
+                            .map(|p| p.input.layout(field_w))
+                            .unwrap_or_else(|| (vec![String::new()], (0, 0)));
+                        let first = visible_first(lines.len(), row, ASK_INPUT_ROWS);
+                        let last = (first + ASK_INPUT_ROWS).min(lines.len());
+                        for (i, line) in lines.iter().enumerate().take(last).skip(first) {
+                            rows.push(WRow::Input(i, line.clone()));
+                        }
                     }
                 }
             }
@@ -5027,11 +5069,11 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
     }
     let hint_rows = if item.kind == WaitKind::Question {
         if w < 55 {
-            5
+            4
         } else if w < 100 {
-            3
-        } else {
             2
+        } else {
+            1
         }
     } else {
         1
@@ -5394,7 +5436,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     let placeholder = if ask.as_ref().is_some_and(|c| c.options().is_empty()) {
                         "Type your answer\u{2026}".replace('\u{2026}', cx.ell())
                     } else {
-                        "Add context, or type your own answer\u{2026}".replace('\u{2026}', cx.ell())
+                        "Add context\u{2026}".replace('\u{2026}', cx.ell())
                     };
                     put(
                         buf,
@@ -5507,63 +5549,9 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 };
                 let mut hints: Vec<(String, String)> = Vec::new();
                 let mut submit = None;
-                if focused
-                    && ask.is_some()
-                    && a.ui.asks.get(&w.id).is_some_and(|d| d.scroll_max > 0)
-                {
-                    hints.push(("pgup/dn".into(), "scroll".into()));
-                }
                 match (&w.kind, ask.as_ref()) {
-                    (WaitKind::Question, Some(c)) if c.sent => {
-                        hints.push((String::new(), "sending the answers...".into()));
-                    }
-                    (WaitKind::Question, Some(c)) if focused && c.review() => {
-                        if c.total > 0 {
-                            hints.push((leftright(cx).to_owned(), "pages".into()));
-                        }
-                        submit = Some(hints.len());
-                        hints.push(("enter".into(), "submit".into()));
-                        hints.push(("esc".into(), "stop".into()));
-                    }
-                    (WaitKind::Question, Some(c)) if focused => {
-                        let field = c.field();
-                        let has_text = c
-                            .pick()
-                            .is_some_and(|p| !p.input.expanded_text().trim().is_empty());
-                        if c.total > 1 {
-                            hints.push((format!("alt+{}", leftright(cx)), "pages".into()));
-                        }
-                        if field && has_text {
-                            hints.push((leftright(cx).to_owned(), "caret".into()));
-                        }
-                        if !c.options().is_empty() {
-                            hints.push((
-                                key("waiting.custom", "alt+a"),
-                                if field { "options" } else { "text" }.into(),
-                            ));
-                            if !field {
-                                hints.push((updown(cx).to_owned(), "move".into()));
-                            }
-                        }
-                        if c.multiple() && !field {
-                            hints.push(("space".into(), "tick".into()));
-                        }
-                        hints.push((
-                            "enter".into(),
-                            if c.total == 1 {
-                                "send"
-                            } else if c.page + 1 < c.total {
-                                "next"
-                            } else {
-                                "review"
-                            }
-                            .into(),
-                        ));
-                        // Keep the action hints whole at narrow widths; Esc is
-                        // the manifest's global chain and is documented elsewhere.
-                        if inner_w >= 60 {
-                            hints.push(("esc".into(), "stop".into()));
-                        }
+                    (WaitKind::Question, Some(c)) if focused || c.sent => {
+                        (hints, submit) = ask_hint_list(cx, c, focused, inner_w);
                     }
                     (_, _) if !focused => {
                         hints.push((key("waiting.focus", "alt+w"), "answer".into()));
@@ -5619,6 +5607,75 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
 }
+
+/// The key hints of a question: `key label` pairs and the index of the one that submits.
+fn ask_hint_list(
+    cx: &Cx,
+    c: &crate::app::AskCurrent,
+    focused: bool,
+    inner_w: u16,
+) -> (Vec<(String, String)>, Option<usize>) {
+    let a = cx.app;
+    let mut hints: Vec<(String, String)> = Vec::new();
+    let mut submit = None;
+    if c.sent {
+        hints.push((String::new(), "sending the answers...".into()));
+        return (hints, submit);
+    }
+    if focused && a.ui.asks.get(&c.wait.id).is_some_and(|d| d.scroll_max > 0) {
+        hints.push(("pgup/dn".into(), "scroll".into()));
+    }
+    if c.review() {
+        if c.total > 0 {
+            hints.push((leftright(cx).to_owned(), "pages".into()));
+        }
+        submit = Some(hints.len());
+        hints.push(("enter".into(), "submit".into()));
+        hints.push(("esc".into(), "stop".into()));
+        return (hints, submit);
+    }
+    let field = c.field();
+    let options = !c.options().is_empty();
+    if options && !field {
+        hints.push((updown(cx).to_owned(), "move".into()));
+        hints.push((
+            "space".into(),
+            if c.multiple() { "tick" } else { "select" }.into(),
+        ));
+    }
+    if options && field {
+        hints.push(("esc".into(), "options".into()));
+    }
+    if c.total > 1 {
+        hints.push((format!("alt+{}", leftright(cx)), "pages".into()));
+    }
+    submit = None;
+    hints.push((
+        "enter".into(),
+        if c.total == 1 {
+            "send"
+        } else if c.page + 1 < c.total {
+            "next"
+        } else {
+            "review"
+        }
+        .into(),
+    ));
+    // Esc is the manifest's global chain: on the options it stops the turn.
+    if inner_w >= 60 && !(options && field) {
+        hints.push(("esc".into(), "stop".into()));
+    }
+    (hints, submit)
+}
+
+/// The question's context line sits in the composer panel when the terminal is tall enough; a
+/// short one keeps it in the card (and the composer shrinks to nothing).
+pub fn ask_docked(app: &App) -> bool {
+    app.ask_current().is_some() && app.size.1 >= ASK_DOCK_MIN_ROWS
+}
+
+/// Terminal rows from which a question's context line replaces the composer input.
+const ASK_DOCK_MIN_ROWS: u16 = 20;
 
 /// Display parts of a `provider/id` model reference. The catalog name wins over
 /// the id; the id is the fallback for a model the catalog no longer lists.
@@ -5844,90 +5901,6 @@ fn draw_working(cx: &Cx, buf: &mut Buffer, start: u16, y: u16, end: u16) {
     );
 }
 
-/// The composer's collapsed pastes: one raised row each, with the text's size
-/// and an explicit `Show` that opens the full paste.
-fn draw_composer_pastes(
-    cx: &Cx,
-    buf: &mut Buffer,
-    strip: Rect,
-    pastes: &[(&str, &str)],
-    hits: &mut HitMap,
-) {
-    if pastes.is_empty() || strip.width < 16 {
-        return;
-    }
-    for (i, (marker, text)) in pastes.iter().enumerate() {
-        let y = strip.y + i as u16 * 2;
-        if y >= strip.bottom() {
-            break;
-        }
-        let width = strip.width.saturating_sub(6);
-        if width < 16 {
-            break;
-        }
-        let height = if y + 1 < strip.bottom() { 2 } else { 1 };
-        let rect = Rect::new(strip.x + 3, y, width, height);
-        let hot = cx.hovered(rect);
-        clear(buf, Rect::new(rect.x, y, width, 1), cx.st(PRIMARY, RAISED));
-        let show_x = rect.right().saturating_sub(5);
-        let x = put(
-            buf,
-            rect.x + 1,
-            y,
-            "Pasted text",
-            cx.st(PRIMARY, RAISED),
-            show_x.saturating_sub(rect.x + 1),
-        );
-        let lines = text.lines().count().max(1);
-        let tokens = (text.chars().count() / 4).max(1);
-        let detail = format!(" {} {lines} lines {} ~{tokens} tokens", cx.sep(), cx.sep());
-        put(
-            buf,
-            x,
-            y,
-            &detail,
-            cx.st(MUTED, RAISED),
-            show_x.saturating_sub(x),
-        );
-        put(
-            buf,
-            show_x,
-            y,
-            "Show",
-            if hot {
-                cx.st(ACCENT, RAISED).add_modifier(Modifier::BOLD)
-            } else {
-                cx.st(ACCENT, RAISED)
-            },
-            4,
-        );
-        if height > 1 {
-            let preview = text
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim_start())
-                .unwrap_or("");
-            let row = Rect::new(rect.x, y + 1, width, 1);
-            clear(buf, row, cx.st(MUTED, RAISED));
-            put(
-                buf,
-                row.x + 1,
-                row.y,
-                &truncate(preview, width.saturating_sub(2) as usize, cx.ell()),
-                cx.st(MUTED, RAISED),
-                width.saturating_sub(1),
-            );
-        }
-        hits.add(
-            rect,
-            Target::TimelinePaste(std::rc::Rc::new(crate::timeline::PasteText {
-                marker: (*marker).to_owned(),
-                text: (*text).to_owned(),
-            })),
-        );
-    }
-}
-
 /// The composer's attachment strip: a muted name row over a square thumbnail
 /// for every image, wrapping when the width runs out.
 fn draw_composer_images(
@@ -6009,15 +5982,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         // One filled card, aligned with the composer panel below it.
         let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), extra);
         clear(buf, card, cx.st(MUTED, PANEL));
-        // The message text starts where the composer's input starts; the
-        // `Q`/`S` marker sits two cells left of it, one cell of air between.
-        let input_x = composer_inner_with(
-            composer,
-            cx.app.composer_ref().images.len(),
-            cx.app.composer_ref().pastes().len(),
-        )
-        .x;
-        let mark_x = input_x.saturating_sub(2);
+        // The `Q`/`S` marker sits one cell in from the card edge, one cell of air before the text.
+        let mark_x = composer_inner_with(composer, cx.app.composer_ref().images.len()).x - 1;
+        let input_x = mark_x + 2;
         let end = card.right().saturating_sub(2);
         if held && card.width >= 15 {
             let label = "Send next";
@@ -6211,10 +6178,14 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let r = composer_content(r);
     let a = cx.app;
     let base = cx.st(PRIMARY, PANEL);
-    let comp_view = a.composer_view();
+    let ask = a.ask_current().filter(|_| ask_docked(a));
+    let comp_view = match ask.as_ref().and_then(|c| c.pick()) {
+        Some(pick) => std::borrow::Cow::Owned(pick.input.clone()),
+        None if ask.is_some() => std::borrow::Cow::Owned(crate::composer::Composer::new()),
+        None => a.composer_view(),
+    };
     let comp = &*comp_view;
-    let pastes = comp.pastes();
-    let card = composer_card(r, comp.images.len(), pastes.len());
+    let card = composer_card(r, comp.images.len());
     // Rows: the pill/attachment row, the top padding, the input, a blank row,
     // the control row, the bottom edge and the project strip.
     let panel = Rect::new(
@@ -6224,7 +6195,34 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         card.height - 2,
     );
     clear(buf, panel, base);
-    hits.add(panel, Target::Composer);
+    hits.add(
+        panel,
+        if ask.is_some() {
+            Target::WaitInput
+        } else {
+            Target::Composer
+        },
+    );
+    if ask.is_some() {
+        // One dock: the card's fill and heavy rail run on through the context line and the
+        // status row, closing the gap row between the two panels.
+        // The same colour as the card's rail: violet for a multi-select, white on the review page.
+        let token = match ask.as_ref() {
+            Some(c) if c.review() => PRIMARY,
+            Some(c) if c.multiple() => MULTI,
+            _ => ACCENT,
+        };
+        let rail = if a.ui.focus == Focus::Waiting {
+            cx.st(token, PANEL).add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(token, PANEL)
+        };
+        let top = panel.y.saturating_sub(1);
+        clear(buf, Rect::new(panel.x, top, panel.width, 1), base);
+        for y in top..panel.bottom() - 1 {
+            put(buf, panel.x, y, cx.t.structure("rail_heavy"), rail, 1);
+        }
+    }
     card_edge(
         cx,
         buf,
@@ -6232,7 +6230,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         panel.bottom() - 1,
         cx.t.structure("card_bottom"),
     );
-    let inner = composer_inner_with(full_r, comp.images.len(), pastes.len());
+    let inner = composer_inner_with(full_r, comp.images.len());
     let input_height = inner.height as usize;
     let cy = r.bottom() - 3;
     // The focus bar at the card's left edge, only where colour cannot carry
@@ -6255,20 +6253,11 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
 
-    // Collapsed pastes first, then the square attachment thumbnails with their names above.
-    let paste_rows = composer_paste_rows(pastes.len()).min(card.y.saturating_sub(r.y));
-    draw_composer_pastes(
-        cx,
-        buf,
-        Rect::new(r.x, r.y, r.width, paste_rows),
-        &pastes,
-        hits,
-    );
-    let images_y = r.y + paste_rows;
+    // The square attachment thumbnails, with their names above.
     draw_composer_images(
         cx,
         buf,
-        Rect::new(r.x, images_y, r.width, card.y.saturating_sub(images_y)),
+        Rect::new(r.x, r.y, r.width, card.y.saturating_sub(r.y)),
         &comp.images,
         hits,
     );
@@ -6285,6 +6274,13 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 }
                 _ => format!("Disconnected {} read-only", cx.t.structure("separator")),
             }
+        } else if let Some(c) = &ask {
+            let text = if c.options().is_empty() {
+                "Type your answer\u{2026}"
+            } else {
+                "Add context\u{2026}"
+            };
+            text.replace('\u{2026}', cx.ell())
         } else if a.question_pending() {
             QUESTION_LOCK.to_owned()
         } else if a.viewed().is_none() {
@@ -6476,7 +6472,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             break;
         }
     }
-    let end = panel.right().saturating_sub(3);
+    let end = panel.right().saturating_sub(2);
     let rw = right_width(meter_on) as u16;
     let right_x = end.saturating_sub(rw);
     let mut context_rect = None;
@@ -6512,7 +6508,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             hits.add(rect, Target::ComposerContext);
         }
     }
-    let selector_end = right_x.saturating_sub(2).max(panel.x + 3);
+    let selector_end = right_x.saturating_sub(2).max(panel.x + 2);
     // Recording: a red square blinks left of the agent name, which does not move.
     if matches!(
         a.ui.dictation.phase,
@@ -6526,9 +6522,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             style.add_modifier(Modifier::DIM)
         };
         let mark = if cx.t.opts.ascii { "#" } else { "■" };
-        put(buf, panel.x + 1, cy, mark, style, 1);
+        put(buf, panel.x, cy, mark, style, 1);
     }
-    let mut x = panel.x + 3;
+    let mut x = panel.x + 2;
     {
         let fields: Vec<(String, Target, Modifier, &str)> = vec![
             (
@@ -6625,7 +6621,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             buf,
             r.x + 2,
             r.bottom() - 1,
-            panel.right().saturating_sub(3),
+            panel.right().saturating_sub(2),
         );
     }
     if let (Some(usage), Some(rect)) = (&usage, context_rect) {
@@ -6642,8 +6638,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
 
 /// The old Nexus bottom rule shows context occupancy at rest and activity while running.
 fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
-    let start = r.x + 2;
-    let width = r.width.saturating_sub(4);
     let y = r.bottom() - 1;
     if let Some(progress) = &cx.app.ui.dictation.download {
         let percent = progress
@@ -6659,9 +6653,18 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
             ),
             None => "Downloading speech model …".into(),
         };
-        put(buf, start, y, &line, cx.st(ACCENT, CANVAS), width);
+        put(
+            buf,
+            r.x + 2,
+            y,
+            &line,
+            cx.st(ACCENT, CANVAS),
+            r.width.saturating_sub(4),
+        );
         return;
     }
+    let start = r.x + 3;
+    let width = r.width.saturating_sub(6);
     let busy = cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id));
     let usage = cx
         .app
@@ -10603,5 +10606,4 @@ mod tests {
         assert!(tight.contains('…'), "{tight:?}");
         assert_eq!(heading_metadata(&parts, 0, " · ", "·", "…"), "");
     }
-
 }

@@ -212,8 +212,10 @@ export function FocusEdge(p: { testID?: string }) {
  * left and 12 px from the top and bottom. The parent must be `relative`. Only the square user
  * band keeps its flush rail.
  */
-export function StatusRail(p: { color?: string; testID?: string }) {
-  return <View class={`absolute left-[6px] top-3 bottom-3 w-[3px] rounded-full ${p.color ?? "bg-primary"}`} testID={p.testID} accessible={false} />;
+/** `join` runs the rail to the edge it shares with the panel above or below (plan 47: a question docked over the composer line draws one rail). */
+export function StatusRail(p: { color?: string; testID?: string; join?: "top" | "bottom" }) {
+  const ends = p.join === "bottom" ? "top-3 bottom-0 rounded-t-full" : p.join === "top" ? "top-0 bottom-3 rounded-b-full" : "top-3 bottom-3 rounded-full";
+  return <View class={`absolute left-[6px] ${ends} w-[3px] ${p.color ?? "bg-primary"}`} testID={p.testID} accessible={false} />;
 }
 
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
@@ -247,6 +249,7 @@ export function Empty(p: { title: string; body?: string; action?: JSX.Element; t
 export function Rule() { return <View class="h-px bg-border" />; }
 
 export function relTime(sec: number, now = Date.now()): string {
+  if (!Number.isFinite(sec) || sec <= 0) return "";
   const d = Math.max(0, now / 1000 - sec);
   if (d < 45) return "now";
   if (d < 3600) return `${Math.round(d / 60)}m`;

@@ -211,3 +211,11 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
 - **Ctrl+V pastes text (11-12).** TUI Ctrl+V reads image, else text (`pbpaste`/`wl-paste`/`xclip`, 1 MiB) through the bracketed-paste path, else toasts "The clipboard is empty"; NSH binds Ctrl+V on Apple platforms via `composer.paste`. Verified: TUI and NSH tests, manifest check; not run in real Ghostty.
 - **Shared UI strings table (11-12, plan 40).** `interface/manifest.toml` gains `[strings]` (`"key" = "text"`, `{name}` placeholders); TUI `Manifest::ui_text`, NSH `uiText` (generated). The Git tab labels moved first; `check_manifest.py` validates keys, placeholders and use. TUI `cargo test`, `git-tab.test.tsx` and the manifest check pass; no screenshots.
 - **Phone Send long-press and iPad as desktop (11-12, plans 25, 05).** On the phone, long-pressing Send while a turn runs opens a sheet with Queue / Interrupt and send (`mode: "interrupt"`); only the phone idiom is the cut-down client, an iPad gets the desktop/web layout. Tests: `phone-redesign`, `mobile`.
+- 47 Questions live in the composer slot (11-14): TUI + NSH built, tests updated; screenshots compared in the plan file.
+- 47 done (11-15): NSH Esc/Up and image-draft tests; TUI/NSH compared (`reports/47-question-in-composer/`); NSH rail joined through the line; caret and highlight no longer reset on model events; 30.2/30.3 marked superseded.
+
+- **Light-theme selection contrast and a safe turn time (11-15, plan 05).** Light `interactive.selection` deepens to a
+  warm sand (`#e8d0b9`) and the Settings focus band to neutral `#d9d9d4`, so selected and focused states stand off the
+  well in both clients (NSH before/after and TUI light frames in `reports/nsh-look-2026-11/`). NSH's turn meta omits a
+  missing or unparsable timestamp instead of printing `Invalid Date`, matching the TUI; `timeline-visual-parity.test.tsx`
+  covers it. Theme checks, NSH web tests and type check pass.

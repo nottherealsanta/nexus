@@ -37,6 +37,11 @@ Implemented in the working tree for iPhone: three tabs, reduced timeline, compac
   playback, interruption/cleanup, Manager integration and real-device verification remain open.
   The partial native crate also passes `cargo check --target aarch64-apple-ios`; this does not exercise audio hardware.
 - [~] Tests on the phone idiom at 390 px (`phone-redesign.test.tsx`, `mobile.test.ts`, `phone-session-controls.test.tsx`) and a phone screenshot of each tab, dark and light, are done ([reports/mobile-2026-11-11](../reports/mobile-2026-11-11/)); `nexus-nsh/README.md` and docs updated. **Open:** a real simulator run and a signed device build (see the `nexus-ios-device` skill).
+  Fixed 2026-11-15: the user message's turn meta showed `#1 · Invalid Date` when Core's `created` was missing or
+  unparsable. NSH's `clock` now omits an unusable time (as the TUI's `local_clock` already did) and the meta, handoff
+  card and turn footer drop the empty part, so the row reads `#1`. Both the phone and the desktop timeline use the same
+  row builder, so the desktop path is covered too. Test: `timeline-visual-parity.test.tsx` ("a missing or unparsable
+  turn time is left out…").
 - [ ] **Remote iPhone install (from 2026-11-09):** Capture the paired iPhone's Bonjour announcement with Xcode Tailscale Bridge
   while phone and Mac are on the same local network, then verify a signed Nexus
   update from a different network over Tailscale. Remote diagnostics/build passed,
@@ -111,6 +116,12 @@ card).
   Where a change is also right for the TUI (spacing, wording, grouping), land it there in the same change.
 - [~] Verify with Playwright screenshots (web done, 1024/1440 dark/light; macOS app not attempted: no non-interactive launch) and the macOS app; before/after pairs saved under
   `reports/nsh-look-2026-11/`.
+  2026-11-15: audit item 7 (light-theme selection contrast) fixed with tokens only, in both clients:
+  `interactive.selection` `#f0e3d8` → `#e8d0b9` and `interactive.settings_selection` `#ddddd9` → `#d9d9d4` (with the
+  256-colour selection fallback 224 → 223). A selected segment or row is now a warm sand band that stands off the
+  panel, sidebar and raised surfaces, while focused Settings rows keep the neutral gray band; no client difference.
+  NSH 1024 light Settings and palette, and TUI 120×40 / 160×48 light Settings, completion and text frames, are in
+  `reports/nsh-look-2026-11/` (`*-light-selection-*`, `tui-*-light-*-after`).
 
 ## 5.4 Redesign pass: web, macOS and phone (user, 2026-11-12)
 
@@ -134,4 +145,6 @@ states, type rules, phone Sessions / conversation / Manager). Awaiting the user'
 - [ ] **Phone:** the `nexus` wordmark in Monaspace at the top of Sessions; the tab bar gets 10 px more top padding.
 - [ ] Verify with the screenshot skills (TUI and NSH web, dark and light) and record any client difference in the ledger.
 
-Audit list, open items (tab clip without ellipsis, light-theme selection contrast, Settings notes vs TUI one-line rows, palette disabled reasons) and before/after pairs: [reports/nsh-look-2026-11/README.md](../reports/nsh-look-2026-11/README.md).
+Audit list, open items (tab clip without ellipsis, Settings notes vs TUI one-line rows, palette disabled reasons) and
+before/after pairs: [reports/nsh-look-2026-11/README.md](../reports/nsh-look-2026-11/README.md). Audit item 7
+(light-theme selection contrast) landed 2026-11-15.

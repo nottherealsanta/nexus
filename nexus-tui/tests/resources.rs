@@ -77,7 +77,10 @@ fn strip_counts_and_modal_list() {
     let chip = app.hits.rect_of(&Target::ComposerShells).unwrap();
     click(&mut app, chip.x, chip.y);
     let shown = draw(&mut app, 160, 50).1.join("\n");
-    assert!(app.groups().group_count() == 1 && app.terminal_shell_count() == 0, "{shown}");
+    assert!(
+        app.groups().group_count() == 1 && app.terminal_shell_count() == 0,
+        "{shown}"
+    );
     assert!(!shown.contains("Kernels (1)"), "{shown}");
     assert!(
         shown.contains("Background shells (1 live, 2 kept)"),
@@ -100,7 +103,9 @@ fn background_and_terminal_shells_are_separate_and_clickable() {
     app.ui
         .groups
         .placements
-        .push_back(nexus_tui::app::tabs::Placement::Split(nexus_tui::groups::Side::Down));
+        .push_back(nexus_tui::app::tabs::Placement::Split(
+            nexus_tui::groups::Side::Down,
+        ));
     app.terminal_created("t1".into());
     // The session page (and its strip) is the focused group's.
     app.execute("layout.focus_up");
@@ -141,7 +146,9 @@ fn a_running_job_and_a_user_terminal_are_counted_separately() {
     app.ui
         .groups
         .placements
-        .push_back(nexus_tui::app::tabs::Placement::Split(nexus_tui::groups::Side::Down));
+        .push_back(nexus_tui::app::tabs::Placement::Split(
+            nexus_tui::groups::Side::Down,
+        ));
     app.terminal_created("t1".into());
     // The user's terminal is a tab; focus goes back to the session to click its chip.
     app.execute("layout.focus_up");

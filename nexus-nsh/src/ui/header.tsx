@@ -21,7 +21,7 @@ function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null
  * change, and a long title ellipsises inside its tab instead of widening it.
  */
 export const tabHeight = () => isNarrow() ? "h-10" : "h-8";
-export const tabBox = () => `shrink-0 flex-row items-center rounded-(--radius) ${tabHeight()}`;
+export const tabBox = () => `shrink-0 flex-row items-center ${tabHeight()}`;
 /** The title's dedicated cells, after status, padding and the fixed close slot. */
 export const tabTitleRoomCells = (widthPx: number) => Math.max(1, Math.round(widthPx / textCellPoints()) - 7);
 export const tabTitleOverflow = (titleWidth: number, roomWidth: number) => Math.max(0, titleWidth - roomWidth);

@@ -13,7 +13,7 @@ use ratatui::style::Color;
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
 
 #[test]
-fn session_sidebar_pins_new_search_and_archive_after_the_list() {
+fn session_sidebar_pins_new_search_and_archive_above_the_list() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let (_, rows) = draw(&mut app, 120, 36);
     let new_session = app
@@ -29,9 +29,12 @@ fn session_sidebar_pins_new_search_and_archive_after_the_list() {
         .hits
         .rect_of(&Target::ArchivedFilter)
         .expect("archive hit");
-    assert!(session.y < new_session.y);
     assert_eq!(new_session.y + 1, search.y);
     assert_eq!(search.y + 1, archive.y);
+    assert!(
+        session.y > archive.y + 1,
+        "the rule sits between the actions and the list"
+    );
     let text = rows.join("\n");
     assert!(text.contains("New session"), "{text}");
     assert!(text.contains("Search sessions"), "{text}");
@@ -57,7 +60,12 @@ fn project_rail_pins_add_above_settings_with_sidebar_open_or_closed() {
     }
 }
 
-fn terminal_resource(id: &str, name: &str, status: &str, controller: Option<&str>) -> nexus_tui::terminal_api::TerminalResource {
+fn terminal_resource(
+    id: &str,
+    name: &str,
+    status: &str,
+    controller: Option<&str>,
+) -> nexus_tui::terminal_api::TerminalResource {
     serde_json::from_value(serde_json::json!({
         "id": id, "name": name, "workspace": "/tmp", "status": status,
         "controller": controller, "rows": 24, "cols": 80
@@ -110,8 +118,14 @@ fn terminal_command_opens_a_new_terminal_in_a_split_below() {
     assert!(app.regions.panel.is_none());
     let body = app.regions.terminal.expect("the terminal's body");
     let session_group = app.ui.groups.rects[0].1;
-    assert!(body.y > session_group.bottom(), "{body:?} below {session_group:?}");
-    assert_eq!(app.active_tab().unwrap().kind, nexus_tui::groups::Kind::Terminal);
+    assert!(
+        body.y > session_group.bottom(),
+        "{body:?} below {session_group:?}"
+    );
+    assert_eq!(
+        app.active_tab().unwrap().kind,
+        nexus_tui::groups::Kind::Terminal
+    );
     let strip = &rows[(body.y - 1) as usize];
     assert!(strip.contains("Build"), "{strip:?}");
     let toolbar = &rows[body.y as usize];
@@ -165,7 +179,10 @@ fn terminal_toolbar_tooltips_follow_the_pointer() {
         row: menu.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(draw(&mut app, 120, 36).1.join("\n").contains("Group actions"));
+    assert!(draw(&mut app, 120, 36)
+        .1
+        .join("\n")
+        .contains("Group actions"));
     let rect = app.hits.rect_of(&Target::TerminalTakeControl).unwrap();
     app.terminal_controlled = true;
     app.handle_mouse(MouseEvent {
@@ -195,7 +212,11 @@ fn terminal_tabs_match_the_shared_scenario() {
     // The scenario's dock-era facts (`Terminals (1)`, the New / Close / Hide
     // actions) are gone; its terminal is a tab, and the agent's job is not one.
     assert!(shown.contains("Build"), "{shown}");
-    for fact in ["Background job ready", "No terminal selected", "Close panel"] {
+    for fact in [
+        "Background job ready",
+        "No terminal selected",
+        "Close panel",
+    ] {
         assert!(!shown.contains(fact), "unexpected {fact:?} in:\n{shown}");
     }
     assert_eq!(app.terminal_panel.terminals.len(), 1);
@@ -227,9 +248,16 @@ fn terminal_list_drops_gone_tabs_and_new_creates_in_current_workspace() {
     app.apply_done(ActionDone {
         call,
         result: Ok(Done {
-            terminals: Some([("closed", "closed"), ("exited", "exited"), ("live", "running")].into_iter().map(|(id, status)| {
-                terminal_resource(id, "Terminal", status, None)
-            }).collect()),
+            terminals: Some(
+                [
+                    ("closed", "closed"),
+                    ("exited", "exited"),
+                    ("live", "running"),
+                ]
+                .into_iter()
+                .map(|(id, status)| terminal_resource(id, "Terminal", status, None))
+                .collect(),
+            ),
             ..Done::default()
         }),
     });
@@ -306,7 +334,11 @@ fn terminal_exit_revokes_input_and_updates_tab_immediately() {
     // The tab's dot is the ended one.
     let (_, rows) = draw(&mut app, 120, 36);
     let body = app.regions.terminal.unwrap();
-    assert!(rows[(body.y - 1) as usize].contains("○"), "{:?}", rows[(body.y - 1) as usize]);
+    assert!(
+        rows[(body.y - 1) as usize].contains("○"),
+        "{:?}",
+        rows[(body.y - 1) as usize]
+    );
 }
 
 #[test]
@@ -461,7 +493,8 @@ fn terminal_ctrl_c_goes_to_shell_and_ctrl_bracket_is_not_sent() {
 }
 
 #[test]
-fn terminal_toggle_key_focuses_the_terminal_tab_without_sending_and_leaves_ctrl_space_to_the_shell() {
+fn terminal_toggle_key_focuses_the_terminal_tab_without_sending_and_leaves_ctrl_space_to_the_shell()
+{
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nexus_tui::terminal_panel::TerminalFocus;
 
@@ -502,11 +535,20 @@ fn terminal_toggle_key_focuses_the_terminal_tab_without_sending_and_leaves_ctrl_
             "{key} does not terminate the terminal"
         );
         assert!(
-            !app.effects.iter().any(|e| matches!(e, Effect::TerminalStop(_))),
+            !app.effects
+                .iter()
+                .any(|e| matches!(e, Effect::TerminalStop(_))),
             "{key} keeps the terminal attached"
         );
-        assert!(app.terminal_live(), "{key} focuses the most recent terminal tab");
-        assert_eq!(app.groups().group_count(), groups, "{key} opens no second terminal");
+        assert!(
+            app.terminal_live(),
+            "{key} focuses the most recent terminal tab"
+        );
+        assert_eq!(
+            app.groups().group_count(),
+            groups,
+            "{key} opens no second terminal"
+        );
     }
 }
 
@@ -1143,7 +1185,7 @@ fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_primary() {
         ]}),
     );
     let (buf, rows) = draw(&mut app, 120, 36);
-    let input_x = (app.regions.composer.x + 5) as usize;
+    let input_x = (app.regions.composer.x + 4) as usize;
     let primary = app.theme.color("text.primary").unwrap();
     for (text, mark) in [("queued one", "Q"), ("steer one", "S")] {
         let y = rows
@@ -1151,9 +1193,9 @@ fn pending_queue_text_lines_up_with_the_input_and_its_marker_is_primary() {
             .position(|row| row.contains(text))
             .unwrap_or_else(|| panic!("{text:?} not in {rows:#?}"));
         let row = &rows[y];
-        assert_eq!(col_of(row, text), input_x, "{row:?}");
-        assert_eq!(col_of(row, mark), input_x - 2, "{row:?}");
-        let cell = &buf[(input_x as u16 - 2, y as u16)];
+        assert_eq!(col_of(row, text), input_x + 1, "{row:?}");
+        assert_eq!(col_of(row, mark), input_x - 1, "{row:?}");
+        let cell = &buf[(input_x as u16 - 1, y as u16)];
         assert_eq!(cell.fg, primary, "{row:?}");
         assert!(
             !cell.modifier.contains(ratatui::style::Modifier::BOLD),
@@ -1915,17 +1957,26 @@ fn system_theme_can_be_selected_and_restored() {
     press(&mut app, &["t", "h", "e", "m", "e"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
-    assert!(text.contains("system") && text.contains("light") && text.contains("dark"), "{text}");
+    assert!(
+        text.contains("system") && text.contains("light") && text.contains("dark"),
+        "{text}"
+    );
     press(&mut app, &["left", "left"]);
     assert!(app.theme_system);
-    assert_eq!(app.theme.opts.mode, nexus_tui::theme::Options::from_env().mode);
+    assert_eq!(
+        app.theme.opts.mode,
+        nexus_tui::theme::Options::from_env().mode
+    );
     app.persist_prefs();
     let saved = prefs::load(&home);
     assert_eq!(saved.theme.mode.as_deref(), Some("system"));
     let mut restored = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     restored.apply_prefs(&home, saved, Overrides::default());
     assert!(restored.theme_system);
-    assert_eq!(restored.theme.opts.mode, nexus_tui::theme::Options::from_env().mode);
+    assert_eq!(
+        restored.theme.opts.mode,
+        nexus_tui::theme::Options::from_env().mode
+    );
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -2222,14 +2273,13 @@ fn question_card_shows_options_and_a_number_key_answers() {
         all.contains("Which database?")
             && all.contains("1 PostgreSQL")
             && all.contains("2 SQLite")
+            && all.contains("space select")
             && all.contains("enter send"),
         "{all}"
     );
     assert!(!all.contains("arrives with"), "{all}");
-    // a number picks; Enter sends the single question at once (no review)
+    // a number chooses and goes on: the lone question is sent (no review)
     press(&mut app, &["2"]);
-    assert!(answers_sent(&app).is_empty());
-    press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
@@ -2251,7 +2301,7 @@ fn long_question_content_scrolls_and_drafts_survive_pages() {
     ))
     .unwrap();
     let mut app = asking(&fixture["questions"].to_string(), (80, 24));
-    press(&mut app, &["alt+w", "1", "enter"]);
+    press(&mut app, &["alt+w", "1"]);
     let mut seen = String::new();
     for _ in 0..100 {
         seen.push_str(&joined(&draw(&mut app, 80, 24).1));
@@ -2280,7 +2330,6 @@ fn long_question_content_scrolls_and_drafts_survive_pages() {
     ] {
         assert!(seen.contains(text), "missing {text}: {seen}");
     }
-    press(&mut app, &["alt+a"]);
     typing(&mut app, "my draft");
     press(&mut app, &["alt+left", "alt+right"]);
     assert_eq!(
@@ -2496,7 +2545,7 @@ fn multi_select_is_violet_and_the_review_rail_is_white() {
         "{rails:?}"
     );
 
-    press(&mut app, &["1", "enter"]);
+    press(&mut app, &["space", "enter"]);
     typing(&mut app, "a note");
     press(&mut app, &["enter"]);
     let (buf, _) = draw(&mut app, 120, 36);
@@ -2526,8 +2575,8 @@ fn typed_text_for_an_option_question_is_its_custom_answer() {
 #[test]
 fn a_selected_option_and_custom_context_are_sent_together() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    press(&mut app, &["1", "alt+a"]);
-    // The leading digit is text in the field, not another option pick.
+    press(&mut app, &["space", "down", "down"]);
+    // The line is focused: the digit is text, not another option pick.
     typing(&mut app, "2nd choice");
     press(&mut app, &["enter"]);
     assert_eq!(
@@ -3337,7 +3386,10 @@ fn tabs_replace_the_title_open_close_and_switch() {
         rows[strip]
     );
     // Clicking the other tab switches to it.
-    let first = app.hits.rect_of(&Target::GroupTab(g, 0)).expect("first tab");
+    let first = app
+        .hits
+        .rect_of(&Target::GroupTab(g, 0))
+        .expect("first tab");
     click(&mut app, first.x + 2, first.y);
     assert_eq!(app.viewed_id(), Some(SESSION));
     // Closing a tab keeps its session and moves to the neighbour.
@@ -3355,7 +3407,10 @@ fn tabs_replace_the_title_open_close_and_switch() {
     assert!(app.viewed_id().is_none());
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(
-        rows.iter().skip(1).take(2).any(|r| r.contains("New session")),
+        rows.iter()
+            .skip(1)
+            .take(2)
+            .any(|r| r.contains("New session")),
         "{}",
         rows[strip]
     );
@@ -3483,7 +3538,10 @@ fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     assert_eq!(rail.width, 4);
     assert_eq!(rail.height, app.regions.centre.height);
     assert_eq!(rail.right(), app.regions.centre.x);
-    assert_eq!(rail.y, app.regions.centre.y, "the rail spans the strip row too");
+    assert_eq!(
+        rail.y, app.regions.centre.y,
+        "the rail spans the strip row too"
+    );
     let heading = centre_row(&app, &rows, app.regions.heading.y);
     assert!(heading.contains("Child task"), "{heading:?}");
     assert!(!heading.contains("Root task"), "{heading:?}");
@@ -3709,7 +3767,7 @@ fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
         assert_eq!(buf[(r.right() - 2, r.y + 1)].symbol(), " ", "{w}");
         // Input at x+3 inside the card, a blank row, the control row.
         let input = card(r.y + 2);
-        assert!(input[input.char_indices().nth(x + 3).unwrap().0..].starts_with("Type a message"));
+        assert!(input[input.char_indices().nth(x + 2).unwrap().0..].starts_with("Type a message"));
         assert!(
             card(r.y + 3).replace('\u{2502}', "").trim().is_empty(),
             "{w}: blank row"
@@ -3717,7 +3775,7 @@ fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
         let control = card(r.bottom() - 4);
         assert!(control
             .chars()
-            .skip(x + 3)
+            .skip(x + 2)
             .collect::<String>()
             .starts_with("Build"));
         assert_eq!(buf[(r.x + 2, r.bottom() - 3)].symbol(), "\u{2580}", "{w}");
@@ -3911,7 +3969,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
             .iter()
             .position(|l| l.contains("⌕"))
             .expect("search row");
-        // The list is above the pinned New / Search / Show archived footer.
+        // New / Search / Show archived are pinned at the top, then a rule, then the list.
         let key = col_of(&text[first], "ctrl+k");
         assert_eq!(
             text[first].find('⌕').map(|_| col_of(&text[first], "⌕")),
@@ -3929,9 +3987,14 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         let title = &text[title_y];
         let detail = &text[title_y + 1];
         assert!(text[title_y + 2].trim().is_empty(), "spacer {w}");
-        assert!(title_y + 2 < first, "list precedes footer {w}");
+        assert!(title_y > first + 2, "list follows the actions {w}");
         assert!(text[first - 1].contains("+ New session"), "{w}");
         assert!(text[first + 1].contains("Show archived"), "{w}");
+        assert!(
+            text[first + 2].starts_with('─') || text[first + 2].contains("───"),
+            "rule {w}: {:?}",
+            text[first + 2]
+        );
         // The open session's active bar at x=0, the mark slot at x=1, title at x=3, time
         // right-aligned with a margin of 1.
         assert!(title.starts_with("▏●"), "{w}: unread mark: {title:?}");
@@ -3999,9 +4062,12 @@ fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees()
     assert!(text[tree + 1].contains("Worktree task"));
     let cursor = app.cursor(nexus_tui::ui::Tab::Sessions);
     let id = &app.side_entries()[cursor].id;
+    let rule = text.iter().position(|l| l.starts_with('─')).expect("rule");
     let title = text
         .iter()
-        .position(|l| {
+        .enumerate()
+        .skip(rule)
+        .position(|(_, l)| {
             l.contains(
                 &app.state.model.sessions[id.as_str()]
                     .title
@@ -4010,7 +4076,8 @@ fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees()
                     .collect::<String>(),
             )
         })
-        .unwrap();
+        .unwrap()
+        + rule;
     assert!(
         text[title].starts_with('▌') && text[title + 1].starts_with('▌'),
         "{text:#?}"
@@ -4927,7 +4994,11 @@ fn a_file_is_a_tab_of_the_focused_group_at_every_width() {
         "typing stays out of the composer"
     );
     press(&mut app, &["alt+x"]);
-    let dialog = app.ui.dialog.as_ref().expect("typed changes require confirmation");
+    let dialog = app
+        .ui
+        .dialog
+        .as_ref()
+        .expect("typed changes require confirmation");
     assert_eq!(dialog.title, "Save changes to hello.txt?");
     // Save, Discard, Cancel: Discard closes the tab and drops the text.
     press(&mut app, &["right", "enter"]);

@@ -787,17 +787,7 @@ impl Frame {
                 };
                 let id = i("id")
                     .or_else(|| cursor.as_deref().and_then(parse_cursor).map(|(_, id)| id))
-                    .or_else(|| {
-                        (ephemeral
-                            && matches!(
-                                kind,
-                                "text_delta"
-                                    | "reasoning_delta"
-                                    | "tool_call_started"
-                                    | "tool_args_delta"
-                            ))
-                        .then_some(0)
-                    })
+                    .or_else(|| ephemeral.then_some(0))
                     .ok_or_else(|| Error::Decode(format!("event {kind} has no durable id")))?;
                 Ok(Frame::Event(Event {
                     id,

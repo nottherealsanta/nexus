@@ -3637,7 +3637,7 @@ impl Builder<'_> {
             let mut left = vec![
                 Span::raw(" ".repeat(ACTIVITY_INDENT)),
                 Span::styled(format!("{glyph} "), glyph_style),
-                Span::styled(verb.to_owned(), b.primary()),
+                Span::styled(verb.to_owned(), b.secondary()),
             ];
             if !arg.is_empty() {
                 left.push(Span::styled(format!("  {arg}"), b.secondary()));
@@ -3924,9 +3924,7 @@ impl Builder<'_> {
                 })
                 .cloned()
         };
-        let agent = child
-            .as_ref()
-            .map_or(agent, |c| c.agent.clone());
+        let agent = child.as_ref().map_or(agent, |c| c.agent.clone());
         // A fork is labelled (and coloured as) `fork`, not the parent's agent
         // it runs as.
         let agent = if child.as_ref().is_some_and(|c| c.fork.is_some()) {

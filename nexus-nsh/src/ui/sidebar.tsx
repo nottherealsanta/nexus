@@ -92,7 +92,7 @@ function GitTab() {
         <Each of={gitFolders(changes())} key={(f) => f.name}>{(folder) => <View>
           <Button testID={`git-folder-${folder().name}`} accessibilityLabel={uiText("git.folder", { name: folder().name, count: folder().files.length })} onPress={() => toggleGitFolder(folder().name)} class={`flex-row gap-2 px-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{gitOpen().has(folder().name) ? "▾" : "▸"}</Text><Text class={TS.base}>{folder().name}</Text><Text class={T.meta}>{`${folder().files.length}`}</Text></Button>
           <If when={gitOpen().has(folder().name)}>
-            <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <View {...trackMods}><ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={(e: any) => { selectedGitFile.set({ path: change().path, group: group() }); openDiffTab(sideClick(e)); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
+            <Each of={gitGroups} key={(g) => g}>{(group) => <Each of={folder().files.filter((c) => inGitGroup(c, group()))} key={(c) => c.path}>{(change) => <View {...trackMods}><ContextMenu onOpenChange={({ open }) => { if (open) selectedGitFile.set({ path: change().path, group: group() }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button testID={`git-${group().toLowerCase()}-${change().path}`} onPress={() => { selectedGitFile.set({ path: change().path, group: group() }); openDiffTab(sideClick()); }} class={`flex-row gap-2 pl-5 pr-2 h-7 rounded-(--radius) hover:bg-accent ${FOCUS}`}><Text class={T.meta}>{group() === "Staged" ? change().status[0] : group() === "Untracked" ? "?" : change().status[1]}</Text><Text class={TS.base}>{change().path}</Text></Button>}>
               <Each of={commands.filter((c) => ["git.stage", "git.unstage", "git.discard"].includes(c.id) && c.placement.includes("row_menu"))} key={(c) => c.id}>{(cmd) => <MenuItem onSelect={() => void run(cmd().id)} disabled={!availability(cmd()).ok} class="rounded-(--radius) px-2 py-1.5 hover:bg-accent"><Text class={TS.base}>{cmd().title}</Text></MenuItem>}</Each>
             </ContextMenu></View>}</Each>}</Each>
           </If>
@@ -106,7 +106,7 @@ export function SessionRail() {
   const projects = () => { m(); return railProjects(model.projects.values()); };
   const labels = () => projectLabels(projects());
   const activity = (id: string) => { m(); return projectActivity(id, model.sessions.values(), model.running, tick()); };
-  const counts = (id: string) => { m(); return projectCounts(id, model.sessions.values(), model.approvals.values(), model.questions.values(), model.running, model.unreadSessions); };
+  const counts = (id: string) => { m(); return projectCounts(id, model.sessions.values(), model.approvals.values(), model.questions.values(), model.running, model.unreadSessions, model.failedSessions); };
   // The rail popup uses two rows of two, in aligned columns.
   const details = (id: string) => {
     const c = counts(id);
@@ -270,7 +270,7 @@ function setSessionQuery(value: string) {
 const snippetOf = (id: string) => { const h = searchHits(); const q = sessionQuery().trim(); return h && h.q === q && !titleMatches(model.sessions.get(id)?.title ?? "") ? h.snippets.get(id) : undefined; };
 const titleMatches = (title: string) => title.toLowerCase().includes(sessionQuery().trim().toLowerCase());
 
-type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "session"; s: Session } | { key: string; kind: "new" };
+type Item = { key: string; kind: "header"; title: string; n: number } | { key: string; kind: "session"; s: Session } | { key: string; kind: "new" } | { key: string; kind: "rule" };
 /** All-projects scope groups sessions under their project; one project is a flat list. */
 function rowItems(): Item[] {
   const query = sessionQuery().trim().toLowerCase();
@@ -283,13 +283,18 @@ function rowItems(): Item[] {
       ...group.sessions.map((s) => ({ key: s.id, kind: "session" as const, s })),
     ]);
   }
-  if (!scopeAll() || (railShown() && !query)) return ses.map((s) => ({ key: s.id, kind: "session" as const, s }));
+  // A rule separates the active sessions from the archived ones below them.
+  const withRule = (list: Session[]): Item[] => list.flatMap((s, i) => [
+    ...(i > 0 && s.archived && !list[i - 1].archived ? [{ key: `rule-${s.id}`, kind: "rule" as const }] : []),
+    { key: s.id, kind: "session" as const, s },
+  ]);
+  if (!scopeAll() || (railShown() && !query)) return withRule(ses);
   const out: Item[] = [];
   for (const pr of model.projectsRecent()) {
     const mine = ses.filter((s) => s.project_id === pr.id);
     if (!mine.length) continue;
     out.push({ key: `h-${pr.id}`, kind: "header", title: pr.name, n: mine.length });
-    for (const s of mine) out.push({ key: s.id, kind: "session", s });
+    out.push(...withRule(mine));
   }
   return out;
 }
@@ -298,7 +303,8 @@ export function rowSessions(): Session[] {
   m();
   const all = model.sessionsRecent().filter((s) => !s.parent_id);
   const p = currentProject();
-  return all.filter((s) => ((scopeAll() && (phone || !railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() || !s.archived));
+  return all.filter((s) => ((scopeAll() && (phone || !railShown() || !!sessionQuery().trim())) || !p || s.project_id === p) && (archivedFilter() || !s.archived))
+    .sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
 }
 function sessionRunning(s: Session) { return s.status === "busy" || model.tree(s.id).some((id) => model.running.has(id)); }
 function childCount(id: string) { let n = 0; for (const s of model.sessions.values()) if (s.parent_id === id) n++; return n; }
@@ -383,18 +389,7 @@ export function SessionsTab() {
           </View>
         </If>
       </View>
-      <View class="flex-1 min-h-0">
-      <If when={rowItems().length > 0} else={
-        <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
-          <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
-        </If>
-      }>
-        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
-          {(x) => <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${T.meta} font-medium`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View></If>}
-        </List>
-      </If>
-      </View>
-      <If when={!phone}><View class="border-t border-border p-2 shrink-0">
+      <If when={!phone}><View class="border-b border-border p-2 shrink-0">
         <Button onPress={() => run("session.new")} disabled={!availability(byId.get("session.new")!).ok} testID="new-session-row" accessibilityLabel="New session" class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="plus" size={16} class="tint-muted-foreground" /><Text class={`${TS.base} text-muted-foreground`}>New session</Text></Button>
         <Button onPress={() => run("session.switch")} accessibilityLabel="Search sessions" testID="session-search" class={`w-full flex-row items-center gap-2 px-2.5 h-[34px] rounded-(--radius) bg-card hover:bg-accent ${FOCUS}`}>
           <Icon name="search" size={14} class="tint-muted-foreground" /><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} text-muted-foreground`}>{leftSidebarWidth() < 220 ? "Search" : "Search sessions"}</Text>
@@ -402,6 +397,17 @@ export function SessionsTab() {
         </Button>
         <Button onPress={() => run("sessions.archived_filter")} testID="chip-archived" accessibilityLabel="Show archived" selected={archivedFilter()} class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}><Icon name="archive" size={16} class={archivedFilter() ? "tint-multi" : "tint-muted-foreground"} /><Text class={`${TS.base} text-foreground`}>Show archived</Text></Button>
       </View></If>
+      <View class="flex-1 min-h-0">
+      <If when={rowItems().length > 0} else={
+        <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
+          <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
+        </If>
+      }>
+        <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
+          {(x) => <If when={x().kind === "rule"} else={<If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}><View class={phone ? "px-3 pt-5 pb-2" : "px-2 pt-3 pb-1"} testID="session-group"><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={phone ? "text-[14px] leading-5 font-semibold text-muted-foreground" : `${T.meta} font-medium`}>{(x() as any).title}{phone && (x() as any).title === "Needs you" ? ` · ${(x() as any).n}` : ""}</Text></View></If>}><View class="border-t border-border my-1" testID="session-archived-rule" /></If>}
+        </List>
+      </If>
+      </View>
     </View>
   );
 }
@@ -542,7 +548,7 @@ function FilesTab() {
         <If when={!root()?.error && rows().length === 0}><Text class={`${T.sec} px-2 pt-1`} testID="files-empty">This folder is empty.</Text></If>
         <Each of={rows()} key={(row) => row.path}>{(row) =>
           <View style={{ paddingLeft: 8 + row().depth * 16 }} {...trackMods} onFocus={() => selectedFileEntry.set({ path: row().path, kind: row().kind })}>
-          <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={(e: any) => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") openFileTab(r.path, sideClick(e)); }}
+          <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={() => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") openFileTab(r.path, sideClick()); }}
             accessibilityLabel={row().name} testID={`file-entry-${row().path}`}
             class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-selection" : ""} ${FOCUS}`}>
             <View class="w-3.5 shrink-0 items-center justify-center">

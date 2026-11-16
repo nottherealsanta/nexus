@@ -196,12 +196,18 @@ fn hovered_session_row_has_stacked_archive_and_menu_actions() {
     let row = app.hits.rect_of(&Target::SideRow(0)).unwrap();
     app.mouse = Some((row.x + 3, row.y));
     draw(&mut app, 120, 36);
-    let archive = app.hits.rect_of(&Target::ArchiveSession(SESSION.to_owned())).unwrap();
+    let archive = app
+        .hits
+        .rect_of(&Target::ArchiveSession(SESSION.to_owned()))
+        .unwrap();
     let menu = app.hits.rect_of(&Target::SessionRowMenu(0)).unwrap();
     assert_eq!(archive.x, menu.x);
     assert_eq!(archive.y + 1, menu.y);
     click(&mut app, menu.x, menu.y);
-    assert!(app.palette_items().iter().any(|item| item.label == "Archive session"));
+    assert!(app
+        .palette_items()
+        .iter()
+        .any(|item| item.label == "Archive session"));
     app.ui.overlay = None;
     draw(&mut app, 120, 36);
     click(&mut app, archive.x, archive.y);
@@ -321,21 +327,22 @@ fn one_free_text_question_is_focused_and_sends_on_enter_without_a_review() {
     let mut app = app();
     ask(&mut app, scenario_question());
     let current = app.ask_current().unwrap();
-    assert!(current.field(), "the free-text answer line has focus");
+    // Options come first (plan 47): the arrows and space work at once; typing moves into the line.
+    assert!(!current.field(), "the options have focus");
     let rows = draw(&mut app, 120, 36).1;
     let y = rows
         .iter()
         .position(|row| row.contains("Add context"))
-        .expect("answer line");
-    let panel = app.theme.color("surface.panel").unwrap();
-    let raised = app.theme.color("surface.raised").unwrap();
-    let x = app.regions.waiting.x + 5;
+        .expect("the composer's slot is the context line");
+    assert!(
+        y as u16 >= app.regions.composer.y,
+        "it sits in the composer's slot"
+    );
+    let x = app.regions.composer.x + 8;
     assert_eq!(app.hits.at(x, y as u16), Some(&Target::WaitInput));
-    let (buf, _) = draw(&mut app, 120, 36);
-    assert_eq!(buf[(x, y as u16)].bg, panel);
-    assert_ne!(buf[(x, y as u16)].bg, raised);
 
     typing(&mut app, "second thoughts");
+    assert!(app.ask_current().unwrap().field());
     press(&mut app, &["enter"]);
     assert_eq!(
         sent_answers(&app),
@@ -357,7 +364,10 @@ fn the_draft_is_locked_and_survives_the_question() {
     assert_eq!(app.ui.focus, Focus::Waiting);
     let rows = draw(&mut app, 120, 36).1;
     assert!(!joined(&rows).contains("Answer the question above"));
-    assert!(joined(&rows).contains(draft), "the draft stays visible");
+    assert!(
+        !joined(&rows).contains(draft),
+        "the slot is the question while it waits"
+    );
 
     typing(&mut app, "free answer");
     app.ui.focus = Focus::Composer;
@@ -391,11 +401,82 @@ fn the_draft_is_locked_and_survives_the_question() {
 }
 
 #[test]
-fn an_empty_composer_shows_the_lock_reason() {
+fn a_short_terminal_keeps_the_context_line_in_the_card() {
+    let mut app = app();
+    app.size = (120, 18);
+    ask(&mut app, scenario_question());
+    let all = joined(&draw(&mut app, 120, 18).1);
+    assert!(!nexus_tui::render::ask_docked(&app));
+    // The line is the card's last row and scrolls into view, as before.
+    assert!(all.contains("pgup/dn scroll"), "{all}");
+    for _ in 0..4 {
+        press(&mut app, &["pagedown"]);
+    }
+    let all = joined(&draw(&mut app, 120, 18).1);
+    assert!(all.contains("Add context"), "{all}");
+}
+
+#[test]
+fn arrows_move_space_selects_and_enter_goes_on() {
+    let mut app = app();
+    ask(
+        &mut app,
+        serde_json::json!([
+            {"id": "db", "question": "Which database?", "multiple": false,
+             "options": [{"id": "pg", "label": "PostgreSQL"}, {"id": "lite", "label": "SQLite"}]},
+            {"id": "tags", "question": "Which tags?", "multiple": true,
+             "options": [{"id": "a", "label": "alpha"}, {"id": "b", "label": "beta"}]}
+        ]),
+    );
+    assert!(!app.ask_current().unwrap().field());
+    press(&mut app, &["down", "space"]);
+    let c = app.ask_current().unwrap();
+    assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![1]));
+    // Space selects; it does not advance.
+    press(&mut app, &["enter"]);
+    assert_eq!(app.ask_current().unwrap().page, 1);
+    press(&mut app, &["space", "down", "down"]);
+    assert!(
+        app.ask_current().unwrap().field(),
+        "down from the last option enters the line"
+    );
+    typing(&mut app, "a note ");
+    assert_eq!(
+        app.ask_current()
+            .unwrap()
+            .pick()
+            .unwrap()
+            .input
+            .expanded_text(),
+        "a note "
+    );
+    // Esc goes back to the options first, keeping the text; up does too.
+    app.escape();
+    let c = app.ask_current().unwrap();
+    assert!(!c.field());
+    assert_eq!(c.pick().unwrap().input.expanded_text(), "a note ");
+    assert_eq!(c.pick().unwrap().chosen, vec![0]);
+    press(&mut app, &["down", "down"]);
+    assert!(app.ask_current().unwrap().field());
+    press(&mut app, &["up"]);
+    assert!(!app.ask_current().unwrap().field());
+    // The last page goes to the review, which sends.
+    press(&mut app, &["enter", "enter"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([
+            {"question_id": "db", "selected": ["lite"], "text": null},
+            {"question_id": "tags", "selected": ["a"], "text": "a note"}
+        ])]
+    );
+}
+
+#[test]
+fn a_digit_or_click_chooses_and_goes_on() {
     let mut app = app();
     ask(&mut app, scenario_question());
-    let all = joined(&draw(&mut app, 120, 36).1);
-    assert!(all.contains("Answer the question above"), "{all}");
+    app.ask_choose(1);
+    assert_eq!(sent_answers(&app).len(), 1);
 }
 
 #[test]

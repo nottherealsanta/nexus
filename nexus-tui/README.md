@@ -117,8 +117,8 @@ the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
 view. New-session composer text and images are kept separately per project, for the
 client process. The left sidebar (D03) lists the current project only (`ctrl+k` opens
-the switcher). Its three-action footer is pinned below the session list (`+ New session`, then `Search sessions`,
-then `Show archived`, also when the list is empty); the archive control includes archived sessions alongside active sessions when enabled.
+the switcher). Its three actions are pinned above the session list (`+ New session`, then `Search sessions`,
+then `Show archived`), with a rule under them, also when the list is empty; the archive control lists archived sessions after the active ones, with a rule between the two.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -761,28 +761,30 @@ Core does not offer show their reason). Toasts (D15) are top-right under the hea
 at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
 same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
-The card also answers `ask` questions and takes the keys on arrival, so typing goes straight
-into its answer. Questions, option labels and previews wrap fully, and Page Up/Page Down
-scroll the card. Every page has a custom answer field in the card, shown as the answer
-line (no filled selection background); typing in it answers in your own words or adds
-context to a selection, and each question keeps its own text. A free-text question (or one
-that allows free text) focuses the field immediately with a visible caret. A
-number key (1-9, 0 for the tenth) or Up/Down picks an option, clicking an option picks
-it, and `Alt+A` moves between the option list and the answer field. **With exactly one
-question**, Enter on a single-choice option (or a click) sends the answer at once; a
-multi-select question still needs its Enter to say "done", but also sends without a
-review page. **Two or more questions** keep the step-through: Enter locks the answer and
-moves to the next question, the last leads to a review page whose rail is
-`text.primary` (white in the dark theme), and Enter there sends the reply.
-`Alt+Left`/`Alt+Right` move between the questions and review, while Left/Right move the
-caret in the answer field (or page when the option list has focus and the field is
-empty). Space ticks options of a multi-select question, whose card uses the violet
-`interactive.multi` rail and ticks. The reply is sent once, as a keyed
-`POST …/question/{id}` (`Ctrl+Enter` submits from any page). While a question is pending
-in the viewed session the composer is disabled and says `Answer the question above`: it
-takes no typing, paste, send, steer or queue, and the draft already there is kept and
-returns when the question is answered. Questions in other sessions do not lock it; Esc
-still follows the manifest chain (while busy it interrupts, which cancels the question).
+The card also answers `ask` questions and takes the keys on arrival. Questions, option labels
+and previews wrap fully, and Page Up/Page Down scroll the card. **A question replaces the
+composer** (plan 47): the card and the composer's input are one dock under one rail, and the
+composer's input line is the answer's "add context" line (`Add context…`, or `Type your
+answer…` when the question has no options), with its own text per question. The options have
+the keys first: Up/Down move, Space selects (a multi-select ticks), and Enter goes on. A
+number key (1-9, 0 for the tenth) or a click chooses an option and goes on at once. Typing,
+or Down from the last option, moves into the line; Up from its first line, or Esc, returns
+to the options (the text stays; Esc on the options keeps its normal meaning). A question
+with no options starts in the line. **With exactly one question**, Enter (or a choice by
+digit or click) sends the answer at once; a multi-select question needs its Enter to say
+"done", and also sends without a review page. **Two or more questions** keep the
+step-through: Enter locks the answer and moves to the next question, the last leads to a
+review page whose rail is `text.primary` (white in the dark theme), and Enter there sends
+the reply. `Alt+Left`/`Alt+Right` move between the questions and review, while Left/Right
+move the caret in the line (or page when the options have the keys). A multi-select
+question uses the violet `interactive.multi` rail and ticks. The reply is sent once, as a
+keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any page). While a question is
+pending in the viewed session the composer is the question: no send, steer, queue or
+slash command, and the draft already there is kept untouched and returns when the question
+is answered. On a terminal shorter than 20 rows the line stays inside the card and the
+composer says `Answer the question above`, as before. Questions in other sessions do not
+lock it; Esc still follows the manifest chain (while busy it interrupts, which cancels the
+question).
 Tab and Shift+Tab switch between parallel asks, each of which keeps its own answers.
 Settings opens in a centered
 modal using old Nexus's panel geometry and a searchable root/drill list. Press
@@ -892,8 +894,8 @@ TUI can be driven by hand in a browser.
   where the terminal supports it, half-blocks otherwise).
 - A large text paste (at least 500 characters, regardless of line count) collapses into one
   `[Pasted ~N tokens]` marker at the cursor, as in the old editor; pasting the
-  same text again expands the marker in place. The composer shows a preview row
-  for each collapsed paste, with `Show` opening the full text, as in NSH. Sending
+  same text again reveals it in place of its marker (the one before the cursor,
+  else the first in the draft); the composer shows no preview row, as in NSH. Sending
   sends the marker and the full text separately: Core stores the text as a
   collapsed part, so the model reads it while the user message shows only the
   marker. In the message the marker is a clickable chip above the text, with no

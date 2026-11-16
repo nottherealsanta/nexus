@@ -48,6 +48,21 @@ describe("session sidebar location", () => {
   });
 });
 
+describe("archived sessions", () => {
+  test("actions sit above the list, and a rule separates active from archived sessions", async () => {
+    const archived = { ...session, id: "ses_2", title: "Old session", archived: 1, updated: 3 };
+    const snapshot = { body: { ...JSON.parse(JSON.stringify(network["GET */api/snapshot*"].body)), sessions: [archived, session] } };
+    const app = await open("./App.tsx", { network: { ...network, "GET */api/snapshot*": snapshot }, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    expect(app.shows("id:session-archived-rule")).toBe(false);
+    await app.press("id:chip-archived");
+    await app.waitFor("id:session-archived-rule");
+    const labels = app.texts();
+    expect(labels.indexOf("Show archived")).toBeLessThan(labels.indexOf("Example session"));
+    expect(labels.indexOf("Example session")).toBeLessThan(labels.indexOf("Old session"));
+  });
+});
+
 describe("sidebar selection highlight", () => {
   test("the selected session row and project tile share the active block and left bar", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });

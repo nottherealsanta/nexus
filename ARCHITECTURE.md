@@ -186,7 +186,7 @@ Measure first, then keep these as tests or benchmarks (numbers are proposals):
    in `docs/api.md`, and the rule "clients do not read the workspace" to the
    docs index. No code change.
 2. **Benchmark the queries.** A small script against a large real repo:
-   search, listing, Git status. Record numbers in this file.
+   search, listing, Git status. Record numbers in this file. s
 3. **`nexus-engine` crate with the file index and search.** Lives in
    `nexus-core/` as a maturin-built module in the uv project. Swap the body of
    `files.search_files` to call it; the endpoint and its response stay the

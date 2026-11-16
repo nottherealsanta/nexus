@@ -652,10 +652,10 @@ fn capture(
             return;
         }
     };
-    if stream.play().is_err() {
+    if let Err(error) = stream.play() {
         let _ = events.send(CaptureEvent::Failed {
             generation,
-            message: "Could not start the microphone input stream".into(),
+            message: format!("Could not start the microphone input stream: {error}"),
         });
         return;
     }

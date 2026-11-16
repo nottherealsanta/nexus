@@ -26,12 +26,21 @@ scenarios, including failed-answer retry coverage.
 
 ## 30.2 Composer locked while a question is on screen
 
+**Superseded 2026-11-14 by [47](47-question-in-composer.md)** on desktop: the question takes the composer's slot
+and the composer input is its "add context" line; the draft is set aside and restored. Approvals and the phone card
+keep this section's behaviour.
+
 - [x] While a question card is pending in the viewed session, the composer is disabled (no typing, no send, no
   steer/queue), with a short reason in its placeholder ("Answer the question above"). Esc still interrupts.
   User confirmed 2026-11-11: Deny/"tell it what to do instead" for approvals stays as is (approvals are not questions).
 - [x] Draft text already in the composer is kept and comes back when the question is answered.
 
 ## 30.3 Free-text answers
+
+**Superseded 2026-11-14 by [47](47-question-in-composer.md)** for questions with options: focus starts on the
+options and typing moves into the line. A text-only question still focuses the line at once.
+
+> **Superseded 2026-11-14 by [plan 47](47-question-in-composer.md)** for questions with options: the options have the keys first; only a text-only question starts in the line.
 
 - [x] When a question asks for a string (free-text option or a text-only question), the input field is **focused
   immediately**, and it is **not shown with a highlighted background** (it reads as the answer line, not a

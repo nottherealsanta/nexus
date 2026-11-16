@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files] [Git]       Pick the migration database                                                                 ◆ waiting for you                   □
+     │                                  ◆ Pick the migration data… ×                                                                                                 +  ⋯
+ 1   │ + New session
+  N  │ ⌕ Search sessions       ctrl+k   i 1 other session waiting for input                                                                                           go
+ 1 4 │ ▣ Show archived                    System prompt ~1.3K
+     │────────────────────────────────
+▏1   │   Notes backlog             1m     AGENTS.md  not found · /private/tmp/tui-ws.2ltcCx/b/AGENTS.md
+▏NT  │
+▏  1 │                                    Tools [18] ~3.6K
+     │▏◆ Pick the migration datab… 1m       ● read                      ● bash_kill                 ● ask
+     │▏                                     ● grep                      ● edit                      ● code
+ NM  │                                      ● glob                      ● patch                     ● browser_exec
+   1 │                                      ● ls                        ● write                     ● browser_screenshot
+     │                                      ● bash                      ● web_search                ● fork
+     │                                      ● bash_output               ● web_fetch                 ● expose_workspace_tools
+ NV  │
+   1 │                                    Skills [0]  none
+     │
+     │                                    MCP [0]  none
+  S  │
+   1 │                                    total  ~4,854 tok
+     │
+     │
+     │                                  │
+     │                                  │  Ask me which database to use.                                                                                  #1 · 11:52 PM
+     │                                  │
+     │
+     │                                     ▾ Working
+     │                                     ◆ Ask  Which database should the migration target?                                                                   waiting
+     │
+     │
+     │
+     │                                   ┃
+     │                                   ┃  ◆ Nexus asks
+     │                                   ┃  waiting on you
+     │                                   ┃
+     │                                   ┃  Which database should the migration target?
+     │                                   ┃▸ 1 PostgreSQL
+     │                                   ┃  2 SQLite
+     │                                   ┃
+     │                                   ┃  esc options · enter send
+     │                                   ┃
+     │                                   ┃
+  +  │                                   ┃
+     │                                   ┃  no
+     │                                   ┃
+     │                                   ┃  Build · m scripted · default                                                                                          ~56
+  ⚙  │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/tui-ws.2ltcCx/b                                                                                   Working · 58s
+     │                                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

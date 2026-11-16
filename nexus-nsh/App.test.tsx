@@ -1365,18 +1365,29 @@ describe("large text paste", () => {
     await app.paste("id:composer-input", { text: big });
     await app.waitUntil(() => app.value("id:composer-input") === marker);
     expect(app.value("id:composer-input")).toBe(marker);
-    await app.waitFor("id:paste-previews");
-    expect(app.shows("id:paste-previews")).toBe(true);
-    const shown = app.texts().join("\n");
-    expect(shown).toContain("Pasted text");
-    expect(shown).toContain("8 lines");
-    expect(shown).toContain("Show");
+    expect(app.shows("id:paste-previews")).toBe(false);
+    expect(app.texts().join("\n").includes("Pasted text")).toBe(false);
     await app.submit("id:composer-input");
     await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/prompt")));
     const req = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/prompt"))!;
     const body = JSON.parse(req.body!);
     expect(body.text).toBe(marker);
     expect(body.pastes).toEqual([{ marker, text: big }]);
+  });
+
+  test("pasting the same content again reveals it in the composer", async () => {
+    const app = await open("./ComposerFixture.tsx", {
+      network: selectedSessionNetwork(),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("text:Refactor loader");
+    await app.waitFor("id:msg-user");
+    await app.paste("id:composer-input", { text: big });
+    await app.waitUntil(() => app.value("id:composer-input") === marker);
+    await app.paste("id:composer-input", { text: big });
+    await app.waitUntil(() => app.value("id:composer-input") === big);
+    expect(app.value("id:composer-input")).toBe(big);
   });
 
   test("a short paste stays inline", async () => {

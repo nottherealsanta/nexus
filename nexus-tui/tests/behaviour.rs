@@ -1991,7 +1991,7 @@ fn mouse_drag_selects_composer_text_for_copy() {
     let mut a = app();
     typing(&mut a, "hello world");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 5;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 2;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 6),
@@ -2037,7 +2037,7 @@ fn mouse_drag_uses_display_cells_and_keeps_wide_graphemes_whole() {
     let mut a = app();
     typing(&mut a, "a日本b");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 5;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 2;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 1),
@@ -2065,7 +2065,7 @@ fn mouse_drag_maps_to_the_scrolled_composer_viewport() {
             .join("\n"),
     );
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 5;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 2;
     for (kind, row, column) in [
         (MouseEventKind::Down(MouseButton::Left), y, x),
@@ -2335,7 +2335,7 @@ fn image_paste_sends_an_image_only_prompt_and_restores_it_on_failure() {
 }
 
 #[test]
-fn big_pastes_collapse_into_a_preview_and_send_their_text() {
+fn big_pastes_collapse_into_a_marker_and_send_their_text() {
     use nexus_tui::actions::ApiCall;
     let big = (1..=8)
         .map(|i| format!("row {i}: {}", "x".repeat(70)))
@@ -2348,9 +2348,10 @@ fn big_pastes_collapse_into_a_preview_and_send_their_text() {
     let (_, rows) = draw(&mut a, 120, 40);
     assert!(rows.iter().any(|row| row.contains(&marker)));
     let shown = rows.join("\n");
-    assert!(shown.contains("Pasted text"), "{shown}");
-    assert!(shown.contains("8 lines"), "{shown}");
-    assert!(shown.contains("Show"), "{shown}");
+    assert!(
+        !shown.contains("Pasted text"),
+        "no composer preview: {shown}"
+    );
     press(&mut a, &["enter"]);
     let call = a
         .effects
@@ -2378,8 +2379,8 @@ fn big_pastes_collapse_into_a_preview_and_send_their_text() {
     let (_, rows) = draw(&mut a, 120, 40);
     let shown = rows.join("\n");
     assert!(
-        shown.contains("Pasted text") && shown.contains("Show"),
-        "the restored draft keeps its preview and Show: {shown}"
+        shown.contains(&marker) && !shown.contains("Pasted text"),
+        "the restored draft keeps its marker, with no preview: {shown}"
     );
 }
 
@@ -3369,7 +3370,10 @@ fn browser_chrome_profile_setting_is_off_by_default_and_patches_core() {
 #[test]
 fn browser_status_row_says_what_is_missing_and_asks_again_when_the_mode_changes() {
     let mut a = app();
-    assert_eq!(a.browser_status_lines(), vec!["loading status…".to_string()]);
+    assert_eq!(
+        a.browser_status_lines(),
+        vec!["loading status…".to_string()]
+    );
     a.execute("app.settings");
     assert!(a
         .effects
@@ -3382,13 +3386,22 @@ fn browser_status_row_says_what_is_missing_and_asks_again_when_the_mode_changes(
     }));
     let lines = a.browser_status_lines();
     assert_eq!(lines[0], "not ready");
-    assert!(lines[1].starts_with("no Chrome, Chromium or Edge was found") && lines[1].contains("browser-use install"));
+    assert!(
+        lines[1].starts_with("no Chrome, Chromium or Edge was found")
+            && lines[1].contains("browser-use install")
+    );
     assert!(lines[2].contains("never touched"));
     a.ui.browser_status = Some(serde_json::json!({
         "ok": true, "mode": "own", "uvx": "/u/uvx", "problems": [], "note": "n", "chrome": null,
         "browser": {"name": "Google Chrome", "path": "/Applications/Google Chrome.app"}
     }));
-    assert_eq!(a.browser_status_lines()[..2], ["ready".to_string(), "Google Chrome · own profile".to_string()]);
+    assert_eq!(
+        a.browser_status_lines()[..2],
+        [
+            "ready".to_string(),
+            "Google Chrome · own profile".to_string()
+        ]
+    );
     a.effects.clear();
     a.apply_sync(SyncMsg::Config(Ok(serde_json::json!({
         "revision": "cfg-2", "values": {"browser": {"use_my_chrome": true}}

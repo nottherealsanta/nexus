@@ -676,16 +676,16 @@ carries 1-5 questions. In the TUI they are pages; questions, option labels and
 optional previews wrap without a line limit. Focus the card with `alt+w` and use
 Page Up/Page Down to scroll its content when it does not fit. NSH shows the
 questions in one scrollable card. The answer fields and submit controls can be
-reached by scrolling; drafts stay with their questions. Every TUI page has a custom answer field in the card: type there to
-answer in your own words, or to add context to a selected option. With options,
-Up/Down moves, Space ticks a multi-select option and a number picks one;
-`alt+a` moves between the option list and the field. Enter locks the answer and
-goes on. `Alt+Left`/`Alt+Right` revisit pages, while Left/Right move the caret
-in the answer field (or page when the option list has focus and the field is
-empty). The last page is a review listing every question and its answer, where
-Enter sends the whole reply. Enter in the composer locks or sends exactly like
-the card, adopting its text as the answer. The question card does not show an
-elapsed timer.
+reached by scrolling; drafts stay with their questions. On desktop a question replaces the
+composer: the composer's input is the answer's "add context" line, where you type to answer in
+your own words or to add context to a selected option. Options have the keys first: Up/Down
+move, Space selects (a multi-select ticks) and Enter locks the answer and goes on; a number or a
+click chooses and goes on. Typing, or Down from the last option, moves into the line; Up or Esc
+returns to the options. A question with no options starts in the line. `Alt+Left`/`Alt+Right`
+revisit pages in the TUI, while Left/Right move the caret in the line (or page when the options
+have the keys). The last page is a review listing every question and its answer, where Enter
+sends the whole reply. The composer's own draft is left untouched and comes back afterwards. The
+question card does not show an elapsed timer.
 
 ```jsonc
 // arguments

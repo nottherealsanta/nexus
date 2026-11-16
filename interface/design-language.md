@@ -37,7 +37,10 @@ whole section or setting row (including its value). A white left bar marks the f
 pane (a dark bar in the light theme); inactive selections retain their gray background. NSH uses
 the same fill for selected sections and hovered or keyboard-focused setting rows.
 Settings values are segmented controls, as NSH draws them: the options sit in a quiet
-well at the row's end, with the current one on `interactive.selection`. In the TUI
+well at the row's end, with the current one on `interactive.selection`. The two bands are deliberately different:
+`interactive.selection` is the warm selected band (a deeper sand in the light theme, so it stands off the panel,
+sidebar and raised surfaces), while `interactive.settings_selection` stays neutral gray, so a current value and the
+keyboard focus are told apart. In the TUI
 Left/Right move the focused segment (wrapping at the ends, as the old cycling did) and
 Tab or Esc returns focus to the section heading; in a detail page Left still returns to
 its heading. Shift+Right also steps a value backward, and model effort cycles back to
@@ -85,7 +88,8 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 - Timeline items follow model context order. The user message is a band across
   the whole page width on the raised surface: the rail `▌` at its left edge
   (muted, the focus colour when focused), padding rows above and below, the fold
-  marker inside at the text edge and `#n · time` at the right. Once its text has
+  marker inside at the text edge and `#n · time` at the right (a timestamp that is
+  missing or unparsable is left out: `#n` alone). Once its text has
   scrolled off, a copy is pinned under the header (three rows at most, then a `░`
   shade row in `border.strong` with `↑ N lines of this turn above`), pushed up by
   the next band. The turn footer is one muted right-aligned row,
@@ -147,10 +151,13 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   question's card uses the violet `interactive.multi` rail and ticks. A single-question ask
   submits a single choice or free-text answer immediately; multi-select keeps one submit
   action, without a review page. Multi-question asks retain their step-through and review
-  page (listing every question and answer), using the `text.primary` rail. A free-text
-  answer line takes focus immediately, without a selected-row background; its arrow keys
-  move the caret. While a question card is on screen in the viewed session the composer
-  preserves its draft but is locked with “Answer the question above”; Esc still interrupts.
+  page (listing every question and answer), using the `text.primary` rail. Options
+  have the keys first (Up/Down move, Space selects, Enter goes on; a click or digit chooses
+  and goes on). While a question is on screen in the viewed session it replaces the composer
+  (plan 47): the card and the composer's input are one dock under one rail, and the input is
+  the answer's “Add context…” line, which typing or Down from the last option reaches and
+  Up or Esc leaves. The composer's draft is kept untouched; Esc on the options still
+  interrupts. The phone keeps its compact card and its own field.
   Approval prompts keep their existing deny/redirect behavior. Toasts are
   raised blocks top-right under the header (level `▌`, glyph, bold title, `×`, no
   lifetime hairline), three at a time with `+N more`; clicking one opens its full text in

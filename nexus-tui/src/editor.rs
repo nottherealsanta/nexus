@@ -110,25 +110,40 @@ impl Editor {
     }
 
     /// Insert pasted text. Large pastes become one atomic marker, like images;
-    /// pasting the same content again right after its marker expands it in place.
+    /// pasting the same content again reveals it: the marker right before the
+    /// cursor, else the first one in the draft, is replaced by the content.
     pub fn paste(&mut self, text: &str) {
         let big = text.chars().count() >= COLLAPSE_CHARS;
         if !big {
             return self.insert(text);
         }
         let base = Self::paste_marker(text);
+        let same = |marker: &String, content: &String| {
+            content == text && self.text.contains(marker.as_str())
+        };
         let at = if self.selection().is_none() {
-            self.pastes.iter().rposition(|(marker, content)| {
-                content == text && self.text[..self.cursor].ends_with(marker)
-            })
+            self.pastes
+                .iter()
+                .rposition(|(marker, content)| {
+                    same(marker, content) && self.text[..self.cursor].ends_with(marker.as_str())
+                })
+                .or_else(|| {
+                    self.pastes
+                        .iter()
+                        .position(|(marker, content)| same(marker, content))
+                })
         } else {
             None
         };
         if let Some(at) = at {
             self.checkpoint();
             let marker = self.pastes[at].0.clone();
-            let start = self.cursor - marker.len();
-            self.text.replace_range(start..self.cursor, text);
+            let start = if self.text[..self.cursor].ends_with(marker.as_str()) {
+                self.cursor - marker.len()
+            } else {
+                self.text.find(marker.as_str()).unwrap_or(0)
+            };
+            self.text.replace_range(start..start + marker.len(), text);
             self.cursor = start + text.len();
             // Keep the entry only if another marker with it remains in the draft.
             if self.text.matches(&marker).count()
@@ -935,5 +950,17 @@ mod tests {
         e.paste(&big);
         assert_eq!(e.text, format!("{big}[Pasted ~342 tokens]"));
         assert_eq!(e.take(), format!("{big}{big}"));
+    }
+
+    #[test]
+    fn repeating_a_paste_reveals_its_marker_wherever_the_cursor_is() {
+        let mut e = Editor::default();
+        let big = "y".repeat(800);
+        e.paste(&big);
+        e.insert(" tail");
+        e.paste(&big);
+        assert_eq!(e.text, format!("{big} tail"));
+        assert_eq!(e.cursor, big.len());
+        assert_eq!(e.take(), format!("{big} tail"));
     }
 }

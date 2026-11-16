@@ -135,13 +135,11 @@ fn question_card_marks_single_and_multiple_choice_and_offers_free_text() {
     assert!(all.contains("1 PostgreSQL"), "{all}");
     assert!(!all.contains("( )"), "{all}");
     assert!(!all.contains("waiting on you · 0:00"), "{all}");
-    assert!(
-        all.contains("Add context, or type your own answer"),
-        "{all}"
-    );
-    // Reserve three footer rows at this card width so complete key hints wrap.
-    assert_eq!(app.regions.waiting.height, 14);
-    press(&mut app, &["down", "enter"]);
+    // The composer's slot is the context line now.
+    assert!(all.contains("Add context"), "{all}");
+    assert!(!all.contains("Answer the question above"), "{all}");
+    assert!(all.contains("space select"), "{all}");
+    press(&mut app, &["enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("Extras?"), "{all}");

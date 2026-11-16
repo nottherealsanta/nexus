@@ -209,6 +209,8 @@ export const projectsOverview = signal<null | { cursor: number; archived: string
 /** The keyboard flow from an empty composer: the session list, then the project rail, which holds the keys. */
 /** The composer has the keyboard focus. */
 export const composerFocused = signal(false);
+/** A question's context line (the composer's input, plan 47) has the caret and the question has options: Esc goes back to them. */
+export const questionLine = signal(false);
 export const flowStage = signal<null | "sessions" | "projects">(null);
 /** The project the flow's Up/Down has selected in the project list. */
 /** The session the flow's Up/Down has selected in the session list. */

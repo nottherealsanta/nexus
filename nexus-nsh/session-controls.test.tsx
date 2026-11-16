@@ -135,6 +135,8 @@ async function openSession(app: any, id = "ses_1", title = "Migration plan") {
   await app.press(`id:session-${id}`);
   // The viewed tab's accessible name is its Rename action; the others keep Open.
   await app.waitFor(`label:/^Rename ${title},/`);
+  // The pane is rebuilt once its history has loaded; keys pressed before that reach the old one.
+  await app.waitUntil(() => !app.shows("text:Loading…"), { timeout: 8000 });
 }
 
 describe("archive closes its tab (plan 29)", () => {
@@ -265,23 +267,24 @@ describe("/search opens the focused switcher (plan 29)", () => {
 });
 
 describe("questions (plan 30)", () => {
-  test("a single choice submits at once and the composer is locked with the draft kept", async () => {
+  test("a question takes the composer's slot: the line adds context and the draft comes back", async () => {
     const flags: Flags = { question: "none" };
     const app = await openApp(flags);
     await openSession(app, "ses_1");
     await app.type("id:composer-input", scenario.draft);
     flags.question = "asked";
     await app.waitFor("id:waiting-card", { timeout: 8000 });
-    expect(app.value("id:composer-input")).toBe(scenario.draft);
-    expect(app.enabled("id:composer-input")).toBe(false);
-    expect(app.shows("text:Answer the question above")).toBe(true);
+    // The composer's input is the answer's "add context" line now; the draft is set aside.
+    await app.waitUntil(() => app.value("id:composer-input") === "");
+    expect(app.shows("text:Answer the question above")).toBe(false);
     expect(app.shows("id:submit-answers")).toBe(false);
+    expect(app.shows("id:question-free-approach")).toBe(false);
+    expect(app.shows("id:question-hints")).toBe(true);
     await app.screenshot("../reports/session-controls-2026-11-11/nsh-question-lock-dark.png");
 
-    // The single free-text answer line is focused, so a key press lands there, not in the composer.
+    // Options have the keys: typing moves into the line and keeps the character.
     await app.keyboard.press("z");
-    await app.waitUntil(() => app.value("id:question-free-approach") === "z");
-    expect(app.value("id:composer-input")).toBe(scenario.draft);
+    await app.waitUntil(() => app.value("id:composer-input") === "z");
 
     await app.press("label:Which approach should we use? Conservative migration");
     // A second press while the first POST is in flight must not duplicate it.
@@ -297,15 +300,81 @@ describe("questions (plan 30)", () => {
     flags.question = "replied";
     await app.waitUntil(() => !app.shows("id:waiting-card"), { timeout: 8000 });
     await app.waitUntil(() => app.enabled("id:composer-input"));
-    expect(app.value("id:composer-input")).toBe(scenario.draft);
+    await app.waitUntil(() => app.value("id:composer-input") === scenario.draft, { timeout: 3000 });
+  });
+
+  test("arrows move, space selects without sending, and enter sends", async () => {
+    const app = await openApp({ questions: [scenario.question] });
+    await openSession(app, "ses_1");
+    await app.waitFor("id:waiting-card");
+    await app.wait(150);
+    await app.keyboard.press("down");
+    await app.keyboard.press("space");
+    await app.wait(300);
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/"))).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 1);
+    const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
+    expect(body.answers[0].selected).toEqual(["fast"]);
+  });
+
+  test("Esc and Up leave the context line for the options, keeping its text", async () => {
+    const app = await openApp({ questions: [scenario.question] });
+    await openSession(app, "ses_1");
+    await app.waitFor("id:waiting-card");
+    await app.wait(150);
+    // Typing enters the line; Esc returns to the options with the note kept.
+    await app.keyboard.press("n");
+    await app.waitUntil(() => app.value("id:composer-input") === "n");
+    await app.waitFor("text:esc options");
+    await app.keyboard.press("escape");
+    await app.waitUntil(() => !app.shows("text:esc options"));
+    expect(app.value("id:composer-input")).toBe("n");
+    expect(app.shows("id:waiting-card")).toBe(true);
+    // Options have the keys again: Down moves, it does not type.
+    await app.keyboard.press("down");
+    await app.wait(150);
+    expect(app.value("id:composer-input")).toBe("n");
+    // Down from the last option enters the line; Up leaves it.
+    await app.keyboard.press("down");
+    await app.waitFor("text:esc options");
+    await app.keyboard.press("up");
+    await app.waitUntil(() => !app.shows("text:esc options"));
+    await app.keyboard.press("space");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 1);
+    const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
+    expect(body.answers[0].text).toBe("n");
+    expect(body.answers[0].selected).toEqual(["fast"]);
+  });
+
+  test("the draft's images are set aside under a question and come back after", async () => {
+    const flags: Flags = { question: "none" };
+    const app = await openApp(flags);
+    await openSession(app, "ses_1");
+    await app.type("id:composer-input", scenario.draft);
+    await app.paste("id:composer-input", { files: ["./fixtures/clipboard.png"] });
+    await app.waitFor("id:image-previews");
+    const before = app.value("id:composer-input");
+    expect(before).toContain("[Image A]");
+    flags.question = "asked";
+    await app.waitFor("id:waiting-card", { timeout: 8000 });
+    await app.waitUntil(() => !app.shows("id:image-previews"));
+    expect(app.value("id:composer-input")).toBe("");
+    flags.question = "replied";
+    await app.waitUntil(() => !app.shows("id:waiting-card"), { timeout: 8000 });
+    await app.waitFor("id:image-previews");
+    await app.wait(500);
+    expect(app.value("id:composer-input")).toBe(before);
   });
 
   test("a free-text answer submits with Enter for a text-only question", async () => {
     const app = await openApp({ questions: [questionWith({ options: [], allow_free_text: true })] });
     await openSession(app, "ses_1");
     await app.waitFor("id:waiting-card");
+    await app.waitUntil(() => app.enabled("id:composer-input"));
     await app.keyboard.press("y");
-    await app.waitUntil(() => app.value("id:question-free-approach") === "y");
+    await app.waitUntil(() => app.value("id:composer-input") === "y");
     await app.keyboard.press("enter");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 1);
     const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
@@ -346,12 +415,12 @@ describe("two questions step through to a review", () => {
 
     await app.press("label:Which approach should we use? Conservative migration");
     expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/"))).toBe(false);
-    await app.press("id:question-next");
+    await app.keyboard.press("enter");
     await app.waitFor("text:Anything else for the release?");
     expect(app.texts().includes("Question 2 of 2")).toBe(true);
-    // The second page's free-text line has focus, so typing lands there and Enter advances to review.
+    // The second page has no options, so the composer's line has the caret: typing lands there and Enter advances to review.
     await app.keyboard.press("q");
-    await app.waitUntil(() => app.value("id:question-free-note") === "q");
+    await app.waitUntil(() => app.value("id:composer-input") === "q");
     await app.keyboard.press("enter");
     await app.waitFor("id:question-review");
     expect(app.texts().includes("Conservative migration")).toBe(true);
@@ -503,12 +572,12 @@ describe("session control failure and edge cases", () => {
     const textOnly = questionWith({ options: [], allow_free_text: true });
     const app = await openApp({ questions: [textOnly], answerFailures: 1 });
     await openSession(app);
-    await app.waitFor("id:question-free-approach");
-    await app.type("id:question-free-approach", "Keep this answer");
-    await app.submit("id:question-free-approach");
+    await app.waitFor("id:waiting-card");
+    await app.type("id:composer-input", "Keep this answer");
+    await app.submit("id:composer-input");
     await app.waitFor("text:Temporary answer failure");
-    expect(app.value("id:question-free-approach")).toBe("Keep this answer");
-    await app.submit("id:question-free-approach");
+    expect(app.value("id:composer-input")).toBe("Keep this answer");
+    await app.submit("id:composer-input");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 2);
     const posts = app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/"));
     expect(posts[0].body).toBe(posts[1].body);

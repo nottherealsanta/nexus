@@ -203,7 +203,12 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   upward movement in web; whether it happens while following or reading history is unclear. The follow handler also
   treats upward list/layout corrections as reader input, a possible cause not yet reproduced. The web scroll suite
   passed 15/16 cases; restoring a session position failed waiting for the jump button. Installed NSH is 209cb84;
-  upstream has since changed List key diffing, but an upgrade has not been evaluated as a fix.
+  upstream has since changed List key diffing. A web fixture reproduced a 1,008 px marker jump when two distant
+  rows changed together: NSH 209cb84 replaced the whole intervening span and forgot its measurements. Stable
+  keyed list slots now prevent that replacement while updating row content; the browser fixture holds the marker
+  at the same coordinate, and the existing paging coordinate check still passes. This fixes that reproduced case,
+  not every possible jump; the user's long live session and native hosts remain unverified. An NSH upgrade has not
+  been evaluated.
 - [ ] Write the generator (`interface/scripts/spinners.py` or `scripts/gen.py`) that emits the frame lists, and add
   `[glyphs.spinner_tab]` and `[glyphs.spinner_agent]` (unicode, ascii) to `interface/theme.toml`, with the random
   shape choice specified as data (variants plus a per-session seed) so both clients behave the same.

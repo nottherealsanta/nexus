@@ -3,13 +3,14 @@ import { Button, Input } from "nsh/base";
 import { sendChoice } from "./mobile/state";
 import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
-import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { PRINTABLE_KEYS, printableOf } from "../manager";
+import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, questionLineFocus, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import { compactApproval } from "../mobile";
 import {
   agentCatalog, contextBudget, contextDetail, draftContext, draftContextKey, draftPlanContext, pendingInputs, loadInputs, loadPromptHistory, promptHistory, centre, config, confirmDialog, connection, currentProject, draft, rememberedModel, info, isNarrow, live, m, model, touch, modelCatalog, tick,
   phone, projectWorktrees, sessionDraft, sessionWorktrees, currentWorktree, userHome, viewResources, viewed, waitIndex, toast, annotating,
-  bashJobs, loadResources, resourceCounts, resourcesOpen, resourcesKind, composerFocused, flowStage, flowProject,
+  bashJobs, loadResources, resourceCounts, resourcesOpen, resourcesKind, composerFocused, questionLine, flowStage, flowProject,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question, QuestionItem } from "../core/api";
@@ -88,6 +89,8 @@ function EditableComposer() {
   let ref: any;
   focusComposer.fn = () => { try { ref?.focus(); } catch {} };
   blurComposer.fn = () => { try { ref?.blur(); } catch {} };
+  questionLineFocus.fn = (end) => { try { ref?.focus(); if (end) setTimeout(() => { const n = (qAnswer()?.text ?? "").length; try { ref?.setSelection(n, n); } catch {} }, 0); } catch {} };
+  questionLineFocus.leave = () => { try { ref?.blur(); } catch {} };
   const h = signal(phone ? 28 : 22);
   // The dock's own width, measured rather than taken from the window: the provider label leaves
   // when the controls would overprint, which the window width alone cannot say.
@@ -95,8 +98,28 @@ function EditableComposer() {
   const key = () => draftKey();
   const text = () => draft()[key()] ?? "";
   const images = () => imageDrafts()[key()] ?? [];
-  const pastes = () => (pasteDrafts()[key()] ?? []).filter((p) => text().includes(p.marker));
+  // A question takes the composer's slot on desktop (plan 47): this input is its "add context" line, and the
+  // draft is left alone. The phone keeps its compact card.
+  const dq = () => dockedQuestion();
+  const qItem = () => { const q = dq(); if (!q) return null; const page = askPageOf(q.id); return page < q.questions.length ? q.questions[page] : null; };
+  const qMode = () => !!dq();
+  const qAnswer = () => { const q = dq(), qq = qItem(); return q && qq ? answers()[`${q.id}:${qq.id}`] ?? blankAnswer() : null; };
+  const shown = () => qMode() ? qAnswer()?.text ?? "" : text();
   const pasting = signal(false);
+  // Options come first: the line takes the caret only for a text-only question; Esc, Up and typing move between them.
+  // Only a new question or page moves the caret: `dq()` re-reads on every model change, and an event arriving
+  // while the user types context must not take the caret out of the line.
+  let placed = "";
+  effect(() => {
+    const q = dq(), qq = qItem();
+    if (!q || !qq || submitted().has(q.id)) { questionLine.set(false); placed = ""; return; }
+    const at = `${q.id}:${qq.id}`;
+    if (at === placed) return;
+    placed = at;
+    const textOnly = !qq.options.length;
+    // Not cleared on a re-run: a model tick must not cancel it, and timers run in order, so the latest page wins.
+    setTimeout(() => { if (placed !== at) return; try { if (textOnly) ref?.focus(); else ref?.blur(); } catch { /* unmounted meanwhile */ } }, 0);
+  });
   const appendImages = (target: string, added: import("../images").DraftImage[]) => {
     const all = [...(imageDrafts()[target] ?? []), ...added];
     const bytes = all.reduce((n, i) => n + (i.data_url.length - i.data_url.indexOf(",") - 1) * 3 / 4, 0);
@@ -244,6 +267,7 @@ function EditableComposer() {
   const caret = signal({ start: 0, end: 0 });
   const caretAt = () => { const t = text(); const c = caret(); return c.start === c.end ? Math.min(c.end, t.length) : -1; };
   const completion = computed(() => {
+    if (qMode()) return null;
     const at = caretAt();
     return at < 0 ? null : completionFor(text(), text().slice(0, at));
   });
@@ -303,6 +327,21 @@ function EditableComposer() {
     const clean = normalisePaste(raw);
     if (!isBigPaste(clean)) { insertAtCaret(clean); return; }
     const target = key();
+    // The same content again reveals the first marker it stands for, in place.
+    const known = (pasteDrafts()[target] ?? []).find((p) => p.text === clean && text().includes(p.marker));
+    if (known) {
+      const value = text();
+      const c = caret();
+      const before = Math.min(c.start, value.length);
+      const at = value.slice(0, before).endsWith(known.marker) ? before - known.marker.length : value.indexOf(known.marker);
+      const next = value.slice(0, at) + clean + value.slice(at + known.marker.length);
+      draft.update((d) => ({ ...d, [target]: next }));
+      prunePastes(target, next);
+      const end = at + clean.length;
+      caret.set({ start: end, end });
+      try { ref?.setSelection(end, end); } catch { /* the platform keeps the caret */ }
+      return;
+    }
     const entry = makePaste(clean, pasteDrafts()[target] ?? [], text());
     pasteDrafts.update((d) => ({ ...d, [target]: [...(d[target] ?? []), entry] }));
     insertAtCaret(entry.marker);
@@ -337,7 +376,7 @@ function EditableComposer() {
     if (project) void loadPromptHistory(project).catch(() => { historyKey = ""; });
   });
   effect(() => {
-    if (!focused() || open() || pendingSelection() || (draftEmpty() && (pendingInputs()[viewed()?.id ?? ""]?.inputs.length ?? 0) > 0)) return;
+    if (qMode() || !focused() || open() || pendingSelection() || (draftEmpty() && (pendingInputs()[viewed()?.id ?? ""]?.inputs.length ?? 0) > 0)) return;
     const entries = promptHistory().entries;
     if (!entries.length) return;
     // A recalled prompt lands with its caret at the end: Up then walks its lines before the next one.
@@ -432,32 +471,12 @@ function EditableComposer() {
       onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
         <View
-          class="w-full pt-3 pb-1"
+          class={`w-full ${qMode() ? "pt-0" : "pt-3"} pb-1`}
           accessibilityLabel="Composer" testID="composer-panel"
           onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
           <PendingStack />
-          <If when={pastes().length > 0}>
-            <View class="gap-1.5 pb-3" testID="paste-previews">
-              <Each of={pastes()} key={(p) => p.id}>
-                {(p) => (
-                  <Button onPress={() => contextDetail.set({ title: "Pasted text", detail: p().text })}
-                    accessibilityLabel={`Show pasted text, ${p().lines} lines`} testID={`composer-paste-${p().id}`}
-                    class={`flex-row items-center gap-2.5 rounded-(--radius) bg-raised px-2.5 ${isNarrow() ? "min-h-11" : "min-h-9"} hover:bg-accent ${FOCUS}`}>
-                    <Text class={`shrink-0 ${T.body}`}>Pasted text</Text>
-                    <View class="flex-1 min-w-0">
-                      <Text style={{ numberOfLines: 1 }} class={T.meta}>{`${p().lines} lines · ~${p().tokens} tokens`}</Text>
-                      <Text style={{ numberOfLines: 1 }} class={T.sec}>
-                        {(p().text.split("\n").find((line) => line.trim()) ?? "").trimStart()}
-                      </Text>
-                    </View>
-                    <Text class={`shrink-0 ${T.body} font-medium`}>Show</Text>
-                  </Button>
-                )}
-              </Each>
-            </View>
-          </If>
-          <If when={images().length > 0}>
+          <If when={images().length > 0 && !qMode()}>
             <View class="flex-row flex-wrap gap-2 pb-3" testID="image-previews">
               <Each of={images()} key={(image) => image.id}>
                 {(image) => <View class="gap-1 w-20 shrink-0">
@@ -536,9 +555,10 @@ function EditableComposer() {
               );
             }}
           </If>
-          <View class={`w-full bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-2"} border ${open() ? "border-border" : "border-transparent"}`} testID="composer-surface">
+          <View class={`w-full ${qMode() ? "bg-raised rounded-b-(--radius-card) px-4 pb-2" : `bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-2"}`} ${qMode() ? "" : `border ${open() ? "border-border" : "border-transparent"}`}`} testID="composer-surface">
+          <If when={qMode()}><StatusRail color={dq()?.questions.some((x) => x.multiple) ? "bg-multi" : "bg-primary"} join="top" testID="question-dock-rail" /></If>
           <RetryNotices />
-          <View class={phone ? "h-2" : "h-5"} testID="composer-top-padding" />
+          <View class={qMode() ? "h-1" : phone ? "h-2" : "h-5"} testID="composer-top-padding" />
           <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
           <Input
             onPaste={(e) => {
@@ -547,13 +567,14 @@ function EditableComposer() {
               pasteText(e.text ?? "");
             }}
             pasteBehavior="report"
-            ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-            placeholder={reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
-            readonly={!live() || questionPending()}
+            ref={(n: any) => (ref = n)} multiline value={shown()} testID="composer-input" accessibilityLabel={qMode() ? "Add context to the answer" : "Message"}
+            placeholder={qMode() ? (qItem()?.options.length ? "Add context…" : "Type your answer…") : reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
+            readonly={!live() || (qMode() ? !qItem() || submitted().has(dq()!.id) : questionPending())}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
               if (dictationPhase() !== "idle") return;
-              // Enter belongs to the question card while it locks the composer.
+              // The question's line: Enter is the card's Enter (next, or send). The phone's locked composer ignores it.
+              if (qMode()) { const q = dq(); if (q) confirmQuestion(q); return; }
               if (questionPending()) return;
               // A standalone `/command` runs the highlighted one, as if typed and sent (the TUI does the same).
               const c = open() ? completion() : null;
@@ -574,8 +595,10 @@ function EditableComposer() {
               }
               void send();
             }}
-            onChange={({ value: t }) => { if (questionPending()) return; selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
-            onFocus={() => { focused.set(true); composerFocused.set(true); flowStage.set(null); flowProject.set(null); }} onBlur={() => { focused.set(false); composerFocused.set(false); }}
+            onChange={({ value: t }) => {
+              if (qMode()) { const q = dq(), qq = qItem(); if (q && qq) answers.update((all) => ({ ...all, [`${q.id}:${qq.id}`]: { selected: all[`${q.id}:${qq.id}`]?.selected ?? [], text: t } })); return; }
+              if (questionPending()) return; selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); prunePastes(key(), t); }}
+            onFocus={() => { focused.set(true); composerFocused.set(true); flowStage.set(null); flowProject.set(null); if (qMode()) { questionFieldFocused.set(true); questionLine.set(!!qItem()?.options.length); } }} onBlur={() => { focused.set(false); composerFocused.set(false); questionFieldFocused.set(false); questionLine.set(false); }}
             onSelectionChange={({ start, end }) => caret.set({ start, end })}
             onKeyPress={(e: { key: string }) => {
               if (String(e.key).toLowerCase() !== "escape") return;
@@ -603,8 +626,8 @@ function EditableComposer() {
                 <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
               </If>
             </View>
-            <If when={!!usageLabel() && !phone}><View class="shrink-0 flex-row items-center gap-1" testID="composer-meter"><Text style={{ numberOfLines: 1 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
-            <If when={!phone}>{actions()}</If>
+            <If when={!!usageLabel() && !phone}><View class="shrink-0 flex-row items-center gap-1" testID="composer-meter"><Text style={{ numberOfLines: 1, fontSize: 15, lineHeight: 22 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
+            <If when={!phone && !qMode()}>{actions()}</If>
           </View>
           </View>
         </View>
@@ -712,8 +735,8 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
       class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-11" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1, ...UI_FONT, ...(phone ? {} : { fontSize: 14, lineHeight: 22 }) }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ? `font-medium ${p.labelClass}` : ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT, ...(phone ? {} : { fontSize: 14, lineHeight: 22 }) }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ? `font-medium ${p.labelClass}` : ""}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
     </Button>
   );
 }
@@ -744,7 +767,7 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   });
   const left = () => activityOffsetPercent(phase());
   // This rule is the card's single bottom edge; the pulse is overlaid on that line.
-  return <View class="w-full -mt-1" testID="composer-bottom-edge">
+  return <View class="w-full -mt-1 px-5" testID="composer-bottom-edge">
       <View class="relative w-full h-0.5 bg-border" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
         <If when={p.busy}>
           <View class={`absolute top-0 h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
@@ -1041,8 +1064,17 @@ function denyWithNote(a: Approval) {
   draft.update((d) => ({ ...d, [k]: "" }));
   void reply(a, false, { note });
 }
-/** One choice: a multi-select toggles; a single choice is the answer, and a lone question submits it at once. */
-function chooseAnswer(q: Question, qq: QuestionItem, option: string) {
+/** The question in view on desktop, where it takes the composer's slot and its input is the "add context" line (plan 47). The phone keeps its card. */
+function dockedQuestion(): Question | null {
+  m();
+  if (phone) return null;
+  const list = waitItems();
+  const w = list.length ? list[waitIndex() % list.length] : null;
+  return w?.kind === "question" ? model.questions.get(w.id) ?? null : null;
+}
+
+/** One choice: a multi-select toggles; a single choice is the answer. A click or digit goes on (a lone question sends, another page moves on); Space only selects. */
+function chooseAnswer(q: Question, qq: QuestionItem, option: string, advance = true) {
   const id = `${q.id}:${qq.id}`;
   if (qq.multiple) {
     answers.update((all) => {
@@ -1053,7 +1085,9 @@ function chooseAnswer(q: Question, qq: QuestionItem, option: string) {
   }
   const answer = { selected: [option], text: answers()[id]?.text ?? "" };
   answers.update((all) => ({ ...all, [id]: answer }));
+  if (!advance) return;
   if (q.questions.length === 1) void submitQuestion(q, { itemId: qq.id, answer });
+  else confirmQuestion(q);
 }
 
 /** How the review shows one answer: selected labels in order, then the quoted free text. */
@@ -1196,7 +1230,9 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     return () => clearInterval(id);
   });
   // The modified keys of the card, bound while it shows. Enter belongs to the focused choice, never a global binding.
-  effect(() => { p.w().id; choice.set(0); waitError.set(null); });
+  // Only a different wait resets the highlight: `p.w()` re-reads on every model change, and the card remounts while
+  // the session's history loads; neither may move the user's highlight back to the first option.
+  effect(() => { const id = p.w().id; if (id === shownWait) return; shownWait = id; choice.set(0); waitError.set(null); });
   effect(() => {
     const k = (id: string) => { const key = byId.get(id)?.keys?.nsh; return key ? toKeystroke(key) : null; };
     const map: Record<string, () => void> = {};
@@ -1222,10 +1258,17 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     if (q && live() && !submitted().has(q.id)) {
       if (shown?.options.length) {
         const last = shown.options.length - 1;
-        map["down"] = () => choice.set(Math.min(choice() + 1, last));
+        // Down from the last option goes into the context line; Up from its first line comes back (desktop: the line is the composer's input).
+        map["down"] = () => { if (!phone && choice() >= last) questionLineFocus.fn(true); else choice.set(Math.min(choice() + 1, last)); };
         map["up"] = () => choice.set(Math.max(choice() - 1, 0));
       }
       map["enter"] = () => { if (!questionFieldFocused()) confirmQuestion(q); };
+    }
+    // The line has the caret (it has options): Up on its first line, and Esc, hand the keys back to the options.
+    const lineFocused = !phone && !!q && !!shown?.options.length && questionLine();
+    if (lineFocused) {
+      const answer = answers()[`${q!.id}:${shown!.id}`]?.text ?? "";
+      map["up"] = () => { if (!answer.includes("\n")) questionLineFocus.leave(); };
     }
     const offs: (() => void)[] = [];
     const letter = (key: string, fn: () => void) => { try { offs.push(keymap.bind(key, fn, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ } };
@@ -1233,16 +1276,31 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     // Number keys act on the page in view; the review page has no choices.
     const page = q ? askPageOf(q.id) : 0;
     const one = q?.questions[page];
+    // Typing moves the caret into the context line (desktop), the character included.
+    if (!phone && q && one && one.options.length && live() && !submitted().has(q.id) && !lineFocused) {
+      for (const key of PRINTABLE_KEYS) {
+        if (/^[1-9]$/.test(key) && !one.multiple) continue; // digits choose an option
+        try { offs.push(keymap.bind(key, (e: { keystroke: string }) => {
+          const typed = printableOf(e.keystroke);
+          if (typed === null) return;
+          const id = `${q.id}:${one.id}`;
+          answers.update((all) => ({ ...all, [id]: { selected: all[id]?.selected ?? [], text: (all[id]?.text ?? "") + typed } }));
+          questionLineFocus.fn(true);
+        }, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ }
+      }
+    }
     if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => { choice.set(i); chooseAnswer(q, one, o.id); }));
-    // Space picks (or, multi-select, ticks) the highlighted option.
-    if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id); });
+    // Space selects (or, multi-select, ticks) the highlighted option and stays on the page; Enter goes on.
+    if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id, false); });
     const off = bindOpenKeys(map);
     return () => { off(); offs.forEach((f) => f()); };
   });
   const multi = () => question()?.questions.some((x) => x.multiple) ?? false;
+  /** On desktop a question and the composer's context line are one dock: no gap, one rail. */
+  const docked = () => !phone && !!question();
   return (
-    <View class={`relative w-full mb-2 ${phone ? "bg-muted rounded-[22px] overflow-hidden" : "bg-raised rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
-      <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} testID="waiting-rail" /></If>
+    <View class={`relative w-full ${docked() ? "" : "mb-2"} ${phone ? "bg-muted rounded-[22px] overflow-hidden" : docked() ? "bg-raised rounded-t-(--radius-card)" : "bg-raised rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+      <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} join={docked() ? "bottom" : undefined} testID="waiting-rail" /></If>
       <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class={phone ? "p-4 gap-2.5" : "pl-4 pr-4 py-3 gap-2.5"}>
@@ -1285,6 +1343,8 @@ const approvalChoices = (a: Approval): Choice[] => [
 ];
 /** The selected choice of the approval card (`▸`); arrows move it over the offered choices. */
 const choice = signal(0);
+/** The wait whose options `choice` indexes (module-level, so a remounted card keeps its highlight). */
+let shownWait = "";
 const offered = (c: Choice) => !c.why && !!c.run && live();
 
 function ApprovalBody(p: { a: Approval }) {
@@ -1344,6 +1404,23 @@ function ApprovalBody(p: { a: Approval }) {
   );
 }
 
+/** The question's key hints, the TUI's row: arrows move, Space selects, Enter goes on, Esc leaves the context line or stops. */
+function QuestionHints(p: { q: Question; page: number }) {
+  const total = p.q.questions.length;
+  const one = () => p.q.questions[Math.min(p.page, total - 1)];
+  const line = () => !!one().options.length && questionLine();
+  const enter = () => (total === 1 ? "send" : p.page + 1 < total ? "next" : "review");
+  const hint = (key: string, label: string) => <Text class={T.meta}><Text class="font-medium text-foreground-secondary">{key}</Text>{` ${label}`}</Text>;
+  return (
+    <View class="flex-row flex-wrap items-center gap-x-3.5 gap-y-0.5" testID="question-hints">
+      <If when={!!one().options.length && !line()}>{hint("↑↓", "move")}{hint("space", one().multiple ? "tick" : "select")}</If>
+      <If when={line()}>{hint("esc", "options")}</If>
+      {hint("enter", enter())}
+      <If when={!line()}>{hint("esc", "stop")}</If>
+    </View>
+  );
+}
+
 function AnswerHint() {
   const c = byId.get("waiting.focus");
   return <If when={!!c && !phone}><Text class={T.meta} testID="waiting-answer-hint"><Text class="font-medium text-foreground">{c ? keyLabel(c) ?? "" : ""}</Text>{" answer"}</Text></If>;
@@ -1375,7 +1452,7 @@ function QuestionBody(p: { q: Question }) {
   // Each page's string question takes focus when it appears, including after Enter advances.
   effect(() => {
     const cur = current();
-    if (reviewing() || done() || !(cur.allow_free_text || cur.options.length === 0)) return;
+    if (!phone || reviewing() || done() || !(cur.allow_free_text || cur.options.length === 0)) return;
     const timer = setTimeout(() => {
       if (askPageOf(q.id) !== page() || reviewing()) return;
       try { freeRef?.focus(); } catch { /* the page changed meanwhile */ }
@@ -1426,7 +1503,7 @@ function QuestionBody(p: { q: Question }) {
               );
             }}
           </Each>
-          <Input ref={(n: any) => (freeRef = n)} value={answerOf(current()).text} autoFocus={current().allow_free_text || current().options.length === 0} readonly={done()}
+          <If when={phone}><Input ref={(n: any) => (freeRef = n)} value={answerOf(current()).text} autoFocus={current().allow_free_text || current().options.length === 0} readonly={done()}
             placeholder={current().options.length ? "Add context, or type your own answer" : "Type your answer"}
             onChange={({ value: t }) => {
               const cur = current();
@@ -1435,7 +1512,8 @@ function QuestionBody(p: { q: Question }) {
             onSubmit={() => confirmQuestion(q)} submitBehavior="submit"
             onFocus={() => questionFieldFocused.set(true)} onBlur={() => questionFieldFocused.set(false)}
             accessibilityLabel={`${current().question} Free-text answer`} testID={`question-free-${current().id}`}
-            class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} />
+            class={`rounded-(--radius) bg-background px-2.5 ${phone ? "h-11" : "h-8"} text-[16px] text-foreground`} /></If>
+          <If when={!phone}><QuestionHints q={q} page={page()} /></If>
           <If when={!single}>
             <View class="flex-row items-center gap-2 pt-1">
               <Btn label="Back" onPress={() => go(Math.max(0, page() - 1))} disabled={page() === 0 || done()} testID="question-back" />
@@ -1446,8 +1524,7 @@ function QuestionBody(p: { q: Question }) {
           <If when={single && current().multiple}>
             <View class="flex-row items-center gap-3">
               <Btn label="Submit answers" kind="primary" busy={busyWait() || done()} onPress={() => submitAllQuestions(q)} testID="submit-answers" disabled={!live() || done()} />
-              <If when={!phone}><Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit`}</Text></If>
-              <AnswerHint />
+              <If when={phone}><AnswerHint /></If>
             </View>
           </If>
         </View>

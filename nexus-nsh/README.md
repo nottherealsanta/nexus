@@ -25,7 +25,8 @@ events after reconnect. Past-answer navigation is not yet offered. `/continuatio
 The timeline lets the NSH virtual list preserve the visible row when measurements
 or splices change content above it; the app does not apply a second height
 correction. Following the latest message and restoring a session's position remain
-app-controlled. Deferred follow commands are scoped to the session that queued them.
+app-controlled. Deferred follow commands are scoped to the session that queued them. Stable keyed list slots update
+row content without making the installed NSH List discard measurements between distant changing rows.
 
 Alt+Enter (Option+Enter on macOS) in the busy composer is `composer.interrupt_send`: it cancels the turn and sends the draft first. Allow for this session on an approval card moved from `alt+enter` to `cmd+shift+enter`. Mobile has no such control.
 
@@ -82,10 +83,9 @@ creation remain available through the sidebar and shortcuts.
 Question cards scroll to reveal all questions, choices and option previews. A one-question ask answers in
 one step: choosing a single-choice option submits it at once and Enter in the free-text line submits that;
 a multi-select still has one `Submit answers` button, and a two-or-more-question card keeps the current
-flow. The free-text line takes focus when a question asks for one and carries no selected-row background.
-Free-text drafts stay with their question across session switches and are dropped when the question is
-replied to or cancelled. While a question card is current, the composer is read-only with `Answer the
-question above`, so the draft stays untouched and no send, steer or queue leaves it; approvals keep their
+flow. Context text stays with its question across session switches and is dropped when the question is
+replied to or cancelled. While a question is current, no send, steer or queue leaves the composer and its draft
+stays untouched (the phone's composer says `Answer the question above`); approvals keep their
 normal deny-with-a-note composer. Accessible names on each choice and text field include the question, so
 controls remain distinguishable when navigating a multi-question card. Narrow connection banners show up
 to three lines of their recovery explanation; the complete message remains in the banner's accessible name.
@@ -297,9 +297,13 @@ edge whose border stops before the card's corners curve (purple for a multi-sele
 when the client first saw the request, the parameter table (at most six rows), for edit,
 write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
 choice list: allow once, allow for session (`scope: "session"`), deny, and deny with a note
-(the note is the composer's text; empty, it says so). Questions show radios or checkboxes and a free-text field,
-focused at once when the ask is a single question; a single choice submits immediately and a multi-select uses
-the one `Submit answers` button (`⌘↵`). Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
+(the note is the composer's text; empty, it says so). Questions show radios or checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
+the composer's input are one dock under one rail, and the input is the answer's `Add context…` line (`Type your
+answer…` for a question without options). Options have the keys first: Up/Down move, Space selects (a multi-select
+ticks), Enter goes on and sends on the last page; a click or number key chooses and goes on at once. Typing, or Down from the
+last option, moves into the line; Up from its first line or Esc returns to the options, with the text kept. A question
+without options starts in the line. The composer draft is left alone and returns when the question is answered. A
+multi-select still has the one `Submit answers` button (`⌘↵`). The phone keeps its compact card and its own field. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
 full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
 notifications drawer opens it in the modal dialog (`c` copies, Esc closes). The banner is a
@@ -434,7 +438,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects. The sidebar lists the current project's sessions only, with a pinned three-action footer (`New session`, `Search sessions`, `Show archived`) that stays at the bottom even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archive includes archived sessions alongside active sessions when enabled.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects. The sidebar lists the current project's sessions only, with three actions (`New session`, `Search sessions`, `Show archived`) pinned above the list under a rule, even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archived lists archived sessions after the active ones, with a rule between the two.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -656,7 +660,7 @@ No global shortcut is registered.
   `nexus/native` outside the app bundle. `App.tsx` therefore has a bare `import "nexus/native"`: `nsh package` links a native UI set into the web runtime only when the bundle imports it, and without that import the packaged web build (`npm run build`, `npm run serve`) fails with `unknown native module nexus/native`, so every Mermaid block falls back to source (the dev host links everything and hid this). `e2e/shots.mjs` fails if the Mermaid shot has no diagram. `src/dictation.ts` does the same for
   `Microphone` and treats a missing module as a client without capture. The Apple native bridge records 16 kHz mono WAV for dictation and Manager pipeline voice on macOS and iOS; packaged apps need `NSMicrophoneUsageDescription` (set by `scripts/native-info.mjs`). Device permission, recording and playback on macOS remain unverified. `src/mermaid-logic.ts` holds the
   closed-fence scan and tone classes.
-- **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ.
+- **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ, but all timeline text (rows, tool labels, code, badges and prose) is 16 px.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and
   the sidebar footer by `safeArea().bottom`, so the status bar and home indicator
   never cover chrome. Phone and tablet idioms (`platform.idiom`, as `touch`) keep hover-only
@@ -816,7 +820,7 @@ keep the same image context.
 
 A large text paste (at least 500 characters, regardless of line count) collapses into one
 `[Pasted ~N tokens]` marker at the caret; shorter multiline pastes stay inline. The
-large-paste composer preview has a **Show** control that opens the existing full-text modal.
+composer shows no preview for it; pasting the same content again reveals it in place of its marker.
 Sending sends the marker and the full text separately: Core
 stores the text as a collapsed part, so the model reads it while the user
 message shows a clickable chip above its text, with no inline preview in the

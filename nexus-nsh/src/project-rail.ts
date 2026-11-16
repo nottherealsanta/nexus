@@ -73,7 +73,9 @@ export type ProjectCounts = [attention: number, finished: number, running: numbe
 /**
  * The TUI's rail counters: one per root session of the project, in this order.
  * A waiting approval or question anywhere in a session's tree marks the root;
- * archived sessions are left out, and a failed session counts as idle.
+ * archived sessions are left out, and a failed session counts as idle. The order
+ * matches the TUI's `session_state`: waiting, failed, running, then unread, so a
+ * session running again after an unread finish counts as running.
  */
 export function projectCounts(
   id: string,
@@ -82,6 +84,7 @@ export function projectCounts(
   questions: Iterable<{ session_id: string }>,
   running: ReadonlyMap<string, string>,
   unread: ReadonlySet<string>,
+  failed: ReadonlySet<string> = new Set(),
 ): ProjectCounts {
   const all = [...sessions];
   const byId = new Map(all.map((s) => [s.id, s]));
@@ -103,8 +106,9 @@ export function projectCounts(
   for (const s of all) {
     if (s.project_id !== id || s.parent_id || s.archived) continue;
     if (waiting.has(s.id)) counts[0]++;
-    else if (unread.has(s.id)) counts[1]++;
+    else if (failed.has(s.id)) counts[3]++;
     else if (running.has(s.id) || s.status === "busy") counts[2]++;
+    else if (unread.has(s.id)) counts[1]++;
     else counts[3]++;
   }
   return counts;

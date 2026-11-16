@@ -271,7 +271,7 @@ pub const WIRED: &[&str] = &[
     "waiting.next",
     "waiting.prev",
     "waiting.focus",
-    "waiting.custom",
+    "waiting.options",
     "waiting.go_to",
 ];
 
@@ -347,7 +347,8 @@ pub struct AskPick {
     pub chosen: Vec<usize>,
     /// The custom answer, edited inline in the card.
     pub input: Composer,
-    /// True while the card's text field has focus (`alt+a` toggles it).
+    /// True while the card's context line has focus (typing, or Down from the last option, moves
+    /// here; Esc and Up go back to the options).
     pub field: bool,
 }
 
@@ -2531,10 +2532,10 @@ impl App {
         }
         if fresh {
             if let Some(pick) = draft.picks.first_mut() {
-                if questions.first().is_some_and(|q| {
-                    q["options"].as_array().is_none_or(Vec::is_empty)
-                        || q["allow_free_text"].as_bool() == Some(true)
-                }) {
+                if questions
+                    .first()
+                    .is_some_and(|q| q["options"].as_array().is_none_or(Vec::is_empty))
+                {
                     pick.field = true;
                 }
             }
@@ -2618,6 +2619,17 @@ impl App {
         }
     }
 
+    /// A click or a digit: pick the option and move on, as Enter would. A multi-select only ticks.
+    pub fn ask_choose(&mut self, i: usize) {
+        self.ask_pick(i);
+        if self
+            .ask_current()
+            .is_some_and(|c| !c.multiple() && !c.sent && !c.review() && i < c.options().len())
+        {
+            self.ask_confirm();
+        }
+    }
+
     fn ask_move(&mut self, down: bool) {
         let Some(cur) = self.ask_current() else {
             return;
@@ -2629,6 +2641,10 @@ impl App {
         let cursor = cur.pick().map_or(0, |p| p.cursor);
         let d = self.ask_picks(&cur.wait.id, cur.total);
         if let Some(pick) = d.picks.get_mut(cur.page) {
+            if down && cursor >= last {
+                pick.field = true;
+                return;
+            }
             pick.cursor = if down {
                 (cursor + 1).min(last)
             } else {
@@ -2745,9 +2761,7 @@ impl App {
         d.page = cur.page + 1;
         d.scroll = 0;
         if let Some(next) = cur.questions.get(d.page) {
-            if next["options"].as_array().is_none_or(Vec::is_empty)
-                || next["allow_free_text"].as_bool() == Some(true)
-            {
+            if next["options"].as_array().is_none_or(Vec::is_empty) {
                 if let Some(pick) = d.picks.get_mut(d.page) {
                     pick.field = true;
                 }
@@ -2816,17 +2830,21 @@ impl App {
         let field = cur.field();
         match name {
             "pageup" | "pagedown" => self.ask_scroll(name == "pagedown"),
-            "alt+a" => self.ask_field(!field),
+            "up" if field && n_opts > 0 => {
+                // Up from the first line of the context line goes back to the options.
+                if cur.pick().is_none_or(|p| p.input.cursor().0 == 0) {
+                    self.ask_field(false);
+                } else {
+                    self.ask_input_key(ev, name);
+                }
+            }
             "up" | "down" if n_opts == 0 || field => self.ask_input_key(ev, name),
             "up" => self.ask_move(false),
             "down" => self.ask_move(true),
             "alt+left" => self.ask_page(false),
             "alt+right" => self.ask_page(true),
             "left" | "right" => {
-                let has_text = cur
-                    .pick()
-                    .is_some_and(|p| !p.input.expanded_text().trim().is_empty());
-                if field || has_text {
+                if field {
                     self.ask_input_key(ev, name);
                 } else {
                     self.ask_page(name == "right");
@@ -2844,7 +2862,7 @@ impl App {
                     .filter(|_| n_opts > 0 && !field && name.len() == 1);
                 if let Some(d) = digit {
                     // 1..9 are options 1..9, 0 is the tenth
-                    self.ask_pick((d + 9) % 10);
+                    self.ask_choose((d + 9) % 10);
                 } else if keys::printable(ev).is_some() || edit_key(name) {
                     self.ask_input_key(ev, name);
                 }
@@ -3143,6 +3161,7 @@ impl App {
                 .session_worktree(s)
                 .is_some_and(|tree| tree["main"].as_bool() == Some(false));
             (
+                s.archived,
                 project_order
                     .iter()
                     .position(|id| id == &s.project_id)
@@ -3351,6 +3370,9 @@ impl App {
                 .as_ref()
                 .is_some_and(|w| w.kind == WaitKind::Question),
             "waiting.multiple" => self.wait_items().len() > 1,
+            "waiting.question_field" => self
+                .ask_current()
+                .is_some_and(|c| !c.sent && !c.review() && c.field() && !c.options().is_empty()),
             "composer.has_text" => {
                 self.composer_ref().has_text() || !self.composer_ref().images.is_empty()
             }
@@ -5871,19 +5893,20 @@ impl App {
             }
             return;
         }
-        if self
-            .active_tab()
-            .is_some_and(|t| matches!(t.kind, crate::groups::Kind::File | crate::groups::Kind::Diff))
-        {
+        if self.active_tab().is_some_and(|t| {
+            matches!(
+                t.kind,
+                crate::groups::Kind::File | crate::groups::Kind::Diff
+            )
+        }) {
             self.layout_close_active();
         }
     }
 
-    /// The composer's text area, below the pending inputs, image strip and
-    /// collapsed paste cards: the same rect the composer is drawn in, so a
-    /// click on a paste card falls through to its hit target.
-    fn composer_text_inner(composer: Rect, images: usize, pastes: usize) -> Rect {
-        crate::render::composer_inner_with(composer, images, pastes)
+    /// The composer's text area, below the pending inputs and image strip: the
+    /// same rect the composer is drawn in.
+    fn composer_text_inner(composer: Rect, images: usize) -> Rect {
+        crate::render::composer_inner_with(composer, images)
     }
 
     /// Show a session as a tab of the focused group and make it the viewed one.
@@ -7208,10 +7231,9 @@ impl App {
                     self.execute("waiting.go_to");
                 }
             }
-            "waiting.custom" => {
+            "waiting.options" => {
                 self.ui.focus = Focus::Waiting;
-                let on = self.ask_current().is_some_and(|c| !c.field());
-                self.ask_field(on);
+                self.ask_field(false);
             }
             "waiting.go_to" => {
                 if let Some(first) = self.waiting_elsewhere().into_iter().next() {
@@ -13396,10 +13418,14 @@ impl App {
         match row.id.as_str() {
             "appearance.theme" => pair(
                 &["system", "light", "dark"],
-                if self.theme_system { "system" } else { match self.theme.opts.mode {
-                    Mode::Dark => "dark",
-                    Mode::Light => "light",
-                }}
+                if self.theme_system {
+                    "system"
+                } else {
+                    match self.theme.opts.mode {
+                        Mode::Dark => "dark",
+                        Mode::Light => "light",
+                    }
+                }
                 .to_owned(),
             ),
             "appearance.monochrome" => pair(&["off", "on"], on_off(self.theme.mono())),
@@ -15011,10 +15037,14 @@ impl App {
             },
             theme: ThemePrefs {
                 mode: Some(
-                    if self.theme_system { "system" } else { match self.theme.opts.mode {
-                        Mode::Dark => "dark",
-                        Mode::Light => "light",
-                    }}
+                    if self.theme_system {
+                        "system"
+                    } else {
+                        match self.theme.opts.mode {
+                            Mode::Dark => "dark",
+                            Mode::Light => "light",
+                        }
+                    }
                     .into(),
                 ),
                 monochrome: Some(self.theme.opts.tier == Tier::Mono),
@@ -15066,7 +15096,8 @@ impl App {
         }
         self.load_layouts(prefs.layouts.clone());
         let mut options = self.theme.opts;
-        self.theme_system = !over.mode && !matches!(prefs.theme.mode.as_deref(), Some("dark" | "light"));
+        self.theme_system =
+            !over.mode && !matches!(prefs.theme.mode.as_deref(), Some("dark" | "light"));
         if !over.mode {
             match prefs.theme.mode.as_deref() {
                 Some("dark") => options.mode = Mode::Dark,
@@ -15394,11 +15425,11 @@ impl App {
                         self.pending_inputs().len(),
                     ),
                     self.composer_ref().images.len(),
-                    self.composer_ref().pastes().len(),
                 );
                 if self.ui.overlay.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.view == View::Session
+                    && !crate::render::ask_docked(self)
                     && contains(inner, ev.column, ev.row)
                 {
                     let (rows, (cursor_row, _)) = self.composer_ref().layout(inner.width as usize);
@@ -15520,7 +15551,6 @@ impl App {
                             self.pending_inputs().len(),
                         ),
                         self.composer_ref().images.len(),
-                        self.composer_ref().pastes().len(),
                     );
                     let row = ev
                         .row
@@ -15993,14 +16023,7 @@ impl App {
             Target::WaitOption(i) => {
                 self.ui.focus = Focus::Waiting;
                 if self.writable() {
-                    self.ask_pick(i);
-                    // A single single-choice question answers on the click.
-                    if self
-                        .ask_current()
-                        .is_some_and(|c| c.total == 1 && !c.multiple() && !c.sent)
-                    {
-                        self.ask_submit();
-                    }
+                    self.ask_choose(i);
                 } else {
                     self.toast(Level::Warning, READ_ONLY);
                 }

@@ -55,3 +55,4 @@ Open (each has a default that holds unless the user objects):
   0.20261105.4 stalled compiling the standard library. The user's system then froze while opening the TUI terminal;
   whether blaze (two daemons on a 16 GB Mac) caused it is unknown (no panic report, no reboot). It was uninstalled and the launcher opt-in removed. Do not add blaze or similar unofficial cargo replacements
   without asking.
+- **Questions live in the composer slot (user, 2026-11-14, plan 47).** The question replaces the composer; the composer's input is the "add context" line. Focus starts on the options (up/down move, space selects, enter continues); click and digit keys still choose and advance; the composer draft is stashed and restored; first Esc in the context line returns to the options; mobile keeps its compact card. Supersedes 30.2 and 30.3 for questions with options.

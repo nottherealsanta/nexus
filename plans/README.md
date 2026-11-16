@@ -49,7 +49,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 24 | [Harness workflow audit](24-harness-audit.md) | One observation item open | Observe larger heaps |
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |
 
-Done: [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
+Done: [47 questions in the composer slot](done/47-question-in-composer.md), [4 tests and lints](done/04-tests.md), [8 provider usage table](done/08-provider-usage-table.md),
 [22 remove `/continuation`](done/22-remove-continuation.md), [25 interrupt and send](done/25-interrupt-and-send.md), [33 right-sidebar Git removed](done/33-remove-git-from-right-sidebar.md), [29 session commands](done/29-session-commands.md),
 [30 questions](done/30-questions.md), [31 pending queue actions](done/31-pending-row-actions.md), [40 Git tab summary](done/40-git-tab-summary.md), [41 terminal separation](done/41-terminal-user-only.md),
 [32 worktree indicator](done/32-worktree-indicator.md), [35 timeline notice rows](done/35-timeline-notice-rows.md),

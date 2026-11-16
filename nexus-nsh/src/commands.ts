@@ -11,7 +11,7 @@ import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, railShown, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
+  composerFocused, questionLine, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -124,6 +124,7 @@ function evalTerm(t: string): boolean {
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
     case "waiting.question": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question"; }
     case "waiting.multiple": return waitItems().length > 1;
+    case "waiting.question_field": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question" && questionLine(); }
     case "composer.has_text": return draftHasText() || (imageDrafts()[draftKey()]?.length ?? 0) > 0;
     case "composer.empty": return !draftHasText() && !(imageDrafts()[draftKey()]?.length);
     case "has_queued": return !!viewed() && (pendingInputs()[viewed()!.id]?.inputs.length ?? 0) > 0;
@@ -883,6 +884,7 @@ on("session.jump_latest", () => { scrolledUp.set(false); jump.fn(); });
 on("waiting.next", () => waitIndex.update((n) => n + 1));
 on("waiting.prev", () => waitIndex.update((n) => Math.max(0, n - 1)));
 on("waiting.focus", () => focusWaiting.fn());
+on("waiting.options", () => { questionLineFocus.leave(); });
 on("waiting.go_to", () => { const id = otherWaits()[0]; if (id) void selectSession(id); });
 on("app.theme", () => { openSettings(); });
 on("session.export", () => {
@@ -1068,6 +1070,8 @@ on("model.effort", () => void pickOne("Reasoning effort", async () => {
 }));
 export const jump = { fn: () => {} };
 export const focusWaiting = { fn: () => {} };
+/** The question's context line (the composer's input while a question waits, plan 47): put the caret in it, or hand the keys back to the options. */
+export const questionLineFocus = { fn: (_end?: boolean) => {}, leave: () => {} };
 
 // Reasons for commands the manifest marks as not API-ready (shown disabled, never hidden).
 const BLOCKED: Record<string, string> = {

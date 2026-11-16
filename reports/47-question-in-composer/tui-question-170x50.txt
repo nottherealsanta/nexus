@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files] [Git]       Pick the migration database                                                                 ◆ waiting for you                   □
+     │                                  ◆ Pick the migration data… ×                                                                                                 +  ⋯
+ 1   │ + New session
+  N  │ ⌕ Search sessions       ctrl+k   i 1 other session waiting for input                                                                                           go
+ 1 4 │ ▣ Show archived
+     │────────────────────────────────
+▏1   │   Notes backlog            now     System prompt ~2.1K
+▏NT  │
+▏  1 │                                    AGENTS.md  unavailable or not read
+     │▏◆ Pick the migration data… now
+     │▏                                   Tools [0]
+ NM  │
+   1 │                                    Skills [0]  none
+     │
+     │                                    MCP [0]  none
+ NV  │
+   1 │                                    total  ~2,094 tok
+     │
+     │
+  S  │
+   1 │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                   ┃
+     │                                   ┃  ◆ Nexus asks
+     │                                   ┃  waiting on you
+     │                                   ┃
+     │                                   ┃  Which database should the migration target?
+     │                                   ┃▸ 1 PostgreSQL
+     │                                   ┃  2 SQLite
+     │                                   ┃
+     │                                   ┃  ↑↓ move · space select · enter send · esc stop
+     │                                   ┃
+     │                                   ┃
+  +  │                                   ┃
+     │                                   ┃  Add context…
+     │                                   ┃
+     │                                   ┃  Build · m scripted · default                                                                                            0
+  ⚙  │                                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                   /private/tmp/tui-ws.2ltcCx/b                                                                                         Working
+     │                                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

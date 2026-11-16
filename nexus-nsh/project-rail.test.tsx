@@ -44,6 +44,8 @@ describe("project rail", () => {
       new Set(["unread"]),
     );
     expect(counts).toEqual([1, 1, 2, 2]);
+    // Running beats unread, and a failed session is idle, as in the TUI.
+    expect(projectCounts("Nexus", [root("a"), root("b")], [], [], new Map([["a", "turn"]]), new Set(["a", "b"]), new Set(["b"]))).toEqual([0, 0, 1, 1]);
     expect(railCount(9)).toBe("9");
     expect(railCount(10)).toBe("*");
   });
