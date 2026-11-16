@@ -1,7 +1,7 @@
 # Plan 10: fork subagent visual check (partial)
 
-Status: **NSH captures taken; TUI captures incomplete.** The plan's visual item is not ticked. The TUI child
-capture (with the right sidebar) is blocked, see "Open".
+Status: **captured in both clients, dark and light (2026-11-16).** See plans/10-fork.md for the diagnosis of the blank TUI child.
+New files: `tui-child-sidebar-{dark,light}.png`, `nsh-child-inherited-open-{dark,light}.png`, `nsh-parent-forks-expanded-{dark,light}.png`.
 
 ## Setup
 

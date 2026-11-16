@@ -219,3 +219,5 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
   well in both clients (NSH before/after and TUI light frames in `reports/nsh-look-2026-11/`). NSH's turn meta omits a
   missing or unparsable timestamp instead of printing `Invalid Date`, matching the TUI; `timeline-visual-parity.test.tsx`
   covers it. Theme checks, NSH web tests and type check pass.
+
+- **Plan 10 visual check (2026-11-16).** The blank TUI fork child was a `--dump-frame` timing bug (waited for a snapshot, not the session history), not a decode error; decoding hardened and failures reported; NSH inherited block gets the TUI's rail; paired dark/light captures in `reports/10-fork/`. Observation item stays open.
