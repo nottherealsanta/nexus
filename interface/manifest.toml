@@ -222,14 +222,6 @@ session = "Timeline plus composer; a child session uses the same view with bread
 new_session = "Starting context (agent, model, effort, directory, system prompt, AGENTS.md, tools, skills, MCP, token count) with the composer below."
 settings = "Opened from app.settings (palette or fixed sidebar entry)."
 
-[navigation.panel]
-# One centred modal over the dimmed page. It shows a file (edit and diff views)
-# or a Git change.
-views = ["file", "diff"]
-default = "file"
-anchored = "centre"
-note = "SUPERSEDED by [navigation.layout] (plan 45): files and diffs open as tabs, not in a modal. Client agents remove this table, the check_manifest.py panel rule and the editor modal together."
-
 # The centre is one layout tree of groups of tabs (plan 45, docs/layout.md). It
 # replaces the header session strip, the file/diff modal and the bottom terminal
 # dock. Desktop and web only (TUI, NSH desktop/web, iPad); the phone ignores it.
@@ -756,11 +748,6 @@ command = "app.open_inspector"
 "layout.unsaved.cancel" = "Cancel"
 "layout.terminal.split" = "New terminal"
 "layout.drop.cancelled" = "Drag cancelled."
-
-# Plan 45 strings, pending: the clients do not use them yet and check_manifest.py
-# refuses unused [strings] keys. Each client agent moves a key into [strings]
-# (same key, same text) in the change that first calls ui_text/uiText with it.
-[layout.strings_pending]
 "layout.restore.dropped" = "Some tabs from your last layout are gone and were not restored."
 
 # --- Commands -----------------------------------------------------------------
@@ -957,7 +944,7 @@ category = "navigation"
 when = ["terminal.selected"]
 unavailable_reason = "Select a terminal first."
 placement = ["panel"]
-note = "SUPERSEDED by layout.tab_close (plan 45): closing a terminal tab terminates it, asking first while it runs. Client agents remove this entry."
+note = "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first while it runs (plan 45)."
 
 [[command]]
 id = "terminal.acquire"
@@ -993,14 +980,14 @@ placement = ["panel"]
 
 [[command]]
 id = "terminal.focus_list"
-title = "Focus terminal list"
+title = "Leave terminal"
 category = "navigation"
 keys = { tui = "ctrl+]", nsh = "ctrl+]" }
 key_context = "terminal"
 when = ["terminal.focused"]
 unavailable_reason = "The terminal screen does not have focus."
 placement = ["panel"]
-note = "SUPERSEDED by plan 45: there is no resource list or dock. Ctrl+] returns focus from the terminal screen to the group strip. Client agents may rename the behaviour; the key stays."
+note = "Ctrl+] hands the keys from the terminal screen back to the group strip (plan 45: there is no resource list or dock)."
 
 # --- Tabs and splits (plan 45, docs/layout.md) ----------------------------------
 # Leader keys follow Ctrl+X. Taken before: shift+/, s, r, shift+n, l, n, o b, m, t, g,

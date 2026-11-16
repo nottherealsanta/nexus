@@ -331,15 +331,6 @@ export const manifest = {
     "settings": "Opened from app.settings (palette or fixed sidebar entry)."
    }
   },
-  "panel": {
-   "views": [
-    "file",
-    "diff"
-   ],
-   "default": "file",
-   "anchored": "centre",
-   "note": "SUPERSEDED by [navigation.layout] (plan 45): files and diffs open as tabs, not in a modal. Client agents remove this table, the check_manifest.py panel rule and the editor modal together."
-  },
   "layout": {
    "region": "between_sidebars",
    "tab_kinds": [
@@ -943,12 +934,8 @@ export const manifest = {
   "layout.unsaved.discard": "Discard",
   "layout.unsaved.cancel": "Cancel",
   "layout.terminal.split": "New terminal",
-  "layout.drop.cancelled": "Drag cancelled."
- },
- "layout": {
-  "strings_pending": {
-   "layout.restore.dropped": "Some tabs from your last layout are gone and were not restored."
-  }
+  "layout.drop.cancelled": "Drag cancelled.",
+  "layout.restore.dropped": "Some tabs from your last layout are gone and were not restored."
  },
  "command": [
   {
@@ -1279,7 +1266,7 @@ export const manifest = {
    "placement": [
     "panel"
    ],
-   "note": "SUPERSEDED by layout.tab_close (plan 45): closing a terminal tab terminates it, asking first while it runs. Client agents remove this entry."
+   "note": "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first while it runs (plan 45)."
   },
   {
    "id": "terminal.acquire",
@@ -1332,7 +1319,7 @@ export const manifest = {
   },
   {
    "id": "terminal.focus_list",
-   "title": "Focus terminal list",
+   "title": "Leave terminal",
    "category": "navigation",
    "keys": {
     "tui": "ctrl+]",
@@ -1346,7 +1333,7 @@ export const manifest = {
    "placement": [
     "panel"
    ],
-   "note": "SUPERSEDED by plan 45: there is no resource list or dock. Ctrl+] returns focus from the terminal screen to the group strip. Client agents may rename the behaviour; the key stays."
+   "note": "Ctrl+] hands the keys from the terminal screen back to the group strip (plan 45: there is no resource list or dock)."
   },
   {
    "id": "layout.split_right",

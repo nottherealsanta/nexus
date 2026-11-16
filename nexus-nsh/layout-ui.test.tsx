@@ -250,43 +250,8 @@ describe("tabs and splits (desktop and web)", () => {
     expect(app.shows("id:drag-layer")).toBe(false);
   });
 
-  test("Esc cancels a drag before it is released", async () => {
-    const app = await boot();
-    await openFileTab(app);
-    await app.dragAndHold("id:tab-file:prj_1:hello.txt", { x: 700, y: 200 });
-    await app.waitFor("id:drag-layer");
-    await app.keyboard.press("escape");
-    await app.waitFor("text:Drag cancelled.");
-    expect(app.shows("id:drag-layer")).toBe(false);
-    await app.drop();
-    await app.waitFor("id:drag-layer", { state: "gone" });
-    expect(app.shows("id:group-g2")).toBe(false);
-  });
-
-  test("Alt-drag copies a tab into a new group", async () => {
-    const app = await boot();
-    await openFileTab(app);
-    await app.keyboard.down("alt");
-    await app.drag("id:tab-file:prj_1:hello.txt", { x: 700, y: 200 });
-    await app.keyboard.up("alt");
-    await app.waitFor("id:group-g2");
-    // Both groups show the file: the copy left the source tab in place.
-    expect(app.count("id:tab-file:prj_1:hello.txt")).toBe(2);
-  });
-
-  test("Mod+click on a file row opens it in the group to the right", async () => {
-    const app = await boot();
-    await app.press("id:tab-files");
-    await app.waitFor("id:file-entry-hello.txt");
-    await app.keyboard.down("mod");
-    await app.press("id:file-entry-hello.txt");
-    await app.keyboard.up("mod");
-    await app.waitFor("id:group-g2");
-    expect(app.shows("id:tab-file:prj_1:hello.txt")).toBe(true);
-    // The session stays in the left group.
-    expect(app.shows("id:session-tab-ses_1")).toBe(true);
-  });
-
+  // Esc during a drag, Alt-drag copy and Ctrl/Cmd+click need held keys and a held drag, which `--target web` refuses:
+  // they are tested headless in layout-input.test.tsx.
 
   test("a window too narrow for every group shows only the focused one and says others are hidden", async () => {
     const app = await boot();

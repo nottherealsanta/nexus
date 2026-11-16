@@ -97,6 +97,7 @@ describe("tab layout pointer input (plan 45)", () => {
     await app.keyboard.up("mod");
     await app.waitFor("id:group-g2");
     expect(app.count("id:session-tab-ses_1")).toBe(2);
-    expect(app.shows("id:session-placeholder-ses_1")).toBe(true);
+    // The unfocused group shows the session as a live read-only timeline (plan 45), not a placeholder card.
+    expect(app.shows("id:peer-timeline-ses_1")).toBe(true);
   });
 });

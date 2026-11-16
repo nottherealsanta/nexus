@@ -255,14 +255,6 @@ def main() -> int:
         err("navigation.header leading/trailing must be the left/right sidebar toggles")
     if nav.get("centre", {}).get("views") != ["session", "new_session", "settings"]:
         err("navigation.centre.views mismatch")
-    panel = nav.get("panel", {})
-    if panel.get("views") != ["file", "diff"]:
-        err("navigation.panel.views must be ['file', 'diff']")
-    if panel.get("anchored") != "centre" or panel.get("default") != "file":
-        err("navigation.panel must be anchored centre and default to file")
-    for term in ("panel.file", "panel.diff"):
-        if term not in terms:
-            err(f"navigation.panel needs the vocabulary term {term!r}")
     ref_ids = [h.get("leading"), h.get("trailing"), h.get("title_click"), nav.get("left_sidebar", {}).get("settings_entry"),
                nav.get("notifications", {}).get("command")]
     ref_ids += h.get("extra", []) + [t.get("command") for t in nav.get("left_sidebar", {}).get("tab", [])]
