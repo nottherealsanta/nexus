@@ -3223,11 +3223,13 @@ fn the_full_session_row_supplies_the_effort_the_snapshot_row_lacks() {
         "id": SESSION, "agent": "scout", "effort": "low", "effort_source": "agent", "skills": [], "mcp": []
     }))
     .unwrap();
-    app.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(nexus_tui::api::History {
-        session_id: SESSION.into(),
-        messages: app.messages().to_vec(),
-        session: Some(full),
-        ..Default::default()
-    })));
+    app.apply_sync(nexus_tui::sync::SyncMsg::History(Box::new(
+        nexus_tui::api::History {
+            session_id: SESSION.into(),
+            messages: app.messages().to_vec(),
+            session: Some(full),
+            ..Default::default()
+        },
+    )));
     assert_eq!(app.current_effort(), "low");
 }

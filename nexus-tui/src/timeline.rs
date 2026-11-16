@@ -2771,7 +2771,10 @@ impl Builder<'_> {
                 let short = crate::stats::catalog_entry(&self.app.state.models, &m)
                     .and_then(|e| e["name"].as_str())
                     .filter(|n| !n.is_empty())
-                    .map_or_else(|| m.rsplit('/').next().unwrap_or(&m).to_owned(), str::to_owned);
+                    .map_or_else(
+                        || m.rsplit('/').next().unwrap_or(&m).to_owned(),
+                        str::to_owned,
+                    );
                 bits.push(vec![Span::styled(short, value)]);
             }
         }
