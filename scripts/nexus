@@ -10,6 +10,8 @@
 #   nexus dev web [flags]     run the hot-reloading web app and open it
 #   nexus macos [flags]       run the NSH app in a macOS window
 #   nexus gpui                experimental GPUI host for the same NSH app
+#   nexus pixel [flags]       experimental, not shipped: the NSH web app in this terminal via PixelGUI
+#                             (kitty graphics; Ghostty/kitty; Ctrl-Q quits; --port N)
 #   nexus ios [flags]         run the NSH app in an iOS simulator (Mac Catalyst when none is installed)
 #   nexus restart             restart the Core daemon
 #   nexus stop                stop the Core daemon
@@ -44,6 +46,7 @@ TUI="$ROOT/nexus-tui"
 NSH="$ROOT/nexus-nsh"
 MERMAID="$ROOT/nexus-mermaid"
 ANNOTATE="$ROOT/nexus-annotate"
+PIXEL="$ROOT/nexus-pixel"
 HOME_DIR="${NEXUS10_HOME:-$HOME/.nexus}"
 
 die() { printf 'nexus: %s\n' "$*" >&2; exit 1; }
@@ -160,6 +163,69 @@ gpui() {
   (cd "$NSH" && npm run gen && nsh build App.tsx -o "$ROOT/nexus-gpui/build")
   cargo run --manifest-path "$ROOT/nexus-gpui/Cargo.toml" -- "$ROOT/nexus-gpui/build/bundle.js"
 }
+
+### POC: the NSH web app in the current terminal pane through PixelGUI
+### (nexus-pixel/). Starts its own NSH host on a separate port, then runs the pixel
+### runtime in the foreground; the host stops when pixel exits.
+pixel_app() (
+  ensure_home
+  ensure_uv
+  ensure_npm
+  local port="${NEXUS_PIXEL_PORT:-4821}" strict=0
+  [ -z "${NEXUS_PIXEL_PORT:-}" ] || strict=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) shift; port="${1:?--port needs a value}"; strict=1 ;;
+      *) die "pixel: unknown argument $1" ;;
+    esac
+    shift
+  done
+  local marker="$PIXEL/node_modules/.package-lock.json"
+  if [ ! -f "$marker" ] || [ "$PIXEL/package.json" -nt "$marker" ]; then
+    printf '› installing PixelGUI (downloads its Electron runtime once)\n'
+    (cd "$PIXEL" && npm install)
+  fi
+  if [ ! -f "$NSH/dist/Nexus/index.html" ]; then
+    ensure_nsh
+    printf '› building the NSH web app\n'
+    (cd "$NSH" && npm run gen && npm run build)
+  fi
+  # Another `nexus pixel` (or anything else) may hold the port. A chosen port must be free;
+  # the default moves to the next free one, so a second pane gets its own host.
+  port="$(node - "$port" "$strict" <<'NODE'
+const net = require('node:net');
+const [start, strict] = [Number(process.argv[2]), process.argv[3] === '1'];
+const tryPort = p => {
+  const s = net.createServer();
+  s.once('error', () => { if (strict || p >= start + 50) process.exit(1); tryPort(p + 1); });
+  s.listen(p, '127.0.0.1', () => s.close(() => { console.log(p); }));
+};
+tryPort(start);
+NODE
+)" || die "pixel: port in use; pick another with --port N"
+  core daemon start >/dev/null || true
+  local log="$HOME_DIR/logs/nexus-pixel-host.log" host_pid=''
+  mkdir -p "$(dirname "$log")"
+  (cd "$NSH" && NEXUS_NSH_CORE_CMD="$(core_cmd)" exec node scripts/serve.mjs --port "$port") >"$log" 2>&1 & host_pid=$!
+  trap '[ -z "$host_pid" ] || kill "$host_pid" 2>/dev/null || true' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  local tries=0
+  until node - "$port" <<'NODE'
+const http = require('node:http');
+const req = http.get(`http://127.0.0.1:${process.argv[2]}/`, res => { res.resume(); process.exit(res.statusCode === 200 ? 0 : 1); });
+req.setTimeout(1000, () => req.destroy());
+req.on('error', () => process.exit(1));
+NODE
+  do
+    kill -0 "$host_pid" 2>/dev/null || die "pixel: NSH host stopped (see $log)"
+    tries=$((tries + 1)); [ "$tries" -lt 30 ] || die "pixel: NSH host did not answer on port $port"
+    sleep 0.3
+  done
+  # The answer must come from our host, not one that held the port first.
+  kill -0 "$host_pid" 2>/dev/null || die "pixel: NSH host stopped (see $log)"
+  (cd "$PIXEL" && NODE_ENV=production ./node_modules/.bin/pixel . -- "http://127.0.0.1:$port")
+)
 
 
 web() {
@@ -347,6 +413,7 @@ case "${1:-}" in
   nsh)                 die "nexus nsh tui is retired; use nexus tui (archive/nsh-terminal-backend preserves the old target)" ;;
   macos)               shift; native macos "$@" ;;
   gpui)                shift; gpui "$@" ;;
+  pixel)               shift; pixel_app "$@" ;;
   ios)                 shift
     if command -v xcrun >/dev/null 2>&1 && xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then
       native ios "$@"

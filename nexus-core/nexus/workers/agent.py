@@ -180,8 +180,12 @@ class ExternalAgent:
                     yield event
 
         try:
+            held = []  # assistant entries that arrived before the previous response's tool results
             while True:
-                event = await queue.get()
+                if held and (isinstance(held[0], WorkerResult) or all(c in results for c in response_calls)):
+                    event = held.pop(0)
+                else:
+                    event = await queue.get()
                 if isinstance(event, Exception):
                     event = WorkerResult("failed", "", DISCLOSURE, error=str(event))
                 if isinstance(event, WorkerResult):
@@ -191,6 +195,9 @@ class ExternalAgent:
                         if cid not in results:
                             async for item in finish_result(cid, "CLI ended without a tool result; its outcome is unknown", True):
                                 yield item
+                    if held:
+                        held.append(event)
+                        continue
                     if event.text and event.text != last_text:
                         async for item in begin():
                             yield item
@@ -236,8 +243,9 @@ class ExternalAgent:
                     if active and response != key:
                         async for item in flush():
                             yield item
-                    if any(c not in results for c in response_calls):
-                        raise ProviderError("Claude began another response before all observed tool results; unsupported transcript ordering")
+                    if held or any(c not in results for c in response_calls):
+                        held.append(event)
+                        continue
                     response = key
                     async for item in begin():
                         yield item

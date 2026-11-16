@@ -379,6 +379,15 @@ class ManagerService:
             self._publish_state(call)
         if voice is not None:
             await voice.close("audio_stopped")
+        # Stop also stops the Manager: the running turn is cancelled unless it already changed a session.
+        while not self._queue.empty():
+            self._queue.get_nowait()
+        turn = self.turn
+        if turn is not None and not turn.acted:
+            turn.muted = turn.cancelled = True
+            episode = self._episode_id()
+            if episode is not None:
+                await self.runtime.interrupt(episode)
 
     async def debug_session(self) -> dict[str, Any]:
         """Ensure the persistent current backend session; never start audio or a model request."""
@@ -550,6 +559,8 @@ class ManagerService:
         subscription = self.bus.open()
         pump = asyncio.ensure_future(self._pump(call, turn, subscription, episode.id))
         try:
+            if turn.cancelled:
+                return
             started = self.runtime.prompt(episode.id, text)
             turn.runtime_turn_id = started["turn_id"]
             task = self.runtime.turns.get(episode.id)

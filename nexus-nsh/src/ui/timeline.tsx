@@ -4,7 +4,7 @@ import { phoneRow } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Btn, FOCUS, Icon, IconButton, UI_FONT, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
+import { Btn, FOCUS, Icon, IconButton, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -28,17 +28,19 @@ import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
 
 type Tone = "info" | "accent" | "warning" | "error";
-/** Every timeline text is 16 px, whatever size the shared kit styles carry. */
-const size16 = (c: string) => c.replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[16px]").replace(/leading-[45]\b/g, "leading-6");
+/** Every timeline text is 14 px, whatever size the shared kit styles carry. */
+const size16 = (c: string) => c.replaceAll("font-(family-name:--font-ui)", "font-(family-name:--font-code)").replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[14px]").replace(/leading-[45]\b/g, "leading-6");
 const sized = <O extends Record<string, string>>(o: O) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, size16(v)])) as O;
 const T = sized(KitT), TS = sized(KitTS), PROSE = sized(KitPROSE);
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
+/** The timeline reads in the monospace face, like the TUI. */
+const UI_FONT = { fontFamily: "Monaspace Argon" };
 /** Timeline metadata uses the app's monospace face. */
 const META = `${T.meta}`;
-const TOOL_TEXT = "text-[16px] leading-6 font-(family-name:--font-ui)";
+const TOOL_TEXT = "text-[14px] leading-6 font-(family-name:--font-code)";
 /** A tool argument or error line: a path or command you could type. */
-const ARG = "font-(family-name:--font-code) text-[16px] leading-6 text-foreground-secondary";
+const ARG = "font-(family-name:--font-code) text-[14px] leading-6 text-foreground-secondary";
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
 const hit = (base: string) => (isNarrow() ? "min-h-11" : base);
 
@@ -995,7 +997,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                   : <CodeFence block={block} />;
               }}
               classes={PROSE}
-              styles={{ root: { fontFamily: "Google Sans", fontSize: 16, lineHeight: 25 } }}
+              styles={{ root: { fontFamily: "Monaspace Argon", fontSize: 14, lineHeight: 24 } }}
             />
           </View>
         </If>
@@ -1024,7 +1026,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                   </View>
                   <Text class={`shrink-0 ${TOOL_TEXT} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
                   <Text style={{ numberOfLines: 1 }} class={`ml-2 shrink min-w-0 ${TOOL_TEXT} text-foreground-secondary`}>{c.title}</Text>
-                  <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
+                  <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[14px] leading-6 font-(family-name:--font-code) tabular-nums text-foreground-secondary">Background</Text></If>
                 </View>
                 <If when={!!c.meta}><Text testID="child-meta" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.meta}</Text></If>
                 <If when={!!c.outcome}><Text testID="child-outcome" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.outcome}</Text></If>
@@ -1077,7 +1079,7 @@ function NoticeRow(p: { text: () => string }) {
   const head = () => firstLine(p.text()).replace(/^→ /, "").replace(/^\[/, "").replace(/\]$/, "");
   const label = () => shell() ? `${head()} · show full output` : `context · ${head()} · show details`;
   return (
-    <View class={`py-0.5 ${TURN_INSET}`}>
+    <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => contextDetail.set({ title: shell() ? "Background shell" : "Context", detail: p.text() })} testID={shell() ? "background-shell-done" : "msg-notice"} accessibilityLabel={label()}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}>
@@ -1100,7 +1102,7 @@ function SubagentDoneRow(p: { text: () => string; notice: () => SubagentNotice }
   };
   const outcome = () => notice().state === "failed" ? "failed" : notice().state === "interrupted" ? "interrupted" : "";
   return (
-    <View class={`py-0.5 ${TURN_INSET}`}>
+    <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => subagentDone.set({ text: p.text(), notice: notice() })} testID="subagent-done"
         accessibilityLabel={`${label()}${outcome() ? `, ${outcome()}` : ""}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
@@ -1168,7 +1170,7 @@ export function CodeFence(p: { block: TextViewCodeBlock }) {
       </View>
       <Scroll horizontal>
         <View class="gap-0 px-4 pb-4">
-          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[16px] leading-6 text-foreground">{line || " "}</Text>)}
+          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[14px] leading-6 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
     </View>
@@ -1196,7 +1198,7 @@ export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the pictur
                 <View class="gap-0" testID="mermaid-text">
                   {rows.map((row) => (
                     <Text style={{ userSelect: "text", numberOfLines: 1 }}
-                      class="font-(family-name:--font-code) text-[16px] leading-6">
+                      class="font-(family-name:--font-code) text-[14px] leading-6">
                       {row.runs.map((run) => <Text class={toneClass(run.tone)}>{run.text}</Text>)}
                     </Text>
                   ))}
@@ -1289,14 +1291,14 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
               {(p, n) => <Button onPress={() => contextDetail.set({ title: "Pasted text", detail: p().text })}
                 accessibilityLabel={`Open pasted text, ${p().marker}`} testID={`user-paste-${r().n}-${n()}`}
                 class={`rounded-(--radius) bg-raised px-2 min-h-7 hover:bg-accent ${FOCUS}`}>
-                <Text class="font-mono text-[16px] leading-6 text-foreground">{p().marker}</Text>
+                <Text class="font-mono text-[14px] leading-6 text-foreground">{p().marker}</Text>
               </Button>}
             </Each>
           </View>
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class="text-[16px] leading-6 text-foreground">{body()}</Text>
+            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class="text-[14px] leading-6 text-foreground">{body()}</Text>
             {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
             <If when={touch}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
@@ -1415,7 +1417,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
     wasRunning = running;
   });
   return (
-    <View class={`py-0.5 ${TURN_INSET}`}>
+    <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
@@ -1444,7 +1446,7 @@ function ForkRow(p: { r: () => Extract<Row, { kind: "fork" }> }) {
   const r = p.r;
   const summary = () => forkSummary(r().parent, r().count);
   return (
-    <View class={`py-0.5 ${TURN_INSET}`}>
+    <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, false)} testID="fork-inherited" accessibilityLabel={`${summary()}, ${r().open ? "collapse" : "expand"}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" /></View>
@@ -1481,7 +1483,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
   const key = () => x().running ? "reason:streaming" : `reason:${x().key}`;
   const preview = () => x().encrypted ? "encrypted, replayed to the provider" : stripEmphasis(firstLine(x().text));
   return (
-    <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
+    <View class={`py-1.5 ${p.nested ? "" : TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={activityIconSize("diamond")} class="tint-muted-foreground" /></View>
@@ -1514,7 +1516,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
 
 /** One line of a member's detail output (the hidden-lines marker is shown as the foot instead). */
 function ToolDetail(p: { line: () => ToolDetailLine }) {
-  return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[16px] leading-6 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
+  return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[14px] leading-6 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean }) {
@@ -1534,11 +1536,11 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
   const MarkRow = (q: { line: () => ToolDetailLine }) => (
     <Button onPress={showAll} class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}
       testID={q.line().tone === "show-all" ? `tool-show-all-${r().id}` : `tool-show-less-${r().id}`}>
-      <Text class={`font-(family-name:--font-code) text-[16px] leading-6 ${q.line().text.includes(HIDDEN_MARK) ? "text-primary" : "text-muted-foreground"}`}>{q.line().text}</Text>
+      <Text class={`font-(family-name:--font-code) text-[14px] leading-6 ${q.line().text.includes(HIDDEN_MARK) ? "text-primary" : "text-muted-foreground"}`}>{q.line().text}</Text>
     </Button>
   );
   return (
-    <View class={`py-0.5 ${p.nested ? "" : TURN_INSET}`}>
+    <View class={`py-1.5 ${p.nested ? "" : TURN_INSET}`}>
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => {
         markFocused();
         // Enter or a press on an open, clipped row brings the rest of its output back.
@@ -1551,7 +1553,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
           {() => <View class="w-4 shrink-0 items-center">
             <If when={r().state === "error"} else={<Status kind={stateKind()} />}>
               {/* A failed call is part of the flow: marked, never red. */}
-              <Text class="text-center text-[16px] leading-6 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
+              <Text class="text-center text-[14px] leading-6 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
             </If>
           </View>}
         </If>
@@ -1566,14 +1568,14 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
         <View class="flex-1" />
         <If when={open()}>
           <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
-            <Text class={`text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
+            <Text class={`text-[14px] leading-6 font-(family-name:--font-code) tabular-nums ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
           </Button>
         </If>
-        <If when={r().exit !== undefined}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
+        <If when={r().exit !== undefined}><Text class="text-[14px] leading-6 font-(family-name:--font-code) tabular-nums text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
         <If when={r().exit !== undefined && (r().state !== "done" || !!r().duration)}><Text class={META}>·</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-primary shrink-0">waiting</Text></If>
-        <If when={r().state === "denied"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-error shrink-0">denied</Text></If>
-        <If when={r().state === "error"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-[14px] leading-6 font-(family-name:--font-code) tabular-nums text-primary shrink-0">waiting</Text></If>
+        <If when={r().state === "denied"}><Text class="text-[14px] leading-6 font-(family-name:--font-code) tabular-nums text-error shrink-0">denied</Text></If>
+        <If when={r().state === "error"}><Text class="text-[14px] leading-6 font-(family-name:--font-code) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
         <If when={(r().state === "done" || r().state === "running") && !!r().duration}><Text class={`${META} shrink-0`}>{r().duration!}</Text></If>
         </View>
       </View>
@@ -1603,7 +1605,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
           <If when={!!r().forkId}>
             <Button onPress={() => r().forkId && void selectSession(r().forkId!)} testID={`tool-open-fork-${r().id}`} accessibilityLabel="open fork"
               class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
-              <Text class="font-(family-name:--font-code) text-[16px] leading-6 text-primary">open fork ↗</Text>
+              <Text class="font-(family-name:--font-code) text-[14px] leading-6 text-primary">open fork ↗</Text>
             </Button>
           </If>
         </View>

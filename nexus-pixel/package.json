@@ -1,0 +1,15 @@
+{
+  "name": "nexus-pixel",
+  "private": true,
+  "description": "POC: the NSH web app inside the terminal through PixelGUI (kitty graphics + an offscreen Chromium WebView)",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "pixel . --"
+  },
+  "dependencies": {
+    "@zenbu-labs/pixel": "0.2.24"
+  },
+  "allowScripts": {
+    "@zenbu-labs/pixel": true
+  }
+}

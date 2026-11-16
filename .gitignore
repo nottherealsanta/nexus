@@ -12,3 +12,4 @@ node_modules/
 nexus-gpui/build/
 nexus-gpui/target/
 !nexus-core/tests/fixtures/**/*.jsonl
+nexus-pixel/node_modules/

@@ -23,7 +23,14 @@ Made (user):
 | 2026-11-10 | **Resume ZMX implementation**, referencing `nexus01`, and keep it separate so non-ZMX behavior does not change. Start with isolated worker transports; no live/paid calls are authorized by this direction. |
 | 2026-11-11 | **The Manager is done** (section 3). Its unrun verification items stay as an unscheduled list; new Manager work is sections 27 and 28 |
 | 2026-11-11 | **PLAN.md became the `plans/` folder**; `ZMX_plan.md` moved to `plans/zmx-design.md`. Mobile redesign and the NSH look are one piece of work (section 5) |
+| 2026-11-16 | **Terminal pixel host POC (user):** try [PixelGUI](https://github.com/zenbu-labs/terminal-browser/tree/main/pixel) to run the NSH web app inside a terminal pane as `nexus pixel`. Like `nexus-gpui`, it is a separate experimental folder (`nexus-pixel/`) that does not ship: not in `nexus build`, `nexus check`, `install.sh`, release artifacts or release-please. |
 | 2026-11-06 | **macOS GPUI direction:** spike a Rust GPUI host embedding the existing NSH app; keep the current AppKit client intact and expose the spike separately as `nexus gpui`. |
+
+## Terminal pixel host POC
+
+- [~] Added `nexus-pixel/` (private npm package, `@zenbu-labs/pixel` pinned to 0.2.24) and `nexus pixel`. It starts its own NSH web host on 4821 (next free port if taken; `--port N` insists) and shows that page in the current pane through PixelGUI's offscreen Chromium and the kitty graphics protocol. Ctrl-Q quits and stops the host.
+- Verified headless only (2026-11-16): through a pseudo-terminal, decoded kitty frames show the NSH app connected to Core; a held port moves the host to the next one. Not verified by hand in Ghostty: input, scrolling, resize, latency. `npm install` downloads PixelGUI's Electron runtime (~330 MB).
+- Alternatives if it is pursued: awrit (CEF over kitty graphics), Carbonyl (block characters, any terminal), or a Chrome DevTools screencast written as kitty frames.
 
 ## GPUI host spike
 
