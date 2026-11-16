@@ -2932,7 +2932,7 @@ impl Builder<'_> {
             }
             let detail = truncate(&detail, b.bw.saturating_sub(used), b.ell());
             let mut spans = vec![
-                Span::styled(format!("{}", " ".repeat(ACTIVITY_INDENT)), b.meta()),
+                Span::styled(" ".repeat(ACTIVITY_INDENT), b.meta()),
                 Span::styled(icon, b.t.agent_style(&info.agent)),
                 Span::styled(" ", b.meta()),
                 Span::styled("Subagent done".to_owned(), b.st(PRIMARY, CANVAS)),

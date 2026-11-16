@@ -447,7 +447,10 @@ mod tests {
         assert_eq!(body.height, g.centre.height - 1);
         assert_eq!(g.heading.y, body.y, "the page starts under the strip");
         assert_eq!(g.composer.bottom(), g.centre.bottom());
-        assert!(g.panel.is_none() && g.terminal.is_none(), "no dock or modal");
+        assert!(
+            g.panel.is_none() && g.terminal.is_none(),
+            "no dock or modal"
+        );
     }
 
     #[test]

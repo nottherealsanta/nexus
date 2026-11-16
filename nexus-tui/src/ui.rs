@@ -392,7 +392,9 @@ pub enum Confirmed {
         tab: crate::groups::Tab,
     },
     /// Closing a group that holds unsaved files: Save all, Discard all or Cancel.
-    CloseDirtyGroup { group: crate::groups::GroupId },
+    CloseDirtyGroup {
+        group: crate::groups::GroupId,
+    },
     AttachTerminalEvidence {
         draft: String,
         payload: String,

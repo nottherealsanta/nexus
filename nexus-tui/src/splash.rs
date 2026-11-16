@@ -395,10 +395,6 @@ mod tests {
     use super::*;
     use ratatui::style::Modifier;
 
-    fn at(start: Instant, frame: u32) -> Instant {
-        start + FRAME * frame
-    }
-
     fn text(buf: &Buffer, y: u16) -> String {
         (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
     }

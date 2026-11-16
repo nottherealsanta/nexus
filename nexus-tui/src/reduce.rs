@@ -290,10 +290,17 @@ impl Model {
     /// "the viewed session" can read another. `None` when it already is, or
     /// has no view; otherwise hand the token to `swap_out`.
     pub fn swap_in(&mut self, session_id: &str) -> Option<(usize, Option<SelectedView>)> {
-        if self.selected.as_ref().is_some_and(|v| v.session_id == session_id) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|v| v.session_id == session_id)
+        {
             return None;
         }
-        let at = self.cached.iter().position(|v| v.session_id == session_id)?;
+        let at = self
+            .cached
+            .iter()
+            .position(|v| v.session_id == session_id)?;
         let view = self.cached.remove(at);
         Some((at, self.selected.replace(view)))
     }
@@ -862,7 +869,10 @@ mod tests {
         let mut other = m.sessions[SESSION].clone();
         other.id = "pinned".into();
         m.sessions.insert("pinned".into(), other);
-        assert_eq!(m.pin(&["pinned".to_owned(), "unknown".to_owned()]), vec!["pinned"]);
+        assert_eq!(
+            m.pin(&["pinned".to_owned(), "unknown".to_owned()]),
+            vec!["pinned"]
+        );
         assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
         // Selecting many others does not evict it.
         for n in 0..(VIEW_CACHE + 3) {
@@ -875,7 +885,11 @@ mod tests {
         assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
         // A snapshot keeps the pin and its view.
         m.apply_snapshot(serde_json::from_str(SNAPSHOT).unwrap());
-        assert_eq!(m.pinned, Vec::<String>::new(), "a session the snapshot lacks is unpinned");
+        assert_eq!(
+            m.pinned,
+            Vec::<String>::new(),
+            "a session the snapshot lacks is unpinned"
+        );
         // Swapping a view in makes it the selected one, and back.
         let mut m = model();
         let mut other = m.sessions[SESSION].clone();
@@ -887,7 +901,10 @@ mod tests {
         m.swap_out(token);
         assert_eq!(m.selected.as_ref().unwrap().session_id, SESSION);
         assert!(m.cached.iter().any(|v| v.session_id == "pinned"));
-        assert!(m.swap_in(SESSION).is_none(), "the selected view needs no swap");
+        assert!(
+            m.swap_in(SESSION).is_none(),
+            "the selected view needs no swap"
+        );
     }
 
     fn model() -> Model {

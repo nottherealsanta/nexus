@@ -656,11 +656,10 @@ impl App {
                 self.toast_too_small();
                 self.ui.groups.layout.open(tab.clone());
             }
-        } else if let Some((g, i)) = layout
-            .find(&tab)
-            .first()
-            .copied()
-            .filter(|_| tab.kind == Kind::Session && !layout.focused_group().tabs.contains(&tab))
+        } else if let Some((g, i)) =
+            layout.find(&tab).first().copied().filter(|_| {
+                tab.kind == Kind::Session && !layout.focused_group().tabs.contains(&tab)
+            })
         {
             // A session already shown by another group: go there (and move the highlight), as NSH does.
             layout.activate(g, i);
@@ -900,8 +899,10 @@ impl App {
             self.manifest
                 .ui_text("layout.unsaved.title", &[("name", base_name(&dirty[0].id))])
         } else {
-            self.manifest
-                .ui_text("layout.unsaved.group", &[("count", &dirty.len().to_string())])
+            self.manifest.ui_text(
+                "layout.unsaved.group",
+                &[("count", &dirty.len().to_string())],
+            )
         };
         self.ui.dialog = Some(Dialog {
             title,
@@ -1004,7 +1005,10 @@ impl App {
             .group(group)
             .map(|g| g.tabs.iter().map(|t| t.id.clone()).collect())
             .unwrap_or_default();
-        self.ui.groups.close_group_asked.retain(|id| live.contains(id));
+        self.ui
+            .groups
+            .close_group_asked
+            .retain(|id| live.contains(id));
         self.layout_close_group_now(group);
     }
 

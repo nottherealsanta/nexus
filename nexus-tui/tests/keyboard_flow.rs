@@ -5,7 +5,7 @@ use common::*;
 use nexus_tui::actions::ApiCall;
 use nexus_tui::app::{App, Effect};
 use nexus_tui::theme::{Mode, Tier};
-use nexus_tui::ui::{Focus, OverlayKind, Tab};
+use nexus_tui::ui::{Focus, Tab};
 
 fn app() -> App {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 40));

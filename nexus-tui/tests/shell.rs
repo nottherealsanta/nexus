@@ -3611,7 +3611,7 @@ fn the_root_back_rail_and_left_jump_straight_to_the_root() {
         .insert(grandchild.id.clone(), grandchild);
     app.open_session("ses_grandchild");
     draw(&mut app, 160, 40);
-    assert_eq!(app.viewed_id().as_deref(), Some("ses_grandchild"));
+    assert_eq!(app.viewed_id(), Some("ses_grandchild"));
     let back = app
         .hits
         .rect_of(&Target::SessionRootBack)
@@ -3619,13 +3619,13 @@ fn the_root_back_rail_and_left_jump_straight_to_the_root() {
     assert_eq!(back, app.regions.back.expect("rail region"));
     // The whole rail is the hit area, not only the arrow on the heading row.
     click(&mut app, back.x, back.bottom() - 1);
-    assert_eq!(app.viewed_id().as_deref(), Some("ses_parent"));
+    assert_eq!(app.viewed_id(), Some("ses_parent"));
 
     // Left is the same gesture from the timeline, and skips the intermediate parent.
     app.open_session("ses_grandchild");
     app.ui.focus = nexus_tui::ui::Focus::Timeline;
     press(&mut app, &["left"]);
-    assert_eq!(app.viewed_id().as_deref(), Some("ses_parent"));
+    assert_eq!(app.viewed_id(), Some("ses_parent"));
 }
 
 #[test]
@@ -3685,7 +3685,7 @@ fn left_still_edits_the_composer_while_a_subagent_is_viewed() {
     app.composer().set_text("ab");
     app.ui.focus = nexus_tui::ui::Focus::Composer;
     press(&mut app, &["left"]);
-    assert_eq!(app.viewed_id().as_deref(), Some(SESSION));
+    assert_eq!(app.viewed_id(), Some(SESSION));
     assert_eq!(app.composer_ref().text(), "ab");
     assert_eq!(app.composer_ref().cursor(), (0, 1));
 }
