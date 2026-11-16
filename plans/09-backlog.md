@@ -418,6 +418,7 @@ The ZMX item is section 6.
 
 ## 9.16 Reliability and safety (old 12)
 
+- [ ] **Network recovery (deferred from plan 34):** retry immediately on a connectivity change rather than waiting for the current network backoff to expire.
 - [ ] Monty: an OS-level sandbox if wanted; checkpoint recovery; forced worker crashes; cold-start latency; the
   Linux `/usr/bin/env` path. (Workers already start through a launcher with an empty environment.)
 - [~] (11-11: `bash.started` records the pid; startup recovery probes each unfinished job read-only by pid, group leader and start time, and says running, gone or unknown in the notice and the closing `bash.finished`; it never signals; 3 real-process tests. Not done: re-adopting a surviving job so Nexus can stop it, which would need a durable output spool) Supervise and report background bash jobs across daemon crashes; never kill a process from a stored PID

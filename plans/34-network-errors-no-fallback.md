@@ -80,7 +80,7 @@ any response event (the loop only retries then).
   Inspector Timing shows the waiting span.
 - [ ] Parent `wait: true` / child-notice paths: a child that is waiting is still running, not failed. Make sure no
   parent-side timeout reports it as failed.
-- [ ] Later: on a connectivity change, retry at once instead of waiting out the backoff.
+- [x] Deferred: retry at once on a connectivity change instead of waiting out the backoff; tracked in [backlog 9.16](09-backlog.md#916-reliability-and-safety-old-12).
 - [x] **Tests:** replay the 11-11 sequence with a fake provider raising `httpx.ConnectTimeout` / `ConnectError` /
   `ReadError` / `RemoteProtocolError` for longer than the old 60 s budget (fake clock). Expect no `ModelFallback`, no
   `retry_exhausted`, success on the same model once the fake recovers, and an unchanged session model. HTTP 500/401

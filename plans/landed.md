@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Plan 34 deferral (11-16).** Moved retry-on-connectivity-change to backlog 9.16; the child-card, inspector and parent-wait verification remain open.
+
 - **Timeline left alignment (11-13, plan 35 follow-up).** Both desktop clients align activity headers/members, child cards and notices in one icon/label column, retaining indented output; NSH tool/thought icons shrink to chevron visual size. TUI suite, NSH layout/thought/shared scenarios and web build pass; paired light screenshots inspected on one isolated scripted Core.
 
 - **Composer file search parity (11-13).** NSH uses the TUI's recursive Core search, per-prefix results and padded ranking; both accept an `@` file or folder with Enter without sending. Shared ranking and interaction tests cover both clients; paired screenshots remain unverified.
