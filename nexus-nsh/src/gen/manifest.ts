@@ -71,6 +71,7 @@ export const manifest = {
    "has_notifications",
    "text_edit.active",
    "view.settings",
+   "waiting.question_field",
    "manager.in_call",
    "manager.focused",
    "manager.minimised",
@@ -187,6 +188,14 @@ export const manifest = {
     ],
     "action": "text_edit.cancel",
     "note": "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+   },
+   {
+    "id": "question_field",
+    "when": [
+     "waiting.question_field"
+    ],
+    "action": "waiting.options",
+    "note": "A question's context line returns to its options first (text kept); Esc on the options keeps its normal meaning."
    },
    {
     "id": "sidebar_back",
@@ -3819,21 +3828,21 @@ export const manifest = {
    ]
   },
   {
-   "id": "waiting.custom",
-   "title": "Custom answer",
+   "id": "waiting.options",
+   "title": "Back to the options",
    "category": "waiting",
    "keys": {
-    "tui": "alt+a"
+    "tui": "esc",
+    "nsh": "esc"
    },
-   "key_context": "waiting",
+   "key_context": "escape_chain",
    "when": [
-    "waiting.question"
+    "waiting.question_field"
    ],
-   "unavailable_reason": "No question is waiting.",
+   "unavailable_reason": "No question's context line has focus.",
    "placement": [
     "card"
-   ],
-   "clients": "tui"
+   ]
   },
   {
    "id": "text_edit.cancel",

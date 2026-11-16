@@ -363,7 +363,7 @@ fn peer_composer_height(cx: &Cx, width: u16, id: &str) -> u16 {
         .ui
         .drafts
         .get(id)
-        .map_or(1, |c| c.layout(width.saturating_sub(10) as usize).0.len())
+        .map_or(1, |c| c.layout(width.saturating_sub(8) as usize).0.len())
         .clamp(1, 8) as u16;
     // As the live card: the attachment row, the card (padding, input, blank,
     // controls, edge) and the two rows the live one keeps for its strips below.

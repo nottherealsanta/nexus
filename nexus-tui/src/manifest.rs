@@ -363,6 +363,7 @@ mod tests {
                 "overlay",
                 "dialog",
                 "text_edit",
+                "question_field",
                 "sidebar_back",
                 "drawer",
                 "alert",

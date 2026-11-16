@@ -43,6 +43,8 @@ terms = [
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
   "has_notifications", "text_edit.active", "view.settings",
+  # a question's context line has the keys (plan 47): Esc goes back to its options
+  "waiting.question_field",
   # Manager (docs/manager-design.md 10.1, 10.6). Only the Manager's own keys read these.
   "manager.in_call",       # a call is running (any client holds it)
   "manager.focused",       # the Manager dropdown is open: it owns the keys and dims the app
@@ -113,6 +115,12 @@ id = "text_edit"
 when = ["text_edit.active"]
 action = "text_edit.cancel"
 note = "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+
+[[keymap.escape]]
+id = "question_field"
+when = ["waiting.question_field"]
+action = "waiting.options"
+note = "A question's context line returns to its options first (text kept); Esc on the options keeps its normal meaning."
 
 [[keymap.escape]]
 id = "sidebar_back"
@@ -2489,15 +2497,14 @@ unavailable_reason = "No question is waiting."
 placement = ["card"]
 
 [[command]]
-id = "waiting.custom"
-title = "Custom answer"
+id = "waiting.options"
+title = "Back to the options"
 category = "waiting"
-keys = { tui = "alt+a" }
-key_context = "waiting"
-when = ["waiting.question"]
-unavailable_reason = "No question is waiting."
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["waiting.question_field"]
+unavailable_reason = "No question's context line has focus."
 placement = ["card"]
-clients = "tui"
 
 [[command]]
 id = "text_edit.cancel"

@@ -114,7 +114,7 @@ function GroupTab(p: { group: string; tab: Tab; width: number }) {
       <View role="button" focusable {...pan.panHandlers} panActivation={{ activeOffsetX: 6, activeOffsetY: 6 }} {...pressMods}
         onPress={press} accessibilityState={{ selected: active() }} accessibilityLabel={`${viewedSession() && active() ? "Rename" : "Open"} ${title()}${status().label ? `, ${status().label}` : ""}`}
         testID={tab.kind === "session" ? `session-tab-${tab.id}` : `tab-${k}`}
-        class={`flex-row min-w-0 flex-1 items-center gap-1.5 rounded-l-(--radius) px-2.5 ${tabHeight()} ${FOCUS}`}
+        class={`flex-row min-w-0 flex-1 items-center gap-1.5 px-2.5 ${tabHeight()} ${FOCUS}`}
       >
         <If when={!!status().glyph}>
           <If when={status().spin} else={<Text class={`shrink-0 ${TS.base} ${status().tone}`} accessibilityLabel={status().label}>{status().glyph}</Text>}>
@@ -130,7 +130,7 @@ function GroupTab(p: { group: string; tab: Tab; width: number }) {
         </View>
       </View>
       <Button onPress={() => closeTabAt(p.group, k)} accessibilityLabel={`Close ${title()} tab`} testID={`tab-close-${id}`}
-        class={`w-6 shrink-0 items-center justify-center rounded-r-(--radius) ${tabHeight()} text-muted-foreground hover:text-foreground ${FOCUS}`}>
+        class={`w-6 shrink-0 items-center justify-center ${tabHeight()} text-muted-foreground hover:text-foreground ${FOCUS}`}>
         <Icon name="x" size={14} class="tint-muted-foreground" />
       </Button>
     </View>

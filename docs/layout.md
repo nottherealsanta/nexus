@@ -16,6 +16,7 @@ replaces the header session strip, the file/diff modal and the terminal dock. Sp
 
 A **tab** has a kind and a resource id; the pair is its identity, so the same file or session can be open in two
 groups and shares one buffer or one live state.
+Tabs have square corners in both clients.
 
 | Kind | Shows |
 | --- | --- |
