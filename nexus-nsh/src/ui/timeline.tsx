@@ -4,7 +4,7 @@ import { phoneRow } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Btn, FOCUS, Icon, IconButton, UI_FONT, PROSE, Shimmer, Status, StatusRail, T, TS } from "./kit";
+import { Btn, FOCUS, Icon, IconButton, UI_FONT, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
 import type { CtxSection } from "./newsession";
@@ -18,6 +18,7 @@ import type { IconName } from "../icons";
 import { motionDurations, roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
+import { listSlots } from "./list-slots";
 import { END_SLOP, followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
@@ -27,6 +28,10 @@ import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
 
 type Tone = "info" | "accent" | "warning" | "error";
+/** Every timeline text is 16 px, whatever size the shared kit styles carry. */
+const size16 = (c: string) => c.replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[16px]").replace(/leading-[45]\b/g, "leading-6");
+const sized = <O extends Record<string, string>>(o: O) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, size16(v)])) as O;
+const T = sized(KitT), TS = sized(KitTS), PROSE = sized(KitPROSE);
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** Timeline metadata uses the app's monospace face. */
@@ -295,8 +300,12 @@ export function fmtDuration(s: number): string {
   if (s < 3599.5) return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
   return `${Math.floor(whole / 3600)}h ${String(Math.floor((whole % 3600) / 60)).padStart(2, "0")}m`;
 }
-function clock(sec: number): string {
-  return new Date(sec * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/** A stored timestamp as a local clock time; empty when it is missing or unparsable (the TUI's `local_clock`). */
+function clock(sec: number | string | null | undefined): string {
+  const at = typeof sec === "string" ? Number(sec) : sec;
+  if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) return "";
+  const time = new Date(at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return time === "Invalid Date" ? "" : time;
 }
 /** The TUI's delivery tags: the start of a queued turn and a steer inside one, never Core's raw enum. */
 function deliveryTags(delivery?: string | null): string[] {
@@ -722,7 +731,10 @@ function buildStableRows(): Row[] {
           segments.push({ text: "usage unknown" });
         }
         segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
-        if (!meta.running && meta.finishedTime != null) segments.push({ text: clock(meta.finishedTime) });
+        if (!meta.running && meta.finishedTime != null) {
+          const finished = clock(meta.finishedTime);
+          if (finished) segments.push({ text: finished });
+        }
         const status = statusOf(meta);
         const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
         rows.push({
@@ -1012,7 +1024,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                   </View>
                   <Text class={`shrink-0 ${TOOL_TEXT} font-medium ${agentColor(c.agent)}`}>{capitalize(c.agent)}</Text>
                   <Text style={{ numberOfLines: 1 }} class={`ml-2 shrink min-w-0 ${TOOL_TEXT} text-foreground-secondary`}>{c.title}</Text>
-                  <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
+                  <If when={c.background}><Text class="ml-2 shrink-0 rounded-(--radius) bg-sidebar px-1.5 text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-foreground-secondary">Background</Text></If>
                 </View>
                 <If when={!!c.meta}><Text testID="child-meta" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.meta}</Text></If>
                 <If when={!!c.outcome}><Text testID="child-outcome" class={`${TOOL_TEXT} text-muted-foreground tabular-nums pl-3`}>{c.outcome}</Text></If>
@@ -1156,7 +1168,7 @@ export function CodeFence(p: { block: TextViewCodeBlock }) {
       </View>
       <Scroll horizontal>
         <View class="gap-0 px-4 pb-4">
-          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[12.5px] leading-5 text-foreground">{line || " "}</Text>)}
+          {code().split("\n").map((line) => <Text style={{ userSelect: "text" }} class="font-(family-name:--font-code) text-[16px] leading-6 text-foreground">{line || " "}</Text>)}
         </View>
       </Scroll>
     </View>
@@ -1184,7 +1196,7 @@ export function MermaidFence(p: { block: TextViewCodeBlock; /** Scale the pictur
                 <View class="gap-0" testID="mermaid-text">
                   {rows.map((row) => (
                     <Text style={{ userSelect: "text", numberOfLines: 1 }}
-                      class="font-(family-name:--font-code) text-[12.5px] leading-5">
+                      class="font-(family-name:--font-code) text-[16px] leading-6">
                       {row.runs.map((run) => <Text class={toneClass(run.tone)}>{run.text}</Text>)}
                     </Text>
                   ))}
@@ -1228,7 +1240,7 @@ function HandoffCard(p: { r: () => Extract<Row, { kind: "handoff" }>; sid: strin
       <Button onPress={open} accessibilityLabel="Show the whole handoff summary" testID="msg-handoff" class={`w-full flex-col items-stretch gap-1 ${FOCUS}`}>
         <View class="flex-row items-center gap-3">
           <Text class={`flex-1 min-w-0 ${TS.body} font-semibold text-foreground`}>{`Continued from ${name()}`}</Text>
-          <Text class={META}>{`handoff · ${r().time}`}</Text>
+          <Text class={META}>{["handoff", r().time].filter(Boolean).join(" · ")}</Text>
         </View>
         <Text style={{ numberOfLines: 3 }} testID="handoff-preview" class={`${TS.body} text-foreground`}>{lines().join("\n")}</Text>
       </Button>
@@ -1246,7 +1258,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   const fold = () => toggleFold(r().turnKey);
   const copy = () => copyText(r().text, "Copied message");
   const glyph = () => turnGlyph(r().status);
-  const meta = () => [...deliveryTags(r().delivery), ...(r().origin === "manager" ? [WORDS.via] : []), `#${r().n}`, r().time].join(" · ");
+  const meta = () => [...deliveryTags(r().delivery), ...(r().origin === "manager" ? [WORDS.via] : []), `#${r().n}`, r().time].filter(Boolean).join(" · ");
   const big = () => r().text.length > 4096 || r().text.split("\n").length > 40;
   const full = () => open(`user:${r().key}`, false);
   const body = () => big() && !full() ? r().text.split("\n").slice(0, 6).join("\n") : r().text;
@@ -1277,7 +1289,7 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
               {(p, n) => <Button onPress={() => contextDetail.set({ title: "Pasted text", detail: p().text })}
                 accessibilityLabel={`Open pasted text, ${p().marker}`} testID={`user-paste-${r().n}-${n()}`}
                 class={`rounded-(--radius) bg-raised px-2 min-h-7 hover:bg-accent ${FOCUS}`}>
-                <Text class="font-mono text-[12px] leading-5 text-foreground">{p().marker}</Text>
+                <Text class="font-mono text-[16px] leading-6 text-foreground">{p().marker}</Text>
               </Button>}
             </Each>
           </View>
@@ -1502,7 +1514,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
 
 /** One line of a member's detail output (the hidden-lines marker is shown as the foot instead). */
 function ToolDetail(p: { line: () => ToolDetailLine }) {
-  return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[12.5px] leading-5 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
+  return <Text style={{ userSelect: "text" }} class={`font-(family-name:--font-code) text-[16px] leading-6 ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean }) {
@@ -1522,7 +1534,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
   const MarkRow = (q: { line: () => ToolDetailLine }) => (
     <Button onPress={showAll} class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}
       testID={q.line().tone === "show-all" ? `tool-show-all-${r().id}` : `tool-show-less-${r().id}`}>
-      <Text class={`font-(family-name:--font-code) text-[12.5px] leading-5 ${q.line().text.includes(HIDDEN_MARK) ? "text-primary" : "text-muted-foreground"}`}>{q.line().text}</Text>
+      <Text class={`font-(family-name:--font-code) text-[16px] leading-6 ${q.line().text.includes(HIDDEN_MARK) ? "text-primary" : "text-muted-foreground"}`}>{q.line().text}</Text>
     </Button>
   );
   return (
@@ -1539,13 +1551,13 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
           {() => <View class="w-4 shrink-0 items-center">
             <If when={r().state === "error"} else={<Status kind={stateKind()} />}>
               {/* A failed call is part of the flow: marked, never red. */}
-              <Text class="text-center text-[12px] leading-5 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
+              <Text class="text-center text-[16px] leading-6 text-muted-foreground" accessibilityLabel="failed">{statusGlyphs.error.unicode}</Text>
             </If>
           </View>}
         </If>
         </View>
         <View class="flex-row flex-1 min-w-0 items-center gap-2">
-        <Text class={`shrink-0 ${TOOL_TEXT} font-medium text-foreground`}>{verbLabel(r().name)}</Text>
+        <Text class={`shrink-0 ${TOOL_TEXT} text-foreground-secondary`}>{verbLabel(r().name)}</Text>
         <If when={!!r().arg}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ${ARG}`}>{r().arg}</Text></If>
         <If when={!!r().errorLine}><Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${ARG}`}>{r().errorLine!}</Text></If>
         <If when={!!r().summary}>
@@ -1554,14 +1566,14 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
         <View class="flex-1" />
         <If when={open()}>
           <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
-            <Text class={`text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
+            <Text class={`text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums ${isRaw() ? "text-primary font-medium" : "text-muted-foreground"}`}>raw</Text>
           </Button>
         </If>
-        <If when={r().exit !== undefined}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
+        <If when={r().exit !== undefined}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">{`exit ${r().exit}`}</Text></If>
         <If when={r().exit !== undefined && (r().state !== "done" || !!r().duration)}><Text class={META}>·</Text></If>
-        <If when={r().state === "waiting"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-primary shrink-0">waiting</Text></If>
-        <If when={r().state === "denied"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-error shrink-0">denied</Text></If>
-        <If when={r().state === "error"}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
+        <If when={r().state === "waiting"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-primary shrink-0">waiting</Text></If>
+        <If when={r().state === "denied"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-error shrink-0">denied</Text></If>
+        <If when={r().state === "error"}><Text class="text-[16px] leading-6 font-(family-name:--font-ui) tabular-nums text-muted-foreground shrink-0">failed</Text></If>
         <If when={(r().state === "done" || r().state === "running") && !!r().duration}><Text class={`${META} shrink-0`}>{r().duration!}</Text></If>
         </View>
       </View>
@@ -1591,7 +1603,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
           <If when={!!r().forkId}>
             <Button onPress={() => r().forkId && void selectSession(r().forkId!)} testID={`tool-open-fork-${r().id}`} accessibilityLabel="open fork"
               class={`self-start rounded-(--radius) ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
-              <Text class="font-(family-name:--font-code) text-[12.5px] leading-5 text-primary">open fork ↗</Text>
+              <Text class="font-(family-name:--font-code) text-[16px] leading-6 text-primary">open fork ↗</Text>
             </Button>
           </If>
         </View>
@@ -1633,6 +1645,8 @@ export function Timeline() {
     // A phone shows the session's status, the user's messages and the agent's replies, and nothing else.
     return (lastRows = keepIdentity(lastRows, phone ? all.filter(phoneRow) : all));
   });
+  const slots = listSlots<Row>();
+  const listRows = computed(() => slots(rows()));
   const below = computed(() => newBelow(rows(), viewId()));
   // Follow state, as in the TUI: an open session and the jump follow the end, any scroll up leaves it, and only
   // scrolling back to the end returns to it. The list's `autoscrollToBottomThreshold` is not used: it pulled a reader
@@ -1778,7 +1792,7 @@ export function Timeline() {
     <View class="relative flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
+          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
           onViewableItemsChange={({ viewableItems }) => {
             const first = viewableItems.reduce<typeof viewableItems[number] | null>((best, item) => !best || item.index < best.index ? item : best, null);
             const sid = viewId();
@@ -1814,7 +1828,7 @@ export function Timeline() {
           }}
           scrollEventThrottle={16}
         >
-          {(r) => <RowView r={r} sid={viewId()} />}
+          {(slot) => <RowView r={() => slot().value()} sid={viewId()} />}
         </List>
       </If>
       <If when={pinned()}><View testID="first-pin" class="absolute w-px h-px" style={{ pointerEvents: "none" }} /></If>
@@ -1860,6 +1874,8 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
     const sid = p.sid;
     return (lastRows = keepIdentity(lastRows, groupActivities(withStreaming(stable(), model.streaming.get(sid), sid), model.running.has(sid))));
   });
+  const slots = listSlots<Row>();
+  const listRows = computed(() => slots(rows()));
   const loaded = () => { m(); return !!model.viewOf(p.sid)?.loaded; };
   let following = true, lastY = 0, queued = false;
   const toEnd = () => { try { ref?.scrollToEnd({ animated: false }); } catch {} };
@@ -1873,7 +1889,7 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
     <View class="relative flex-1 min-h-0" testID={`peer-timeline-${p.sid}`}>
       <If when={rows().length > 0} else={<View class="flex-1 items-center justify-center p-6"><Text class={T.sec}>{loaded() ? "No messages yet" : "Loading…"}</Text></View>}>
         <List
-          ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
+          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
           onLayout={() => keepEnd()}
           onScroll={(e) => {
             const y = e.offset.y, height = e.contentSize.height;
@@ -1883,7 +1899,7 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
           }}
           scrollEventThrottle={16}
         >
-          {(r) => <RowView r={r} sid={p.sid} peer={p.onFocus} />}
+          {(slot) => <RowView r={() => slot().value()} sid={p.sid} peer={p.onFocus} />}
         </List>
       </If>
     </View>

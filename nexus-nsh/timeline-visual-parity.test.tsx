@@ -94,6 +94,22 @@ describe("timeline visual parity", () => {
     expect(shown).toContain("queued · #2");
   });
 
+  test("a missing or unparsable turn time is left out of the user band meta, never Invalid Date", async () => {
+    const app = await openSession({
+      messages: [
+        { ...user("m1", 1, "no timestamp"), created: undefined },
+        { ...user("m2", 2, "broken timestamp"), created: "not-a-time" },
+      ],
+    });
+    await app.waitFor("id:msg-user");
+    const shown = app.texts().join("\n");
+    expect(shown).not.toContain("Invalid Date");
+    expect(shown).toContain("#1");
+    expect(shown).toContain("#2");
+    expect(shown).not.toContain("#1 ·");
+    expect(shown).not.toContain("#2 ·");
+  });
+
   test("a thought shows its preview and no duration, as in the TUI", async () => {
     const app = await openSession({
       messages: [
