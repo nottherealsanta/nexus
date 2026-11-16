@@ -1,6 +1,6 @@
 # Layout: tabs, groups and splits
 
-Plan: [45](../plans/45-tabs-and-splits.md). Status: the manifest, this page and the TUI (2026-11-13) are in; NSH lands
+Plan: [45](../plans/done/45-tabs-and-splits.md). Status: the manifest, this page and the TUI (2026-11-13) are in; NSH lands
 alongside (see each client's section for its differences). terminals.md keeps its migration note until both clients
 have been verified together.
 
