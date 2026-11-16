@@ -18,15 +18,15 @@ row's second line already shows.
 
 ## Plan
 
-- [ ] Rule: show the worktree header only when the group has **two or more sessions** (root sessions in that
+- [x] Rule: show the worktree header only when the group has **two or more sessions** (root sessions in that
   worktree, in the list as filtered: archived filter and scope apply). Children (`↳`) do not count. A one-session
   linked worktree shows the plain row; its second line keeps `⌥ branch`, so nothing is lost.
-- [ ] Confirm with the user: count root sessions only, and recount when the archived filter changes. (Default: yes.)
-- [ ] TUI: count sessions per `(project_id, root)` next to `roots` in `app.rs` and add `count > 1` to the `tree`
+- [x] Confirm with the user: count root sessions only, and recount when the archived filter changes. (Default: yes.)
+- [x] TUI: count sessions per `(project_id, root)` next to `roots` in `app.rs` and add `count > 1` to the `tree`
   condition. Cursor/hit-target indices follow from the row list, so check keyboard navigation and drag reorder still
   land on the right row.
-- [ ] NSH: the same rule in the same change (parity skill). If NSH has no header today, bring it in line with the
+- [x] NSH: the same rule in the same change (parity skill). If NSH has no header today, bring it in line with the
   TUI first or record the gap.
-- [ ] Tests: TUI render test (one-session worktree: no header; two sessions: header), NSH browser test the same;
+- [x] Tests: TUI render test (one-session worktree: no header; two sessions: header), NSH browser test the same;
   paired screenshots of the Sessions tab.
-- [ ] Docs: both READMEs and `interface/design-language.md` (sessions list).
+- [x] Docs: both READMEs and `interface/design-language.md` (sessions list).
