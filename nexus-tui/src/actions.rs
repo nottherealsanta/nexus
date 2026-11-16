@@ -176,6 +176,8 @@ pub enum ApiCall {
     },
     Continue {
         session: String,
+        /// The one idempotency key for this `/continue`, reused when it is resent (plan 37).
+        key: RequestId,
     },
     Speak {
         session: String,
@@ -1127,8 +1129,8 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.open = Some(s.id.clone());
             done.session = Some(s.clone());
         }
-        ApiCall::Continue { session } => {
-            conflict(api.continue_turn(session, &key).await.map_err(e)?)?;
+        ApiCall::Continue { session, key } => {
+            conflict(api.continue_turn(session, key).await.map_err(e)?)?;
         }
         ApiCall::Speak { session } => {
             crate::speech::speak(&api.http, session).await?;
@@ -2110,6 +2112,7 @@ mod tests {
             None,
             ApiCall::Continue {
                 session: "s".into(),
+                key: RequestId::new(),
             },
         )
         .await;

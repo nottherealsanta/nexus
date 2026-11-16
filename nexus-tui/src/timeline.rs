@@ -1935,6 +1935,7 @@ impl Builder<'_> {
                 }
             }
         }
+        self.pending_row(view);
         // Trim trailing blanks.
         while self.out.last().is_some_and(|l| l.spans.is_empty()) {
             self.out.pop();
@@ -1944,6 +1945,67 @@ impl Builder<'_> {
                 self.blank();
             }
         }
+    }
+
+    /// The optimistic working row of a turn Core has not shown yet (plan 37): `/continue` and sends.
+    /// Its phase comes from real events: Core not connected or no 202, then busy with no output
+    /// (the model), or the network wait plan 34 announces.
+    fn pending_row(&mut self, view: &crate::reduce::SelectedView) {
+        let Some(p) = self.app.ui.pending_turns.get(&view.session_id) else {
+            return;
+        };
+        if self
+            .app
+            .state
+            .model
+            .streaming
+            .get(&view.session_id)
+            .is_some_and(|s| !s.text.is_empty() || !s.reasoning.is_empty())
+        {
+            return;
+        }
+        let waiting = view
+            .scratch
+            .iter()
+            .rev()
+            .find(|e| {
+                matches!(
+                    e.kind.as_str(),
+                    "retry_scheduled" | "retry_started" | "step_start"
+                )
+            })
+            .filter(|e| e.kind == "retry_scheduled" && e.data["phase"] == "waiting_network");
+        let elapsed = self
+            .app
+            .clock
+            .saturating_duration_since(p.started)
+            .as_secs();
+        self.clocked.set(true);
+        if !self.t.opts.reduced_motion {
+            self.animated.set(true);
+        }
+        let text = if let Some(e) = waiting {
+            format!(
+                "Waiting for network · retrying in {}",
+                fmt_duration(e.data["delay"].as_f64().unwrap_or(0.0))
+            )
+        } else if p.queued {
+            format!("Waiting for Core{} not connected", self.sep())
+        } else if p.busy_seen {
+            format!("Waiting for the model{}{elapsed}s", self.sep())
+        } else {
+            format!("Waiting for Core{}{elapsed}s", self.sep())
+        };
+        let spin = self.t.spinner(self.frame).to_owned();
+        let style = self.st(PRIMARY, CANVAS);
+        let secondary = self.secondary();
+        self.block("pending-turn", BlockKind::Group, self.turn, false, |b| {
+            b.line(vec![
+                Span::raw(" ".repeat(ACTIVITY_INDENT)),
+                Span::styled(format!("{spin} "), style),
+                Span::styled(text, secondary),
+            ]);
+        });
     }
 
     /// The folded row standing for a fork's inherited messages:

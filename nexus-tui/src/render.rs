@@ -6128,7 +6128,48 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         return;
     }
     draw_activity_line(cx, buf, r);
-    if !cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id)) {
+    // A pending start (plan 37): the strip says nothing came back after 10 s and offers Retry; a
+    // refusal shows its reason here, not only in a toast.
+    let viewed = cx.app.viewed_id().map(str::to_owned);
+    let slow = viewed
+        .as_deref()
+        .and_then(|id| cx.app.ui.pending_turns.get(id))
+        .filter(|p| p.key.is_some() && !p.queued && !p.accepted)
+        .filter(|p| cx.app.clock.saturating_duration_since(p.started) >= crate::app::PENDING_SLOW);
+    let refused = viewed
+        .as_deref()
+        .and_then(|id| cx.app.ui.pending_failed.get(id))
+        .cloned();
+    if slow.is_some() || refused.is_some() {
+        let (text, tone) = match (&refused, slow) {
+            (Some(reason), _) => (
+                format!("Continue refused {} {reason}", cx.t.structure("separator")),
+                "status.error",
+            ),
+            (None, _) => ("No answer from Core yet".to_owned(), "status.warning"),
+        };
+        // A refusal has no Retry beside it, so it may use the whole strip.
+        let available = r
+            .width
+            .saturating_sub(if refused.is_some() { 4 } else { 28 });
+        put(
+            buf,
+            r.x + 2,
+            r.y,
+            &truncate(
+                &format!("{} {text}", if refused.is_some() { "×" } else { "!" }),
+                available as usize,
+                cx.ell(),
+            ),
+            cx.st(tone, CANVAS),
+            available,
+        );
+        if refused.is_none() {
+            let x = r.right().saturating_sub(24);
+            put(buf, x, r.y, "Retry", cx.st(SECONDARY, CANVAS), 5);
+            hits.add(Rect::new(x, r.y, 5, 1), Target::Continue);
+        }
+    } else if !cx.app.viewed_id().is_some_and(|id| cx.app.is_busy(id)) {
         if let Some((text, tone)) = cx
             .app
             .state

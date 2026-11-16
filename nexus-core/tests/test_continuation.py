@@ -749,3 +749,21 @@ async def test_cli_ignores_previous_turn_idle_before_continuation_busy():
     client = Fake()
     await cli._continue(client, "ses", cli.Renderer(wire=False, wire_file=None, out=io.StringIO()))
     assert client.delivered
+
+
+async def test_continue_uses_an_existence_check_for_stored_messages(env):
+    """Plan 37: `/continue` asks the store whether a message exists (an index probe), not for the whole conversation."""
+    rt, client, provider, workspace = env
+    empty = await _create(client, workspace)
+    assert not rt.store.has_messages(empty["id"])
+    refused = await client.post(f"/api/session/{empty['id']}/continue", json={})
+    assert refused.status_code == 400 and "no stored messages" in refused.text
+
+    session = await _create(client, workspace)
+    provider.script = [[Text("answer")], [Text("again")]]
+    assert (await client.post(f"/api/session/{session['id']}/prompt", json={"text": "hello"})).status_code == 202
+    await _idle(rt, session["id"])
+    assert rt.store.has_messages(session["id"])
+    response = await client.post(f"/api/session/{session['id']}/continue", json={})
+    assert response.status_code == 202, response.text
+    await _idle(rt, session["id"])

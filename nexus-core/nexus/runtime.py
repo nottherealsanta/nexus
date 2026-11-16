@@ -3307,7 +3307,7 @@ class Runtime:
                 f"session {session_id} has unfinished durable turn {unfinished['id']}; restart the daemon so "
                 "startup recovery reconciles it before continuing"
             )
-        if not self.store.messages(session_id):
+        if not self.store.has_messages(session_id):
             raise ValueError(
                 f"session {session_id} has no stored messages to continue; send a prompt first "
                 f"(POST /api/session/{session_id}/prompt or `nexus run --session {session_id} \"…\"`)"

@@ -1459,6 +1459,10 @@ class Store:
         return self.db.execute("select coalesce(max(seq), 0) from message where session_id = ?",
                                (session_id,)).fetchone()[0]
 
+    def has_messages(self, session_id: str) -> bool:
+        """Whether the session stores any message; an index probe, not a load of the whole conversation."""
+        return self.db.execute("select 1 from message where session_id = ? limit 1", (session_id,)).fetchone() is not None
+
     def handles(self) -> dict[str, str]:
         """Persisted spoken handles, `{session_id: handle}`."""
         return {r["session_id"]: r["handle"] for r in self.db.execute("select session_id, handle from manager_handle")}

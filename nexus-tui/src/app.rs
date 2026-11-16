@@ -289,7 +289,6 @@ const MUTATING: &[&str] = &[
     "session.unarchive",
     "session.delete",
     "session.interrupt",
-    "session.continue",
     "session.speak",
     "session.speak_stop",
     "session.handoff",
@@ -815,6 +814,23 @@ pub enum OverviewRow {
     ArchivedToggle(String, usize),
 }
 
+/// How long Core may stay silent after a `/continue` before the strip offers Retry.
+pub const PENDING_SLOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A turn start that is not yet visible as a running turn (plan 37, D3).
+#[derive(Debug, Clone)]
+pub struct PendingTurn {
+    pub started: Instant,
+    /// The call waits for Core to be connected before it is sent.
+    pub queued: bool,
+    /// Core answered 202 (the turn is accepted).
+    pub accepted: bool,
+    /// The `session.status busy` event arrived: now waiting for the model.
+    pub busy_seen: bool,
+    /// `/continue` (resendable with its key) rather than a message send.
+    pub key: Option<crate::api::RequestId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingFirstPrompt {
     pub text: String,
@@ -841,6 +857,13 @@ pub struct Ui {
     pub detail: crate::ui::Detail,
     pub draft: Draft,
     pub first_prompts: HashMap<String, PendingFirstPrompt>,
+    /// Turns the user started that Core has not shown yet (plan 37), by session: the timeline's
+    /// optimistic working row. Driven by real events; removed on the first output, a refusal or Esc.
+    pub pending_turns: HashMap<String, PendingTurn>,
+    /// Why the last `/continue` or send was refused, shown in the status strip until the next turn starts.
+    pub pending_failed: HashMap<String, String>,
+    /// Debug timing marks per session (`NEXUS_TUI_TIMING`).
+    pub timing: HashMap<String, Vec<(String, Instant)>>,
     /// A session's first message is pinned to the top of the timeline until the reader scrolls.
     pub first_pin: Option<FirstPin>,
     pub completion: CompletionState,
@@ -1335,6 +1358,9 @@ impl App {
                 detail: crate::ui::Detail::default(),
                 draft: Draft::default(),
                 first_prompts: HashMap::new(),
+                pending_turns: HashMap::new(),
+                pending_failed: HashMap::new(),
+                timing: HashMap::new(),
                 first_pin: None,
                 focus: Focus::Composer,
                 left_open: true,
@@ -1502,7 +1528,8 @@ impl App {
     }
 
     pub fn is_busy(&self, id: &str) -> bool {
-        self.state.model.running.contains_key(id)
+        self.ui.pending_turns.contains_key(id)
+            || self.state.model.running.contains_key(id)
             || self
                 .state
                 .model
@@ -5160,6 +5187,117 @@ impl App {
         self.effects.push(Effect::Api(call));
     }
 
+    /// `/continue`: show the pending row at once, queue the call while Core is not connected
+    /// (sent when it is, with the same idempotency key), and resend with that key on Retry.
+    fn start_continue(&mut self, id: &str) {
+        let key = self
+            .ui
+            .pending_turns
+            .get(id)
+            .and_then(|p| p.key.clone())
+            .unwrap_or_default();
+        let live = self.writable();
+        let started = self
+            .ui
+            .pending_turns
+            .get(id)
+            .map_or_else(Instant::now, |p| p.started);
+        self.ui.pending_failed.remove(id);
+        self.ui.pending_turns.insert(
+            id.to_owned(),
+            PendingTurn {
+                started,
+                queued: !live,
+                accepted: false,
+                busy_seen: false,
+                key: Some(key.clone()),
+            },
+        );
+        self.timing_mark(id, "command");
+        if live {
+            self.timing_mark(id, "sent");
+            self.api(ApiCall::Continue {
+                session: id.to_owned(),
+                key,
+            });
+        }
+    }
+
+    /// Drop a pending turn the user cancelled. True when it was never sent, so there is nothing to
+    /// interrupt in Core.
+    fn cancel_pending_turn(&mut self, id: &str) -> bool {
+        match self.ui.pending_turns.remove(id) {
+            Some(p) if p.queued => {
+                self.toast(Level::Info, "Continue cancelled; nothing was sent");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A pending turn Core has now shown output for, refused, or finished is no longer pending.
+    fn settle_pending(&mut self, kind: &str, session: &str, data: &Value) {
+        if kind == "session.status" && data["status"] == "busy" {
+            self.ui.pending_failed.remove(session);
+        }
+        let Some(pending) = self.ui.pending_turns.get_mut(session) else {
+            return;
+        };
+        match kind {
+            "session.status" if data["status"] == "busy" => {
+                pending.busy_seen = true;
+                self.timing_mark(session, "busy");
+            }
+            "text_delta" | "reasoning_delta" | "tool_call_started" | "tool_args_delta"
+            | "part_done" => {
+                self.timing_mark(session, "first_delta");
+                self.ui.pending_turns.remove(session);
+            }
+            "turn.summary" | "session.error" => {
+                self.ui.pending_turns.remove(session);
+            }
+            "session.status" if pending.busy_seen => {
+                self.ui.pending_turns.remove(session);
+            }
+            _ => {}
+        }
+    }
+
+    /// `NEXUS_TUI_TIMING=<file>`: one line per turn start with the milliseconds from the command to
+    /// each step (sent, 202, busy, first delta). Off unless the variable is set.
+    fn timing_mark(&mut self, session: &str, step: &str) {
+        let Some(path) = std::env::var_os("NEXUS_TUI_TIMING") else {
+            return;
+        };
+        let now = Instant::now();
+        let marks = self.ui.timing.entry(session.to_owned()).or_default();
+        if step == "command" {
+            marks.clear();
+        }
+        let origin = marks.first().map_or(now, |(_, at)| *at);
+        marks.push((step.to_owned(), now));
+        if step == "first_delta" {
+            let line = marks
+                .iter()
+                .map(|(name, at)| {
+                    format!(
+                        "{name}={}ms",
+                        at.saturating_duration_since(origin).as_millis()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "{session} {line}");
+            }
+        }
+    }
+
     fn refresh_voice_settings_status(&mut self) {
         self.ui.voice_status_generation = self.ui.voice_status_generation.wrapping_add(1);
         self.ui.voice_status_error = None;
@@ -6919,12 +7057,17 @@ impl App {
             "session.delete" => self.ask_delete(),
             "session.interrupt" => {
                 if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    // Esc on a turn that was never sent just cancels it; one Core may already have
+                    // is interrupted as usual (plan 37).
+                    if self.cancel_pending_turn(&id) {
+                        return;
+                    }
                     self.api(ApiCall::Interrupt { session: id });
                 }
             }
             "session.continue" => {
                 if let Some(id) = self.viewed_id().map(str::to_owned) {
-                    self.api(ApiCall::Continue { session: id });
+                    self.start_continue(&id);
                 }
             }
             "session.speak" => {
@@ -7820,6 +7963,22 @@ impl App {
                     .collect();
                 self.composer().take();
                 let images = std::mem::take(&mut self.composer().images);
+                if mode == "send" && !self.is_busy(&id) {
+                    // The same pending row as `/continue` (plan 37, D3): until Core's events show the turn.
+                    self.ui.pending_failed.remove(&id);
+                    self.ui.pending_turns.insert(
+                        id.clone(),
+                        PendingTurn {
+                            started: Instant::now(),
+                            queued: false,
+                            accepted: false,
+                            busy_seen: false,
+                            key: None,
+                        },
+                    );
+                    self.timing_mark(&id, "command");
+                    self.timing_mark(&id, "sent");
+                }
                 self.api(ApiCall::Prompt {
                     session: id,
                     unarchive,
@@ -8349,6 +8508,15 @@ impl App {
             .and_then(|(_, id)| id.as_deref())
             .and_then(|id| self.root_session(id));
         let was_busy = notice_root.as_deref().is_some_and(|id| self.tree_busy(id));
+        if let SyncMsg::Event(event) = &msg {
+            if let Some(sid) = event.session_id.as_deref() {
+                self.settle_pending(&event.kind, sid, &event.data);
+            }
+        }
+        if snapshot {
+            // A fresh snapshot is authoritative: an accepted start that never showed output is over.
+            self.ui.pending_turns.retain(|_, p| !p.accepted || p.queued);
+        }
         self.state.apply(msg);
         if archive_event && self.state.events_applied > applied_before {
             // The event names every session it archived (root and descendants);
@@ -9249,6 +9417,28 @@ impl App {
             }
             return;
         }
+        if let ApiCall::Continue { session, .. } = &done.call {
+            match &done.result {
+                Ok(_) => {
+                    if let Some(p) = self.ui.pending_turns.get_mut(session) {
+                        p.accepted = true;
+                    }
+                    self.timing_mark(session, "202");
+                }
+                Err(reason) => {
+                    // A refusal removes the row at once and says why in the strip, not only a toast.
+                    self.ui.pending_turns.remove(session);
+                    self.ui
+                        .pending_failed
+                        .insert(session.clone(), reason.clone());
+                }
+            }
+        }
+        if let (ApiCall::Prompt { session, mode, .. }, Err(_)) = (&done.call, &done.result) {
+            if mode == "send" {
+                self.ui.pending_turns.remove(session);
+            }
+        }
         match done.result {
             Ok(r) => {
                 if matches!(done.call, ApiCall::Prompt { .. }) {
@@ -9998,6 +10188,31 @@ impl App {
         }
         self.renew_file_watch(now);
         let mut changed = false;
+        if self.writable() {
+            let queued: Vec<(String, crate::api::RequestId)> = self
+                .ui
+                .pending_turns
+                .iter()
+                .filter(|(_, p)| p.queued)
+                .filter_map(|(id, p)| p.key.clone().map(|key| (id.clone(), key)))
+                .collect();
+            for (id, key) in queued {
+                if let Some(p) = self.ui.pending_turns.get_mut(&id) {
+                    p.queued = false;
+                }
+                self.timing_mark(&id, "sent");
+                self.api(ApiCall::Continue { session: id, key });
+                changed = true;
+            }
+        }
+        if self
+            .ui
+            .pending_turns
+            .values()
+            .any(|p| !p.accepted && now.saturating_duration_since(p.started) >= PENDING_SLOW)
+        {
+            changed = true; // the strip's "no answer" line and Retry appear
+        }
         if self.terminal_panel.reconnect_at.is_some_and(|at| now >= at) {
             self.terminal_panel.reconnect_at = None;
             if self.terminal_open {
@@ -16048,7 +16263,11 @@ impl App {
             }
             Target::PendingAction(index, action) => self.pending_action(index, action),
             Target::PendingNext => self.pending_next(),
-            Target::Continue => self.run_command("session.continue"),
+            Target::Continue => match self.viewed_id().map(str::to_owned) {
+                // Retry on the slow-start strip resends with the same key.
+                Some(id) if self.ui.pending_turns.contains_key(&id) => self.start_continue(&id),
+                _ => self.run_command("session.continue"),
+            },
             Target::BannerAction(i) => {
                 if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {
                     self.run_command(&cmd);
