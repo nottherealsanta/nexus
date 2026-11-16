@@ -249,3 +249,120 @@ async def test_slow_backoff_cannot_start_an_attempt_past_its_budget(tmp_path):
         async for _ in active.turn("hello"):
             pass
     assert len(provider.requests) == 1
+
+
+# --- plan 34: a network outage waits on the same model and never falls back ---------------------------------
+
+def _net(kind: type[Exception] = httpx.ConnectTimeout) -> ProviderError:
+    return ProviderError(f"flaky: network error: {kind.__name__}", phase="transport", network_kind=kind.__name__)
+
+
+def test_is_network_covers_transport_failures_only():
+    from nexus.retry import is_network
+    assert is_network(_net())
+    assert not is_network(ProviderError("x: HTTP 503", status=503, phase="response"))
+    assert not is_network(ProviderError("x: HTTP 401", status=401, phase="response"))
+    assert not is_network(ProviderError("stream ended", phase="stream"))
+    assert not is_network(ProviderError("no kind", phase="transport"))
+
+
+async def test_the_provider_layers_tag_transport_errors_but_not_http_statuses():
+    from nexus.llmhub.chat import ChatProvider, ChatQuirks
+    from nexus.llmhub.responses import ResponsesProvider, ResponsesQuirks
+    from nexus.llmhub.types import Message, Request
+
+    class Auth:
+        async def headers(self):
+            return {}
+
+    request = Request(model="m", messages=(Message("user", (Text("hi"),)),), instructions="", tools=())
+
+    def down(_):
+        raise httpx.ConnectError("refused")
+
+    def busy(_):
+        return httpx.Response(503, text="busy")
+
+    for make in (lambda c: ChatProvider("p", "http://x", Auth(), ChatQuirks(), client=c),
+                 lambda c: ResponsesProvider("p", "http://x", Auth(), ResponsesQuirks(), client=c)):
+        for handler, kind, status in ((down, "ConnectError", None), (busy, None, 503)):
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            with pytest.raises(ProviderError) as caught:
+                async for _ in make(client).stream(request):
+                    pass
+            assert caught.value.network_kind == kind and caught.value.status == status
+
+
+async def test_a_long_outage_waits_on_the_same_model_without_exhausting_or_falling_back(tmp_path):
+    """The 2026-11-11 outage replayed: errors for far longer than the old 60 s budget, then recovery."""
+    from nexus.loop import ModelFallback
+    clock = Clock()
+    kinds = [httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError]
+    script: list = [_net(kinds[i % 4]) for i in range(40)] + [[Text("back")]]
+    provider = Flaky(script)
+    fallback = Flaky([[Text("wrong model")]])
+    a = Agent(provider, model="primary", model_ref="p/primary", workspace=tmp_path, retry_policy=RetryPolicy(),
+              retry_clock=clock, retry_sleep=clock.sleep, retry_random=lambda: 0.5,
+              fallback_models=[("p/other", fallback, "other")])
+    events = [event async for event in a.turn("hello")]
+    assert len(provider.requests) == 41 and not fallback.requests
+    assert clock.now > 300  # well past max_elapsed (60 s) and every old attempt budget
+    scheduled = [e for e in events if isinstance(e, RetryScheduled)]
+    assert len(scheduled) == 40 and all(e.phase == "waiting_network" for e in scheduled)
+    assert max(clock.delays) <= 30.0 and clock.delays[0] <= 1.0
+    assert not any(isinstance(e, (RetryExhausted, ModelFallback)) for e in events)
+    assert a.model_ref == "p/primary"
+    assert isinstance(events[-1], TurnEnd)
+
+
+async def test_http_errors_still_fall_back(tmp_path):
+    from nexus.loop import ModelFallback
+    for status in (500, 401):
+        clock = Clock()
+        provider = Flaky([ProviderError(f"flaky: HTTP {status}", status=status, phase="response")])
+        fallback = Flaky([[Text("ok")]])
+        a = Agent(provider, model="primary", model_ref="p/primary", workspace=tmp_path, retry_policy=RetryPolicy(),
+                  retry_clock=clock, retry_sleep=clock.sleep, retry_random=lambda: 0.5,
+                  fallback_models=[("p/other", fallback, "other")])
+        events = [event async for event in a.turn("hello")]
+        assert any(isinstance(e, ModelFallback) for e in events), status
+        assert a.model_ref == "p/other"
+
+
+async def test_an_interrupt_stops_the_network_wait_promptly(tmp_path):
+    provider = Flaky([_net() for _ in range(1000)])
+    gate = asyncio.Event()
+
+    async def sleep(delay: float) -> None:
+        gate.set()
+        await asyncio.sleep(3600)
+
+    a = Agent(provider, model="m", workspace=tmp_path, retry_policy=RetryPolicy(),
+              retry_sleep=sleep, retry_random=lambda: 0.5)
+
+    async def run() -> None:
+        async for _ in a.turn("hello"):
+            pass
+
+    task = asyncio.create_task(run())
+    await asyncio.wait_for(gate.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    assert len(provider.requests) == 1
+
+
+async def test_a_partial_stream_then_a_network_error_is_not_retried(tmp_path):
+    clock = Clock()
+
+    class Cut(Flaky):
+        async def stream(self, req):
+            self.requests.append(req)
+            yield Text("partial")
+            raise _net(httpx.ReadError)
+
+    provider = Cut([])
+    with pytest.raises(ProviderError):
+        async for _ in agent(provider, clock, workspace=tmp_path).turn("hello"):
+            pass
+    assert len(provider.requests) == 1 and clock.delays == []

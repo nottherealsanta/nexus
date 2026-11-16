@@ -209,8 +209,11 @@ class ProviderError(Exception):
     """
 
     def __init__(self, message: str, *, status: int | None = None, body: str | None = None,
-                 phase: str = "stream", retry_after: float | None = None) -> None:
+                 phase: str = "stream", retry_after: float | None = None,
+                 network_kind: str | None = None) -> None:
         super().__init__(message)
+        # The `httpx.TransportError` class name when the connection itself failed (no HTTP response).
+        self.network_kind = network_kind
         self.status = status
         self.body = body
         self.phase = phase

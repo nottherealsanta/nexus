@@ -1924,8 +1924,11 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
     let mut sibling = other.clone();
     sibling.id = "worktree-sibling".into();
     sibling.title = "Worktree sibling".into();
-    app.state.worktrees.insert("worktree-sibling".into(), serde_json::json!({"session_directory": "/work/aaa",
-            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}));
+    app.state.worktrees.insert(
+        "worktree-sibling".into(),
+        serde_json::json!({"session_directory": "/work/aaa",
+            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}),
+    );
     app.state.model.sessions.insert(sibling.id.clone(), sibling);
     app.state.model.sessions.insert(other.id.clone(), other);
     let index = app
@@ -1941,7 +1944,10 @@ fn worktree_groups_keep_cursor_on_the_same_session_when_branch_data_arrives() {
         app.apply_sync(SyncMsg::Event(event));
     }
     let entries = app.side_entries();
-    let at = entries.iter().position(|e| e.id == "worktree-session").unwrap();
+    let at = entries
+        .iter()
+        .position(|e| e.id == "worktree-session")
+        .unwrap();
     assert_eq!(entries[app.cursor(Tab::Sessions)].id, "worktree-session");
     let header = entries
         .iter()
@@ -6245,8 +6251,11 @@ fn a_worktree_with_one_listed_session_has_no_header_until_the_archived_filter_ad
     old.archived = true;
     app.state.model.sessions.insert(only.id.clone(), only);
     app.state.model.sessions.insert(old.id.clone(), old);
-    app.state.worktrees.insert("worktree-old".into(), serde_json::json!({"session_directory": "/work/aaa",
-            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}));
+    app.state.worktrees.insert(
+        "worktree-old".into(),
+        serde_json::json!({"session_directory": "/work/aaa",
+            "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]}),
+    );
     let value = serde_json::json!({"id": 221, "type": "worktree.listed", "session_id": "worktree-only", "cursor": "log_c915bfc9b6d826c4:221", "data": {
         "session_directory": "/work/aaa", "worktrees": [{"path": "/work/aaa", "branch": "feature", "main": false}]
     }});

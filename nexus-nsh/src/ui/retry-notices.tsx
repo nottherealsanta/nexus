@@ -29,7 +29,8 @@ export function retryNotices(turns: TurnSummary[], scratch: CoreEvent[]): RetryN
   for (const event of scratch) {
     const data = event.data ?? {};
     const base = { key: `retry-event-${event.id}`, time: event.time };
-    if (event.type === "retry_scheduled") notices.push({ ...base, text: `provider retry ${data.attempt ?? ""}/${data.max_attempts ?? ""} in ${typeof data.delay === "number" ? fmtDuration(data.delay) : "?"}`, detail: data.reason });
+    if (event.type === "retry_scheduled" && data.phase === "waiting_network") notices.push({ ...base, text: `Waiting for network${typeof data.delay === "number" ? ` · retrying in ${fmtDuration(data.delay)}` : ""}`, detail: data.reason });
+    else if (event.type === "retry_scheduled") notices.push({ ...base, text: `provider retry ${data.attempt ?? ""}/${data.max_attempts ?? ""} in ${typeof data.delay === "number" ? fmtDuration(data.delay) : "?"}`, detail: data.reason });
     else if (event.type === "retry_started") notices.push({ ...base, text: `provider retry started (attempt ${data.attempt ?? ""})` });
     else if (event.type === "retry_exhausted") notices.push({ ...base, text: "provider retries exhausted", detail: data.reason, error: true });
   }

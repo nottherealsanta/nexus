@@ -28,6 +28,14 @@ MAX_WAIT_CEILING = 300.0
 MAX_ELAPSED_CEILING = 900.0
 
 
+def is_network(error: ProviderError) -> bool:
+    """The connection itself failed (DNS, connect, read, timeout, dropped stream): no HTTP response was received.
+
+    Never true for any HTTP status (4xx, 5xx, 429), auth errors or malformed streams.
+    """
+    return error.phase == "transport" and error.status is None and error.network_kind is not None
+
+
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
     max_attempts: int = 3
@@ -55,6 +63,12 @@ class RetryPolicy:
         if error.phase not in RETRYABLE_PHASES:
             return False
         return error.status is None or error.status in TRANSIENT_STATUS
+
+    def network_delay(self, failed_attempt: int, *, rng: Callable[[], float] | None = None) -> float:
+        """The wait before retrying a network failure: capped, jittered, never giving up (plan 34)."""
+        exponent = min(failed_attempt - 1, 20)
+        draw = (rng or random.random)()
+        return max(0.0, min(self.max_wait, self.base_delay * (2 ** exponent) * (0.5 + draw / 2)))
 
     def delay(self, failed_attempt: int, *, retry_after: float | None = None,
               remaining: float | None = None, rng: Callable[[], float] | None = None) -> float | None:

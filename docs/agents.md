@@ -264,6 +264,8 @@ for the current session: `primary` or `all` for roots and drafts, `subagent` or
 agent` command and API catalog still list all agents and problems; Core enforces
 eligibility when creating or switching a session.
 
+Fallbacks apply to provider/auth errors only, never to network failures (the child waits and retries the same model), last one turn, and are dropped at creation when the catalog does not list them (plan 34).
+
 `GET /api/agent` adds `subagent: {pool, fallbacks, effective: {model, source}}`
 to each agent that can run as a subagent: its configured lists and what a new
 subagent uses with an empty pool (`agent`: the file's `model`; `parent`: the

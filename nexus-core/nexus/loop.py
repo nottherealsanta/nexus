@@ -36,7 +36,7 @@ from .llmhub.types import (
     WireRequest,
     WireResponse,
 )
-from .retry import RetryPolicy
+from .retry import RetryPolicy, is_network
 from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 
 MAX_STEPS = 500
@@ -136,6 +136,7 @@ class RetryScheduled:
     status: int | None = None
     retry_after: float | None = None
     max_attempts: int = 3
+    phase: str = "retry"  # "waiting_network": the connection is down; waits are unbounded until it returns
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +241,7 @@ class Agent:
         self.model_ref = model_ref
         self.fallback_models = list(fallback_models or [])
         self._stream_received = False
+        self.fallback_from: str | None = None  # the configured model while a fallback runs this turn
         self.workspace = workspace
         self.tools = {tool.spec.name: tool for tool in tools}
         self.instructions = instructions or default_instructions(workspace)
@@ -357,10 +359,13 @@ class Agent:
                         yield event
                     break
                 except (ProviderError, AuthError, CredentialError) as error:
-                    if self._stream_received or not self.fallback_models:
-                        raise
+                    if self._stream_received or not self.fallback_models or (
+                            isinstance(error, ProviderError) and is_network(error)):
+                        raise  # a network failure never switches models: the connection is the problem, not the model
                     ref, provider, model = self.fallback_models.pop(0)
                     previous = self.model_ref
+                    if self.fallback_from is None:
+                        self.fallback_from = previous
                     self.provider, self.model, self.model_ref = provider, model, ref
                     if ref in self.model_efforts:
                         self.reasoning_effort = self.model_efforts[ref]
@@ -428,6 +433,15 @@ class Agent:
                     yield event
                 return
             except ProviderError as error:
+                if not received and policy.retryable(error) and is_network(error):
+                    # Wait for the network on the same model; only an interrupt (cancellation) ends this.
+                    delay = policy.network_delay(failed, rng=self._retry_random)
+                    attempt_id = f"att_{uuid.uuid4().hex[:12]}"
+                    yield RetryScheduled(failed, failed + 1, attempt_id, delay, str(error), None, None,
+                                         policy.max_attempts, "waiting_network")
+                    await self._retry_sleep(delay)
+                    yield RetryStarted(failed + 1, attempt_id)
+                    continue
                 remaining = policy.max_elapsed - (self._retry_clock() - started)
                 can_retry = not received and policy.retryable(error)
                 delay = policy.delay(

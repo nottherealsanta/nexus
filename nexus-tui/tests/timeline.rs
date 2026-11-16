@@ -3233,3 +3233,24 @@ fn the_full_session_row_supplies_the_effort_the_snapshot_row_lacks() {
     )));
     assert_eq!(app.current_effort(), "low");
 }
+
+#[test]
+fn a_network_wait_reads_waiting_for_network_with_the_backoff() {
+    let mut a = app();
+    let v = serde_json::json!({"id": 600, "type": "retry_scheduled", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:600", "data": {"attempt": 7, "next_attempt": 8, "max_attempts": 3, "delay": 12.0,
+        "phase": "waiting_network", "reason": "codex: network error: ConnectError"}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("retry_scheduled", None, &v)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    let (text, tone) =
+        nexus_tui::timeline::session_outcome(a.state.model.selected.as_ref().unwrap()).unwrap();
+    assert!(
+        text.starts_with("Waiting for network · retrying in 12s"),
+        "{text}"
+    );
+    assert!(!text.contains("provider retry"), "{text}");
+    assert_eq!(tone, "warning");
+}

@@ -69,9 +69,20 @@ attached) for `POST …/prompt`, through the same turn lifecycle.
       and tries the frozen request again; settings changes wait for the next
       logical request. No response stream event may have been
       received yet. `RetryExhausted` says why no further attempt fits the
-      budget. A child with frozen fallback models may then switch in order on a
+      budget. A **network failure** (`ProviderError.network_kind` set from an
+      `httpx.TransportError`; `is_network()` in `nexus/retry.py`; never an HTTP
+      status, auth or stream error) is different: the wrapper never gives up. It
+      yields `RetryScheduled(phase="waiting_network")`, waits a capped, jittered
+      backoff (1 s doubling to `max_wait`, 30 s) and retries the same model until
+      it succeeds or the turn is interrupted (cancellation ends the sleep at
+      once). A network error never triggers a fallback, for children and roots
+      alike. A child with frozen fallback models may switch in order on any other
       provider or auth failure before response events: `ModelFallback` records
       the failed request and new model, followed by a visible user-context notice.
+      The switch lasts that turn only: the session row keeps its configured
+      model, so the next turn or a resume starts on it again. Fallbacks the
+      cached catalog does not list are dropped when the child is created
+      (recorded under `skipped`).
       No fallback occurs after partial response output. `PartDone` parts are
       collected; the last `Done.stop` is kept (default `"other"`).
    3. Append the assistant message made of the collected parts, yield `MessageAdded`.

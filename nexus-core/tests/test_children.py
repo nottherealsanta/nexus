@@ -334,7 +334,7 @@ async def test_child_fallback_is_recorded_and_partial_output_is_not_retried(env)
     await _idle(rt)
     requests = rt.store.requests_for_turn(turn_id)
     assert [(r["model"], r["status"]) for r in requests] == [("codex/child", "failed"), ("codex/parent", "completed")]
-    assert rt.session(child.id).model == "codex/parent"
+    assert rt.session(child.id).model == "codex/child"  # the fallback lasted that turn only (D6)
     messages = await _texts(client, child.id)
     assert any("model fallback" in text for _, text in messages if text)
     assert messages[-1] == ("assistant", "fallback answer")

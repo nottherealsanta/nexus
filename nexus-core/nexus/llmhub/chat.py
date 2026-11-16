@@ -247,7 +247,8 @@ class ChatProvider:
                     for event in events_for_chunk(data, state, origin=self.name):
                         yield event
         except httpx.HTTPError as exc:
-            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}", phase="transport") from exc
+            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}", phase="transport",
+                                network_kind=type(exc).__name__ if isinstance(exc, httpx.TransportError) else None) from exc
         finally:
             if self._client is None:
                 await client.aclose()

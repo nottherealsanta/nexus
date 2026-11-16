@@ -1276,7 +1276,8 @@ class Runtime:
                         "the agent file's model" if snapshot["agent"].get("model") else "the parent session's model")
             if fallbacks:
                 primary = model or snapshot["agent"].get("model") or self.resolve_model(parent, self.snapshot_for(parent))[0]
-                usable = [ref for ref in fallbacks if ref != primary and split_ref(ref)[0] in live]
+                usable = [ref for ref in fallbacks if ref != primary and split_ref(ref)[0] in live
+                          and self._in_catalog(ref)]
                 snapshot["model_fallbacks"] = {"primary": primary, "models": usable,
                                                "skipped": [ref for ref in fallbacks if ref != primary and ref not in usable]}
             efforts = settings.get("efforts", {}).get(agent, {})
@@ -2108,6 +2109,20 @@ class Runtime:
         except (OSError, ValueError, TypeError, KeyError):
             return None
 
+    @staticmethod
+    def _in_catalog(ref: str) -> bool:
+        """Whether the cached catalog lists this model (plan 34: a fallback the account cannot use is skipped).
+
+        A provider whose list is dynamic, or an unreadable cache, counts as listed: the check only drops what the
+        catalog positively does not know.
+        """
+        try:
+            provider, model_id = split_ref(ref)
+            infos = catalog.models_for(catalog._read_cache(catalog.cache_path()), provider)
+        except (OSError, ValueError, TypeError, KeyError):
+            return True
+        return not infos or any(item.id == model_id for item in infos)
+
     async def image_input(self, ref: str) -> bool:
         """Whether the catalog says this model takes images. Unknown models count as yes: a provider that refuses
         says so, and silently hiding an image from a model that could read it is worse."""
@@ -2478,9 +2493,13 @@ class Runtime:
         """Rebind explicit changes at dispatch boundaries, never within a running call."""
         self._apply_pending_directory(session_id)  # a queued move lands between calls, not inside one
         updated = self._agent(self.session(session_id), refresh=False)
+        # While a fallback runs the turn, keep it unless the user changed the session's model.
+        held = ("provider", "model", "model_ref", "fallback_models", "reasoning_effort", "model_efforts", "render") \
+            if active.fallback_from is not None and updated.model_ref == active.fallback_from else ()
         for name in ("provider", "model", "model_ref", "fallback_models", "workspace", "tools", "instructions", "reasoning_effort", "model_efforts", "approve",
                      "file_lock", "cwd_changed", "render"):
-            setattr(active, name, getattr(updated, name))
+            if name not in held:
+                setattr(active, name, getattr(updated, name))
 
     def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
         if session.kind == "manager":
@@ -3438,7 +3457,7 @@ class Runtime:
                         # `event.attempt_id` is only an event correlation id.
                         pass
                     elif isinstance(event, ModelFallback):
-                        if self._model_ref(session_id) != event.previous:
+                        if self._model_ref(session_id) != (agent.fallback_from or event.previous):
                             raise ValueError("model changed while the fallback was being selected")
                         if active_request is not None:
                             if partial is not None:
@@ -3447,8 +3466,7 @@ class Runtime:
                                                     reasoning_seconds=clock.seconds())
                         if active_attempt is not None:
                             self.store.finish_attempt(active_attempt, "failed", error=event.reason)
-                        self.store.update_session(session_id, model=event.model)
-                        self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
+                        # The fallback lasts this turn only (plan 34, D6): the session row keeps its model.
                         self.vision[agent.model] = await self.image_input(event.model)
                         agent.render = lambda message: self.render_media(message, agent.model)
                         active_request = self.store.start_request(turn_id, session_id, step, model=event.model,

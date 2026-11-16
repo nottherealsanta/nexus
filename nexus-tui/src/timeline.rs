@@ -1228,6 +1228,16 @@ pub fn session_outcome(view: &crate::reduce::SelectedView) -> Option<(String, &'
             )
         }
         "retry_exhausted" => ("provider retries exhausted".into(), "error"),
+        "retry_scheduled" if d["phase"] == "waiting_network" => (
+            format!(
+                "Waiting for network{}",
+                d["delay"]
+                    .as_f64()
+                    .map(|delay| format!(" · retrying in {}", fmt_duration(delay)))
+                    .unwrap_or_default()
+            ),
+            "warning",
+        ),
         "retry_scheduled" => (
             format!(
                 "provider retry {}/{}{}",
@@ -1775,7 +1785,8 @@ impl Builder<'_> {
                         self.turn_block(turn_no, m, &text, &pastes, &turns, folded);
                         continue;
                     }
-                    if !turn_open || folded {
+                    // A handoff session's first replies follow the summary with no prompt: no turn is open, but they show.
+                    if folded {
                         continue;
                     }
                     for (pi, p) in m.parts.iter().enumerate() {
@@ -4150,6 +4161,14 @@ impl Builder<'_> {
                     )
                 }
             }
+            "retry_scheduled" if d["phase"] == "waiting_network" => (
+                format!(
+                    "Waiting for network · retrying in {}",
+                    fmt_duration(d["delay"].as_f64().unwrap_or(0.0))
+                ),
+                d["reason"].as_str().map(str::to_owned),
+                "warning",
+            ),
             "retry_scheduled" => (
                 match d["max_attempts"].as_u64() {
                     Some(max) => format!(

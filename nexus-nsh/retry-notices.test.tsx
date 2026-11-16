@@ -15,6 +15,13 @@ describe("provider retry notices", () => {
     expect(notices[2].error).toBe(true);
   });
 
+  test("a network wait reads Waiting for network with the backoff, not an attempt count", () => {
+    const events = [{ id: 1, type: "retry_scheduled", time: 1, data: { attempt: 7, max_attempts: 3, delay: 12, phase: "waiting_network", reason: "codex: network error: ConnectError" } }] as any;
+    const [notice] = retryNotices([], events);
+    expect(notice.text).toBe("Waiting for network · retrying in 12s");
+    expect(notice.detail).toBe("codex: network error: ConnectError");
+  });
+
   test("running summaries do not duplicate the live retry", () => {
     const turn = { id: "t", status: "running", started: 1, requests: [{ id: "r", started: 1, attempts: [
       { n: 1, status: "failed", started: 1, finished: 2, error: "offline" },
