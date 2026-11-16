@@ -105,9 +105,7 @@ describe("modal recipe (I7)", () => {
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
-    await app.keyboard.press("mod+3");
-    await app.waitFor("id:project-prj_1");
-    await app.rightClick("id:project-prj_1");
+    await app.rightClick("id:rail-project-prj_1");
     await app.press("id:row-action-project.remove");
     await app.waitFor("id:confirm-dialog");
     expect(app.shows("id:confirm-cancel")).toBe(true);

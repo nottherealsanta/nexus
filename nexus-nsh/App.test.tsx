@@ -1167,9 +1167,10 @@ describe("turn summaries", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:session-status");
     const shown = app.texts().join("\n");
-    expect(shown).toContain("provider: overloaded · HTTP 529 (+2)");
-    expect(shown.includes("provider retry")).toBe(false);
-    expect(shown.includes("provider retries exhausted")).toBe(false);
+    // The status strip has the turn's error; the retry history is its own strip (retry-notices.tsx).
+    expect(shown).toContain("× provider: overloaded · HTTP 529");
+    expect(shown).toContain("Previous · provider retries exhausted · HTTP 529 again");
+    expect(shown.includes("provider retry ")).toBe(false);
   });
 
   test("a turn the client cannot read details for is announced, and the timeline still loads", async () => {

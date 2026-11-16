@@ -98,7 +98,7 @@ describe("timeline reading column", () => {
     expect(TEXT_INSET).toBe("px-2");
     expect(TURN_INSET).toBe("pl-4");
     expect(USER_BAND_INSET).toBe("pl-4 pr-2");
-    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-1 items-center");
+    expect(ACTIVITY_CHEVRON).toBe("w-4 shrink-0 -ml-1 mr-1 items-center");
   });
 
   test("the new-session starting context renders in the timeline's shared column and card", async () => {

@@ -76,11 +76,11 @@ describe("Void second pass", () => {
     expect(app.shows("id:waiting-card")).toBe(true);
   });
 
-  test("a session row with nothing on its second line is one line", async () => {
+  test("every session row has its second line, as in the TUI (two lines, README D03)", async () => {
     const app = await view(snapshot());
     await app.waitFor("id:session-ses_1");
-    expect(app.shows("id:session-line-ses_1")).toBe(false);
-    // The parent has a child, so it keeps its second line (the child count).
+    expect(app.shows("id:session-line-ses_1")).toBe(true);
+    // The parent has a child, so its second line carries the child count.
     expect(app.shows("id:session-line-ses_2")).toBe(true);
     expect(app.texts().includes("1 ↳")).toBe(true);
   });

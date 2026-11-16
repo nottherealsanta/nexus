@@ -519,6 +519,7 @@ describe("queued row actions (plan 31)", () => {
     await app.type("id:composer-input", "");
     await app.keyboard.press("up");
     await app.keyboard.press("up");
+    await app.waitUntil(() => app.texts().some((t) => t.includes("enter edit")));
     await app.keyboard.press("enter");
     await app.waitUntil(() => app.value("id:composer-input") === scenario.queue[2]);
   });
@@ -620,6 +621,8 @@ describe("session control failure and edge cases", () => {
     await app.wait(150);
     await app.type("id:composer-input", "");
     await app.keyboard.press("up");
+    await app.waitUntil(() => app.texts().some((t) => t.includes("enter edit")));
+    await app.wait(400);
     await app.keyboard.press("enter");
     await app.waitUntil(() => app.value("id:composer-input") === text);
   });

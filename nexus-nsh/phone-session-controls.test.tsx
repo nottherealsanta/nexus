@@ -73,56 +73,59 @@ describe("phone routes (plans 29 and 30)", () => {
   test("opens the sessions drawer and switches conversations", async () => {
     const app = await openPhone();
     await openConversation(app);
-    await app.press("id:phone-open-sessions");
-    await app.waitFor("id:phone-sessions-drawer");
+    await app.press("id:phone-drawer-button");
+    await app.waitFor("id:phone-drawer");
     await app.press("id:session-ses_2");
-    await app.waitFor("id:phone-sessions-drawer", { state: "gone" });
+    await app.waitFor("id:phone-drawer", { state: "gone" });
     expect(app.shows("id:composer-input")).toBe(true);
-    await app.press("id:phone-open-sessions");
-    await app.press("id:phone-all-sessions");
-    await app.waitFor("id:phone-tab-sessions");
   });
-  test("back leaves a focused conversation without losing its draft", async () => {
+  test("leaving a conversation through the drawer keeps its draft", async () => {
     const app = await openPhone();
     await openConversation(app);
     await app.type("id:composer-input", "unfinished message");
-    await app.press("id:phone-back");
-    await app.waitFor("id:phone-tab-sessions");
+    await app.press("id:phone-drawer-button");
+    await app.waitFor("id:phone-drawer");
+    await app.press("id:session-ses_2");
+    await app.waitFor("id:phone-drawer", { state: "gone" });
+    await app.press("id:phone-drawer-button");
+    await app.waitFor("id:phone-drawer");
     await app.press("id:session-ses_1");
-    await app.waitFor("id:composer-input");
+    await app.waitFor("id:phone-drawer", { state: "gone" });
     expect(app.value("id:composer-input")).toBe("unfinished message");
   });
   test("the project switcher changes scope without leaving the Sessions tab", async () => {
     const app = await openPhone();
     await app.waitFor("id:project-selector");
     await app.press("id:project-selector");
-    await app.waitFor("id:picker");
-    await app.press("id:pick-0");
-    await app.waitFor("text:All projects");
+    await app.waitFor("id:project-sheet");
+    await app.press("id:project-all");
+    await app.waitFor("id:project-sheet", { state: "gone" });
     await app.press("id:project-selector");
-    await app.waitFor("id:picker");
-    await app.press("id:pick-1");
-    await app.waitFor("id:phone-tab-sessions");
+    await app.waitFor("id:project-sheet");
+    await app.press("id:project-prj_1");
+    await app.waitFor("id:project-sheet", { state: "gone" });
+    await app.waitFor("id:phone-sessions");
     expect(app.shows("id:session-ses_1")).toBe(true);
   });
   test("phone settings opens a section and returns to the grouped list", async () => {
     const app = await openPhone();
     await app.press("id:phone-tab-settings");
-    await app.waitFor("id:phone-core-card");
-    await app.press("id:section-appearance");
-    await app.waitFor("id:settings-page-appearance");
+    await app.waitFor("id:connection-card");
+    await app.press("id:phone-setting-appearance");
+    await app.waitFor("id:phone-settings-page-appearance");
     expect(app.shows("id:setting-appearance.theme")).toBe(true);
     await app.press("id:phone-settings-back");
-    expect(app.shows("id:phone-core-card")).toBe(true);
-    await app.press("id:section-providers");
-    await app.waitFor("id:settings-page-providers");
+    expect(app.shows("id:connection-card")).toBe(true);
+    await app.press("id:phone-setting-providers");
+    await app.waitFor("id:phone-settings-page-providers");
     await app.press("id:phone-settings-back");
-    expect(app.shows("id:phone-core-card")).toBe(true);
-    await app.press("id:phone-core-card");
+    expect(app.shows("id:connection-card")).toBe(true);
+    await app.press("id:core-change");
+    await app.press("id:connect-manual-toggle");
     await app.waitFor("id:connect-address");
-    expect(app.value("id:connect-address")).toBe("http://nexus.invalid:4747");
+    expect(app.value("id:connect-address")).toBe(""); // the redesigned connect screen starts the manual field empty
     await app.press("id:connect-cancel");
-    await app.waitFor("id:phone-core-card");
+    await app.waitFor("id:connection-card");
   });
   test("/search opens Sessions with its search field focused", async () => {
     const app = await openPhone();
