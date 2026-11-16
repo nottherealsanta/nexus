@@ -5189,7 +5189,13 @@ impl App {
 
     /// `/continue`: show the pending row at once, queue the call while Core is not connected
     /// (sent when it is, with the same idempotency key), and resend with that key on Retry.
+    fn bump_timeline(&self) {
+        self.timeline_revision
+            .set(self.timeline_revision.get().wrapping_add(1));
+    }
+
     fn start_continue(&mut self, id: &str) {
+        self.bump_timeline();
         let key = self
             .ui
             .pending_turns
@@ -5226,6 +5232,7 @@ impl App {
     /// Drop a pending turn the user cancelled. True when it was never sent, so there is nothing to
     /// interrupt in Core.
     fn cancel_pending_turn(&mut self, id: &str) -> bool {
+        self.bump_timeline();
         match self.ui.pending_turns.remove(id) {
             Some(p) if p.queued => {
                 self.toast(Level::Info, "Continue cancelled; nothing was sent");
@@ -7963,6 +7970,7 @@ impl App {
                     .collect();
                 self.composer().take();
                 let images = std::mem::take(&mut self.composer().images);
+                self.bump_timeline();
                 if mode == "send" && !self.is_busy(&id) {
                     // The same pending row as `/continue` (plan 37, D3): until Core's events show the turn.
                     self.ui.pending_failed.remove(&id);

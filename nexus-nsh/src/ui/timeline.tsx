@@ -1059,7 +1059,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
         <If when={r().kind === "pending"}>
           <View class={`flex-row items-center gap-2 py-1.5 ${TURN_INSET}`} testID="pending-turn" accessible accessibilityLabel={(r() as Extract<Row, { kind: "pending" }>).text}>
             <Status kind="running" />
-            <Shimmer text={(r() as Extract<Row, { kind: "pending" }>).text} reduced={!!config()?.values?.ui?.reduced_motion} testID="pending-turn-text" />
+            <Text style={{ numberOfLines: 1 }} class={T.secondary} testID="pending-turn-text">{(r() as Extract<Row, { kind: "pending" }>).text}</Text>
           </View>
         </If>
         <If when={r().kind === "diag"}>

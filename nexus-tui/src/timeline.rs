@@ -1990,7 +1990,7 @@ impl Builder<'_> {
                 fmt_duration(e.data["delay"].as_f64().unwrap_or(0.0))
             )
         } else if p.queued {
-            format!("Waiting for Core{} not connected", self.sep())
+            format!("Waiting for Core{}not connected", self.sep())
         } else if p.busy_seen {
             format!("Waiting for the model{}{elapsed}s", self.sep())
         } else {
