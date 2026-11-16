@@ -3175,3 +3175,38 @@ fn browser_tools_have_labels_subjects_and_the_web_glyph() {
     );
     assert_eq!(nexus_tui::paint::verb_glyph("browser_exec", false), "↗");
 }
+
+// ---- a fork child's real Core JSON (plan 10) ---------------------------------
+
+fn fixture(name: &str) -> serde_json::Value {
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn a_fork_childs_real_core_json_decodes_and_fills_the_timeline() {
+    // Captured from a scratch Core running `mock/fork_subagent` (reports/10-fork/visual_core.py): `null`
+    // `origin` / `raw` inside parts, a `fork` block, notices and a turn page.
+    let page = fixture("fork_child_messages.json");
+    let messages: Vec<nexus_tui::api::Message> =
+        serde_json::from_value(page["messages"].clone()).expect("messages decode");
+    assert_eq!(messages.len(), 7);
+    let session: nexus_tui::api::Session =
+        serde_json::from_value(fixture("fork_child_session.json")).expect("session decodes");
+    assert_eq!(session.fork.as_ref().map(|f| f.inherited), Some(3));
+    let turns: nexus_tui::api::TurnPage =
+        serde_json::from_value(fixture("fork_child_turns.json")).expect("turn page decodes");
+    assert!(!turns.turns.is_empty());
+}
+
+#[test]
+fn a_message_with_null_strings_still_decodes() {
+    let m: nexus_tui::api::Message = serde_json::from_value(serde_json::json!({
+        "id": "m1", "session_id": null, "seq": 1, "created": 1.0, "role": "user",
+        "parts": [{"type": "text", "text": "hi", "origin": null, "raw": null}],
+        "notices": [{"kind": null, "state": null, "session_id": null, "agent": null, "title": null}]
+    }))
+    .expect("null strings read as empty");
+    assert_eq!(m.session_id, "");
+    assert_eq!(m.notices.len(), 1);
+}

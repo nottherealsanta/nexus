@@ -1145,13 +1145,22 @@ async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
         api.session(sid),
         api.turns(sid, None, None, Some(TURN_PAGE)),
     );
-    let (messages, messages_more) = messages.ok()?;
+    // A page that cannot be decoded must never leave the timeline silently blank: say why (plan 10).
+    let (messages, messages_more, messages_error) = match messages {
+        Ok((messages, more)) => (messages, more, None),
+        Err(e) => (
+            Vec::new(),
+            false,
+            Some(format!("messages failed to load ({e})")),
+        ),
+    };
     let mut h = History {
         session_id: sid.to_owned(),
         messages,
         messages_more,
         starting: starting.ok(),
         session: session.ok(),
+        turns_error: messages_error,
         ..Default::default()
     };
     match page {

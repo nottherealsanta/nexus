@@ -296,15 +296,15 @@ impl Session {
 /// notices have no metadata, and clients parse the text instead.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Notice {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub state: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub session_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub agent: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub title: String,
     #[serde(default)]
     pub model: Option<String>,
@@ -317,7 +317,7 @@ pub struct Notice {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Message {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     pub session_id: String,
     #[serde(default)]
     pub seq: i64,

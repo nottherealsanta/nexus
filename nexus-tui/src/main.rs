@@ -960,14 +960,21 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
                     _ => {}
                 }
             }
-            let before = app.state.snapshots_applied;
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while app.state.snapshots_applied == before && Instant::now() < deadline {
+            // Wait for the opened session's own history, not a snapshot: `Select` never
+            // bumps `snapshots_applied`, so a dump of a session other than the first
+            // used to render before its messages arrived (plan 10).
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut loaded = false;
+            while !loaded && Instant::now() < deadline {
                 if let Ok(Some(m)) =
                     tokio::time::timeout(Duration::from_millis(200), handle.messages.recv()).await
                 {
+                    loaded = matches!(&m, SyncMsg::History(h) if h.session_id == id);
                     app.apply_sync(m);
                 }
+            }
+            if !loaded {
+                eprintln!("nexus-tui: the history of {id} did not load");
             }
         }
     }

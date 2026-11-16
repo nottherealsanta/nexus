@@ -950,7 +950,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
   const r = p.r;
   return (
     <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), p.sid, b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class={`w-full ${r().inherited ? "pl-4" : ""}`} testID={r().inherited ? "fork-inherited-row" : undefined}>
+      <View class={`w-full ${r().inherited ? "pl-3 ml-1 border-l border-border-strong" : ""}`} testID={r().inherited ? "fork-inherited-row" : undefined}>
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;

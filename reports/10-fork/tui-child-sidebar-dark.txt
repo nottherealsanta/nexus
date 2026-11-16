@@ -1,0 +1,50 @@
+  ◧      [Sessions] [Files] [Git]           Fork subagents › Pick a file                                                                                                ◨
+     │                                      · Fork subagents ×                                                                   +  ⋯
+▏    │ + New session                        Pick a file                                                Fork·Builds cont…·mock·default   SESSION
+▏ W  │ ⌕ Search sessions       ctrl+k           ● read                      ● bash_kill                 ● ask                           Agent    build
+▏  1 │ ▣ Show archived                          ● grep                      ● edit                      ● code                          Model    mock/fork_subagent
+     │────────────────────────────────          ● glob                      ● patch                     ● browser_exec                  Effort   default
+     │   Fork subagents           16m           ● ls                        ● write                     ● browser_screenshot            Status   ✓ idle
+     │                            2 ↳           ● bash                      ● web_search                ● fork                          Turns    1 · 2 tools
+     │                                          ● bash_output               ● web_fetch                 ● expose_workspace_tools        Tools    glob 1 · ls 1
+     │                                                                                                                                  Started  1:05 PM · 16m
+     │                                        Skills [0]  none                                                                          Id       ses_1a1e348bf1bbfa3adbb
+     │
+     │                                        MCP [0]  none                                                                             CONTEXT
+     │                                                                                                                                  ╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱ 0%
+     │                                        total  ~4,857 tok · 2.4% of the window                                                    Used     361 of 200k
+     │                                                                                                                                  Tokens   625 in · 0 out
+     │                                                                                                                                  Cost     <$0.01
+     │                                         ▸ Forked from Fork subagents · 3 messages
+     │
+     │                                      … the turns above have no recorded details (tokens, models, timings): pruned, or older th
+     │
+     │                                      │
+     │                                      │  [Nexus fork] You are in a forked session of ses_1a1e348b942ded5c75b.    #2 · 1:05 PM
+     │                                      │  It is read-only: `edit`, `write`, `patch`, MCP tools that may change
+     │                                      │  state, and workspace changes are refused, and you may run only shell
+     │                                  ←   │  commands that change no files. Your Python kernel is private; do not
+     │                                      │  borrow other kernels. Do only the task below, in at most 20 steps, 40
+     │                                      │  total tool calls (including nested calls), and 180 seconds before
+     │                                      │  tools are disabled. Then report your findings and anything unverified.
+     │                                      │
+     │                                      │  Task: List the files you saw and say which one to read first.
+     │                                      │
+     │
+     │                                         Checking the workspace once more from the fork.
+     │
+     │                                         ▸ 1 tool
+     │
+     │                                         Fork report: I reused the parent's listing and checked it again; nothing else was
+     │                                         needed.
+     │
+     │                                        Builds context, then launches two forks that share it · 1 tool · 625i · 0o · 0r · 7%c
+     │                                                                                                               0.0s · 1:05 PM
+     │
+  +  │
+     │                                         Type a message…
+     │
+     │                                         Build · Builds context, then launches two forks that share it mock       361 · 0.2%
+  ⚙  │                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                       /private/tmp/fork-home/h/workspace
+     │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
