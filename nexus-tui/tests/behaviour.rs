@@ -2689,6 +2689,28 @@ fn handoff_summary_is_a_three_line_box_that_opens_whole() {
 }
 
 #[test]
+fn handoff_session_shows_replies_and_tools_before_any_prompt() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (110, 34));
+    a.open_session(SESSION);
+    a.effects.clear();
+    let summary = "[Handoff from session ses_abcdef123456]\n\n## Goal\nFix the login bug.";
+    message_event(&mut a, 900, 1, "user", Some("handoff"), summary);
+    let data = serde_json::json!({"id": "m_h901", "session_id": SESSION, "seq": 2, "created": 1793113301.0,
+        "role": "assistant", "parts": [
+            {"type": "text", "text": "Looking at the login code now."},
+            {"type": "tool_call", "id": "call_1", "name": "bash", "arguments": "{\"command\": \"echo handoff-tool\"}"}]});
+    let v = serde_json::json!({"id": 901, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:901", "data": data});
+    if let Ok(Frame::Event(e)) = Frame::from_value("message.added", None, &v) {
+        a.apply_sync(SyncMsg::Event(e));
+    }
+    let (_, rows) = draw(&mut a, 110, 34);
+    let text = rows.join("\n");
+    assert!(text.contains("Looking at the login code now."), "{text}");
+    assert!(text.contains("1 command"), "{text}");
+}
+
+#[test]
 fn handoff_and_btw_commands_call_core() {
     let mut a = app();
     a.run_command("session.handoff");

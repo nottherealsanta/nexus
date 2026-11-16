@@ -15,6 +15,11 @@ const messages = [
   { id: "m1", session_id: "ses_1", seq: 1, role: "user", delivery: "handoff", parts: [{ type: "text", text: `[Handoff from session ses_abcdef123456]\n\n${summary}` }], created: 1 },
   { id: "m2", session_id: "ses_1", seq: 2, role: "user", parts: [{ type: "text", text: "carry on" }], created: 2 },
 ];
+const unprompted = [
+  messages[0],
+  { id: "m2", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "text", text: "Looking at the login code now." }, { type: "tool_call", id: "call_1", name: "bash", arguments: "{\"command\": \"echo handoff-tool\"}" }], created: 2 },
+  { id: "m3", session_id: "ses_1", seq: 3, role: "tool", parts: [{ type: "tool_result", call_id: "call_1", output: "[exit code 0]\nhandoff-tool" }], created: 3 },
+];
 const network = {
   "GET */__nexus/host": { body: { host: "test", canStart: false } },
   "GET */api/info": { body: { name: "nexus", version: "0.10.0.dev0", pid: 1 } },
@@ -71,5 +76,14 @@ describe("Handoff and side questions (K1-K3)", () => {
     await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_0/message")));
     await app.waitUntil(() => app.count("id:msg-handoff") === 0);
     expect(app.texts().some((t) => t.includes("Original work"))).toBe(true);
+  });
+
+  test("replies and tools that follow the summary with no prompt stay visible", async () => {
+    const app = await open("./App.tsx", { network: { ...network, "GET */api/session/ses_1/message*": { body: unprompted } }, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:msg-handoff");
+    expect(app.texts().some((t) => t.includes("Looking at the login code now."))).toBe(true);
+    expect(app.texts().some((t) => t.includes("1 command"))).toBe(true);
   });
 });
