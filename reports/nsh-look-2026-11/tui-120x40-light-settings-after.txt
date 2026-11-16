@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Settings                                                                            □
+     │                                                                                                             +  ⋯
+▏2   │ + New session              i 2 other sessions waiting for input                                              go
+▏ W  │ ⌕ Search sessions ctrl+k  ▌
+▏  3 │ ▣ Show archived
+     │──────────────────────────    System prompt ~2.1K
+     │ ◆ Waiting
+     │            Settings
+     │
+     │ ◆ Waiting  ⌕ Filter settings…
+     │            ────────────────────────────────────────────────────────────────────────────────────
+     │            ▌ Appearance          │   Theme                                 system  light  dark
+     │   Rich te    Providers           │   Monochrome mode                                   off  on
+     │              Agents              │   Animations                                        on  off
+     │              Tools               │   Sidebar                                        full  rail
+     │   Streami    ZMX                 │   Timeline detail                         low  medium  high
+     │              Browser             │   Scroll bar                                        off  on
+     │              MCP                 │   Details sidebar                                   off  on
+     │   Hello      Context             │   Sessions shown                 this project  all projects
+     │              Voice and speech    │   Archived sessions                                 off  on
+     │              Manager             │
+     │              Keybindings         │
+     │              Notifications       │
+     │              About               │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │
+     │            ↑↓ section · enter open · esc close                                      13 sections
+  +  │
+     │                               Message to start a new session
+     │
+     │                               Build · … · default                                                           0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/nexus-selection.nElF9H/workspace
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

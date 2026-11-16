@@ -1,10 +1,11 @@
 # NSH look audit and component pass (plan 05, section 5.3)
 
 Seeded with the offline mock provider (`visual_core.py`: tool_marathon, streaming_rich, question, bash_wait, hello;
-scratch `NEXUS10_HOME`, no provider calls). `capture.mjs <home> <port> before|after` writes
-`nsh-{1024,1440}-{dark,light}-{tools,text,question,approval,palette,settings}-{before,after}.png`; `tui.sh before`
+scratch `NEXUS10_HOME`, no provider calls). `capture.mjs <home> <port> before|after [tag]` writes
+`nsh-{1024,1440}-{dark,light}-{tools,text,question,approval,palette,settings}[-tag]-{before,after}.png`; `tui.sh before`
 writes `tui-{120x40,160x48}-{dark,light}-{tools,text,question,approval,palette,settings}-before.{txt,svg}` (real
-`nexus-tui --dump-frame`). The TUI is unchanged by this pass, so it has no `after` set.
+`nexus-tui --dump-frame`). The first (component) pass left the TUI unchanged, so it had no `after` set; the
+2026-11-15 token pass does change it, so it adds light `after` frames for Settings, the palette, completion and text.
 
 ## Audit: what looked unfinished (NSH before)
 
@@ -19,8 +20,14 @@ writes `tui-{120x40,160x48}-{dark,light}-{tools,text,question,approval,palette,s
    (ledger 2026-11-03) so it was not changed; the fixed-width clip without an ellipsis is still open.
 6. Settings pane heading (`Appearance`, 12 px muted) is much smaller than the rows below it; the TUI has no such
    heading. Open.
-7. Light theme: selected segment and focused list rows use the same beige, low contrast against the gray well. Open
-   (token change in `interface/theme.toml`, needs a TUI check).
+7. Light theme: selected segment and focused list rows used the same pale beige, low contrast against the gray well.
+   **Fixed 2026-11-15 (tokens only, both clients):** `light.interactive.selection` `#f0e3d8` → `#e8d0b9` (warm sand,
+   ~1.3:1 against `surface.panel`, where it was ~1.09:1) and `light.interactive.settings_selection` `#ddddd9` → `#d9d9d4`
+   (neutral, a step below hover); the 256-colour selection fallback moves 224 → 223. Selected segments and rows now read
+   warm, focused Settings rows neutral, so the two states are distinguishable. Evidence: `nsh-1024-light-settings-light-selection-{before,after}.png`,
+   `nsh-1024-light-palette-light-selection-{before,after}.png`, all 1024/1440 light surfaces with the `-light-selection-`
+   tag, and `tui-{120x40,160x48}-light-{settings,text}-after.*` plus `tui-120x40-light-complete-after.*`.
+   `python3 interface/check_theme.py` (and with the NSH overlay) passes.
 8. NSH-only content: Settings notes under each row and a `System` theme option; the TUI shows one-line rows and
    `light dark`. Wording/grouping parity decision, open.
 9. Palette: disabled commands list their reason inline in the muted row, producing long muted lines the TUI keeps

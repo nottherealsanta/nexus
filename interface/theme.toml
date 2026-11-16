@@ -128,12 +128,12 @@ focus   = "#a84e16"
 
 [light.interactive]
 settings_focus = "#1f2124" # dark equivalent on light surfaces
-settings_selection = "#ddddd9"
+settings_selection = "#d9d9d4"  # neutral focus band; a step below hover, never the selection tint
 accent    = "#a84e16"
 multi     = "#6743ae"
 on_accent = "#ffffff"
 focus     = "#a84e16"
-selection = "#f0e3d8"
+selection = "#e8d0b9"   # selected row/segment: warm sand, clearly off the panel, sidebar and raised surfaces
 hover     = "#e9e9e6"
 scrollbar = "#c4c4bf"
 active    = "#ffffff"
@@ -314,7 +314,7 @@ style = ""
 "interactive.multi" = 60
 "interactive.on_accent" = 231
 "interactive.focus" = 94
-"interactive.selection" = 224
+"interactive.selection" = 223
 "interactive.hover" = 253
 "status.success" = 22
 "status.warning" = 94

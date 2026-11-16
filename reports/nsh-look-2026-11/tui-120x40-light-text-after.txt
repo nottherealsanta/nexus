@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Rich text reply                                                                     □
+     │                            · Rich text reply ×                                                              +  ⋯
+▏2   │ + New session
+▏ W  │ ⌕ Search sessions ctrl+k   i 2 other sessions waiting for input                                              go
+▏  3 │ ▣ Show archived            │  Show rich text.                                                    #1 · 10:40 PM
+     │──────────────────────────  │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 0 lines of this turn above
+     │ ◆ Waiting question    9m      ──────────────────
+     │
+     │                               Lists and emphasis
+     │ ◆ Waiting approval    9m
+     │                               1. bold, italic, struck,  inline code
+     │
+     │▏  Rich text reply     9m      │ A block quote
+     │▏
+     │                               ┌───────┬─────────┐
+     │   Streaming and tools 9m      │ tool  │ mutates │
+     │                               ├───────┼─────────┤
+     │                               │ read  │ no      │
+     │   Hello               9m      ├───────┼─────────┤
+     │                               │ write │ yes     │
+     │                               └───────┴─────────┘
+     │
+     │                                 ╭─ python
+     │                                 │ def fib(n): return n if n < 2 else fib(n-1)+fib(n-2)
+     │                                 ╰─
+     │
+     │                               日本語 · Ελληνικά · مرحبا · 🚀🔥✅
+     │
+     │                               ✓ mock verdict — streaming-rich: 0/0 checks passed
+     │
+     │                                    Markdown, code, tables and Unicode · 0 tools · 17i · 0o · 0r · 471%c · 0.0s
+     │                                                                                                       10:40 PM
+     │
+  +  │
+     │                               Type a message…
+     │
+     │                               Build · Markdown, code, tables and Unicode mock · default             17 · 0.0%
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/nexus-selection.nElF9H/workspace
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

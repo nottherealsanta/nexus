@@ -1,0 +1,40 @@
+  ◧      [Sessions] [Files] [Git] Rich text reply                                                                     □
+     │                            · Rich text reply ×                                                              +  ⋯
+▏2   │ + New session
+▏ W  │ ⌕ Search sessions ctrl+k   i 2 other sessions waiting for input                                              go
+▏  3 │ ▣ Show archived            │  Show rich text.                                                    #1 · 10:40 PM
+     │──────────────────────────  │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 0 lines of this turn above
+     │ ◆ Waiting question    8m      ──────────────────
+     │
+     │                               Lists and emphasis
+     │ ◆ Waiting approval    8m
+     │                               1. bold, italic, struck,  inline code
+     │
+     │▏  Rich text reply     8m      │ A block quote
+     │▏
+     │                               ┌───────┬─────────┐
+     │   Streaming and tools 8m      │ tool  │ mutates │
+     │                               ├───────┼─────────┤
+     │                               │ read  │ no      │
+     │   Hello               8m      ├───────┼─────────┤
+     │                               │ write │ yes     │
+     │                               └───────┴─────────┘
+     │
+     │                                 ╭─ python
+     │                                 │ def fib(n): return n if n < 2 else fib(n-1)+fib(n-2)
+     │                             ▌  /model             Change model
+     │                                /manager-session   Open Manager session
+     │                                /manager-stop      Stop the Manager · No Manager call is running.
+     │                                /agent             Change agent
+     │                                /archive           Archive session
+     │                                /btw               Ask a side question · Not available yet.
+     │                                /cd                Change session directory
+     │                                /close             Close tab
+     │                                ↑↓ move · tab accept · esc close                                       1 of 10
+  +  │
+     │                               /mo
+     │
+     │                               Build · Markdown, code, tables and Unicode mock · default             17 · 0.0%
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/nexus-selection.nElF9H/workspace
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

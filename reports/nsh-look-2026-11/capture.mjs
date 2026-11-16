@@ -1,10 +1,11 @@
-// usage: node capture.mjs <scratch home> <port> <label>   (label: before|after); writes nsh-<w>-<scheme>-<surface>-<label>.png
+// usage: node capture.mjs <scratch home> <port> <label> [tag]
+//   label: before|after; writes nsh-<w>-<scheme>-<surface>[-<tag>]-<label>.png
 import { chromium } from "../../nexus-nsh/node_modules/playwright/index.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const [home, port, label] = process.argv.slice(2);
-if (!home?.startsWith("/tmp/nexus-look.")) throw new Error("Pass the scratch home");
+const [home, port, label, tag] = process.argv.slice(2);
+if (!home?.startsWith("/tmp/nexus-")) throw new Error("Pass the scratch home");
 const ids = JSON.parse(await fs.readFile(path.join(home, "ids.json"), "utf8"));
 const out = path.dirname(new URL(import.meta.url).pathname);
 const browser = await chromium.launch();
@@ -13,7 +14,7 @@ try {
     const ctx = await browser.newContext({ viewport: { width, height: width === 1024 ? 768 : 900 }, colorScheme: scheme });
     const p = await ctx.newPage();
     p.on("pageerror", (e) => console.log("page error:", e.message));
-    const shot = (name) => p.screenshot({ path: path.join(out, `nsh-${width}-${scheme}-${name}-${label}.png`) });
+    const shot = (name) => p.screenshot({ path: path.join(out, `nsh-${width}-${scheme}-${name}${tag ? `-${tag}` : ""}-${label}.png`) });
     await p.goto(`http://127.0.0.1:${port}`);
     await p.locator('[data-testid="app"]').waitFor({ timeout: 15000 });
     for (const [name, key] of [["tools", "rich"], ["text", "text"], ["question", "question"], ["approval", "approval"]]) {
