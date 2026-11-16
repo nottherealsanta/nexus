@@ -137,7 +137,7 @@ def report(job: Any, args: dict[str, Any]) -> str:
     status = job.status
     header = f"job {job.id} · {status}"
     if job.exit_code is not None:
-        header += f" · exit code {job.exit_code}"
+        header += f" · exit code {job.exit_code}{job.hidden}"
     if job.timeout is not None:
         header += f" · timeout {job.timeout:g}s"
     header += f" · {job.json()['duration_s']:.1f}s · {len(output)} chars"
@@ -163,7 +163,7 @@ def killed(job: Any) -> str:
     if job.status == "running":  # the process was signalled, but its reader has not finished yet
         return f"stopping job {job.id} (pid {job.process.pid}); its status will become 'killed'"
     return (f"job {job.id} · {job.status}"
-            + (f" · exit code {job.exit_code}" if job.exit_code is not None else "")
+            + (f" · exit code {job.exit_code}{job.hidden}" if job.exit_code is not None else "")
             + f"\ncommand: {clip(job.command, 500)}")
 
 

@@ -84,7 +84,7 @@ Some measurements use 7 or 14 days where two days were too few. No live daemon, 
 - The one poisoned session (`ses_1a1cd54815b36cee45b`) stays as it is: its dangling calls are already followed by a user
   message, and repairing that would rewrite history. Start a new session from it if needed.
 - Plan 34's items (fallback scope, live-catalog validation, waiting on network errors) belong there.
-- Background-job pipeline status (D) waits for the concurrent `bash_jobs.py` work.
+- Background-job pipeline status (D): **landed 2026-11-16** (`bash_jobs.py` `_read_pipestatus`; shown in `bash_output`, the finish notice and the job JSON; tests in `test_bash_jobs.py`).
 
 ## Measure again
 

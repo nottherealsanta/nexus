@@ -507,7 +507,10 @@ Run a command with `/bin/bash -c` in the workspace.
   a reader such as `head` closing early) is not reported. When bash itself printed
   `/bin/bash: X: command not found` anywhere, the status adds
   `· command not found: X`. The exit code itself is never changed; there is no
-  `pipefail`. Background jobs do not have this yet.
+  `pipefail`. Background jobs have it too (2026-11-16): the same trap and file, read when the job
+  ends with exit code 0 (a killed or timed-out job gets no note). The note shows in `bash_output`
+  (`job … · done · exit code 0 · pipeline exit codes 1 0`), in the finish notice and as
+  `hidden_failures` in the job's JSON.
 * Each call starts in the workspace; a `cd` does not carry over. The
   description says not to `cd` to the workspace itself (a third of calls did,
   2026-11) and not to use `timeout`, which macOS lacks.

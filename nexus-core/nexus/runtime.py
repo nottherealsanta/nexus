@@ -2466,7 +2466,7 @@ class Runtime:
     def _job_notice(job: Job) -> str:
         head = f"→ Background Shell Done: {clip(repr(job.command), 500)}\njob {job.id} · {job.status}"
         if job.exit_code is not None:
-            head += f" · exit code {job.exit_code}"
+            head += f" · exit code {job.exit_code}{job.hidden}"
         if job.dropped:
             head += f" · {job.dropped} chars dropped"
         output = job.output[-NOTICE_CHARS:]

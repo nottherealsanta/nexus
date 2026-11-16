@@ -50,6 +50,63 @@ async def test_foreground_bash_reports_failures_a_pipeline_hides(tmp_path):
     assert not list(tmp_path.iterdir())  # nothing left in the workspace
 
 
+async def test_background_job_reports_failures_a_pipeline_hides(tmp_path):
+    from nexus.runtime import Runtime
+
+    jobs = Jobs()
+    finished: list[Job] = []
+
+    async def run(command: str) -> Job:
+        job = await jobs.start(session_id="s", root="r", command=command, directory=tmp_path, timeout=None,
+                               on_finish=finished.append)
+        await asyncio.wait_for(asyncio.shield(job.task), 5)
+        return job
+
+    try:
+        hidden = await run("printf 'x\\n' | grep zzz | cat")  # grep fails in the middle; the job still exits 0
+        assert hidden.exit_code == 0 and hidden.hidden == " · pipeline exit codes 0 1 0"
+        assert "exit code 0 · pipeline exit codes 0 1 0" in report(hidden, {})
+        assert hidden.json()["hidden_failures"] == "pipeline exit codes 0 1 0"
+        assert "exit code 0 · pipeline exit codes 0 1 0" in Runtime._job_notice(hidden)
+        missing = await run("nexus-no-such-cmd --check 2>&1 | tail -3")
+        assert missing.hidden.startswith(" · pipeline exit codes 127 0 · command not found: nexus-no-such-cmd")
+        # Plain cases stay plain: SIGPIPE from an early-closing reader, a single command, a real failure.
+        assert (await run("yes | head -1")).hidden == ""
+        assert (await run("true")).hidden == ""
+        failed = await run("false | true; exit 3")
+        assert failed.exit_code == 3 and failed.hidden == "" and "pipeline" not in report(failed, {})
+        assert "hidden_failures" not in failed.json()
+        # The shell's own error text and line numbers are unchanged by the trap, and nothing is left behind.
+        script = "echo a\necho b\nnexus-no-such-cmd"
+        plain = (await asyncio.to_thread(subprocess.run, ["/bin/bash", "-c", script], check=False,
+                                         capture_output=True, text=True, cwd=tmp_path)).stderr
+        assert (await run(script)).output.endswith(plain)
+        assert not list(tmp_path.iterdir())
+        assert all(job.status_file is None for job in finished)
+    finally:
+        await jobs.shutdown()
+
+
+async def test_killed_and_timed_out_jobs_do_not_leave_a_status_file_or_a_hidden_note(tmp_path):
+    import glob
+    import tempfile
+
+    before = set(glob.glob(f"{tempfile.gettempdir()}/nexus-pipestatus-*"))
+    jobs = Jobs()
+    try:
+        slow = await jobs.start(session_id="s", root="r", command="sleep 30 | cat", directory=tmp_path,
+                                timeout=0.2, on_finish=lambda _: None)
+        await asyncio.wait_for(asyncio.shield(slow.task), 5)
+        killed = await jobs.start(session_id="s", root="r", command="sleep 30 | cat", directory=tmp_path,
+                                  timeout=None, on_finish=lambda _: None)
+        await jobs.kill(killed.id, root="r")
+        await asyncio.wait_for(asyncio.shield(killed.task), 5)
+        assert slow.hidden == "" and killed.hidden == ""
+    finally:
+        await jobs.shutdown()
+    assert set(glob.glob(f"{tempfile.gettempdir()}/nexus-pipestatus-*")) == before
+
+
 async def test_job_output_finish_timeout_kill_and_tree_scope(tmp_path):
     jobs = Jobs()
     finished: list[Job] = []

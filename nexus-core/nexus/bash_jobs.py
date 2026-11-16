@@ -18,6 +18,7 @@ import codecs
 import contextlib
 import os
 import signal
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from typing import Any
 from . import cargo_env
 from .store import new_id
 from .tools.base import ToolError
+from .tools.bash import PIPESTATUS_TRAP, hidden_failures
 
 MAX_LIVE = 16  # running at once
 MAX_JOBS = 64  # running + retained for output
@@ -100,6 +102,10 @@ class Job:
     killed: bool = False
     user_stopped: bool = False  # stopped from a client: the notice must not wake the model
     error: str | None = None
+    # A clean exit that hides a failing stage of the command's last pipeline (`cmd 2>&1 | tail`), as the
+    # foreground tool reports it (plan 44): " · pipeline exit codes 1 0".
+    hidden: str = ""
+    status_file: str | None = None
     task: asyncio.Task[None] | None = None
     watchdog: asyncio.Task[None] | None = None
     silent: bool = False  # no finish notice (session/project deletion, daemon shutdown)
@@ -139,6 +145,8 @@ class Job:
                 "timeout": self.timeout, "output_chars": self.size, "dropped_chars": self.dropped}
         if self.error:
             data["error"] = self.error
+        if self.hidden:
+            data["hidden_failures"] = self.hidden.removeprefix(" · ")
         if self.turn_id:
             data["turn_id"] = self.turn_id
         if self.tool_call_id:
@@ -188,20 +196,32 @@ class Jobs:
         if sum(1 for job in self.items.values() if job.finished is None) >= MAX_LIVE:
             raise ToolError(f"live background bash job limit ({MAX_LIVE}) reached; kill one first")
         self._trim()
+        fd, status_file = tempfile.mkstemp(prefix="nexus-pipestatus-")
+        os.close(fd)
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-            "/bin/bash", "-c", command, cwd=directory, env=cargo_env.process_env(directory), stdin=asyncio.subprocess.DEVNULL,
+            # Same line as the command, so bash's "line N" in error messages is unchanged (as in the foreground tool).
+            "/bin/bash", "-c", PIPESTATUS_TRAP + command, cwd=directory,
+            env={**os.environ, **cargo_env.extra_env(directory), "NEXUS_PIPESTATUS_FILE": status_file},
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True,
         ))
         try:
             process = await asyncio.shield(spawn)
         except asyncio.CancelledError:
             # The launch was cancelled but the process may exist; do not leave it running.
+            with contextlib.suppress(OSError):
+                os.unlink(status_file)
             process = await spawn
             kill_process(process)
             await process.communicate()
             raise
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(status_file)
+            raise
         job = Job(new_id("job"), session_id, root, command, str(directory), process, time.time(), timeout,
                   turn_id=turn_id, tool_call_id=tool_call_id)
+        job.status_file = status_file
         self.items[job.id] = job
         job.task = asyncio.create_task(self._run(job, on_finish))
         if timeout is not None:
@@ -238,10 +258,27 @@ class Jobs:
             with contextlib.suppress(Exception):
                 await job.process.wait()
             job.exit_code = job.process.returncode
+            await self._read_pipestatus(job)
             job.finished = time.time()
             if not job.silent and not self.closing:
                 with contextlib.suppress(Exception):
                     on_finish(job)
+
+    @staticmethod
+    async def _read_pipestatus(job: Job) -> None:
+        """Read the last pipeline's exit codes the shell's EXIT trap wrote, and keep the file out of the workspace's way."""
+        path, job.status_file = job.status_file, None
+        if path is None:
+            return
+        try:
+            if job.exit_code == 0 and not job.killed and not job.timed_out:
+                text = await asyncio.to_thread(Path(path).read_text, encoding="utf-8", errors="replace")
+                job.hidden = hidden_failures(text, job.output)
+        except OSError:
+            pass
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
     async def kill(self, job_id: str, *, root: str | None = None, user: bool = False) -> Job:
         job = self.get(job_id, root=root)
