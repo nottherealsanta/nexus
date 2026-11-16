@@ -39,6 +39,8 @@ and Muted / Unmuted (the two buttons below). Recorded in [decisions.md](decision
   NSH `manager.test.tsx` mute case. Not verified: real microphone mute against the service, phone screenshots, TUI hardware.
 - [x] Tests: TUI `indicator_is_still_unless_the_voice_is_connected`, indicator unit tests (still/muted never drift,
   colour per speaker); NSH `manager.test.tsx` "indicator states", `manager-cards.test.tsx` scrim cut-out.
-- [ ] Screenshots of the four states (connected speaking/listening, muted, disconnected) in both clients, and a
-  check that NSH's measured indicator box is window-relative on every target (only the cut-out's presence is tested).
+- [x] Screenshots (2026-11-16, `reports/28-manager-indicator/`): TUI all four states in dark and light; NSH listening and
+  disconnected (speaking and muted are covered by unit tests, the dev pref cannot hold them). **Finding:** NSH's `onLayout`
+  origin is parent-relative on web, so the scrim hole was cut in the wrong place; it is now rebuilt in window space from
+  sizes (`windowSpaceBox`) with a full-scrim fallback, and tested.
 - [x] Docs: `docs/manager.md`, both READMEs, `interface/manifest.toml`, `interface/design-language.md`, decisions.

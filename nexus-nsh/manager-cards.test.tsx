@@ -2,6 +2,7 @@
 // drawn by the real app. A card is shown through the dev preview setting (inert unless it is set), so no
 // Core or microphone is involved; then keys, clicks and the zero-idle-cost rule are checked on the same app.
 import { describe, expect, open, test } from "nsh/test";
+import { windowSpaceBox } from "./src/ui/manager/stage";
 import scenarios from "../interface/scenarios/manager-cards.json";
 import dropdownScenario from "../interface/scenarios/manager-dropdown.json";
 
@@ -73,9 +74,20 @@ describe("manager keys and clicks", () => {
   test("the open panel's scrim leaves the header indicator undimmed", async () => {
     const app = await withCard(board);
     await app.waitFor("id:manager-indicator");
-    await app.wait(100);
     // The scrim is cut around the indicator's measured box (a full-window scrim is the fallback).
-    expect(app.count("id:manager-backdrop-hole")).toBe(1);
+    await app.waitUntil(() => app.count("id:manager-backdrop-hole") === 1);
+  });
+
+  test("the scrim hole is rebuilt in window space from sizes, whatever origin the target reports", () => {
+    const win = { width: 1280, height: 800 };
+    // Web: the origin is relative to the right-hand group (152 wide: 8 padding, 100 indicator, 4 gap, 32 toggle).
+    expect(windowSpaceBox({ x: 8, y: 6, w: 100, h: 20 }, win, 152, 44)).toEqual({ x: 1136, y: 12, w: 100, h: 20 });
+    // A host that reports window space already: kept.
+    expect(windowSpaceBox({ x: 1136, y: 12, w: 100, h: 20 }, win, 152, 44)).toEqual({ x: 1136, y: 12, w: 100, h: 20 });
+    // Unmeasured group, or a box outside the header band: a full scrim.
+    expect(windowSpaceBox({ x: 8, y: 6, w: 100, h: 20 }, win, 0, 44)).toBeNull();
+    expect(windowSpaceBox({ x: 1136, y: 400, w: 100, h: 20 }, win, 152, 44)).toBeNull();
+    expect(windowSpaceBox(null, win, 152, 44)).toBeNull();
   });
 
   test("cards appear over a dimmed app and Escape closes only the dropdown", async () => {

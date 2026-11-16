@@ -1,0 +1,20 @@
+  ◧      [Sessions] [Files] [Git] New session                                                             ⣂⡤⠴⠦⠭⠔⣦⣤⡐⠮  □
+     │                                                                                                                ⋯
+     │ + New session                              Manager
+     │ ⌕ Search sessions ctrl+k                   Connecting…
+     │ ▣ Show archived
+     │──────────────────────────
+     │  No project yet. Add                        Tell the Manager…
+     │  one with the + on the
+     │  project rail.
+     │                                            Disconnect  Mute                            Open Manager session
+     │
+     │
+     │
+  +  │
+     │                               Message to start a new session
+     │
+     │                               Build · … · default                                                           0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

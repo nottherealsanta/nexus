@@ -68,6 +68,30 @@ export function ManagerWave() {
 /** Where the header indicator sits in the window: the open panel's scrim leaves this box undimmed (the wave stays at full strength). */
 export const indicatorBox = signal<{ x: number; y: number; w: number; h: number } | null>(null);
 
+/** The header's right-hand group (the indicator's parent), measured by its size only: sizes are the same on every target. */
+export const headerRightWidth = signal(0);
+
+/**
+ * The indicator's box in window space. `onLayout` origins are relative to the parent on the web target (and may be
+ * window-relative on others), so the box is rebuilt from sizes: the right-hand header group ends at the window's right
+ * edge and the header centres its items, so a parent-relative origin maps to
+ * `x = window width - group width + origin x`, `y = header centre - height / 2`. An origin that does not fit inside the
+ * group is taken as already window-relative. Outside the header band the answer is null (a full scrim).
+ */
+export function windowSpaceBox(
+  raw: { x: number; y: number; w: number; h: number } | null,
+  win: { width: number; height: number }, group: number, headerHeight: number,
+) {
+  if (!raw || !(group > 0)) return null;
+  const relative = raw.x + raw.w <= group + 1;
+  const box = relative
+    ? { x: win.width - group + raw.x, y: headerHeight / 2 - raw.h / 2, w: raw.w, h: raw.h }
+    : raw;
+  const inBand = box.y >= 0 && box.y + box.h <= headerHeight + 1;
+  const inWindow = box.x >= 0 && box.x + box.w <= win.width + 1;
+  return inBand && inWindow ? box : null;
+}
+
 export function ManagerHeaderIndicator() {
   const hovered = signal(false);
   const stopping = () => liveVoice() && hovered();
@@ -159,11 +183,15 @@ export function ManagerTab() {
 /** The scrim of an open panel: the whole window except the header indicator's box, so the wave is never dimmed. */
 function Backdrop() {
   const dim = (style: Record<string, number | string>, testID?: string) => <View class={`absolute ${DIM}`} style={{ pointerEvents: "none", ...style }} accessible={false} testID={testID} />;
-  const boxed = () => indicatorBox() !== null && managerHeaderIndicatorVisible();
+  const box = signal<ReturnType<typeof windowSpaceBox>>(null);
+  // An effect, not a bare read: the hole follows the header's measured sizes as they arrive and as the window changes.
+  effect(() => { box.set(windowSpaceBox(indicatorBox(), windowSize(), headerRightWidth(), isNarrow() ? 56 : 44)); });
+  const usable = () => box();
+  const boxed = () => usable() !== null && managerHeaderIndicatorVisible();
   return <>
     <If when={!boxed()}>{() => dim({ left: 0, right: 0, top: 0, bottom: 0 }, "manager-backdrop")}</If>
     <If when={boxed()}>{() => {
-      const b = indicatorBox()!;
+      const b = usable()!;
       return <>
         {dim({ left: 0, right: 0, top: 0, height: b.y }, "manager-backdrop")}
         {dim({ left: 0, right: 0, top: b.y + b.h, bottom: 0 })}

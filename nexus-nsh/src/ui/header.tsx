@@ -7,7 +7,7 @@ import { byId, keyLabel, run, rightIsOpen, rightWidthHint, waitItems } from "../
 import { attention as attentionGlyph } from "../gen/theme";
 import { agentCatalog, centre, config, connection, coreUrl, drawer, isNarrow, leftOpen, m, model, modelCatalog, native, railShown, unread, viewed, rootOf, width } from "../store";
 import { agentLabel } from "../agent-color";
-import { ManagerHeaderIndicator, managerHeaderIndicatorVisible } from "./manager/stage";
+import { ManagerHeaderIndicator, headerRightWidth, managerHeaderIndicatorVisible } from "./manager/stage";
 import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
@@ -186,7 +186,8 @@ export function Header() {
           </View>
         </View>
       </View>
-      <View class="flex-row items-center justify-end gap-1 shrink-0 px-2" style={rightDocked() ? { width: rightSidebarWidth(width()) } : {}}>
+      <View class="flex-row items-center justify-end gap-1 shrink-0 px-2" style={rightDocked() ? { width: rightSidebarWidth(width()) } : {}}
+        onLayout={(b: any) => headerRightWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         <If when={native && platform.os !== "macos"}>
           <Button onPress={() => coreEditing.set(true)} accessibilityLabel={`Core connection, ${coreUrl() ?? ""}`} testID="core-connect"
             class={`shrink-0 items-center justify-center rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "h-7"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
