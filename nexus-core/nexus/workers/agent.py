@@ -51,10 +51,12 @@ def usage_event(value: dict | None) -> Usage | None:
 
 class ExternalAgent:
     def __init__(self, *, ref: str, workspace: Path, messages: list[Message], instructions: str,
-                 permission: str, effort: str | None, worker: dict | None = None):
+                 permission: str, effort: str | None, worker: dict | None = None,
+                 project: Path | None = None):
         self.pid, self.model = ref.split("/", 1)
         self.model_ref, self.workspace, self.messages = ref, workspace, messages
         self.instructions, self.reasoning_effort, self.permission = instructions, effort, permission
+        self.project = project
         self.provider = ExternalProvider(self.pid)
         self.worker = {**facts(self.pid), **(worker or {})}
         self.turn_id = ""
@@ -105,7 +107,7 @@ class ExternalAgent:
                                               policy=ClaudePolicy(self.worker["permission_mode"], self.reasoning_effort),
                                               instructions=self.instructions if not resume else "", resume=resume,
                                               previous_fingerprint=self.worker.get("policy_fingerprint"),
-                                              previous_transcript=self.worker.get("transcript_path"))
+                                              previous_transcript=self.worker.get("transcript_path"), project=self.project)
                 else:
                     worker = AntigravityWorker(executable)
                     assignment = prompt if resume or not self.instructions else "[Nexus assignment instructions]\n" + self.instructions + "\n\n[Assignment]\n" + prompt

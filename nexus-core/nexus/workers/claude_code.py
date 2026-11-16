@@ -142,6 +142,36 @@ def attention_for(terminal: str, prompt: str, replies: list[str]) -> str | None:
     return None
 
 
+def worktree_main(workspace: Path) -> Path | None:
+    """The main checkout of a linked git worktree, read from its `.git` file (no subprocess); None otherwise."""
+    marker = workspace / ".git"
+    try:
+        if not marker.is_file():
+            return None
+        line = marker.read_text(errors="replace").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    gitdir = Path(line.removeprefix("gitdir:").strip())
+    if not line.startswith("gitdir:") or gitdir.parent.name != "worktrees" or gitdir.parent.parent.name != ".git":
+        return None
+    return gitdir.parent.parent.parent
+
+
+def trust_target(workspace: Path, project: Path | None, home: Path) -> Path | None:
+    """The folder to pre-trust for a workspace of a Nexus project: the project, or the workspace if it is one of
+    its linked worktrees. Nothing for a workspace outside the project, and never a home or root directory."""
+    if project is None:
+        return None
+    project = project.resolve()
+    if workspace.is_relative_to(project):
+        target = project
+    elif (main := worktree_main(workspace)) is not None and main.resolve() == project:
+        target = workspace
+    else:
+        return None
+    return None if target in (home.resolve(), Path(target.anchor)) else target
+
+
 class ClaudeCodeWorker:
     def __init__(self, executable: str, *, state_dir: Path, config_dir: Path | None = None,
                  environ: Mapping[str, str] | None = None):
@@ -153,6 +183,47 @@ class ClaudeCodeWorker:
             self.env["CLAUDE_CONFIG_DIR"] = source["CLAUDE_CONFIG_DIR"]
         self.env.update(TERM="xterm-256color", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
         self.state_dir = state_dir
+
+    def global_config(self) -> Path:
+        base = self.env.get("CLAUDE_CONFIG_DIR")
+        return (Path(base) / ".claude.json") if base else Path(self.env.get("HOME", str(Path.home()))) / ".claude.json"
+
+    def ensure_trust(self, workspace: Path, project: Path | None) -> str | None:
+        """Record workspace trust for a folder of a Nexus project, the way the CLI's own dialog does
+        (`projects[path].hasTrustDialogAccepted` in its global config; the CLI documents this key). Returns a note
+        when Nexus wrote it. Never creates the file, never touches an unreadable one, and never trusts a folder
+        outside a registered project."""
+        target = trust_target(workspace, project, Path(self.env.get("HOME", str(Path.home()))))
+        path = self.global_config()
+        if target is None or not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            projects = data.get("projects") if isinstance(data, dict) else None
+            if not isinstance(projects, dict):
+                return None
+            for folder in (target, *target.parents):
+                entry = projects.get(str(folder))
+                if isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True:
+                    return None
+            entry = projects.get(str(target))
+            if entry is None:
+                entry = projects[str(target)] = {}
+            if not isinstance(entry, dict):
+                return None
+            entry["hasTrustDialogAccepted"] = True
+            temporary = path.with_name(f"{path.name}.nexus-{os.getpid()}.part")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IMODE(path.stat().st_mode))
+            try:
+                with os.fdopen(fd, "w") as out:
+                    json.dump(data, out, indent=2)
+                os.replace(temporary, path)
+            finally:
+                with suppress(OSError):
+                    temporary.unlink()
+        except (OSError, ValueError):
+            return None
+        return f"Nexus marked {target} trusted in Claude Code (a Nexus project folder) so its trust prompt does not block the run"
 
     async def preflight(self) -> str:
         if os.name != "posix":
@@ -180,7 +251,8 @@ class ClaudeCodeWorker:
 
     async def run(self, *, prompt: str, model: str, workspace: Path, policy: ClaudePolicy | None = None,
                   emit: Emit | None = None, resume: str | None = None, previous_fingerprint: str | None = None,
-                  previous_transcript: str | None = None, instructions: str = "") -> WorkerResult:
+                  previous_transcript: str | None = None, instructions: str = "",
+                  project: Path | None = None) -> WorkerResult:
         policy = policy or ClaudePolicy()
         workspace = workspace.resolve(strict=True)
         if not workspace.is_dir() or not _ID.fullmatch(model):
@@ -198,6 +270,8 @@ class ClaudeCodeWorker:
         reader = TranscriptReader(expected, session, offset=baseline)
         sidechains = SubagentReader(expected)
         notes: list[str] = []
+        if trusted := self.ensure_trust(workspace, project):
+            notes.append(trusted)
         replies: list[str] = []
         text = ""
         usage = None

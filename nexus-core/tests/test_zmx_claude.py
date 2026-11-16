@@ -343,3 +343,59 @@ async def test_external_agent_attaches_the_sidechain_to_the_agent_call_result(tm
     assert len(ends) == 1 and ends[0].result.raw == {"sidechain": {
         "agent_id": "x", "agent_type": "general-purpose", "description": "d", "finished": True, "clipped": False,
         "entries": [{"kind": "text", "text": "inner"}]}}
+
+
+def write_claude_config(home, projects):
+    path = home / ".claude.json"
+    path.write_text(json.dumps({"numStartups": 3, "projects": projects}))
+    return path
+
+
+async def test_nexus_project_folder_is_pre_trusted_and_disclosed(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    configure, workspace, home, _ = fake
+    path = write_claude_config(home, {"/elsewhere": {"hasTrustDialogAccepted": True}})
+    result, _ = await run(configure(), workspace, project=workspace)
+    data = json.loads(path.read_text())
+    assert data["numStartups"] == 3 and data["projects"]["/elsewhere"] == {"hasTrustDialogAccepted": True}
+    assert data["projects"][str(workspace.resolve())] == {"hasTrustDialogAccepted": True}
+    assert result.status == "completed" and any("marked" in n and "trusted" in n for n in result.notes)
+    assert not list(home.glob(".claude.json.*"))
+
+
+async def test_trust_is_not_written_outside_a_project_or_without_a_config(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    configure, workspace, home, _ = fake
+    worker = configure()
+    assert worker.ensure_trust(workspace, None) is None
+    assert worker.ensure_trust(workspace, home / "other") is None
+    assert not (home / ".claude.json").exists()
+    path = write_claude_config(home, {})
+    assert worker.ensure_trust(workspace, home / "other") is None and worker.ensure_trust(home, home) is None
+    assert json.loads(path.read_text())["projects"] == {}
+
+
+async def test_trust_leaves_already_trusted_and_broken_configs_alone(fake):
+    configure, workspace, home, _ = fake
+    worker = configure()
+    path = write_claude_config(home, {str(workspace.parent.resolve()): {"hasTrustDialogAccepted": True}})
+    before = path.read_text()
+    assert worker.ensure_trust(workspace, workspace) is None and path.read_text() == before
+    path.write_text("{not json")
+    assert worker.ensure_trust(workspace, workspace) is None and path.read_text() == "{not json"
+
+
+def test_linked_worktree_of_the_project_is_trusted_but_a_stranger_is_not(tmp_path):
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+    tree = tmp_path / "wt"
+    tree.mkdir()
+    (tree / ".git").write_text(f"gitdir: {main}/.git/worktrees/wt\n")
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    (stranger / ".git").write_text(f"gitdir: {tmp_path}/elsewhere/.git/worktrees/x\n")
+    home = tmp_path / "home"
+    assert claude_code.trust_target(tree, main, home) == tree
+    assert claude_code.trust_target(main / "sub", main, home) == main.resolve()
+    assert claude_code.trust_target(stranger, main, home) is None
+    assert claude_code.trust_target(home, home, home) is None

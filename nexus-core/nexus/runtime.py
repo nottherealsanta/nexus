@@ -2496,7 +2496,8 @@ class Runtime:
                 raise ValueError("ZMX is only available to ordinary child sessions, never roots or read-only forks")
             return ExternalAgent(ref=ref, workspace=Path(session.directory), messages=[m.message for m in self.store.messages(session.id)],
                                  instructions=spec["prompt"], permission=session.permission,
-                                 effort=self.resolve_effort(session, snapshot, ref)[0], worker=snapshot.get("worker"))
+                                 effort=self.resolve_effort(session, snapshot, ref)[0], worker=snapshot.get("worker"),
+                                 project=Path(self.project(session.project_id).path))
         provider, model = provider_for(ref)
         fallback_config = snapshot.get("model_fallbacks") or {}
         sequence = [fallback_config.get("primary"), *(fallback_config.get("models") or [])]

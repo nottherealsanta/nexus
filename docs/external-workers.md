@@ -8,6 +8,7 @@ The child's heading retains the ZMX label.
 
 It is **off by default**, **subagents only** (never a root session or the Manager), and Nexus **never answers a CLI
 prompt**: trust, sign-in and permission prompts end the turn as `needs_attention` with the command the user must run.
+The one exception is workspace trust for a folder of a Nexus project (see [Workspace trust](#workspace-trust)).
 Design, milestones and open questions: [plans/zmx-design.md](../plans/zmx-design.md), status in
 [plans/06-zmx.md](../plans/06-zmx.md).
 
@@ -128,6 +129,24 @@ CLI session id and transcript of a running turn; it is removed when the process 
 
 `nexus doctor` reports each switch (`off (no CLI probed)` while off) and, when on, the CLI path, version and required
 flags.
+
+## Workspace trust
+
+Claude Code asks "trust this folder?" once per directory and stores the answer as
+`projects[<dir>].hasTrustDialogAccepted` in its global config (`~/.claude.json`, or under `$CLAUDE_CONFIG_DIR`). The CLI
+has no flag for it: `-p` skips the dialog, but Nexus drives the interactive CLI. So before launching, Nexus records that
+key itself, and only when all of these hold:
+
+- the session's directory is inside a **registered Nexus project**, or is a linked git worktree of that project
+  (read from the worktree's `.git` file); the project folder is trusted, or the worktree folder itself;
+- no folder at or above it is already trusted;
+- the config file already exists and parses (Nexus never creates or repairs it);
+- the folder is not `$HOME` or `/`.
+
+The write is atomic (temporary file and rename, same mode) and adds nothing else. The child's notes record
+"Nexus marked <dir> trusted in Claude Code". Any other folder still ends `needs_attention`; Nexus does not answer the
+dialog and never trusts a folder the user did not add as a project. Decision 2026-11-13 (user: auto-trust Nexus projects
+and their worktrees; ledger row in [porting-ledger.md](porting-ledger.md)).
 
 ## Bounds and trust
 

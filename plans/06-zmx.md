@@ -63,6 +63,9 @@ Tests on 11-12: `test_zmx_workers.py`, `test_zmx_claude.py`, `test_zmx_runtime.p
   required") as designed, until the user runs `claude` there once; the first run proved this and I did not approve trust.
   Spend: about six short Haiku/Flash turns plus one direct agy probe. Not run: the Settings/clients against these
   sessions, parallel tools, quota comparison of `-p` vs interactive.
+- [x] **Auto-trust for Nexus project folders (2026-11-13).** Claude Code trust is pre-recorded for a registered
+  project folder or a linked worktree of one (`ClaudeCodeWorker.ensure_trust`); everything else still ends
+  `needs_attention`. Offline tests only; not run against the real CLI.
 - [x] **Claude's own subagents** read-only inside the calling tool's card (`306670ac` Core, `5dee5561` clients).
 - [~] **Inspector:** raw CLI entries show as wire events. Rebuilt requests depend on the unanswered M0 question.
 - [x] **M4 reliability** offline: recovery text, transcript tail after a crash, orphan records + `nexus workers clean`,
