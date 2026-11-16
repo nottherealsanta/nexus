@@ -15,6 +15,35 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.13.0](https://github.com/nottherealsanta/nexus/compare/v0.12.0...v0.13.0) (2026-11-16)
+
+
+### Features
+
+* **bash:** pipeline exit status for background jobs (plan 44) ([7ad8c66](https://github.com/nottherealsanta/nexus/commit/7ad8c661550120e9eb337c28fe192a48b35982ba))
+* **composer:** questions in the composer slot (plan 47), NSH/TUI look and docs ([2579f65](https://github.com/nottherealsanta/nexus/commit/2579f6557e1fba18f1f7267f60a7f1d13e6a92ab))
+* **core:** wait for the network instead of exhausting or falling back; fallbacks last one turn (plan 34) ([b1a434c](https://github.com/nottherealsanta/nexus/commit/b1a434c61e2aec29baf440a0b4b89ed869fcfa9d))
+* **nsh:** list-slots timeline rebuild and scroll fixture ([da302ff](https://github.com/nottherealsanta/nexus/commit/da302ffa2674bcff9fccc60b7558498a5671a5cc))
+* **nsh:** pending working row for /continue and sends, queued while Core is down, Retry after 10 s (plan 37) ([03dcdb4](https://github.com/nottherealsanta/nexus/commit/03dcdb44c7138abc7e18d2e00877bf22528eebb9))
+* **sidebar:** worktree header only for two or more sessions, in both clients (plan 39) ([8cddc70](https://github.com/nottherealsanta/nexus/commit/8cddc70624a578636439948af62beecd5574d0f0))
+* **theme:** distinct selection and neutral focus tokens, with captures ([f2fabbb](https://github.com/nottherealsanta/nexus/commit/f2fabbb98002a39e73032f2fc0b9809c01508927))
+* **tui:** pending working row for /continue and sends, queued while Core is down, Retry after 10 s (plan 37); Core: existence check ([7508815](https://github.com/nottherealsanta/nexus/commit/7508815def6272e2cfd63644ffd041b1fc17bd2e))
+* **zmx:** pre-trust a Nexus project folder in Claude Code's config ([0496ef5](https://github.com/nottherealsanta/nexus/commit/0496ef562262b3a69653618e631eb0d81a433daa))
+
+
+### Bug fixes
+
+* **layout:** dropped tabs restore quietly; drop the unused restore string (plan 45) ([0f3a5c9](https://github.com/nottherealsanta/nexus/commit/0f3a5c9ab57d88868de3b9efe6d55e3eada33c0b))
+* **nsh:** correct pending turn types for release check ([8ca7eba](https://github.com/nottherealsanta/nexus/commit/8ca7eba6e6e7a8a60937b0d7aff020a043b2d53c))
+* **nsh:** Manager indicator scrim hole in window space; four-state captures (plan 28) ([2ce3f36](https://github.com/nottherealsanta/nexus/commit/2ce3f36e8182a2fef47c354b9be07b7f24511c6d))
+* **nsh:** mount the project MCP panel in the new-session view; drop the debug test ([abbdb84](https://github.com/nottherealsanta/nexus/commit/abbdb84e5be3308b67f9837d0d30f7a925171cfa))
+* **tabs:** remove superseded navigation.panel, toast dropped tabs on restore, headless input tests (plan 45) ([f026a8a](https://github.com/nottherealsanta/nexus/commit/f026a8a10038163d6f929dfe697aef452527ac86))
+* **tabs:** square tab corners (plan 45) ([90a59fd](https://github.com/nottherealsanta/nexus/commit/90a59fd99699bbed1342956e6f278024ab850728))
+* **tui:** effort and footer model agree with NSH for ZMX children; sync ZMX M0 boxes, confirm D5 (plan 06) ([cbfd356](https://github.com/nottherealsanta/nexus/commit/cbfd35678e713a10206c59017f5886e744b296c5))
+* **tui:** tolerate null strings in messages, report a failed message load, dump-frame waits for the opened session (plan 10); NSH inherited rail ([3ef0d21](https://github.com/nottherealsanta/nexus/commit/3ef0d219fa999d13510c90fe668736c4a3658220))
+* **ui:** pending row repaints on queue/cancel, plain text in NSH; plan 37 status and captures ([7888ede](https://github.com/nottherealsanta/nexus/commit/7888edeffacf1f3d028778c00303d0456e45635c))
+* **workers:** probe reads its default timeout at call time ([5fb8628](https://github.com/nottherealsanta/nexus/commit/5fb8628efcbc176083be779bcb0c1c6fb2854093))
+
 ## [0.12.0](https://github.com/nottherealsanta/nexus/compare/v0.11.0...v0.12.0) (2026-11-09)
 
 
