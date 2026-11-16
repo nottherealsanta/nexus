@@ -748,7 +748,6 @@ command = "app.open_inspector"
 "layout.unsaved.cancel" = "Cancel"
 "layout.terminal.split" = "New terminal"
 "layout.drop.cancelled" = "Drag cancelled."
-"layout.restore.dropped" = "Some tabs from your last layout are gone and were not restored."
 
 # --- Commands -----------------------------------------------------------------
 # `leader` is the Ctrl+X leader sequence old Nexus bound in the TUI. NSH's keymap

@@ -934,8 +934,7 @@ export const manifest = {
   "layout.unsaved.discard": "Discard",
   "layout.unsaved.cancel": "Cancel",
   "layout.terminal.split": "New terminal",
-  "layout.drop.cancelled": "Drag cancelled.",
-  "layout.restore.dropped": "Some tabs from your last layout are gone and were not restored."
+  "layout.drop.cancelled": "Drag cancelled."
  },
  "command": [
   {

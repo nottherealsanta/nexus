@@ -471,7 +471,6 @@ async function load(key: string) {
     : t.kind === "terminal" ? !terminalsKnown() || terminalItems().some((i) => i.id === t.id)
     : t.kind === "browser" ? false : true;
   let next = saved ? restore(saved, exists) : emptyLayout();
-  if (saved && allTabs(next).length < allTabs(saved).length) toast("info", uiText("layout.restore.dropped"));
   for (const t of carried) if (!allTabs(next).some((x) => tabKey(x) === tabKey(t))) next = addTab(next, t);
   loadedKey = key; everLoaded = true;
   lastRoot = null; lastIds = "";

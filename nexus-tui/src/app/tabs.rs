@@ -364,13 +364,9 @@ impl App {
         }
         let layout = match self.ui.groups.saved.get(&key).cloned() {
             Some(saved) => {
-                let (layout, dropped) = Layout::restore(saved, &|t| {
+                let (layout, _) = Layout::restore(saved, &|t| {
                     self.tab_exists(&project, worktree.as_deref(), t)
                 });
-                if dropped > 0 {
-                    let text = self.manifest.ui_text("layout.restore.dropped", &[]);
-                    self.toast(Level::Info, text);
-                }
                 layout
             }
             None => Layout::new(),
