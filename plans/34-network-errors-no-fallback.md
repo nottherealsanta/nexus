@@ -51,21 +51,21 @@ any response event (the loop only retries then).
 
 ## Plan
 
-- [ ] **Classify network failures** in one place (`retry.py`): `ProviderError` with `phase == "transport"` and no
+- [x] **Classify network failures** in one place (`retry.py`): `ProviderError` with `phase == "transport"` and no
   status, whose cause is an `httpx.TransportError`. That covers `ConnectError`, `ConnectTimeout`, `ReadError`,
   `ReadTimeout`, `WriteError`, `PoolTimeout` and `RemoteProtocolError`, which is everything seen on 11-11. Keep the
   exception name on the error (`network_kind`) rather than parsing the message text. Not network: any HTTP response
   (4xx, 5xx, 429), auth or credential errors, and malformed or ended streams. Ask the user: should 502/503/504 count as
   network? Default: no, because the connection itself worked.
-- [ ] **Wait instead of exhausting:** for a network failure, the retry loop drops `max_attempts` and `max_elapsed`
+- [x] **Wait instead of exhausting:** for a network failure, the retry loop drops `max_attempts` and `max_elapsed`
   and keeps retrying **the same model** with capped backoff (1 s, 2 s, 4 s … up to 30 s, with jitter) until it
   succeeds or the session is interrupted or cancelled. Interrupt stops the wait at once. Any non-network error
   during the wait goes back to the normal policy.
-- [ ] **No fallback on network errors:** in `loop.py` ~342 a network `ProviderError` never pops a fallback model.
+- [x] **No fallback on network errors:** in `loop.py` ~342 a network `ProviderError` never pops a fallback model.
   (After the change above it only ends by interrupt, but keep the guard explicit and tested.)
-- [ ] **Roots too:** a root session gets the same wait, because both roots failed on 11-11. A parent woken by a child
+- [x] **Roots too:** a root session gets the same wait, because both roots failed on 11-11. A parent woken by a child
   notice waits the same way. Ask the user to confirm; default yes.
-- [ ] **A fallback must not permanently change the session's model** (the 16:27 HTTP 400s). Check what
+- [x] **A fallback must not permanently change the session's model** (the 16:27 HTTP 400s). Check what
   `ModelFallback` writes to the session row and snapshot. Default: a fallback lasts for that turn only; the next
   turn or a resume starts on the primary model again. If the model has to stay switched for cache reasons, show it and
   let the user switch back. Ask the user which. Separately, `copilot/gpt-6.1-terra` returned `model_not_supported`,
@@ -81,10 +81,17 @@ any response event (the loop only retries then).
 - [ ] Parent `wait: true` / child-notice paths: a child that is waiting is still running, not failed. Make sure no
   parent-side timeout reports it as failed.
 - [ ] Later: on a connectivity change, retry at once instead of waiting out the backoff.
-- [ ] **Tests:** replay the 11-11 sequence with a fake provider raising `httpx.ConnectTimeout` / `ConnectError` /
+- [x] **Tests:** replay the 11-11 sequence with a fake provider raising `httpx.ConnectTimeout` / `ConnectError` /
   `ReadError` / `RemoteProtocolError` for longer than the old 60 s budget (fake clock). Expect no `ModelFallback`, no
   `retry_exhausted`, success on the same model once the fake recovers, and an unchanged session model. HTTP 500/401
   with fallbacks still falls back. Interrupt during the wait stops promptly. A partial stream followed by a network
   error is unchanged (no retry after response events). Covers both a root and a child.
-- [ ] **Docs:** `docs/loop.md` (retry and fallback), `docs/agents.md` (fallbacks), `docs/stream-events.md` (new phase),
+- [x] **Docs:** `docs/loop.md` (retry and fallback), `docs/agents.md` (fallbacks), `docs/stream-events.md` (new phase),
   `docs/api.md` if `retry_scheduled` changes; porting-ledger row.
+
+
+## Landed 2026-11-16 (still open)
+
+Core: `ProviderError.network_kind`, `is_network()`, unbounded capped jittered `network_delay` in `_stream_with_retry`, `RetryScheduled.phase = "waiting_network"`, no fallback on a network error, a fallback lasts one turn (the session row keeps its model), fallbacks missing from the cached catalog are dropped at child creation. Tests in `tests/test_retry.py` (fake-clock replay of the outage, HTTP 500/401 still fall back, interrupt stops the wait, partial stream unchanged) and `tests/test_children.py`. TUI and NSH status strip/notice read "Waiting for network · retrying in Ns". Docs and ledger row written.
+
+Still open: the wait is shown in the status strip only, not yet on the parent's child card or the Inspector Timing span; the strip shows the delay as sent (no live countdown); "retry at once on a connectivity change" (Later); the parent-side timeout path was read (the child wait has no timeout of its own, `runtime.py` ~3907) but has no dedicated test.
