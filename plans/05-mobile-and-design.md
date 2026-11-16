@@ -80,7 +80,11 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
   Recent Cores list. Clear "cannot reach (Local Network permission?)" error and Retry. This absorbs the Connect flow
   item in [09-backlog.md](09-backlog.md) 9.6.
   Partial 2026-11-12: manual connect shows two setup steps, LAN/Tailscale guidance, a trusted-network warning and
-  permission troubleshooting. Pairing, QR scanning and recent Cores are not implemented.
+  permission troubleshooting. **Corrected 2026-11-16 (the text above was stale):** pairing and recent Cores exist:
+  `nexus pair` prints the address, token and a terminal QR code (`nexus-core/nexus/cli.py`, `pair`); the Connect screen
+  parses `nexus://pair?url=&token=&name=` links and bare addresses (`parsePairing`, `nexus-nsh/src/mobile.ts`) and keeps
+  the five most recent Cores (`rememberCore`, `ui/mobile/connect.tsx`, `nexus.recent-cores`). **Still not implemented:**
+  the in-app QR scanner and the `nexus://` URL-scheme handler (the link is pasted); both need a device (carried over).
 
 Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device.
 
@@ -134,7 +138,9 @@ states, type rules, phone Sessions / conversation / Manager). Awaiting the user'
   modals, composer, prose, tool labels, turn footer). Monaspace only for code, diffs, shell commands and output, file
   paths and tool arguments, `@` mentions in the draft, the path strip, tree/braille glyphs and the wordmark. Today
   `font-mono` is spread across settings.tsx (12), composer.tsx (6), newsession.tsx (5), timeline/resources/
-  project-mcp/overlays (4 each) and others.
+  project-mcp/overlays (4 each) and others. **2026-11-16 re-count:** 14 uses remain in `src/ui`, all code-like (the
+  composer's path strips, shell output and commands in resources, the MCP file paths and commands, the inspector's lines,
+  the splash wordmark, the Connect screen's field, a footer marker); the interface text runs through `--font-ui`.
 - [ ] **One desktop type scale:** title 16/24, prose 15/24, body/UI 14/22, secondary 13/20, meta 12/16, section 11/16
   caps. Picker and palette rows are 14 px (the completion rows are 16 px today).
 - [ ] **Pickers on top:** the `@` file and slash completion floats as a layer over the timeline, anchored to the
