@@ -28,7 +28,7 @@ playing. Remove the progress bar: it never seems to move; it only ever shows `0%
 - [x] Reduced motion / animations off: static logo, straight cut (unchanged).
 - [x] Update the splash module docs, `interface/design-language.md` if it describes the bar, both READMEs; frame
   tests in TUI (`splash.rs` tests assert progress) and the NSH splash test.
-- [ ] (NOT VERIFIED) Verify: cold start with a stopped daemon in Ghostty and in NSH web; record a short capture.
+- [x] Verify: cold start with a stopped daemon, TUI (tmux frames) and NSH web (frames, GIF), slow line past 5 s, then the live screen (2026-11-16, `reports/26-launch-splash/`). Real Ghostty by hand: user checklist.
 
 ## Findings and decisions (2026-11-12)
 
@@ -53,3 +53,10 @@ playing. Remove the progress bar: it never seems to move; it only ever shows `0%
   startup to a live screen, **not** the animation, first frame or transition. The scratch daemon and host were stopped.
 - Still open: record and inspect the cold-start animation in Ghostty and NSH web, including a slow-start wait and
   the transition. The sweep's runtime cost has not been measured.
+
+## Verification (2026-11-16)
+
+- Cold start in scratch homes with Core delayed 8 s: both clients animate from the first frame, show `Starting Nexus Core…`
+  after 5 s and land on the live screen. Captures and a GIF in `reports/26-launch-splash/`.
+- NSH sweep cost measured: ~62 ms/s of extra main-thread time (~6% of a core) while waiting, no frame drops; left as is.
+- Not verified: real Ghostty (hand check on the user checklist).

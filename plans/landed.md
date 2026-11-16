@@ -221,3 +221,4 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
   covers it. Theme checks, NSH web tests and type check pass.
 
 - **Plan 10 visual check (2026-11-16).** The blank TUI fork child was a `--dump-frame` timing bug (waited for a snapshot, not the session history), not a decode error; decoding hardened and failures reported; NSH inherited block gets the TUI's rail; paired dark/light captures in `reports/10-fork/`. Observation item stays open.
+- **Plan 26 verified (2026-11-16).** Cold start recorded in both clients with a delayed scratch Core; sweep cost measured (~6% of one core while waiting, no dropped frames). `reports/26-launch-splash/`.

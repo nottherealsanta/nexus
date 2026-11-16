@@ -1,0 +1,32 @@
+  ◧      [Sessions] [Files] [Git] New session                                               ● 1             □
+     │                                                                                                   +  ⋯
+▏    │ + New session                                                     ▌ ✓ Project added                 ×
+▏ W  │ ⌕ Search sessions ctrl+k
+▏─── │ ▣ Show archived              System prompt ~2.1K
+     │──────────────────────────
+     │  No sessions yet. Type       AGENTS.md  unavailable or not read
+     │  in the composer to
+     │  start one.                  Tools [0]
+     │
+     │                              Skills [0]  none
+     │
+     │                              MCP [0]  none
+     │
+     │                              total  ~2,094 tok
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+     │
+  +  │
+     │                               Message to start a new session
+     │
+     │                               Build · … · default                                                 0
+  ⚙  │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                             /private/tmp/splash/ws
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
