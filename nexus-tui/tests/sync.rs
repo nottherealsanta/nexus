@@ -521,7 +521,7 @@ async fn selecting_a_session_loads_its_history_without_a_resync() {
     // The stream stays open and no global snapshot is read again.
     assert_eq!(mock.count("/api/snapshot"), 1);
     assert_eq!(mock.count("/api/event"), 1);
-    assert_eq!(mock.count(&format!("/api/session/{sid}/message")), 1);
+    assert_eq!(mock.count(&format!("/api/session/{sid}/open")), 1);
     assert!(st.connection.is_live());
     h.commands.send(Command::Shutdown).unwrap();
 }

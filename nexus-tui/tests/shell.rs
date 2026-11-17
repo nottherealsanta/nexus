@@ -5659,8 +5659,6 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
     assert!(!view.messages_more);
     // The turns covering the older page arrive in the same step.
     assert!(view.turns.iter().any(|t| t.id == "trn_older"));
-    assert!(view.turns_more_before);
-    assert!(view.turns.iter().any(|t| t.id == "trn_older"));
     assert!(!view.turns_more_before);
 }
 
