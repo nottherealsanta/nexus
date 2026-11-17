@@ -229,7 +229,7 @@ class Stream:
         try:
             last = self.after
             while last < self.head:
-                rows = self.store.replay(last, self.head, REPLAY_PAGE)
+                rows = await self.store.r.replay(last, self.head, REPLAY_PAGE)
                 if not rows:
                     break  # the remaining rows were deleted; nothing left below the head
                 self.replay_pages += 1

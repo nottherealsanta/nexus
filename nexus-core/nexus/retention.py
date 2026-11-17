@@ -126,11 +126,55 @@ class Retention:
         }
 
     def run_once(self) -> dict[str, Any]:
-        """Run one bounded, resumable maintenance pass; safe to call from tests."""
-        settings = self.settings
+        """Run one bounded, resumable maintenance pass on the calling thread; safe to call from tests."""
         started = time.monotonic()
+        extra = self._busy_sessions()
+        summary, deliveries = self._pass(extra)
+        return self._finish(summary, deliveries, started)
+
+    async def run_once_async(self) -> dict[str, Any]:
+        """The same pass with its SQLite work on the store's writer thread, so the loop keeps serving.
+
+        Loop-owned state (running turns, pending questions, the bus) is read and written here on the loop;
+        the thread only runs store calls, and the announcements it committed are delivered afterwards, in order.
+        """
+        started = time.monotonic()
+        extra = self._busy_sessions()
+        summary, deliveries = await self.runtime.store.w.run(lambda _store: self._pass(extra))
+        return self._finish(summary, deliveries, started)
+
+    def _busy_sessions(self) -> set[str]:
+        busy = {sid for sid in self.runtime.turns}
+        busy |= {request.session_id for request in self.runtime.questions.values()}
+        return busy
+
+    def _finish(self, summary: dict[str, Any], deliveries: list[dict[str, Any]], started: float) -> dict[str, Any]:
+        for event in deliveries:
+            self.runtime.bus.deliver_stored(event)
+        now = summary["at"]
+        settings = self.settings
+        wire, events = summary["wire"], summary["events"]
+        summary["elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
+        self.last_run = now
+        self.last_duration_ms = summary["elapsed_ms"]
+        self.last_summary = summary
+        announce = summary["worked"] or wire["over_budget"] or events["over_budget"]
+        if announce and (self.last_announce is None
+                         or now - self.last_announce >= settings.announce_seconds):
+            # A global record, so any resyncing client can see why the floor
+            # moved or a diagnostic payload became an explicit marker. It is
+            # rate-limited: maintenance must not create an endless stream of
+            # its own log events when a configured budget is impossible.
+            self.runtime.bus.publish("log.retention", summary)
+            self.last_announce = now
+        return summary
+
+    def _pass(self, extra_protected: set[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The store work of one pass. Touches no loop state; returns the summary and events to deliver."""
+        settings = self.settings
         now = time.time()
         store = self.runtime.store
+        deliveries: list[dict[str, Any]] = []
 
         indexes = store.ensure_payload_indexes(limit=1)
         migration = store.backfill_event_payloads(limit=min(500, settings.batch_size))
@@ -143,8 +187,7 @@ class Retention:
             limit=settings.batch_size,
         )
         protected = store.protected_sessions()
-        protected |= {sid for sid in self.runtime.turns}
-        protected |= {request.session_id for request in self.runtime.questions.values()}
+        protected |= extra_protected
         wire = store.expire_wire_payloads(
             now=now, byte_budget=settings.wire_bytes, protect_sessions=protected,
             batch_size=settings.batch_size)
@@ -164,7 +207,7 @@ class Retention:
             info = store.compact_session(row[0], now=now, idle_seconds=settings.session_idle_seconds,
                                          protect_sessions=protected, batch_size=settings.batch_size)
             if info:
-                self.runtime.bus.deliver_stored(info.pop("event"))
+                deliveries.append(info.pop("event"))
                 compacted.append(info)
 
         events = {"removed": 0, "floor": store.log_floor(), "head": store.log_head(),
@@ -209,26 +252,13 @@ class Retention:
             "worked": worked,
             "settings": asdict(settings),
         }
-        summary["elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
-        self.last_run = now
-        self.last_duration_ms = summary["elapsed_ms"]
-        self.last_summary = summary
-        announce = worked or wire["over_budget"] or events["over_budget"]
-        if announce and (self.last_announce is None
-                         or now - self.last_announce >= settings.announce_seconds):
-            # A global record, so any resyncing client can see why the floor
-            # moved or a diagnostic payload became an explicit marker. It is
-            # rate-limited: maintenance must not create an endless stream of
-            # its own log events when a configured budget is impossible.
-            self.runtime.bus.publish("log.retention", summary)
-            self.last_announce = now
-        return summary
+        return summary, deliveries
 
     async def run_forever(self) -> None:
         while True:
             try:
                 while True:
-                    summary = self.run_once()
+                    summary = await self.run_once_async()
                     self.last_error = None
                     if not summary["worked"]:
                         if not (summary["wire"]["over_budget"] or summary["events"]["over_budget"]):

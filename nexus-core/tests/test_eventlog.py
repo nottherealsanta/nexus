@@ -206,16 +206,16 @@ async def test_a_publication_during_replay_is_delivered_exactly_once(env, monkey
     head = store.log_head()
     monkeypatch.setattr(eventlog, "REPLAY_PAGE", 2)
 
-    original, calls = store.replay, 0
+    original, calls = store.r.replay, 0
 
-    def replay(after, upto, limit):
+    async def replay(after, upto, limit):
         nonlocal calls
         calls += 1
         if calls == 2:  # between two replay pages
             publish(rt, session.id, 99)  # commits with an id above the boundary
-        return original(after, upto, limit)
+        return await original(after, upto, limit)
 
-    monkeypatch.setattr(store, "replay", replay)
+    monkeypatch.setattr(store.r, "replay", replay)
     stream = Stream.open(store, rt.bus, after=start)
     assert stream.head == head
     events = await collect(stream, 6)
