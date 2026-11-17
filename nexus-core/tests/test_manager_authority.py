@@ -334,6 +334,7 @@ async def test_start_session_creates_a_session_labelled_via_the_manager(h):
     await h.say("start fix the dictation cue in nexus")
     sessions = h.store.sessions()
     assert len(sessions) == 1
+    await until(lambda: h.store.messages(sessions[0].id), what="the first message")  # the started turn stores it
     messages = h.store.messages(sessions[0].id)
     assert messages[0].message.parts[0].text == "fix the dictation cue" and messages[0].origin == "manager"
     api = (await h.client.get(f"/api/session/{sessions[0].id}/message")).json()
