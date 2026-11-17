@@ -1,4 +1,5 @@
-import { expect, open, test } from "nsh/test";
+import { expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { appendTranscript } from "./src/dictation-logic";
 import scenario from "../interface/scenarios/voice-transcript.json";
 

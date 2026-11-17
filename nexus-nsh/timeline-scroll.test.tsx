@@ -1,5 +1,6 @@
 // The timeline follows the end as the TUI does, and keeps measured rows across rebuilds.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { keepIdentity } from "./src/ui/keep-identity";
 import { followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "./src/scroll-follow";
 import { stickyUser, visibleRowKey } from "./src/ui/timeline";

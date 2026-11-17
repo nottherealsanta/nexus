@@ -1,6 +1,7 @@
 // The Void design's second pass: the composer's measured selector, the working row while
 // waiting, and a session row's one-line shape.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const project = { id: "prj_1", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };

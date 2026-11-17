@@ -1,5 +1,6 @@
 // Shared scenarios: `interface/scenarios/*.json`, which the TUI's `tests/scenarios.rs` also loads.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import activityGroup from "../interface/scenarios/activity-group.json";
 import collapsedPaste from "../interface/scenarios/collapsed-paste.json";
 import mermaid from "../interface/scenarios/mermaid.json";

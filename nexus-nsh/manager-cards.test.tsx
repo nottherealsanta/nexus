@@ -1,7 +1,8 @@
 // The Manager's cards (docs/manager-design.md 10.4): the shared scenarios in interface/scenarios/manager-cards.json,
 // drawn by the real app. A card is shown through the dev preview setting (inert unless it is set), so no
 // Core or microphone is involved; then keys, clicks and the zero-idle-cost rule are checked on the same app.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { windowSpaceBox } from "./src/ui/manager/stage";
 import scenarios from "../interface/scenarios/manager-cards.json";
 import dropdownScenario from "../interface/scenarios/manager-dropdown.json";
@@ -23,7 +24,7 @@ const network = {
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/session/ses_1/message*": { body: [] },
   "GET */api/session/ses_1/snapshot": { body: null },
-  "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
+  "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
   "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
   "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
   "GET */api/session/ses_1/input": { body: { held: false, inputs: [] } },

@@ -1,5 +1,6 @@
 // DESIGN_PLAN I8 (D14, D15): the waiting card, toasts, the banner, the jump pill and the full-text dialog.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { splitAlert } from "./src/store";
 import { approvalParts, clock } from "./src/ui/composer";
 import { detailOf } from "./src/ui/timeline";

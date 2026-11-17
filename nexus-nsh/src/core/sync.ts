@@ -1,37 +1,11 @@
 // Connection supervisor: handshake, snapshot, SSE with durable cursors, reconnect with backoff,
 // resync, daemon-restart detection. Mirrors nexus-tui/src/sync.rs.
 import { ApiError, Backoff, apiBase, eventStream, request, sleep } from "./transport";
-import { Compat, CoreEvent, Info, Snapshot, TurnPage, TurnSummary, checkCompat, parseApiVersion } from "./api";
+import { Compat, CoreEvent, Info, OpenBundle, Session, Snapshot, TurnPage, checkCompat, parseApiVersion } from "./api";
 import { Model } from "./reduce";
 
-/** `/turn` page size while loading a session's summaries (Core's maximum). */
-export const TURN_PAGE = 200;
 /** Messages a session opens with; `turn.load_older` reads this many more each time. */
 export const MESSAGE_PAGE = 200;
-/** Pages of summaries read per session open; older turns beyond them are announced, not loaded. */
-export const TURN_PAGES_MAX = 25;
-
-/**
- * Every turn summary of a session, newest page first and then `before=` pages to the oldest,
- * returned oldest first with the newest page's floor and ledger. A failed or malformed read
- * throws; the caller announces it.
- */
-export async function loadTurns(id: string, stillWanted: () => boolean = () => true): Promise<{ page: TurnPage; capped: boolean } | null> {
-  const first = await request<TurnPage>("GET", `/api/session/${id}/turn`, { query: { limit: TURN_PAGE } });
-  if (!first || !Array.isArray(first.turns)) throw new Error("Core returned no turn summaries");
-  let turns: TurnSummary[] = first.turns;
-  let more = !!first.more_before;
-  let pages = 1;
-  while (more && turns.length && pages < TURN_PAGES_MAX) {
-    if (!stillWanted()) return null;
-    const page = await request<TurnPage>("GET", `/api/session/${id}/turn`, { query: { before: turns[0].id, limit: TURN_PAGE } });
-    if (!page || !Array.isArray(page.turns)) throw new Error("Core returned no turn summaries");
-    turns = [...page.turns, ...turns];
-    more = !!page.more_before && page.turns.length > 0;
-    pages++;
-  }
-  return { page: { ...first, turns, more_before: more }, capped: more };
-}
 
 export type ConnectionState =
   | { kind: "starting" }
@@ -62,6 +36,10 @@ export interface SyncHost {
   /** `provider.login` (sign-in progress, device code) and `agents.changed`, for the Settings pages. */
   settingsEvent?(event: CoreEvent): void;
   contextChanged?(id: string): void;
+  /** The full session row that came with a history load (`GET …/open`). */
+  sessionLoaded?(id: string, row: Session): void;
+  /** A session's history was loaded: one `/open` request and how long it took (debug timing). */
+  historyLoaded?(id: string, info: { ms: number; open_ms: number; requests: number; messages: number; turns: number }): void;
   inputsChanged?(id: string): void;
   /** Global live-only notifications share the SSE cursor but never become session scratch. */
   globalEvent?(event: CoreEvent): void;
@@ -306,8 +284,8 @@ export class Sync {
   }
 
   /**
-   * Load the selected session's full history: every saved message, the frozen starting
-   * context and the turn summaries with the spend ledger (`GET …/turn`). The event log is
+   * Load the selected session's history in one request (`GET …/open`): the newest messages, the
+   * frozen starting context and exactly the turn summaries covering them, with the spend ledger. The event log is
    * not read: live events cover the running turn, summaries cover the rest.
    */
   async loadSelected(): Promise<void> {
@@ -335,22 +313,27 @@ export class Sync {
   /** Read a session's history into its (selected or cached) view while `wanted` holds. */
   private async loadView(id: string, wanted: () => boolean): Promise<void> {
     const m = this.host.model;
-    const [msgPage, starting, turns] = await Promise.all([
-      request<any>("GET", `/api/session/${id}/message`, { query: { limit: MESSAGE_PAGE } }),
-      request<any>("GET", `/api/session/${id}/snapshot`).catch(() => null),
-      loadTurns(id, wanted).then((r) => r, (e) => ({ error: String((e as Error)?.message ?? e) })),
-    ]);
-    if (!wanted() || turns === null) return;
-    // A page is `{messages, more}`; a plain list is the whole history.
-    const msgs: any[] = Array.isArray(msgPage) ? msgPage : msgPage.messages;
-    let gap: string | null = null;
-    if ("error" in turns) gap = `turn details failed to load (${turns.error}); tokens, models and timings are missing`;
-    else if (turns.capped) gap = `only the newest ${TURN_PAGE * TURN_PAGES_MAX} turns have details loaded`;
-    const page = "error" in turns ? null : turns.page;
+    const t0 = Date.now();
+    let b: OpenBundle;
+    try {
+      b = await request<OpenBundle>("GET", `/api/session/${id}/open`, { query: { limit: MESSAGE_PAGE } });
+      if (!b || !Array.isArray(b.messages) || !Array.isArray(b.turns)) throw new Error("Core returned no history");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) throw e; // the session is gone: the caller says so
+      if (!wanted()) return;
+      // A bundle that cannot be read must never leave the timeline silently blank: say why.
+      m.applyHistory({ sessionId: id, messages: [], turns: [], floor: null, usage: null, starting: null, turnsGap: `messages failed to load (${String((e as Error)?.message ?? e)})` });
+      this.host.changed();
+      return;
+    }
+    const openMs = Date.now() - t0;
+    if (!wanted()) return;
     m.applyHistory({
-      sessionId: id, messages: msgs, messagesMore: !Array.isArray(msgPage) && !!msgPage.more, starting, turnsGap: gap,
-      turns: page?.turns ?? [], floor: page?.floor ?? null, usage: page?.usage ?? null,
+      sessionId: id, messages: b.messages, messagesMore: !!b.messages_more, starting: b.starting, turnsGap: null,
+      turns: b.turns, turnsMore: !!b.turns_more_before, floor: b.floor ?? null, usage: b.usage ?? null,
     });
+    if (b.session) this.host.sessionLoaded?.(id, b.session);
+    this.host.historyLoaded?.(id, { ms: Date.now() - t0, open_ms: openMs, requests: 1, messages: b.messages.length, turns: b.turns.length });
     this.host.changed();
   }
 

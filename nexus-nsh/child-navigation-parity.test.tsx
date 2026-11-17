@@ -1,7 +1,8 @@
 // Child-session navigation parity with the TUI: subagents stay out of the root tab strip,
 // a viewed child keeps its root's tab and has one heading row (title plus metadata), and the
 // full-height rail goes back to the root. Child cards remain the way to open subagents.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { SESSION_BACK_CELLS, headingMeta, headingMetaRoom, sessionBackRailPx } from "./src/ui/header";
 import { centreContentPadding } from "./src/ui/centre";
 import { textCellPoints } from "./src/ui/geometry";
@@ -60,21 +61,21 @@ function network(options: {
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/turn*": { body: quiet },
     "GET */api/session/ses_1/input": { body: [] },
-    "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_1": { body: parent },
     "GET */api/session/ses_child/message*": { body: [] },
     "GET */api/session/ses_child/snapshot": { body: null },
     "GET */api/session/ses_child/turn*": { body: quiet },
     "GET */api/session/ses_child/input": { body: [] },
-    "GET */api/session/ses_child/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_child/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_child/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_child": { body: children[0] },
     "GET */api/session/ses_child2/message*": { body: [] },
     "GET */api/session/ses_child2/snapshot": { body: null },
     "GET */api/session/ses_child2/turn*": { body: quiet },
     "GET */api/session/ses_child2/input": { body: [] },
-    "GET */api/session/ses_child2/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_child2/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_child2/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_child2": { body: children[1] },
   };

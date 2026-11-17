@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Open bundle (11-17, plan 50 D).** `GET /api/session/{id}/open` (API 1.6) returns the session row, starting context, the newest 200 messages and exactly the turns covering them, so both clients open a session with one request instead of four plus up to nine turn pages; older messages page with their turns (`message?before=&turns=1`); `/context?summary=1` sends only the budget figures. New index `turn_session_seq`. Size and query-count budgets are tests (`tests/test_open_bundle.py`). The stored turn-summary read model is not done (plans/50).
+
 - **Performance timings (11-17).** Core times every request (`server-timing`, `x-nexus-trace` echo, slow-request log) and watches event-loop stalls, naming the requests in flight; `GET /api/debug/perf` reports it. The TUI logs slow requests (client vs Core time) and every history load (parallel phase vs sequential older turn pages) to `logs/tui-perf.jsonl`; `nexus perf` shows both. NSH is not instrumented yet. Core perf tests and the TUI suite pass; not yet measured on a real slow session open.
 
 - **NSH pending-turn typecheck (11-16, plan 37 follow-up).** Corrected the fixture network type and nullable event session ID; NSH check and five pending-turn tests pass. Timing measurements remain open.

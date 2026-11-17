@@ -273,8 +273,9 @@ as shared text rows or the shared PNG, with a clickable label to copy their
 source; unsupported diagrams show the source), tool-specific expansion (diffs, output
 caps, raw arguments/results), child cards, context notices, Manager decisions, and the
 frozen starting-context section. Selecting a session loads its stored history
-in the background while the event stream stays open: the newest messages, the
-starting-context snapshot and its turn summaries, fetched together. The event
+in the background while the event stream stays open, with one request
+(`GET /api/session/{id}/open`): the session row, the starting-context snapshot, the
+newest 200 messages and exactly the turn summaries covering them. The event
 log is not read. A select never resyncs (no global snapshot, no stream reopen).
 
 **Session views are cached.** The views of the last 8 sessions left behind stay
@@ -292,8 +293,9 @@ session. `--bench WxH` also prints `switch_away_ms`,
 `switch_back_first_frame_ms` and `switch_back_history_ms`.
 
 **Turn details come from turn summaries** (`GET /api/session/{id}/turn`, Core
-API 1.2; TURN_SUMMARY_PLAN.md). The TUI reads every page of them on open (200 a
-page, at most 10 pages) and keeps them in `SelectedView::turns`:
+API 1.2; TURN_SUMMARY_PLAN.md). Open brings the summaries covering the loaded messages (`/open`), older
+message pages bring theirs (`message?before=&turns=1`), and a reconnect catches up with `/turn?after=`.
+They live in `SelectedView::turns`:
 
 | Shown | From |
 | --- | --- |
@@ -309,7 +311,7 @@ timeline turn gathers every stored turn that starts inside it (continuations,
 notice turns). Usage Core does not know is shown as `usage unknown`, never as
 zero. Messages below `floor.seq` (pruned turns, or history from before turn
 records) have no summary: the row "the turns above have no recorded details"
-says so where they end. A failed `/turn` read is announced at the top.
+says so where they end; so does a session with over 500 turns in the loaded range. A failed open is announced at the top.
 
 Live events still arrive over SSE. The running turn's events are kept as
 scratch (`SelectedView::scratch`): deltas are folded into the streaming text,
@@ -397,7 +399,7 @@ lists sessions whose user messages match (Core's `/api/search`) after the title 
 the snippet in the hint column. `/search` opens the same switcher with the search field focused and
 empty, or prefilled by `/search <text>`; typing filters immediately. A
 session opens with its newest 200 messages; Enter on `older messages are not loaded` (or the
-palette's Load older turns) reads the page before the oldest. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
+palette's Load older turns) reads the page before the oldest, with the turns covering it. A running session loads every older page on its own, and pages already read stay cached across snapshot resyncs. The approval card offers `y` allow
 once, `a` allow for the session, `n` deny, `d` deny with the composer's text as the note.
 Choosing a model or agent for an existing session first asks `…/switch-cost` and confirms when
 the cache would be lost. `/usage` shows provider usage (`GET /api/usage`): every connected provider, with plan

@@ -1,4 +1,5 @@
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Task", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
 const queued = { id: "in_1", session_id: "ses_1", mode: "queue", parts: [{ type: "text", text: "follow up" }] };
@@ -16,7 +17,7 @@ const network = {
   "GET */api/mcp*": { body: { servers: [] } },
   "GET */api/session/ses_1/message*": { body: [] },
   "GET */api/session/ses_1/snapshot": { body: null },
-  "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
+  "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
   "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
   "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
   "GET */api/session/ses_1/input": { body: { held: true, inputs: [queued] } },

@@ -77,12 +77,20 @@ Why Python is enough for most of it, and where it is not:
 
 ### Phase 2 — Read paths by design (workstream D; API addition, both clients)
 
-- [ ] `GET /api/session/{id}/open`: one bounded bundle (session row, starting context, newest page of messages and the
-  turn summaries those messages reference, usage totals, pending waits). Replaces the TUI's four parallel requests and
-  up to nine sequential turn pages; NSH changes in the same change (AGENTS.md parity) and gets the TUI's timings.
-- [ ] Turn summaries as a read model, written when a turn step closes (R3).
-- [ ] Per-route payload budgets (R4); `/context` sends a summary on open and details on demand.
-- [ ] Visible changes (what loads when) get a porting-ledger row.
+- [x] `GET /api/session/{id}/open` (API 1.6, 11-17): one bounded bundle (session row, starting context, newest page of
+  messages and the turn summaries covering them, usage totals, pending waits). Replaces the TUI's four parallel requests and
+  up to nine sequential turn pages; NSH changed in the same change and logs the same timing with `debug.timing`.
+  Older history pages messages with their turns (`message?before=&turns=1`).
+- [ ] Turn summaries as a read model, written when a turn step closes (R3). **Left open:** a summary is assembled from
+  `turn`, `turn_request`, `turn_attempt` and `turn_tool`, written at about 25 sites in `store.py` (and the live partial
+  overlays in `runtime.py`); a stored JSON column needs invalidation at every one, plus pruning, startup recovery and the
+  backfill, and workstream B is rewriting those paths into the writer thread. After `/open`, reads are bounded (about 100
+  turns, three indexed queries, the new `turn_session_seq` index), so the read model is no longer the open bottleneck. Do it
+  after B lands, as a write-through in the writer, with a test that stored and assembled summaries are equal.
+- [x] Per-route payload budgets (R4) as tests on a 3,000-turn fixture built in the test (`/open`, older page, `/context?summary=1`)
+  and a statement-count test; `/context` sends a summary (`?summary=1`, a few bytes instead of ~522 KB) in both clients.
+  Core still builds the whole request body to estimate tokens when no measured figure exists; caching that is for Phase 1.
+- [x] Visible changes (what loads when) have a porting-ledger row.
 
 **Gate:** open p95 < 100 ms on the fixture, independent of history length; no route over budget.
 

@@ -1,4 +1,5 @@
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import terminalDock from "../interface/scenarios/terminal-dock.json";
 
 const session = {

@@ -1,5 +1,6 @@
 // A reasoning part is one `▸ Thought · preview` row (D07), never an activity group around a single Thought.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;

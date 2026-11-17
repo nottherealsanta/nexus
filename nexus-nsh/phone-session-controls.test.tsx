@@ -1,6 +1,7 @@
 // The phone client's routes for plans 29 and 30: `/search`, `/archive` and a question card.
 // Run without `--target` so the app runs in the phone idiom (390x844, platform "ios").
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import scenario from "../interface/scenarios/session-controls.json";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -34,13 +35,13 @@ function network(flags: Flags = {}) {
     "GET */api/mcp*": { body: { servers: [] } },
     "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
-    "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_1/input": { body: { held: false, inputs: [] } },
     "GET */api/session/ses_2/message*": { body: [] },
     "GET */api/session/ses_2/snapshot": { body: null },
-    "GET */api/session/ses_2/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_2/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_2/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_2/input": { body: { held: false, inputs: [] } },

@@ -1,6 +1,7 @@
 // Shift+Tab cycles the eligible agents in the composer: a draft's next session and a
 // viewed session (through Core's switch-cost check), skipping subagents where required.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = {
@@ -21,7 +22,7 @@ const core = {
   "GET */api/event*": { body: connected, headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
   "GET */api/config": { body: { revision: "test", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-  "GET */api/session/*/context": { body: { used: 0, window: null, exact: false } },
+  "GET */api/session/*/context*": { body: { used: 0, window: null, exact: false } },
   "GET */api/model/last*": { body: { model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [], problems: [] } },

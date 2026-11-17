@@ -1,7 +1,8 @@
 // Plan 45: the pointer gestures of the tab layout that only the headless input can drive (docs/layout.md):
 // Esc during a drag, Alt-drag copy and Mod/Ctrl+click open-to-the-side. `--target web` refuses `dragAndHold` and
 // `keyboard.down`, so this file runs headless (no `--target`) like the other input tests.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Refactor loader", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };

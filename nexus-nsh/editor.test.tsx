@@ -1,6 +1,7 @@
 import fileWatchScenario from "../interface/scenarios/file-watch.json";
 // PLAN K10: the built-in editor over a project file.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { fileRows } from "./src/file-tree";
 
 const sse = (...frames: string[]) => frames.join("");

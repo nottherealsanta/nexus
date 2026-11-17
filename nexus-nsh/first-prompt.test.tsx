@@ -31,9 +31,7 @@ describe("shared first prompt scenario", () => {
       const path = String(url).split("?")[0];
       if (init?.method === "POST" && path.endsWith("/api/session")) return new Promise<Response>((r) => { create = r; });
       if (path.endsWith("/prompt")) { posted = true; return reply({}); }
-      if (path.endsWith("/message")) return new Promise<Response>((r) => { history = r; });
-      if (path.endsWith("/ses_instant")) return reply(session);
-      if (path.endsWith("/turn")) return reply({ turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } });
+      if (path.endsWith("/open")) return new Promise<Response>((r) => { history = r; });
       return reply({});
     };
     try {
@@ -48,7 +46,11 @@ describe("shared first prompt scenario", () => {
       expect(posted).toBe(true);
       expect(pendingFirstPrompt()?.text).toBe(scenario.text);
       expect(model.selected!.messages.length).toBe(0);
-      history(reply([{ id: "msg_first", session_id: session.id, seq: 1, role: "user", parts: [{ type: "text", text: scenario.text }], created: 1 }]));
+      history(reply({
+        session, starting: null, messages_more: false, oldest_seq: 1, turns: [], turns_more_before: false, floor: null,
+        usage: { since: null, models: {} }, approvals: [], questions: [],
+        messages: [{ id: "msg_first", session_id: session.id, seq: 1, role: "user", parts: [{ type: "text", text: scenario.text }], created: 1 }],
+      }));
       expect(await sending).toBe(true);
       await tick();
       expect(pendingFirstPrompt()).toBe(null);

@@ -1,4 +1,5 @@
-import { expect, open, test } from "nsh/test";
+import { expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import scenario from "../interface/scenarios/resume-archived.json";
 
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Archived work", model: "scripted/m", permission: "allow", created: 1, updated: 2, agent: "build", parent_id: null, archived: 1, revision: 1, disabled_tools: "[]" };

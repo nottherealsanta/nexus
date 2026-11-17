@@ -1,5 +1,6 @@
 // PLAN K1-K3: the handoff summary card, `/handoff` and `/btw` in the composer.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -73,7 +74,7 @@ describe("Handoff and side questions (K1-K3)", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:handoff-open-original");
     await app.press("id:handoff-open-original");
-    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_0/message")));
+    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_0/open")));
     await app.waitUntil(() => app.count("id:msg-handoff") === 0);
     expect(app.texts().some((t) => t.includes("Original work"))).toBe(true);
   });
