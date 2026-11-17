@@ -417,6 +417,23 @@ reason, briefly, in the present tense; say "not verified" where it is not. A
 new module gets a mention in the doc for its area and in the layout above. Index
 new pages in [README.md](README.md).
 
+## Benchmarks (`nexus bench`)
+
+`nexus bench fixture --out PATH --scale small|large` writes a synthetic `nexus.db` through the real `Store` (real
+schema, triggers and indexes; nothing is read from any real database), a manifest `PATH.json` and a project tree
+`PATH.projects/` (project-0 holds the file tree for `@` search). It needs a scratch `$NEXUS10_HOME`. `small` takes
+about a second (7 MB); `large` takes about two minutes and makes a 1.1 GB DB (4,800 sessions, a 5,000-turn session,
+large tool outputs, 60,000 files), so check free disk first.
+
+`nexus bench run [--scale small|large | --fixture PATH] [--seconds N] [--no-maintenance] [--json]` runs the real app
+in-process on a copy of the fixture under a scratch `$NEXUS10_HOME` and `$HOME`, with the `mock` provider enabled for
+the bench process only and the usage poll disabled. An idle phase (polls only) is followed by a load phase: streaming
+`mock/stress` turns, TUI-style session opens, lists, `/context` on the big session, `/api/bash` and `/api/kernel`
+polls, and `@` search. It prints client-side p50/p95/max per route (queueing behind a blocked loop included),
+event-loop lateness from a 10 ms probe, Perf stalls and Core-side handler times. `--no-maintenance` turns retention
+off for stable baselines. Code: `nexus/bench/`; tests: `tests/test_bench.py` (small scale only). Baselines live in
+`plans/50-rust-core.md`.
+
 ## Offline database compaction
 
 `nexus db compact` is a read-only dry run. `nexus db compact --apply` requires the
