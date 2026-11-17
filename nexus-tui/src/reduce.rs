@@ -438,6 +438,29 @@ impl Model {
         view.messages_more = more;
     }
 
+    /// An older page (`turn.load_older`): its messages go before the loaded ones and the turn
+    /// summaries covering them join the held ones in the same step, so the timeline never shows
+    /// older messages without their details. A turn already held (one straddling the boundary, or
+    /// closed live since) is kept as it is; Core's ledger already counts every turn.
+    pub fn prepend_history(&mut self, session: &str, page: crate::api::OlderPage) {
+        self.seed_partials(session, &page.turns, &page.messages);
+        self.prepend_messages(session, page.messages, page.more);
+        let Some(view) = self.view_mut(session) else {
+            return;
+        };
+        for t in page.turns {
+            if view.turns.iter().any(|x| x.id == t.id) {
+                continue;
+            }
+            view.counted.insert(t.id.clone(), UsageLedger::of_turn(&t));
+            view.place(t);
+        }
+        view.turns_more_before = page.turns_more_before;
+        if page.floor.is_some() {
+            view.floor = page.floor;
+        }
+    }
+
     pub fn apply_history(&mut self, mut h: crate::api::History) {
         self.seed_partials(&h.session_id, &h.turns, &h.messages);
         if self.view_mut(&h.session_id).is_none() {
@@ -507,7 +530,9 @@ impl Model {
                 None => view.upsert_turn(t, now),
             }
         }
-        view.turns_more_before = h.more_before;
+        if !older_held {
+            view.turns_more_before = h.more_before;
+        }
         view.floor = h.floor;
         view.turns_error = h.turns_error;
     }

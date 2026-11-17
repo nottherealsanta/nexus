@@ -583,7 +583,7 @@ pub struct Done {
     /// Core's answer to `…/switch-cost`.
     pub switch_cost: Option<Value>,
     /// A page of older messages and whether more remain.
-    pub older: Option<(Vec<crate::api::Message>, bool)>,
+    pub older: Option<crate::api::OlderPage>,
     /// Core's search hits (`/api/search`).
     pub search: Option<Value>,
     /// `/api/skill/preview` result, shown by the app as a checklist or install.
@@ -1009,7 +1009,7 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::OlderMessages { session, before } => {
             done.older = Some(
-                api.messages_page(session, Some(*before), crate::sync::MESSAGE_PAGE)
+                api.older_history(session, *before, crate::sync::MESSAGE_PAGE)
                     .await
                     .map_err(e)?,
             );

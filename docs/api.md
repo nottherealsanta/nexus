@@ -6,6 +6,10 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 `/api/*` (opencode.ai/v2/docs/api), cut down to what exists. Code:
 `nexus-core/nexus/server.py`.
 
+API 1.6 adds `GET /api/session/{id}/open` (one bounded bundle to open a session), `turns=1` on
+message pages and `summary=1` on `/context`; see [Open a session](#open-a-session). Updated clients use them, so
+an older Core answers 404.
+
 API 1.5 adds request-local streaming checkpoints. `text_delta`, `reasoning_delta`,
 `tool_call_started` and `tool_args_delta` now have `id: null` and no SSE id/cursor.
 Their data (and `part_done`) carries `request_id`, request-local `seq` and
@@ -195,7 +199,8 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | POST | `/api/session/{id}/seen` | | 204; a client is showing the session. Publishes a live-only `session.seen` so every client clears its unread mark |
-| GET | `/api/session/{id}/message` | | `[Message]` in order |
+| GET | `/api/session/{id}/open` | `?limit=` (messages, 1..500, default 200) | One bounded bundle to open a session: `{session, starting, messages, messages_more, oldest_seq, turns, turns_more_before, floor, usage, approvals, questions}`; see [Open a session](#open-a-session) |
+| GET | `/api/session/{id}/message` | | `[Message]` in order; with `limit`/`before` a page ([Message paging](#message-paging-k6)); with `before` and `turns=1` the page plus the turns covering it |
 | GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more, floor, head, generation, history_truncated}`: the retained stored event log |
 | GET | `/api/session/{id}/turn` | `?after=<turn id>` or `?before=<turn id>`, `&limit=` (default 50, ≤ 200) | `{turns, more_before, more_after, floor, usage}`: turn summaries, oldest first, and the spend ledger; see [Turn summaries](#turn-summaries) |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
@@ -204,7 +209,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/session/{id}/btw` | child session id | `{session, head, inherited, calls, running, error, messages, partial, events}`: reconnect checkpoint for a side run. Messages exclude the inherited prefix; events are compact tool/nested-call progress. 400 for a non-btw session |
 | POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
 | POST | `/api/draft/context` | session-creation fields | the first request a new session would send, with nothing stored ([Configuration](#configuration-provider-login-and-context-budget)) |
-| GET | `/api/session/{id}/context` | | the provider request body plus `used`, `window`, `exact` context budget |
+| GET | `/api/session/{id}/context` | `?summary=1` | the provider request body plus `used`, `window`, `exact` context budget; with `summary` only `{used, window, exact}` (and `context_complete` for a ZMX child), a few bytes instead of the whole request (about 500 KB on a long session) |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
@@ -375,6 +380,45 @@ After every turn closes (completed, failed or interrupted) the daemon publishes
 a durable `turn.summary` event whose `data` is that turn's entry, before the
 `session.status` idle event. Startup recovery publishes one for each turn it
 closes. A client replaces its copy of that turn with it.
+
+### Open a session
+
+`GET /api/session/{id}/open` (since `api_version` 1.6) is the one request a client makes to show a session. It
+replaces the four parallel reads (`GET /api/session/{id}`, `…/snapshot`, `…/message?limit=`, `…/turn`) and the
+sequential older `…/turn?before=` pages that followed. Query: `limit`, the number of messages (1..500, default 200;
+a non-integer is 400). 404 for an unknown session. `Cache-Control: no-store`.
+
+```jsonc
+{
+  "session": {…},          // the full session row, as GET /api/session/{id} (skills and mcp included)
+  "starting": {…},         // the frozen starting-context snapshot, as GET …/snapshot
+  "messages": [Message],   // the newest `limit` messages, oldest first
+  "messages_more": true,   // older messages exist
+  "oldest_seq": 812,       // null when there are no messages; the next `before`
+  "turns": [Turn summary], // exactly the turns covering `messages` (see below), oldest first
+  "turns_more_before": true, // turns older than the first one returned exist
+  "floor": {"seq": 40},    // as in Turn summaries: messages below have no summary; null when all are covered
+  "usage": {…},            // the session's spend ledger (all turns, however many are returned)
+  "approvals": [Pending approval], "questions": [Pending question]  // this session's pending waits
+}
+```
+
+**Which turns.** A turn owns the messages after its `start_seq`. The bundle holds the turn that owns the oldest
+returned message and every turn after it, including a running one with its live `partial`. With no messages it holds
+the newest turns. At most 500 turns are returned (the newest); beyond that `turns_more_before` is true and the
+timeline says the older turns' details were not loaded, as before. Older turns come with older messages (below), so
+the history a client holds is always messages and their turns together. Turn summaries for turns whose messages are
+not loaded are never read on open, so open cost is bounded by `limit`, not by how long the session is.
+
+**Older history.** `GET /api/session/{id}/message?before=<oldest_seq>&limit=<n>&turns=1` returns the usual page
+`{messages, more, oldest_seq}` plus `turns` (the turns covering that page, ending before `before`; a turn that
+straddles the boundary appears in both responses and a client replaces by id), `turns_more_before` and `floor`.
+`turns=1` without `before` is 400. The ledger is not repeated: it already counts every turn.
+
+**Budgets.** The bundle is bounded by its limits, not by history length. The test suite builds a large session
+(thousands of turns) and fails when `/open` (200 messages), an older page (100 messages with `turns=1`) or the
+`summary` form of `/context` grows past 1 MB, 512 KB and 1 KB respectively (R4 in
+[plan 50](../plans/50-rust-core.md)); `GET /api/snapshot` and the session lists have their own bounded sizes.
 
 ### Archive and session lists
 
@@ -1239,9 +1283,8 @@ The TUI sends a trace id (`tui-<pid>-<n>`) with every request and appends JSON
 lines to `logs/tui-perf.jsonl` (restarted past 4 MB, one `.1` kept): each request
 of 50 ms or more (`kind: request`, with `ms`, Core's `core_ms`, and
 `outside_core_ms`, the time queued in Core's loop, on the wire or reading the
-body), and every session-history load (`kind: history`, with `phases.first_ms`
-for the four parallel requests and `older_pages`/`older_ms` for the older turn
-pages read one after another).
+body), and every session-history load (`kind: history`, one `/open` request: `phases.open_ms`
+and `phases.requests`; before API 1.6 `first_ms` and `older_pages`/`older_ms`).
 
 JSON bodies and SSE frames encode with orjson (`nexus/jsonenc.py`): compact UTF-8, key order kept, non-ASCII
 written raw (SSE `data:` lines no longer escape to `\uXXXX` or use `", "` separators), NaN and infinities become
@@ -1253,7 +1296,7 @@ inspector, message pages, file reads) encode in a thread (`ajson`), so the loop 
 a high `core_ms` with high `cpu_ms` is Python work in that handler; a high
 `core_ms` with low CPU is waiting (disk, a lock); a low `core_ms` with a high
 `outside_core_ms` is a request queued behind a stall; a history load dominated
-by `older_ms` is the client's sequential paging. To see inside a slow handler,
+by `older_ms` is the client's sequential paging (gone with `/open`). To see inside a slow handler,
 profile the daemon with `py-spy record --pid <pid>`.
 
 ## Crash recovery
@@ -1652,7 +1695,7 @@ its best-ranked user message or final answer; `snippet` marks the match with `[ 
 it returns a page, `{messages, more, oldest_seq}`: the `limit` messages before sequence `before` (the newest when
 absent), oldest first. Pass `oldest_seq` as the next `before` until `more` is false. `/api/snapshot` still caps its
 selected session at `message_limit` and reports `messages_more` and `oldest_seq`, so a client loads older messages
-with this endpoint. Turn summaries page with `before=<turn id>` as before.
+with this endpoint, passing `turns=1` to receive the turns covering the page ([Open a session](#open-a-session)). `GET /api/session/{id}/turn` pages with `before=<turn id>` as before.
 
 ### Approvals (K7)
 

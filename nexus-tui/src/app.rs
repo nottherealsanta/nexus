@@ -9395,8 +9395,8 @@ impl App {
         if let ApiCall::OlderMessages { session, .. } = &done.call {
             self.ui.loading_older = false;
             if let Ok(r) = done.result {
-                if let Some((messages, more)) = r.older {
-                    self.state.model.prepend_messages(session, messages, more);
+                if let Some(page) = r.older {
+                    self.state.model.prepend_history(session, page);
                 }
             } else if let Err(error) = done.result {
                 self.ui.older_failed = Some(session.clone());

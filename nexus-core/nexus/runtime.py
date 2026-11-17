@@ -3368,21 +3368,55 @@ class Runtime:
         return {**response, "turn_id": turn["id"]}
 
     def turn_summaries(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
-        return self._with_live_partial(session_id, self.store.turn_summaries(session_id, **kwargs))
+        page = self.store.turn_summaries(session_id, **kwargs)
+        self._overlay_live(session_id, page["turns"])
+        return page
 
     async def turn_summaries_async(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
         """`turn_summaries` with the query off the loop; the live partial is attached back on it."""
         page = await self.read_session(session_id, lambda: self.store.turn_summaries(session_id, **kwargs))
-        return self._with_live_partial(session_id, page)
+        self._overlay_live(session_id, page["turns"])
+        return page
 
-    def _with_live_partial(self, session_id: str, page: dict[str, Any]) -> dict[str, Any]:
+    def _overlay_live(self, session_id: str, turns: list[dict[str, Any]]) -> None:
+        """The running request's in-memory partial replaces its stored checkpoint."""
         live = self.live_partials.get(session_id)
         if live is not None:
-            for turn in page["turns"]:
+            for turn in turns:
                 for request in turn["requests"]:
                     if request["id"] == live.request_id and request["message_id"] is None:
                         request["partial"] = live.json()
-        return page
+
+    def open_session(self, session_id: str, *, limit: int = 200) -> dict[str, Any]:
+        """Everything a client reads to open a session, in one bounded bundle (docs/api.md, Open a session)."""
+        session = self.session(session_id)
+        bundle = self.store.open_bundle(session_id, limit=limit)
+        self._overlay_live(session_id, bundle["turns"])
+        return {"session": self.session_json(session), "starting": self.snapshot_for(session), **bundle,
+                "approvals": self.pending_approvals(session_id), "questions": self.pending_questions(session_id)}
+
+    def older_history(self, session_id: str, *, before: int, limit: int) -> dict[str, Any]:
+        """A page of older messages with the turn summaries covering them."""
+        bundle = self.store.older_bundle(session_id, before=before, limit=limit)
+        self._overlay_live(session_id, bundle["turns"])
+        return bundle
+
+    async def open_session_async(self, session_id: str, *, limit: int = 200) -> dict[str, Any]:
+        """`open_session` with the store reads off the loop (one read snapshot); live state is added on the loop."""
+        def view() -> dict[str, Any]:
+            session = self.session(session_id)
+            return {"session": self.session_json(session), "starting": self.snapshot_for(session),
+                    **self.store.open_bundle(session_id, limit=limit)}
+        bundle = await self.read(view)
+        self._overlay_live(session_id, bundle["turns"])
+        return {**bundle, "approvals": self.pending_approvals(session_id), "questions": self.pending_questions(session_id)}
+
+    async def older_history_async(self, session_id: str, *, before: int, limit: int) -> dict[str, Any]:
+        """`older_history` with the query off the loop."""
+        bundle = await self.read_session(
+            session_id, lambda: self.store.older_bundle(session_id, before=before, limit=limit))
+        self._overlay_live(session_id, bundle["turns"])
+        return bundle
 
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None,

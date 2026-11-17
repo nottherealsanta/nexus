@@ -204,11 +204,15 @@ def render(core: dict[str, Any] | None, client: list[dict[str, Any]], *, top: in
         out.append("TUI: no timings yet (written to logs/tui-perf.jsonl)")
         return "\n".join(out)
     if loads:
-        out.append("TUI session opens (newest last): total = first parallel requests + older turn pages one by one")
+        out.append("TUI session opens (newest last): one /open request; older loads: first parallel requests + older turn pages")
         for e in loads[-top:]:
             ph = e.get("phases") or {}
-            out.append(f"  {_clock(e['at'])}  {e['ms']:>8} ms  first {ph.get('first_ms', '-')} ms · "
-                       f"{ph.get('older_pages', 0)} older pages {ph.get('older_ms', '-')} ms · "
+            if "open_ms" in ph:  # one /open request (since API 1.6)
+                phases = f"open {ph['open_ms']} ms · {ph.get('requests', 1)} request · "
+            else:  # parallel first reads, then older turn pages one by one
+                phases = (f"first {ph.get('first_ms', '-')} ms · "
+                          f"{ph.get('older_pages', 0)} older pages {ph.get('older_ms', '-')} ms · ")
+            out.append(f"  {_clock(e['at'])}  {e['ms']:>8} ms  {phases}"
                        f"{e.get('messages')} messages, {e.get('turns')} turns  {e.get('session')}"
                        + (f"  ERROR {e['error']}" if e.get("error") else ""))
     if slow:
