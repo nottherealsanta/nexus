@@ -48,6 +48,8 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
+import threading
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -59,6 +61,7 @@ from . import payloads
 from .codec import message_from_json, message_to_json, part_from_json, to_json
 from .llmhub.types import Image, Message, Text, ToolCall, ToolResult, Usage
 from .paths import home
+from .storeio import LockedConnection, StoreThreads
 
 SCHEMA = """
 create table if not exists project (
@@ -708,7 +711,9 @@ class Store:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._database_lock = None if _locked else database_lock(self.path)
         self.backup: Path | None = prepare_database(self.path)
-        self.db = sqlite3.connect(self.path, check_same_thread=False)
+        self._lock = threading.RLock()  # whoever holds it is the one thread using the write connection
+        self._is_reader = False
+        self.db = LockedConnection(sqlite3.connect(self.path, check_same_thread=False), self._lock)
         self.db.row_factory = sqlite3.Row
         self.db.execute("pragma journal_mode = wal")
         self.db.execute("pragma foreign_keys = on")
@@ -725,6 +730,32 @@ class Store:
         # Sessions that are not the user's (Manager episodes): kept in memory so the
         # event stream can drop their events without a query per event.
         self._hidden: set[str] = {r["id"] for r in self.db.execute("select id from session where kind != 'user'")}
+        # The async facade (docs/daemon.md § Storage threading): `await store.w.x(...)` runs a method on the
+        # writer thread, `await store.r.x(...)` runs a read method in a snapshot on a read-only connection.
+        self._threads = StoreThreads(self, READ_METHODS)
+        self.w = self._threads.w
+        self.r = self._threads.r
+
+    def _open_reader(self) -> Store:
+        """A read-only view of this database for one reader thread: same methods, its own connection and lock."""
+        reader = object.__new__(Store)
+        reader.path = self.path
+        reader._lock = threading.RLock()
+        reader._is_reader = True
+        raw = sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True, check_same_thread=False)
+        reader.db = LockedConnection(raw, reader._lock)
+        reader.db.row_factory = sqlite3.Row
+        reader.db.execute("pragma query_only = on")
+        reader._generation = self._generation
+        reader._hidden = self._hidden
+        reader._pins = self._pins
+        reader.backup = None
+        reader._database_lock = None
+        reader.pressure_bytes = None
+        reader.on_pressure = None
+        reader._pressure_notified = False
+        reader._pin_seq = 0
+        return reader
 
     # -- additive payload storage -------------------------------------------
 
@@ -1059,6 +1090,8 @@ class Store:
         return row["generation"]
 
     def close(self) -> None:
+        if not self._is_reader and hasattr(self, "_threads"):
+            self._threads.shutdown()
         self.db.close()
         if self._database_lock is not None:
             self._database_lock.close()
@@ -3066,14 +3099,18 @@ class Store:
     @contextmanager
     def read_transaction(self) -> Iterator[None]:
         """Hold one SQLite read snapshot across several selects."""
-        if self.db.in_transaction:
-            yield
-            return
-        self.db.execute("begin")
-        try:
-            yield
-        finally:
-            self.db.execute("commit")
+        with self._lock:
+            if self.db.in_transaction:
+                yield
+                return
+            self.db.execute("begin")
+            try:
+                yield
+            finally:
+                # SQLite may already have ended the transaction (a failed write on a read-only connection rolls
+                # it back); end ours without masking the error that is propagating.
+                if self.db.in_transaction:
+                    self.db.rollback() if sys.exc_info()[0] else self.db.commit()
 
     def state_snapshot(self, *, session_id: str | None = None, message_limit: int = 200) -> dict[str, Any]:
         """Projects, sessions, pending state and an optional bounded session view at one log head."""
@@ -3238,3 +3275,41 @@ class Store:
                 "requests": turn_requests, "tools": tools[row["id"]],
             })
         return out
+
+
+# Read-only methods that may run on a reader thread (`await store.r.name(...)`). A reader connection is
+# `query_only`, so a method that writes fails loudly instead of corrupting anything. `search` is not here:
+# it spends a slice of the deferred index backfill (a write), so it goes through the writer.
+READ_METHODS = frozenset({
+    "messages", "messages_page", "messages_after_seq", "events", "event_counts", "replay", "turn_summaries",
+    "turn_summary", "state_snapshot", "sessions", "session", "children", "session_usage", "prompt_history",
+    "artifacts", "artifact", "audit", "compaction", "wait_lifecycle", "projects", "project", "turns_for_session",
+    "requests_for_turn", "tools_for_turn", "log_head", "log_floor", "snapshot", "continuation_of", "running_turns",
+    "descendants", "tree_ids", "handles", "preference",
+})
+
+
+def _serialize_methods(cls: type[Store]) -> None:
+    """Hold the store lock for the whole of every public and private method (reads and writes alike).
+
+    The lock is re-entrant, so methods call each other freely. It guarantees that a synchronous call site
+    on the loop thread and a job on the writer thread never interleave statements of one transaction.
+    """
+    import functools
+    import inspect
+
+    skip = {"read_transaction", "close", "_open_reader", "log_generation", "is_hidden"}
+    for name, fn in list(vars(cls).items()):
+        if name.startswith("__") or name in skip or not inspect.isfunction(fn) or inspect.isgeneratorfunction(fn):
+            continue
+
+        def make(fn: Any) -> Any:
+            @functools.wraps(fn)
+            def locked(self: Store, *args: Any, **kwargs: Any) -> Any:
+                with self._lock:
+                    return fn(self, *args, **kwargs)
+            return locked
+        setattr(cls, name, make(fn))
+
+
+_serialize_methods(Store)

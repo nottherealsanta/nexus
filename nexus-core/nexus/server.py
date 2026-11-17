@@ -711,15 +711,16 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def info(request: Request) -> Response:
         generation = runtime.store.log_generation()
-        head = runtime.store.log_head()
+        head, floor, retention_status = await runtime.read(
+            lambda: (runtime.store.log_head(), runtime.store.log_floor(), runtime.retention.metrics()))
         return JSONResponse({
             "name": "nexus", "version": VERSION, "api_version": API_VERSION, "code": code_fingerprint,
             "pid": os.getpid(), "home": str(home()), "url": url,
             "log": {"generation": generation, "head": head, "head_cursor": format_cursor(generation, head),
-                    "floor": runtime.store.log_floor(),
-                    "floor_cursor": format_cursor(generation, runtime.store.log_floor())},
+                    "floor": floor,
+                    "floor_cursor": format_cursor(generation, floor)},
             "retention": asdict(runtime.retention.settings),
-            "retention_status": runtime.retention.metrics(),
+            "retention_status": retention_status,
             "retry": {"max_attempts": runtime.retry_policy.max_attempts,
                       "base_delay": runtime.retry_policy.base_delay,
                       "max_wait": runtime.retry_policy.max_wait,
@@ -760,8 +761,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse(usage_cache.snapshot())
 
     async def session_usage_totals(request: Request) -> Response:
-        runtime.session(p(request, "id"))
-        return JSONResponse(runtime.store.session_usage(p(request, "id")))
+        sid = p(request, "id")
+        return JSONResponse(await runtime.read_session(sid, lambda: runtime.store.session_usage(sid)))
 
     async def models(request: Request) -> Response:
         data, source = await catalog.load()
@@ -1113,7 +1114,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if request.method == "POST":
             body = await _body(request)
             return JSONResponse(project_json(runtime.open_project(body["path"], body.get("name"))))
-        return JSONResponse([project_json(x) for x in runtime.store.projects()])
+        return JSONResponse(await runtime.read(lambda: [project_json(x) for x in runtime.store.projects()]))
 
     async def project(request: Request) -> Response:
         pid = p(request, "id")
@@ -1324,7 +1325,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             before = int(request.query_params["before"]) if request.query_params.get("before") else None
         except ValueError:
             raise ValueError("limit and before must be integers") from None
-        prompts = runtime.store.prompt_history(project.id, q=request.query_params.get("q", ""), limit=limit, before=before)
+        prompts = await runtime.store.r.prompt_history(
+            project.id, q=request.query_params.get("q", ""), limit=limit, before=before)
         return JSONResponse({"prompts": prompts})
 
     async def search(request: Request) -> Response:
@@ -1335,19 +1337,23 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         project_id = request.query_params.get("project")
         if project_id:
             runtime.project(project_id)
-        hits = runtime.store.search(request.query_params.get("q", ""), project_id=project_id,
-                                    archived=_archive_filter(request), limit=limit)
-        out = []
-        for hit in hits:
-            session = runtime.store.session(hit["session_id"])
-            if session is not None:
-                out.append({**hit, "session": runtime.session_json(session)})
+        hits = await runtime.store.w.search(request.query_params.get("q", ""), project_id=project_id,
+                                            archived=_archive_filter(request), limit=limit)
+
+        def sessions_for_hits() -> list[dict[str, Any]]:
+            found = []
+            for hit in hits:
+                session = runtime.store.session(hit["session_id"])
+                if session is not None:
+                    found.append({**hit, "session": runtime.session_json(session)})
+            return found
+        out = await runtime.read(sessions_for_hits)
         return JSONResponse({"query": request.query_params.get("q", ""), "hits": out})
 
     async def artifact_list(request: Request) -> Response:
-        runtime.session(p(request, "id"))
-        return JSONResponse([{k: a[k] for k in ("id", "mime", "name", "bytes", "source", "created")}
-                             for a in runtime.store.artifacts(p(request, "id"))])
+        sid = p(request, "id")
+        rows = await runtime.read_session(sid, lambda: runtime.store.artifacts(sid))
+        return JSONResponse([{k: a[k] for k in ("id", "mime", "name", "bytes", "source", "created")} for a in rows])
 
     async def artifact_one(request: Request) -> Response:
         from nexus import artifacts
@@ -1391,13 +1397,14 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return JSONResponse(runtime.session_json(session))
         archived = _archive_filter(request)
         if request.query_params.get("parent"):
-            runtime.session(request.query_params["parent"])
-            return JSONResponse([runtime.session_json(s) for s in runtime.store.children(
-                request.query_params["parent"], archived=archived)])
+            parent_id = request.query_params["parent"]
+            return JSONResponse(await runtime.read_session(parent_id, lambda: [
+                runtime.session_json(s) for s in runtime.store.children(parent_id, archived=archived)]))
         project_id = request.query_params.get("project")
         if request.query_params.get("directory"):
             project_id = runtime.open_project(request.query_params["directory"]).id
-        return JSONResponse([runtime.session_json(s) for s in runtime.store.sessions(project_id, archived=archived)])
+        return JSONResponse(await runtime.read(
+            lambda: [runtime.session_json(s) for s in runtime.store.sessions(project_id, archived=archived)]))
 
     async def session(request: Request) -> Response:
         sid = p(request, "id")
@@ -1421,27 +1428,33 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
     async def diagnostics(request: Request) -> Response:
         sid = p(request, "id")
-        runtime.session(sid)
         if request.method == "POST":
+            runtime.session(sid)
             body = await request.json()
             if not isinstance(body.get("keep"), bool):
                 raise ValueError("keep must be a boolean")
-            runtime.store.keep_diagnostics(sid, body["keep"])
-        row = runtime.store.db.execute("select keep from session_diagnostics where session_id = ?", (sid,)).fetchone()
-        return JSONResponse({"keep": bool(row and row[0]), "compaction": runtime.store.compaction(sid),
-                             "waits": runtime.store.wait_lifecycle(sid)})
+            await runtime.store.w.keep_diagnostics(sid, body["keep"])
+        def view() -> dict[str, Any]:
+            row = runtime.store.db.execute("select keep from session_diagnostics where session_id = ?", (sid,)).fetchone()
+            return {"keep": bool(row and row[0]), "compaction": runtime.store.compaction(sid),
+                    "waits": runtime.store.wait_lifecycle(sid)}
+        return JSONResponse(await runtime.read_session(sid, view))
 
     async def stored_events(request: Request) -> Response:
         sid = p(request, "id")
-        runtime.session(sid)
         limit = min(int(request.query_params.get("limit") or 1000), 5000)
         types = [t for t in (request.query_params.get("type") or "").split(",") if t]
-        rows = runtime.store.events(sid, after=int(request.query_params.get("after") or 0), limit=limit, types=types or None)
-        return JSONResponse({"events": rows, "counts": runtime.store.event_counts(sid), "more": len(rows) == limit,
-                             "floor": runtime.store.log_floor(), "head": runtime.store.log_head(),
-                             "generation": runtime.store.log_generation(),
-                             "history_truncated": runtime.store.log_floor() > 0,
-                             "compaction": runtime.store.compaction(sid)})
+        after = int(request.query_params.get("after") or 0)
+
+        def view() -> dict[str, Any]:
+            store = runtime.store
+            rows = store.events(sid, after=after, limit=limit, types=types or None)
+            return {"events": rows, "counts": store.event_counts(sid), "more": len(rows) == limit,
+                    "floor": store.log_floor(), "head": store.log_head(),
+                    "generation": store.log_generation(),
+                    "history_truncated": store.log_floor() > 0,
+                    "compaction": store.compaction(sid)}
+        return JSONResponse(await runtime.read_session(sid, view))
 
     def _inspector_target(request: Request) -> tuple[str, str | None]:
         sid = p(request, "id")
@@ -1506,9 +1519,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def turns(request: Request) -> Response:
         """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
         sid = p(request, "id")
-        runtime.session(sid)
         query = request.query_params
-        return JSONResponse(runtime.turn_summaries(
+        return JSONResponse(await runtime.turn_summaries_async(
             sid, after=query.get("after") or None, before=query.get("before") or None,
             limit=min(int(query.get("limit") or TURN_PAGE), TURN_PAGE_MAX)))
 
@@ -1520,25 +1532,31 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         is available through the message endpoint.
         """
         sid = request.query_params.get("session") or None
-        if sid is not None:
-            runtime.session(sid)
         limit = max(1, min(int(request.query_params.get("message_limit") or 200), 1000))
-        data = runtime.store.state_snapshot(session_id=sid, message_limit=limit)
+
+        def view() -> dict[str, Any]:
+            store = runtime.store
+            selected = runtime.session(sid) if sid is not None else None  # NotFound for an unknown session
+            data = store.state_snapshot(session_id=sid, message_limit=limit)
+            data["_selected"] = selected
+            data["running"] = store.running_turns()
+            data["held_sessions"] = [r["session_id"] for r in store.db.execute("select session_id from input_hold")]
+            data["inputs"] = runtime.inputs.list()
+            return data
+        data = await runtime.read(view)
         # An explicit debug selection must survive reconnect snapshots. Ordinary
         # discovery still excludes every Manager session and its hidden project.
-        if sid is not None and runtime.session(sid).kind == "manager":
-            data["sessions"].append(runtime.manager.session_json(runtime.session(sid)))
-        data["running"] = runtime.store.running_turns()
+        selected = data.pop("_selected")
+        if selected is not None and selected.kind == "manager":
+            data["sessions"].append(runtime.manager.session_json(selected))
         data["approvals"] = [request_ for sid_, _, request_ in runtime.approvals.values()]
         data["questions"] = runtime.pending_questions()
-        data["inputs"] = runtime.inputs.list()
-        data["held_sessions"] = [r["session_id"] for r in runtime.store.db.execute("select session_id from input_hold")]
         return await ajson(data, headers={"x-nexus-log-generation": data["watermark"]["generation"],
                                            "cache-control": "no-store"})
 
     async def children(request: Request) -> Response:
-        runtime.session(p(request, "id"))
-        return JSONResponse([runtime.session_json(s) for s in runtime.store.children(p(request, "id"))])
+        return JSONResponse(await runtime.read_session(
+            p(request, "id"), lambda: [runtime.session_json(s) for s in runtime.store.children(p(request, "id"))]))
 
     async def tree(request: Request) -> Response:
         return JSONResponse(runtime.tree(p(request, "id")))
@@ -1683,15 +1701,17 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return Response(status_code=204)
 
     async def messages(request: Request) -> Response:
-        runtime.session(p(request, "id"))
+        sid = p(request, "id")
         if "limit" in request.query_params or "before" in request.query_params:  # a page: K6
             try:
                 limit = max(1, min(500, int(request.query_params.get("limit", "100"))))
                 before = int(request.query_params["before"]) if request.query_params.get("before") else None
             except ValueError:
                 raise ValueError("limit and before must be integers") from None
-            return await ajson(runtime.store.messages_page(p(request, "id"), before=before, limit=limit))
-        return await ajson([message_json(m) for m in runtime.store.messages(p(request, "id"))])
+            return await ajson(await runtime.read_session(
+                sid, lambda: runtime.store.messages_page(sid, before=before, limit=limit)))
+        return await ajson(await runtime.read_session(
+            sid, lambda: [message_json(m) for m in runtime.store.messages(sid)]))
 
     async def context(request: Request) -> Response:
         return await ajson(await runtime.context_usage(p(request, "id")))
@@ -1845,7 +1865,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             limit = max(1, min(500, int(request.query_params.get("limit", "100"))))
         except ValueError:
             raise ValueError("limit must be an integer") from None
-        return JSONResponse(runtime.store.audit(limit=limit, tool=request.query_params.get("tool") or None))
+        return JSONResponse(await runtime.store.r.audit(limit=limit, tool=request.query_params.get("tool") or None))
 
     async def manager_session(request: Request) -> Response:
         if request.method == "POST":

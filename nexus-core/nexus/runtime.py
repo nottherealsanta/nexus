@@ -52,6 +52,7 @@ import hashlib
 import json
 import logging
 import secrets
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
@@ -121,6 +122,7 @@ from .recovery import Recovery, open_approvals
 from .retention import Retention
 from .retry import RetryPolicy
 from .store import Project, Session, Store, StoredMessage, new_id
+from .storeio import READER
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError, ToolOutput
 from .tools import bash as bash_tool
 from .tools.base import clip
@@ -289,13 +291,45 @@ def _config_stamp() -> tuple[int, str] | None:
 
 
 class Runtime:
+    @property
+    def store(self) -> Store:
+        """The store; inside `read()` it is the read-only view on the reader thread running the call."""
+        return READER.get() or self._store
+
+    async def read(self, fn: Callable[[], Any]) -> Any:
+        """Run `fn()` (read-only runtime/store code) off the loop in one SQLite read snapshot.
+
+        Inside `fn`, `self.store` is a read-only connection owned by a reader thread, so a slow query no
+        longer holds the event loop. `fn` must not publish events, touch the loop or write; a write attempt
+        (for example a stored snapshot rebuilt for an old session) raises and the call runs again on the loop.
+        """
+        def job(reader: Store) -> Any:
+            token = READER.set(reader)
+            try:
+                return fn()
+            finally:
+                READER.reset(token)
+        try:
+            return await self._store.r.run(job)
+        except sqlite3.OperationalError as exc:
+            if "readonly" not in str(exc):
+                raise
+        return fn()
+
+    async def read_session(self, session_id: str, fn: Callable[[], Any]) -> Any:
+        """`read()` that first checks the session exists (`NotFound` otherwise), in the same snapshot."""
+        def checked() -> Any:
+            self.session(session_id)
+            return fn()
+        return await self.read(checked)
+
     # Titles and automatic handoffs make their own model requests; tests with scripted providers turn this off.
     background_requests = True
 
     def __init__(self, store: Store, bus: Bus) -> None:
         self.kernels = Kernels()
         self.jobs = Jobs()
-        self.store = store
+        self._store = store
         self.live_partials: dict[str, LivePartial] = {}
         from .inputs import Inputs
         self.inputs = Inputs(store)
@@ -3334,7 +3368,14 @@ class Runtime:
         return {**response, "turn_id": turn["id"]}
 
     def turn_summaries(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
-        page = self.store.turn_summaries(session_id, **kwargs)
+        return self._with_live_partial(session_id, self.store.turn_summaries(session_id, **kwargs))
+
+    async def turn_summaries_async(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
+        """`turn_summaries` with the query off the loop; the live partial is attached back on it."""
+        page = await self.read_session(session_id, lambda: self.store.turn_summaries(session_id, **kwargs))
+        return self._with_live_partial(session_id, page)
+
+    def _with_live_partial(self, session_id: str, page: dict[str, Any]) -> dict[str, Any]:
         live = self.live_partials.get(session_id)
         if live is not None:
             for turn in page["turns"]:

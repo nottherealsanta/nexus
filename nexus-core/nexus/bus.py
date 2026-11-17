@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
@@ -71,6 +72,9 @@ class Bus:
         self._seq = 0
         self._lock = threading.Lock()  # publish and open() are atomic with respect to each other
         self._subscribers: dict[asyncio.Queue[dict[str, Any] | None], int | None] = {}  # queue -> last enqueued id
+        # Events committed on the store's writer thread, waiting for the loop to deliver them. Appended under the
+        # lock in commit (id) order; every loop-side delivery drains this first, so delivery order is id order.
+        self._pending: deque[dict[str, Any]] = deque()
 
     def attach(self, log: EventLog) -> None:
         """Attach storage for durable publishes."""
@@ -83,38 +87,84 @@ class Bus:
     def publish(self, type_: str, data: Any = None, *, session_id: str | None = None,
                 turn_id: str | None = None, durable: bool = True) -> dict[str, Any]:
         with self._lock:
-            self._seq += 1
-            if type_ == "session.deleted":
-                # A deletion is global in storage and live delivery alike: its session row
-                # may be gone, and the tombstone must survive the cascade.
-                session_id = None
-            event: dict[str, Any] = {"seq": self._seq, "time": time.time(), "type": type_,
-                                     "session_id": session_id, "data": data}
-            if not durable:
-                event["id"] = None
-            if self._log is not None and durable:
-                # Internal storage metadata: the store records it for payload
-                # retention, and it is removed before any subscriber sees it.
-                if turn_id is not None:
-                    event["_turn_id"] = turn_id
-                event_id = self._log.append_event(event)
-                event.pop("_turn_id", None)
-                if event_id is None:
-                    # The subject session is gone: there is no durable identity to resume from.
-                    return event
-                event["id"] = event_id
-            self._deliver(event)
+            event, stored = self._store_event(type_, data, session_id, turn_id, durable)
+            if stored:
+                self._drain()
+                self._deliver(event)
             return event
+
+    def _store_event(self, type_: str, data: Any, session_id: str | None, turn_id: str | None,
+                     durable: bool) -> tuple[dict[str, Any], bool]:
+        """Number and (when durable) commit one event. Holds `_lock`.
+
+        The flag is false when the subject session is gone: there is no durable identity to resume from,
+        so the event is not delivered.
+        """
+        self._seq += 1
+        if type_ == "session.deleted":
+            # A deletion is global in storage and live delivery alike: its session row
+            # may be gone, and the tombstone must survive the cascade.
+            session_id = None
+        event: dict[str, Any] = {"seq": self._seq, "time": time.time(), "type": type_,
+                                 "session_id": session_id, "data": data}
+        if not durable:
+            event["id"] = None
+        if self._log is not None and durable:
+            # Internal storage metadata: the store records it for payload
+            # retention, and it is removed before any subscriber sees it.
+            if turn_id is not None:
+                event["_turn_id"] = turn_id
+            event_id = self._log.append_event(event)
+            event.pop("_turn_id", None)
+            if event_id is None:
+                return event, False
+            event["id"] = event_id
+        return event, True
+
+    async def apublish(self, type_: str, data: Any = None, *, session_id: str | None = None,
+                       turn_id: str | None = None, durable: bool = True) -> dict[str, Any]:
+        """`publish` with the commit on the store's writer thread; the loop is free while it runs.
+
+        Same contract: persisted before any subscriber sees it, and durable when this returns. Delivery
+        happens on the loop, in id order with every other publish (see `_pending`).
+        """
+        if self._log is None or not durable or not hasattr(self._log, "w"):
+            return self.publish(type_, data, session_id=session_id, turn_id=turn_id, durable=durable)
+        loop = asyncio.get_running_loop()
+
+        def job(_store: Any) -> dict[str, Any]:
+            with self._lock:
+                event, stored = self._store_event(type_, data, session_id, turn_id, durable)
+                if stored:
+                    self._pending.append(event)
+            if stored:
+                loop.call_soon_threadsafe(self.flush)
+            return event
+
+        event = await self._log.w.run(job)
+        self.flush()
+        return event
+
+    def flush(self) -> None:
+        """Deliver events committed on the writer thread, in order."""
+        with self._lock:
+            self._drain()
+
+    def _drain(self) -> None:
+        while self._pending:
+            self._deliver(self._pending.popleft())
 
     def deliver_stored(self, event: dict[str, Any]) -> None:
         """Deliver an announcement already committed atomically with maintenance."""
         with self._lock:
+            self._drain()
             self._deliver(event)
 
     def open(self) -> Subscription:
         """Register a subscriber and read the durable head as one atomic boundary."""
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         with self._lock:
+            self._drain()  # committed before the head read below, so it must not reach this subscriber as live
             self._subscribers[queue] = None
             head = self._log.log_head() if self._log is not None else 0
             generation = self._log.log_generation() if self._log is not None else ""

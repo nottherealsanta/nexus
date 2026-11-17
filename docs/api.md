@@ -1221,10 +1221,10 @@ the timing. Requests at least `NEXUS_PERF_SLOW_MS` (default 250) are logged to
 `logs/daemon.log` as `slow request …`.
 
 A watcher wakes every 100 ms and records how late it woke. Lateness of 100 ms or
-more is a stall: something ran on the event loop without yielding (SQLite runs
-synchronously in handlers, so a slow query stalls every other request), and the
+more is a stall: something ran on the event loop without yielding (SQLite work
+that has not moved to the store's threads yet runs synchronously in the handler), and the
 stall lists the requests that were open. Stalls are logged as `event loop
-stalled …`.
+stalled …`. The hot read routes run on reader threads ([Storage threading](daemon.md#storage-threading-nexusstoreiopy-plan-50-phase-1a)), so a slow query holds only its own request.
 
 `GET /api/debug/perf` returns, since the daemon started: `{since, pid, slow_ms,
 cpu_percent, loop: {ticks, max_late_ms, late: {100ms, 250ms, 1s}, tasks},
