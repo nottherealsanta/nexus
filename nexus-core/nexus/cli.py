@@ -1143,6 +1143,16 @@ def main(argv: list[str] | None = None) -> int:
     perf = sub.add_parser("perf", help="where time goes: Core request timings, event-loop stalls and the TUI's own timings")
     perf.add_argument("--json", action="store_true", help="print Core's report and the TUI lines as JSON")
     perf.add_argument("--top", type=int, default=12, help="rows per section")
+    bench = sub.add_parser("bench", help="performance benchmark: `fixture` writes a large synthetic database, `run` drives Core against it (plan 50)")
+    bench.add_argument("action", choices=["fixture", "run"])
+    bench.add_argument("--out", type=Path, help="fixture: where to write the database (a manifest goes beside it)")
+    bench.add_argument("--scale", choices=["small", "large"], default="small")
+    bench.add_argument("--fixture", type=Path, help="run: use this fixture database (copied; default: generate one in a scratch dir)")
+    bench.add_argument("--seconds", type=float, help="run: length of the load phase (default 4 small, 20 large)")
+    bench.add_argument("--seed", type=int, default=1)
+    bench.add_argument("--no-maintenance", action="store_true", help="run: leave Core's retention loop off")
+    bench.add_argument("--json", action="store_true", help="run: print the report as JSON")
+    bench.add_argument("--quiet", action="store_true", help="no progress on stderr")
     workers = sub.add_parser("workers", help="ZMX vendor-CLI processes that outlived Nexus")
     workers.add_argument("action", choices=["list", "clean"], help="`clean` stops listed processes whose pid and start time still match")
     update = sub.add_parser("update", help="check for a newer release (never installs anything)")
@@ -1256,6 +1266,9 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor(args.json)
         elif args.command == "perf":
             return asyncio.run(_perf(args))
+        elif args.command == "bench":
+            from .bench import run as bench_run
+            return bench_run.main(args)
         elif args.command == "workers":
             from .workers import records
             found = records.orphans()
