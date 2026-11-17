@@ -1,4 +1,5 @@
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import scenario from "../interface/scenarios/session-status-btw.json";
 import { manifest } from "./src/gen/manifest";
 

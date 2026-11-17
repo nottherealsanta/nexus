@@ -1,5 +1,6 @@
 // PLAN K6: a long session opens with its newest messages and loads older ones on request.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -52,6 +53,6 @@ describe("Older messages (K6)", () => {
     await app.type("id:palette-input", "Load older");
     await app.waitFor("text:Load older turns");
     await app.keyboard.press("Enter");
-    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_1/message") && r.url.includes("before=7") && r.url.includes("limit=200")));
+    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_1/message") && r.url.includes("before=7") && r.url.includes("limit=200") && r.url.includes("turns=1")));
   });
 });

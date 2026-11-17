@@ -1,6 +1,7 @@
 // Timeline visual parity with the TUI: monospace content, delivery tags,
 // completed-thought timings and the parent's child card. Existing parity.test.tsx is untouched.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const session = {
   id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Parent", model: "", permission: "ask",

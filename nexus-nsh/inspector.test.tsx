@@ -1,4 +1,5 @@
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import scenario from "../interface/scenarios/inspector.json";
 
 // One handler answers every inspector route from the shared scenario; tests steer it through `core`.

@@ -3,7 +3,8 @@
 // timeline folds the messages copied from the parent into one
 // `Forked from ‹parent› · N messages` row, collapsed by default and opened like an activity group. The
 // `[Nexus fork]` task message after it is an ordinary user message.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { buildRows, forkSummary } from "./src/ui/timeline";
 import { model, timelineOpen } from "./src/store";
 import { agentLabel } from "./src/agent-color";

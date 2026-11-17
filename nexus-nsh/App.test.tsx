@@ -1,5 +1,6 @@
 // Headless interaction tests (`nsh test`): the real runtime, a fake network standing in for the host's /api proxy.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, VIEW_CACHE, scratchOf, upsertTurn } from "./src/core/reduce";
@@ -24,7 +25,7 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
   "GET */api/config": { body: { revision: "test", values: { defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [] } },
-  "GET */api/session/*/context": { body: { used: 0, window: null, exact: false } },
+  "GET */api/session/*/context*": { body: { used: 0, window: null, exact: false } },
   "GET */api/model/last*": { body: { model: "scripted/m" } },
   "GET */api/model": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
@@ -595,7 +596,7 @@ describe("history", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("text:Refactor loader");
     await app.wait(100);
-    const loads = () => app.requests().filter((r) => r.url.includes("/api/session/ses_1/message")).length;
+    const loads = () => app.requests().filter((r) => r.url.includes("/api/session/ses_1/open")).length;
     expect(loads()).toBe(1);
     expect(app.requests().some((r) => r.url.includes("/api/snapshot") && r.url.includes("session=ses_1"))).toBe(false);
     pid = 2; // the stream keeps dropping; the next handshake sees a new daemon and resyncs
@@ -818,7 +819,7 @@ describe("context, composer and footer parity", () => {
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
         "GET */api/session/ses_1/turn*": turnPage([turnSummary("trn_1", 0, [["codex/gpt-5", usage(1000)], ["codex/gpt-5", usage(11100)]])]),
-        "GET */api/session/*/context": { body: { used: 11100, window: 1_000_000, exact: true } },
+        "GET */api/session/*/context*": { body: { used: 11100, window: 1_000_000, exact: true } },
         "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-6.1 Terra", context: 1_000_000, tiers: [270_000] }] } },
       }),
       width: 1024, height: 768, platform: "web",
@@ -1146,7 +1147,8 @@ describe("turn summaries", () => {
     expect(shown.includes("0 i")).toBe(false);
     expect(shown.includes("1 request reported no usage (unknown, not zero)")).toBe(true);
     expect(shown.includes("/continue")).toBe(false); // a turn without a summary is not called interrupted
-    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/turn"))).toBe(true);
+    expect(app.requests().filter((r) => r.url.includes("/api/session/ses_1/open")).length).toBe(1); // one request, not four plus turn pages
+    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/turn") || r.url.includes("/api/session/ses_1/message"))).toBe(false);
     expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/event"))).toBe(false);
   });
 
@@ -1173,16 +1175,15 @@ describe("turn summaries", () => {
     expect(shown.includes("provider retry ")).toBe(false);
   });
 
-  test("a turn the client cannot read details for is announced, and the timeline still loads", async () => {
+  test("a history that cannot be read is announced instead of leaving the timeline silently blank", async () => {
     const app = await open("./App.tsx", {
-      network: selectedSessionNetwork({ "GET */api/session/ses_1/turn*": { status: 500, body: { error: "boom" } } }),
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/open*": { status: 500, body: { error: "boom" } } }),
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:timeline-older");
-    expect(app.texts().join("\n").includes("Turn details failed to load")).toBe(true);
-    expect(app.texts().includes("done")).toBe(true);
+    expect(app.texts().join("\n").includes("Messages failed to load")).toBe(true);
   });
 });
 

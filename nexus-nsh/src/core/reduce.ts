@@ -34,6 +34,8 @@ export interface SelectedView {
   starting: any | null;
   /** Why the turn details are incomplete (announced in the timeline); messages are complete. */
   turnsGap: string | null;
+  /** Older turn summaries exist than the ones held (`turns_more_before` of the last open or older page). */
+  turnsMore?: boolean;
 }
 
 /** Live events never kept as scratch: deltas fold into `streaming`; raw wire traffic is the inspector's. */
@@ -61,6 +63,12 @@ export function normalizeSession(raw: any): Session {
   s.archived = !!raw.archived;
   if (typeof s.disabled_tools === "string") { try { s.disabled_tools = JSON.parse(s.disabled_tools); } catch { s.disabled_tools = []; } }
   return s as Session;
+}
+
+/** Messages older than the oldest held summary, with more turns on Core: the timeline says their details are not loaded. */
+export function capGap(v: SelectedView): string | null {
+  if (!v.turnsMore || !v.turns.length || !v.messages.length) return null;
+  return v.messages[0].seq <= v.turns[0].start_seq ? `only the newest ${v.turns.length} turns have details loaded` : null;
 }
 
 function emptyView(sessionId: string, messages: Message[] = [], messagesMore = false, loaded = false): SelectedView {
@@ -196,11 +204,30 @@ export class Model {
   }
 
   /**
+   * An older page (`turn.load_older`): its messages go before the loaded ones and the turn summaries
+   * covering them join the held ones in the same step, so the timeline never shows older messages
+   * without their details. A turn already held is kept as it is; Core's ledger counts every turn.
+   */
+  prependHistory(sessionId: string, page: { messages: Message[]; more: boolean; turns: TurnSummary[]; turnsMoreBefore: boolean; floor: { seq: number } | null }) {
+    const v = this.viewOf(sessionId);
+    if (!v) return;
+    this.seedPartials(sessionId, page.turns, page.messages);
+    this.prependMessages(sessionId, page.messages, page.more);
+    const have = new Set(v.turns.map((t) => t.id));
+    let turns = v.turns;
+    for (const t of page.turns) if (!have.has(t.id)) turns = upsertTurn(turns, t);
+    v.turns = turns;
+    v.turnsMore = page.turnsMoreBefore;
+    if (page.floor) v.floor = page.floor;
+    if (v.turnsGap === null || v.turnsGap.startsWith("only the newest")) v.turnsGap = capGap(v);
+  }
+
+  /**
    * Fold a fully loaded history into the selected or a cached view (never mixes sessions).
    * Messages and summaries applied live after the fetch are kept, and so is the scratch (a live
    * `turn.summary` already cleared it for its turn).
    */
-  applyHistory(h: { sessionId: string; messages: Message[]; messagesMore?: boolean; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; usageMark?: number }) {
+  applyHistory(h: { sessionId: string; messages: Message[]; messagesMore?: boolean; turns: TurnSummary[]; floor: { seq: number } | null; usage: UsageLedger | null; starting: any | null; turnsGap: string | null; turnsMore?: boolean; usageMark?: number }) {
     const v = this.viewOf(h.sessionId);
     if (!v) return;
     // Messages held but not fetched are kept, ordered by seq: ones applied live after the
@@ -234,7 +261,8 @@ export class Model {
     if (newest?.error && newest.error.kind !== "interrupted") this.failedSessions.add(h.sessionId);
     else if (newest) this.failedSessions.delete(h.sessionId);
     v.starting = h.starting;
-    v.turnsGap = h.turnsGap;
+    v.turnsMore = h.turnsMore ?? false;
+    v.turnsGap = h.turnsGap ?? capGap(v);
     v.loaded = true;
   }
 

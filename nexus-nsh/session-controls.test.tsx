@@ -1,6 +1,7 @@
 // Plans 29-32 in NSH: archive closes tabs from any source, /archive and /search, the one-step
 // question card and locked composer, queued-row actions, and the worktree icon + details modal.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import scenario from "../interface/scenarios/session-controls.json";
 import { Model } from "./src/core/reduce";
 
@@ -85,7 +86,7 @@ function network(flags: Flags = {}) {
     "GET */api/mcp*": { body: { servers: [] } },
     "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
-    "GET */api/session/ses_1/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_1/worktrees": { body: flags.directory ? {
       ...worktrees, session_directory: flags.directory,
@@ -94,7 +95,7 @@ function network(flags: Flags = {}) {
     "GET */api/session/ses_1/input": () => ({ body: { held: flags.held ?? true, inputs: flags.inputs ?? [] } }),
     "GET */api/session/ses_2/message*": { body: [] },
     "GET */api/session/ses_2/snapshot": { body: null },
-    "GET */api/session/ses_2/context": { body: { used: 0, window: null, exact: false } },
+    "GET */api/session/ses_2/context*": { body: { used: 0, window: null, exact: false } },
     "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
     "GET */api/session/ses_2/worktrees": { body: { worktrees: [] } },
     "GET */api/session/ses_2/input": { body: { held: false, inputs: [] } },
@@ -151,7 +152,7 @@ describe("archive closes its tab (plan 29)", () => {
     flags.archive = true;
     await app.waitUntil(() => !app.shows("id:session-tab-ses_1"), { timeout: 8000 });
     expect(app.shows("id:session-tab-ses_2")).toBe(true);
-    expect(app.requests().some((r) => r.method === "GET" && r.url.includes("/api/session/ses_2/message"))).toBe(true);
+    expect(app.requests().some((r) => r.method === "GET" && r.url.includes("/api/session/ses_2/open"))).toBe(true);
   });
 
   test("/arch completes to /archive and the archive command closes the tab on its event", async () => {

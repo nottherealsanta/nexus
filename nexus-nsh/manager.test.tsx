@@ -384,7 +384,7 @@ describe("the controller", () => {
     pickRow(1);
     expect(card()).toBe(null);
     await settleAsync(50);
-    expect(sent.some((s) => s.path === "/api/session/s_auth01")).toBe(true);
+    expect(sent.some((s) => s.path === "/api/session/s_auth01/open")).toBe(true); // the row comes with the history
     expect(sent.some((s) => s.path === "/api/manager/card/dismiss")).toBe(true);
     model.sessions.delete("s_auth01");
     await reset();

@@ -75,6 +75,15 @@ export interface TurnPage {
   /** Messages with a lower seq have no summary; `null` when every message is covered. */
   floor: { seq: number } | null; usage: UsageLedger;
 }
+/** `GET /api/session/{id}/open` (docs/api.md, Open a session). Pending waits in it are not used: the snapshot and events carry them. */
+export interface OpenBundle {
+  session: Session; starting: any | null; messages: Message[]; messages_more: boolean; oldest_seq: number | null;
+  turns: TurnSummary[]; turns_more_before: boolean; floor: { seq: number } | null; usage: UsageLedger;
+}
+/** An older page of messages with the turns covering it (`GET …/message?before=&turns=1`). */
+export interface OlderPage {
+  messages: Message[]; more: boolean; oldest_seq: number | null; turns: TurnSummary[]; turns_more_before: boolean; floor: { seq: number } | null;
+}
 export interface Watermark { generation: string; head: number; floor: number; head_cursor: string }
 export interface Snapshot {
   watermark: Watermark; projects: Project[]; sessions: Session[];
@@ -88,7 +97,7 @@ export interface Info {
 
 export const CLIENT_VERSION = "0.10.0";
 /** The API version this client was written against (same convention as nexus-tui). */
-export const CLIENT_API = { major: 1, minor: 5 };
+export const CLIENT_API = { major: 1, minor: 6 };
 
 export interface ApiVersion { major: number; minor: number }
 

@@ -1,6 +1,7 @@
 // The phone redesign of plans/05 section 5.2: sessions sections, the drawer, the row menu, the approval card, the Settings
 // connection card and the pairing screen. Run without `--target` so the app runs in the phone idiom (390x844, "ios").
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const base = { model: "scripted/m", permission: "ask", effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };

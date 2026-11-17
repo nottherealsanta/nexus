@@ -262,16 +262,17 @@ opens with the ZMX card instead of the starting context: `context incomplete`, t
 `Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
 own subagents show read-only inside the calling tool's card. As in the TUI.
 
-Selecting a session loads, after the bounded snapshot view, every message, the
-frozen starting context and the turn summaries with the session's spend ledger
-(`GET /api/session/{id}/turn`: the newest 200, then `before=` pages to the oldest,
-at most 25 pages; more are announced). It never reads the event log. Footers
+Selecting a session loads, after the bounded snapshot view, one bundle
+(`GET /api/session/{id}/open`): the session row, the frozen starting context, the
+newest 200 messages, exactly the turn summaries covering them and the session's spend
+ledger. "Load older" reads the page before the oldest with its turns
+(`message?before=&turns=1`). It never reads the event log; with `debug.timing` on, each load logs its time. Footers
 (models, duration, tokens and cache share), tool timings, retry notices and error rows,
 the dock's activity bar and the Working row's output count read the
 summaries; a user turn's footer covers every Core turn that starts in its message
 range, so continuations and notice turns join the turn they follow. A row marks
 `floor.seq`: turns above it have no details (pruned, or older than turn records),
-and a failed `/turn` read is announced while the messages still load. Unknown
+and a failed open (or over 500 turns in the loaded range) is announced. Unknown
 usage reads `tokens unknown` (or `+ unknown` beside a partial total) and is never
 counted as zero. Live events of the selected session since the last
 `turn.summary` are kept as the running turn's scratch (deltas fold into the

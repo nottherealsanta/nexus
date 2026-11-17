@@ -1,6 +1,7 @@
 // Regression coverage for the shared timeline reading column: the new-session
 // starting context and the started session use the same column, card and inset.
-import { describe, expect, open, test } from "nsh/test";
+import { describe, expect, test } from "nsh/test";
+import { open } from "./open-bundle";
 import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TEXT_INSET, TURN_INSET, USER_BAND_INSET, timelineColumnClass, timelineColumnPx } from "./src/ui/reading-column";
 import { iconGlyphs } from "./src/ui/kit";
 import { sidebarGlyphs, verbGlyphs, structure } from "./src/gen/theme";

@@ -7,7 +7,7 @@ import { Storage, computed, platform, signal, windowSize } from "nsh";
 import { Model, normalizeSession } from "./core/reduce";
 import { PHONE_PREVIEW } from "./gen/preview";
 import { Banner, ConnectionState, MESSAGE_PAGE, Sync, SyncHost } from "./core/sync";
-import { Compat, Info, Message, Session, SubagentNotice } from "./core/api";
+import { Compat, Info, Message, OlderPage, Session, SubagentNotice } from "./core/api";
 import { ApiError, apiBase, localCore, request, setApiBase } from "./core/transport";
 import { ClientView, ViewReporter, sameClientView } from "./core/view";
 import type { ProjectMcpSummary } from "./project-mcp";
@@ -151,7 +151,7 @@ export async function loadContext(id: string) {
   try {
     do {
       contextReads.set(id, false);
-      const data = await request<any>("GET", `/api/session/${id}/context`).catch(() => null);
+      const data = await request<any>("GET", `/api/session/${id}/context`, { query: { summary: 1 } }).catch(() => null);
       if (data) contextBudget.update((all) => ({ ...all, [id]: data }));
     } while (contextReads.get(id));
   } finally { contextReads.delete(id); }
@@ -689,9 +689,9 @@ export async function loadOlderMessages(manual = false) {
   if (!sel || !first || loadingOlder) return;
   loadingOlder = true;
   try {
-    const page = await request<{ messages: Message[]; more: boolean }>("GET", `/api/session/${sel.sessionId}/message`, { query: { limit: MESSAGE_PAGE, before: first.seq } });
+    const page = await request<OlderPage>("GET", `/api/session/${sel.sessionId}/message`, { query: { limit: MESSAGE_PAGE, before: first.seq, turns: 1 } });
     olderFailed.delete(sel.sessionId);
-    model.prependMessages(sel.sessionId, page.messages, page.more);
+    model.prependHistory(sel.sessionId, { messages: page.messages, more: page.more, turns: page.turns ?? [], turnsMoreBefore: !!page.turns_more_before, floor: page.floor ?? null });
     bump();
   } catch (e) {
     olderFailed.add(sel.sessionId);
@@ -711,6 +711,16 @@ function autoLoadOlder() {
 const host: SyncHost = {
   model,
   canStart: true,
+  sessionLoaded(id, full) {
+    const cur = model.sessions.get(id);
+    if (cur && full.revision >= cur.revision) model.sessions.set(id, { ...cur, ...normalizeSession(full), status: full.status ?? cur.status });
+  },
+  historyLoaded(id, info) {
+    if (prefs()["debug.timing"] !== true) return;
+    const line = `history ms=${info.ms} open_ms=${info.open_ms} requests=${info.requests} messages=${info.messages} turns=${info.turns}`;
+    timingLog.update((all) => [...all, { session: id, line }]);
+    console.info(`[nexus timing] ${id} ${line}`);
+  },
   setConnection(c) {
     connection.set(c);
     if (c.kind === "live") {
@@ -1249,11 +1259,7 @@ export async function selectSession(id: string) {
   sessionOpened.update((n) => n + 1);
   loadSessionWorktrees(id);
   if (isNarrow()) drawer.set(null);
-  void request<any>("GET", `/api/session/${id}`).then((full) => {
-    const cur = model.sessions.get(id);
-    if (cur && full.revision >= cur.revision) { model.sessions.set(id, { ...cur, ...normalizeSession(full), status: full.status ?? cur.status }); host.changed(); }
-  }).catch(() => {});
-  // The complete history (messages, turn summaries, starting context); no global snapshot needed.
+  // The history in one request (session row, starting context, newest messages and their turns); no global snapshot needed.
   try {
     await sync.loadSelected();
   } catch (e) {
