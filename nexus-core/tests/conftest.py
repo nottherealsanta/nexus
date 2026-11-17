@@ -68,6 +68,14 @@ def pytest_configure(config):
         "markers", "blocks_loop(reason): the test (or code it exercises) blocks the event loop for the stall limit; a reason is required")
 
 
+def pytest_collection_modifyitems(items):
+    # Manager tests seed and read the SQLite store synchronously on the loop (~100-200 ms steps in nearly every
+    # test, including teardown); that is workstream B's store threading. Drop this when B lands.
+    for item in items:
+        if item.path.name.startswith("test_manager_"):
+            item.add_marker(pytest.mark.blocks_loop("Manager tests: synchronous SQLite seeding and store work on the loop; workstream B (store threading) owns the fix"))
+
+
 @pytest.fixture(autouse=True)
 def _loop_stall_watchdog(request):
     marker = request.node.get_closest_marker("blocks_loop")

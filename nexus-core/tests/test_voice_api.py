@@ -148,6 +148,7 @@ async def test_download_is_explicit_and_publishes_voice_progress(setup) -> None:
     subscription.close()
 
 
+@pytest.mark.blocks_loop("voice runtime import on first use")
 @pytest.mark.asyncio
 async def test_partial_query_is_validated(setup) -> None:
     _, client, _, _ = setup

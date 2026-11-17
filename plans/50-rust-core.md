@@ -65,13 +65,29 @@ Why Python is enough for most of it, and where it is not:
   behaviour unchanged; crash-recovery guarantees unchanged (an awaited write is durable when it returns).
 
 1b. **Fast encoding, off-loop CPU, watchdog (workstream C).**
-- [ ] JSON responses and SSE frames encode with `orjson` (or `msgspec`), output byte-compatible where clients care.
-- [ ] Large responses (`/context`, `/snapshot`, inspector, export) encode off the loop.
-- [ ] Remaining synchronous file walks and subprocess calls on request paths move off the loop (`tools/walk.py`,
+- [x] JSON responses and SSE frames encode with `orjson` (or `msgspec`), output byte-compatible where clients care.
+- [x] Large responses (`/context`, `/snapshot`, inspector, export) encode off the loop.
+- [x] Remaining synchronous file walks and subprocess calls on request paths move off the loop (`tools/walk.py`,
   `files.search_files`, the few `subprocess.run`).
-- [ ] The stall watchdog joins the test suite (R1).
-- [ ] The timing-flaky tests seen 11-17 (`test_children`, `test_manager_service`, kernel-start tests in
+- [x] The stall watchdog joins the test suite (R1).
+- [x] The timing-flaky tests seen 11-17 (`test_children`, `test_manager_service`, kernel-start tests in
   `test_server`) made deterministic.
+
+Landed (C): orjson via `nexus/jsonenc.py`; `ajson` (thread) for large bodies; `search_files`, `list_directory`,
+`read_file`, `connected()` and provider usage off the loop (E replaces `search_files` with an index). Deflake: `tests/waiting.py`
+`until` (60 s ceiling), `Harness.flush()`. Still on the loop: `connected()` inside sync `create_session` (child
+sessions), `workers/agent._record` `ps` (ZMX), recovery `ps` probes, CLI-side `daemon.py`/`pair.py`.
+
+Stalls the suite watchdog found (default 100 ms; 1633 tests):
+- Fixed: `test_manager_live::test_two_real_peers...` was 16.8 s of blocking wait (now a 0.5 s step, marked);
+  `files` search/list/read stalls (moved to threads); `test_server` project-git and anonymous-server stalls (gone
+  after the moves and `until`).
+- Marked `blocks_loop` (26 tests, reasons in the marks): Manager tests (`test_manager_live/stage/authority/store/
+  redteam/service`) are synchronous SQLite seeding on the loop, belong to workstream B; `test_git_ops` pull
+  (real git subprocess, 595 ms), `test_bash_jobs` pipeline failure (232 ms), `test_inputs_integration` recovery
+  (220 ms), `test_terminals_http`, `test_client_view`, `test_export` (store reads, B), `test_zmx_workers` control
+  expansion (114 ms), `test_children` fallback, `test_voice_api` partial query. Remove each mark when its
+  cause is fixed; an unmarked 100 ms stall now fails the test.
 
 **Gate:** a week of use with no stall ≥ 250 ms; trivial routes p95 < 20 ms during a streaming turn on the fixture.
 

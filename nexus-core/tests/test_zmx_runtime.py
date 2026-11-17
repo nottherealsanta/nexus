@@ -148,6 +148,7 @@ async def test_normal_children_are_unchanged(env):
     assert [p.text for m in rt.store.messages(child.id) for p in m.message.parts if isinstance(p, Text)][-1] == "normal"
 
 
+@pytest.mark.blocks_loop("httpx builds its TLS context (loads the CA bundle, ~100 ms) on the loop at the first models.dev fetch; swap for a prebuilt context later")
 async def test_daemon_with_zmx_off_probes_no_cli_and_registers_no_provider(tmp_path, monkeypatch):
     """Starting the daemon and serving its provider, model and config routes with ZMX off never looks for a CLI,
     never spawns one and lists no ZMX provider or model."""

@@ -456,6 +456,7 @@ async def test_transport_headers_are_redacted_but_text_is_preserved(env):
 # -- large logs and the boundary ---------------------------------------------
 
 
+@pytest.mark.blocks_loop("synchronous SQLite seeding and store reads on the loop; workstream B (store threading) owns the fix")
 async def test_more_events_than_one_api_page_are_exported_in_order(env):
     _, client, _, workspace = env
     project, _ = env.store.project_for_path(str(workspace))
