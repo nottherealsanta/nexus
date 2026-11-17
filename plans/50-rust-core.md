@@ -178,6 +178,11 @@ Stalls the suite watchdog found (default 100 ms; 1633 tests):
   (220 ms), `test_terminals_http`, `test_client_view`, `test_export` (store reads, B), `test_zmx_workers` control
   expansion (114 ms), `test_children` fallback, `test_voice_api` partial query. Remove each mark when its
   cause is fixed; an unmarked 100 ms stall now fails the test.
+- After merging A-E (11-17): the models.dev catalog parse/encode and the MCP SDK's first import moved to threads
+  (they stalled whichever test reached them first, and every first request in production); `test_bench` is marked
+  (it drives `/context`, which still builds the whole request body on the loop); seeding in `test_store_threads`
+  and `test_open_bundle` moved to the writer or is marked. With B merged, 12 of 245 Manager tests still stall, so their
+  blanket mark stays.
 
 **Gate:** a week of use with no stall ≥ 250 ms; trivial routes p95 < 20 ms during a streaming turn on the fixture.
 

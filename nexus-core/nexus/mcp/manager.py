@@ -49,6 +49,16 @@ def log_path(name: str) -> Path:
     return home() / "logs" / "mcp" / f"{bridge.part(name)}.log"
 
 
+_MCP_MODULES = ("mcp", "mcp.client.stdio", "mcp.client.sse", "mcp.client.streamable_http", "httpx2")
+
+
+def _load_mcp() -> None:
+    """Import the MCP SDK (about half a second on first use); called on a thread so the loop never pays it."""
+    import importlib
+    for name in _MCP_MODULES:
+        importlib.import_module(name)
+
+
 def _transport(config: ServerConfig, errlog: Any) -> Any:
     from mcp.client.stdio import StdioServerParameters, stdio_client
     if config.transport == "stdio":
@@ -156,6 +166,7 @@ class Connection:
                                                "removed": sorted(before - after)})
 
     async def _run(self) -> None:
+        await asyncio.to_thread(_load_mcp)  # a no-op once imported
         from mcp import Client
         config = self.config
         errlog = None

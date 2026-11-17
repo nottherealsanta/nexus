@@ -13,6 +13,7 @@ reasoning `gpt-*` models, and not every listed id is served by the Codex backend
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -68,14 +69,14 @@ async def _download() -> dict[str, Any]:
             if size > MAX_BYTES:
                 raise OSError("models.dev: catalog exceeds size limit")
             chunks.append(chunk)
-    data = json.loads(b"".join(chunks))
+    data = await asyncio.to_thread(json.loads, b"".join(chunks))  # multi-MB: off the loop
     if not isinstance(data, dict):
         raise TypeError("models.dev: catalog is not an object")
     return data
 
 
 # The parsed cache file, keyed by path, mtime and size. Parsing the multi-MB file
-# takes hundreds of milliseconds on the event loop, and context, draft context and
+# takes hundreds of milliseconds, so it runs on a thread, and context, draft context and
 # image checks all read it; callers treat the returned catalog as read-only.
 _parsed: tuple[tuple[str, int, int], dict[str, Any]] | None = None
 
@@ -94,7 +95,7 @@ async def load(*, refresh: bool = False) -> tuple[dict[str, Any], str]:
     age = time.time() - path.stat().st_mtime if path.exists() else None
     if not refresh and age is not None and age < TTL_S:
         try:
-            return _read_cache(path), f"cache ({int(age // 60)} min old)"
+            return await asyncio.to_thread(_read_cache, path), f"cache ({int(age // 60)} min old)"
         except ValueError:
             age = None  # corrupt cache: download instead
     try:
@@ -102,10 +103,10 @@ async def load(*, refresh: bool = False) -> tuple[dict[str, Any], str]:
     except (OSError, ValueError, TypeError, httpx.HTTPError) as exc:
         if age is None:
             raise OSError(f"models.dev is unreachable and there is no cache: {exc}") from exc
-        return json.loads(path.read_bytes()), f"stale cache ({int(age // 3600)} h old; download failed: {exc})"
+        return await asyncio.to_thread(_read_cache, path), f"stale cache ({int(age // 3600)} h old; download failed: {exc})"
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(data))
+    await asyncio.to_thread(lambda: temp.write_text(json.dumps(data)))
     os.replace(temp, path)
     return data, "models.dev (downloaded now)"
 

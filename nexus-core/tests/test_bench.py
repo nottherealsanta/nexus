@@ -41,6 +41,7 @@ def test_refuses_to_overwrite(tmp_path):
         fixture.generate(tmp_path / "f" / "small.db", "small")
 
 
+@pytest.mark.blocks_loop("drives /context, which still builds the whole request body on the loop to estimate tokens (plan 50)")
 async def test_run_reports_routes_and_restores_env():
     before = {k: os.environ.get(k) for k in ("NEXUS10_HOME", "HOME")}
     result = await bench_run.run(scale="small", seconds=2, maintenance=False)

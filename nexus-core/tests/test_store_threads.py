@@ -120,15 +120,15 @@ async def test_a_slow_write_does_not_hold_other_requests(env):
 async def test_a_large_read_does_not_stall_the_loop(env):
     _rt, store, client, session = env
     big = "x" * 4000
-    for n in range(3000):
-        store.append_message(session.id, user(f"{n} {big}"))
+    # Seeded on the writer thread: 3,000 appends in one loop step would be the stall, not the reads under test.
+    await store.w.run(lambda s: [s.append_message(session.id, user(f"{n} {big}")) for n in range(3000)])
     async with Lateness() as lateness:
         for path in (f"/api/session/{session.id}/message",  # all 3000, ~12 MB
                      f"/api/session/{session.id}/message?limit=500",
                      f"/api/snapshot?session={session.id}&message_limit=1000"):
             response = await client.get(path)
             assert response.status_code == 200
-    # The encode of the 12 MB body is still on the loop (plan 50 phase 1b); the SQLite read and row conversion are not.
+    # The SQLite read, row conversion and the 12 MB encode (ajson) all run off the loop.
     assert lateness.max < 0.25, f"loop stalled {lateness.max * 1000:.0f} ms"
 
 
