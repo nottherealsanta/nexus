@@ -5638,7 +5638,18 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
             before: first.seq,
         },
         result: Ok(Done {
-            older: Some((vec![older], false)),
+            older: Some(nexus_tui::api::OlderPage {
+                messages: vec![older],
+                more: false,
+                // The turns covering the page arrive with it, in the same step.
+                turns: vec![serde_json::from_value(serde_json::json!({
+                    "id": "trn_older", "status": "completed", "started": 1793113000.0,
+                    "finished": 1793113001.0, "start_seq": 0, "steps": 1, "requests": [], "tools": []
+                }))
+                .unwrap()],
+                turns_more_before: false,
+                floor: None,
+            }),
             ..Done::default()
         }),
     });
@@ -5646,6 +5657,11 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
     assert_eq!(view.messages.len(), loaded + 1);
     assert_eq!(view.messages[0].id, "older_1");
     assert!(!view.messages_more);
+    // The turns covering the older page arrive in the same step.
+    assert!(view.turns.iter().any(|t| t.id == "trn_older"));
+    assert!(view.turns_more_before);
+    assert!(view.turns.iter().any(|t| t.id == "trn_older"));
+    assert!(!view.turns_more_before);
 }
 
 #[test]

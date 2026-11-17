@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::transport::{ApiError, Error, Http, SseFrame};
 
 /// The Core API major/minor this client was written against.
-pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 5 };
+pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 6 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
@@ -440,6 +440,39 @@ pub struct History {
     pub usage: UsageLedger,
     /// Why the turn summaries are missing or incomplete; the timeline says so.
     pub turns_error: Option<String>,
+}
+
+/// A page of older history: messages, and the turn summaries covering them
+/// (`GET …/message?before=&turns=1`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OlderPage {
+    pub messages: Vec<Message>,
+    pub more: bool,
+    pub turns: Vec<TurnSummary>,
+    pub turns_more_before: bool,
+    pub floor: Option<i64>,
+}
+
+/// `GET /api/session/{id}/open` (docs/api.md, Open a session). Pending waits in it are not used: the
+/// snapshot and the event stream carry them.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct OpenBundle {
+    #[serde(default)]
+    pub session: Option<Session>,
+    #[serde(default)]
+    pub starting: Option<Value>,
+    #[serde(default)]
+    pub messages: Vec<Message>,
+    #[serde(default)]
+    pub messages_more: bool,
+    #[serde(default)]
+    pub turns: Vec<TurnSummary>,
+    #[serde(default)]
+    pub turns_more_before: bool,
+    #[serde(default)]
+    pub floor: Option<Floor>,
+    #[serde(default)]
+    pub usage: UsageLedger,
 }
 
 /// Token counts as Core reports them. A request or attempt without a report
@@ -1593,25 +1626,44 @@ impl CoreApi {
             .await
     }
 
-    /// One page of messages, oldest first: the `limit` before sequence `before` (the newest when
-    /// absent), and whether older ones remain (`GET …/message?limit=&before=`).
-    pub async fn messages_page(
+    /// One page of older history, oldest first: the `limit` messages before sequence `before` and the
+    /// turn summaries covering them (`GET …/message?limit=&before=&turns=1`).
+    pub async fn older_history(
         &self,
         session: &str,
-        before: Option<i64>,
+        before: i64,
         limit: u32,
-    ) -> Result<(Vec<Message>, bool), Error> {
-        let mut query = vec![("limit", limit.to_string())];
-        if let Some(before) = before {
-            query.push(("before", before.to_string()));
-        }
+    ) -> Result<OlderPage, Error> {
+        let query = [
+            ("limit", limit.to_string()),
+            ("before", before.to_string()),
+            ("turns", "1".to_owned()),
+        ];
         let page = self
             .http
             .get(&format!("/api/session/{session}/message"), &query)
             .await?;
-        let more = page["more"].as_bool().unwrap_or(false);
-        let messages = serde_json::from_value(page["messages"].clone()).map_err(dec)?;
-        Ok((messages, more))
+        Ok(OlderPage {
+            more: page["more"].as_bool().unwrap_or(false),
+            messages: serde_json::from_value(page["messages"].clone()).map_err(dec)?,
+            turns: serde_json::from_value(page["turns"].clone()).map_err(dec)?,
+            turns_more_before: page["turns_more_before"].as_bool().unwrap_or(false),
+            floor: page["floor"]["seq"].as_i64(),
+        })
+    }
+
+    /// Everything to open a session in one request (`GET …/open`): the session row, the starting
+    /// context, the newest `limit` messages and exactly the turn summaries covering them.
+    pub async fn open(&self, session: &str, limit: u32) -> Result<OpenBundle, Error> {
+        serde_json::from_value(
+            self.http
+                .get(
+                    &format!("/api/session/{session}/open"),
+                    &[("limit", limit.to_string())],
+                )
+                .await?,
+        )
+        .map_err(dec)
     }
 
     pub async fn messages(&self, session: &str) -> Result<Vec<Message>, Error> {

@@ -986,7 +986,10 @@ fn load_context(cx: &mut Ctx, api: &CoreApi) {
         loop {
             if let Ok(data) = api
                 .http
-                .get(&format!("/api/session/{session}/context"), &[])
+                .get(
+                    &format!("/api/session/{session}/context"),
+                    &[("summary", "1".to_owned())],
+                )
                 .await
             {
                 let _ = out.send(SyncMsg::Context { session, data });
@@ -1127,20 +1130,20 @@ async fn load_catalog(api: &CoreApi, project: Option<&str>) -> Option<CatalogDat
     ))
 }
 
-/// Turn summaries are read 200 to a page (Core's maximum).
+/// Turn summaries are read 200 to a page (Core's maximum) when a reconnect catches up.
 const TURN_PAGE: u32 = 200;
-/// Pages of older turn summaries read on open; beyond them the timeline says
-/// that older turns' details were not loaded.
+/// Pages of turn summaries a reconnect reads.
 const TURN_PAGES: usize = 10;
 
 /// Messages a session opens with; `turn.load_older` reads this many more each time.
 pub const MESSAGE_PAGE: u32 = 200;
 
-/// The newest page of messages, the starting context and every turn summary, fetched together.
-/// The event log is not read: the timeline's details come from summaries.
+/// The session's history in one `GET …/open` request: the row, the starting context, the newest
+/// page of messages and exactly the turn summaries covering them. Older history is paged with its
+/// turns on scroll. The event log is not read.
 async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
     let started = std::time::Instant::now();
-    let (h, phases) = load_history_pages(api, sid).await?;
+    let (h, open_ms) = load_open(api, sid).await;
     crate::perf::event(
         "history",
         json!({
@@ -1149,88 +1152,37 @@ async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
             "messages": h.messages.len(),
             "turns": h.turns.len(),
             "error": h.turns_error,
-            "phases": phases,
+            "phases": { "open_ms": open_ms, "requests": 1 },
         }),
     );
     Some(h)
 }
 
-/// The history, and how long its first parallel requests and the older turn
-/// pages that follow them (one at a time) took.
-async fn load_history_pages(api: &CoreApi, sid: &str) -> Option<(History, Value)> {
+async fn load_open(api: &CoreApi, sid: &str) -> (History, f64) {
     let started = std::time::Instant::now();
-    let (messages, starting, session, page) = tokio::join!(
-        api.messages_page(sid, None, MESSAGE_PAGE),
-        api.snapshot_json(sid),
-        api.session(sid),
-        api.turns(sid, None, None, Some(TURN_PAGE)),
-    );
-    let first = crate::perf::ms(started.elapsed());
-    // A page that cannot be decoded must never leave the timeline silently blank: say why (plan 10).
-    let (messages, messages_more, messages_error) = match messages {
-        Ok((messages, more)) => (messages, more, None),
-        Err(e) => (
-            Vec::new(),
-            false,
-            Some(format!("messages failed to load ({e})")),
-        ),
+    let bundle = api.open(sid, MESSAGE_PAGE).await;
+    let open_ms = crate::perf::ms(started.elapsed());
+    // A bundle that cannot be read must never leave the timeline silently blank: say why (plan 10).
+    let h = match bundle {
+        Ok(b) => History {
+            session_id: sid.to_owned(),
+            messages: b.messages,
+            messages_more: b.messages_more,
+            starting: b.starting,
+            session: b.session,
+            turns: b.turns,
+            more_before: b.turns_more_before,
+            floor: b.floor.map(|f| f.seq),
+            usage: b.usage,
+            turns_error: None,
+        },
+        Err(e) => History {
+            session_id: sid.to_owned(),
+            turns_error: Some(format!("messages failed to load ({e})")),
+            ..Default::default()
+        },
     };
-    let mut h = History {
-        session_id: sid.to_owned(),
-        messages,
-        messages_more,
-        starting: starting.ok(),
-        session: session.ok(),
-        turns_error: messages_error,
-        ..Default::default()
-    };
-    match page {
-        Ok(page) => {
-            h.floor = page.floor.map(|f| f.seq);
-            h.usage = page.usage;
-            h.more_before = page.more_before;
-            h.turns = page.turns;
-        }
-        Err(e) => {
-            h.turns_error = Some(format!("turn details failed to load ({e})"));
-            return Some((h, json!({ "first_ms": first })));
-        }
-    }
-    // Older pages, newest first, until the start or the cap.
-    let older = std::time::Instant::now();
-    let mut older_pages = 0;
-    for _ in 1..TURN_PAGES {
-        let Some(oldest) = h
-            .turns
-            .first()
-            .map(|t| t.id.clone())
-            .filter(|_| h.more_before)
-        else {
-            break;
-        };
-        older_pages += 1;
-        match api.turns(sid, None, Some(&oldest), Some(TURN_PAGE)).await {
-            Ok(page) => {
-                h.more_before = page.more_before;
-                if page.turns.is_empty() {
-                    h.more_before = false;
-                }
-                let mut turns = page.turns;
-                turns.append(&mut h.turns);
-                h.turns = turns;
-            }
-            Err(e) => {
-                h.turns_error = Some(format!("older turn details failed to load ({e})"));
-                break;
-            }
-        }
-    }
-    let phases = json!({
-        "first_ms": first,
-        "older_pages": older_pages,
-        "older_ms": crate::perf::ms(older.elapsed()),
-    });
-    Some((h, phases))
+    (h, open_ms)
 }
 
 /// After a dropped stream resumed from its cursor: the turns that started
