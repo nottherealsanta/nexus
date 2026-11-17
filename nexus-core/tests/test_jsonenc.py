@@ -12,7 +12,7 @@ PAYLOADS = [
     {"floats": [1e16, 1.5e-7, 1e22, -0.0, 3.141592653589793, 123456789.123456789, 5e-324]},
     {"nested": {"z": 1, "a": [1, {"m": "x", "b": 2}], "k": {"y": 0, "x": 0}}},
     {"escapes": 'quote " backslash \\ newline \n tab \t nul \x00 del \x7f sep   '},
-    {1: "int key", True: "bool key", None: "none key"},
+    {1: "int key", False: "bool key", None: "none key"},
     {"huge": 2**70, "tuple": (1, 2), "empty": {}, "list": []},
     {"lone": "bad \ud800 surrogate"},
     [{"type": "text", "text": "x" * 10000, "raw": {"a": [None] * 50}}],

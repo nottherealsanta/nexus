@@ -679,7 +679,7 @@ async def _row(provider: str, client: httpx.AsyncClient) -> dict[str, Any]:
 
 async def providers_usage(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     """One row per connected provider; limit windows where the provider reports them."""
-    wanted = connected_providers()
+    wanted = await asyncio.to_thread(connected_providers)
     own = client is None
     client = client or httpx.AsyncClient(timeout=15.0)
     try:

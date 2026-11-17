@@ -745,7 +745,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return out
 
     async def providers(request: Request) -> Response:
-        live = set(connected())
+        live = set(await asyncio.to_thread(connected))  # may run the Claude CLI (cached)
         return JSONResponse([
             {"id": i.id, "label": i.label, "dialect": i.dialect, "base_url": i.base_url, "catalog": i.catalog_id,
              "connected": i.id in live, "verified": i.verified} | sign_in(i.id)
@@ -768,7 +768,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         wanted = request.query_params.get("provider")
         # ZMX models carry `zmx: true`; clients list them in subagent pools only, never in a root picker.
         out = [to_json(m) | {"ref": m.ref} | ({"zmx": True} if pid in ("claude-code", "agy") else {})
-               for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
+               for pid in await asyncio.to_thread(connected) if not wanted or pid == wanted
+               for m in await catalog.list_models(data, pid)]
         out.sort(key=lambda m: (_version(m["name"]), m.get("released") or ""), reverse=True)
         return JSONResponse({"source": source, "models": out})
 
@@ -1280,7 +1281,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if request.method == "PUT":
             return await project_file_write(request)
         try:
-            return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
+            return await ajson(await asyncio.to_thread(files.read_file, file_root(request), request.query_params.get("path", "")))
         except ValueError as exc:
             raise (_missing(exc) or exc) from exc
 

@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 from conftest import remembering
+from waiting import until
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, PartDone, Text, ToolCall
@@ -58,11 +59,7 @@ def env(tmp_path, monkeypatch):
 
 
 async def _idle(rt):
-    for _ in range(300):
-        if not rt.turns:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"still running: {list(rt.turns)}")
+    await until(lambda: not rt.turns, "every turn to finish")
 
 
 async def _texts(client, session_id):
@@ -97,10 +94,7 @@ async def test_non_blocking_child_wakes_the_idle_parent(env):
     providers["parent"].replies = [[_call("c1", agent="helper", prompt="look", wait=False)], [Text("waiting")], [Text("thanks")]]
     parent = (await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate"})).json()
     await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
-    for _ in range(100):
-        if parent["id"] not in rt.turns:
-            break
-        await asyncio.sleep(0.01)
+    await until(lambda: parent["id"] not in rt.turns, "the parent turn to end")
     assert parent["id"] not in rt.turns and rt.turns  # the parent turn ended, but the child still runs
     assert (await client.get(f"/api/session/{parent['id']}")).json()["status"] == "busy"
     statuses = [e["data"] for e in rt.store.events(parent["id"], limit=5000) if e["type"] == "session.status"]
@@ -133,10 +127,7 @@ async def test_interrupting_the_parent_stops_a_waiting_child(env):
     providers["parent"].replies = [[_call("c1", agent="helper", prompt="slow")]]
     parent = (await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate"})).json()
     await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
-    for _ in range(100):
-        if len(rt.turns) == 2:
-            break
-        await asyncio.sleep(0.01)
+    await until(lambda: len(rt.turns) == 2, "the parent and child turns")
     assert len(rt.turns) == 2
     await client.post(f"/api/session/{parent['id']}/interrupt")
     await _idle(rt)
@@ -145,11 +136,7 @@ async def test_interrupting_the_parent_stops_a_waiting_child(env):
 
 
 async def _two_turns(rt):
-    for _ in range(100):
-        if len(rt.turns) == 2:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"expected parent and child turns: {list(rt.turns)}")
+    await until(lambda: len(rt.turns) == 2, "the parent and child turns")
 
 
 async def test_parent_interrupt_lands_before_a_queued_steer(env):
@@ -482,10 +469,7 @@ async def test_message_session_steers_a_working_child(env):
     parent = await _start_parent(client, workspace)
     providers["parent"].replies = [[_call("c1", agent="helper", prompt="work", wait=False)], [Text("started")]]
     await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "go"})
-    for _ in range(300):
-        if parent["id"] not in rt.turns and rt.turns:
-            break
-        await asyncio.sleep(0.01)
+    await until(lambda: parent["id"] not in rt.turns and rt.turns, "the parent turn to end with the child running")
     [child] = (await client.get(f"/api/session/{parent['id']}/children")).json()
     assert child["status"] == "busy"
 

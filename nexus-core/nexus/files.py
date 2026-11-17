@@ -80,6 +80,20 @@ def _open(root: Path, name: str, *, directory: bool) -> int:
         raise ValueError(str(exc)) from exc
 
 
+def _directory_entries(fd: int, name: str, statuses: dict[str, str], ignored: str) -> list[dict]:
+    """Scan and annotate one directory: stat calls plus a status match per entry, so a thread's work."""
+    ignored_paths = set(ignored.split("\0"))
+    entries = []
+    with os.scandir(fd) as iterator:
+        directory_entries = sorted(iterator, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.casefold()))
+    for entry in directory_entries:
+        stat = entry.stat(follow_symlinks=False)
+        rel = (Path(name) / entry.name).as_posix().removeprefix("./")
+        status = statuses.get(rel) or next((code for path, code in statuses.items() if path.startswith(rel + "/")), None)
+        entries.append({"name": entry.name, "kind": "symlink" if entry.is_symlink() else "directory" if entry.is_dir(follow_symlinks=False) else "file", "size": stat.st_size, "mtime": stat.st_mtime, "git_status": status, "ignored": rel == ".git" or rel in ignored_paths or rel + "/" in ignored_paths or any(rel.startswith(path.rstrip("/") + "/") for path in ignored_paths if path)})
+    return entries
+
+
 async def list_directory(root: Path, name: str) -> dict:
     fd = _open(root, name, directory=True)
     try:
@@ -97,15 +111,7 @@ async def list_directory(root: Path, name: str) -> dict:
                 statuses[path[len(prefix):]] = code
             if "R" in record[:2] or "C" in record[:2]:
                 next(records, None)
-        ignored_paths = set(ignored.split("\0"))
-        entries = []
-        with os.scandir(fd) as iterator:
-            directory_entries = sorted(iterator, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.casefold()))
-        for entry in directory_entries:
-            stat = entry.stat(follow_symlinks=False)
-            rel = (Path(name) / entry.name).as_posix().removeprefix("./")
-            status = statuses.get(rel) or next((code for path, code in statuses.items() if path.startswith(rel + "/")), None)
-            entries.append({"name": entry.name, "kind": "symlink" if entry.is_symlink() else "directory" if entry.is_dir(follow_symlinks=False) else "file", "size": stat.st_size, "mtime": stat.st_mtime, "git_status": status, "ignored": rel == ".git" or rel in ignored_paths or rel + "/" in ignored_paths or any(rel.startswith(path.rstrip("/") + "/") for path in ignored_paths if path)})
+        entries = await asyncio.to_thread(_directory_entries, fd, name, statuses, ignored)
         return {"path": name, "entries": entries}
     except OSError as exc:
         raise ValueError(str(exc)) from exc
@@ -393,6 +399,17 @@ async def search_files(
 
     workspace = root.resolve()
     visible = await _git_visible(workspace)
+    # The walk is up to 50,000 scandir/stat calls of pure Python: a thread, never the loop (plan 50 R1).
+    return await asyncio.to_thread(_search_walk, workspace, visible, query, limit, include_directories)
+
+
+def _search_walk(
+    workspace: Path,
+    visible: tuple[frozenset[str], frozenset[str]] | None,
+    query: str,
+    limit: int,
+    include_directories: bool,
+) -> list[str]:
     needle = query.casefold()
     found: list[str] = []
     visited = 0
@@ -457,6 +474,17 @@ def _rank(path: str, needle: str) -> tuple[int, int, int, str]:
     return tier, bare.count("/"), 0 if path.endswith("/") else 1, path
 
 
+def _visible_sets(output: str) -> tuple[frozenset[str], frozenset[str]]:
+    files = frozenset(name for name in output.split("\0") if name)
+    directories = frozenset(
+        "/".join(parts[:index])
+        for name in files
+        for parts in (name.split("/"),)
+        for index in range(1, len(parts))
+    )
+    return files, directories
+
+
 async def _git_visible(root: Path) -> tuple[frozenset[str], frozenset[str]] | None:
     """Files Git would not ignore, plus their parent directories, relative to ``root``.
 
@@ -477,14 +505,7 @@ async def _git_visible(root: Path) -> tuple[frozenset[str], frozenset[str]] | No
     except ValueError:  # output over the _git limit
         ok, output = False, ""
     if ok and len(output.encode("utf-8", "surrogateescape")) <= _GIT_LIST_MAX_BYTES:
-        files = frozenset(name for name in output.split("\0") if name)
-        directories = frozenset(
-            "/".join(parts[:index])
-            for name in files
-            for parts in (name.split("/"),)
-            for index in range(1, len(parts))
-        )
-        result = (files, directories)
+        result = await asyncio.to_thread(_visible_sets, output)
     if len(_git_cache) > 16:
         _git_cache.clear()
     _git_cache[key] = (now, result)
