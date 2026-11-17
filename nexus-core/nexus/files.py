@@ -12,7 +12,7 @@ import shutil
 import stat
 import sys
 import time
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from nexus import worktrees
 
@@ -22,7 +22,6 @@ MAX_FILE_SEARCH_LIMIT = 100
 MAX_FILE_SEARCH_ENTRIES = 50_000
 _GIT_LIST_MAX_BYTES = 16 * 1024 * 1024
 _GIT_LIST_TTL = 3.0
-_git_cache: dict[str, tuple[float, tuple[frozenset[str], frozenset[str]] | None]] = {}
 
 
 async def _git(root: Path, *args: str) -> tuple[bool, str]:
@@ -292,7 +291,7 @@ def mutate_path(root: Path, action: str, name: str, destination: str | None = No
         os.close(src)
         if dst >= 0:
             os.close(dst)
-    _git_cache.pop(str(root), None)
+    invalidate_index(root)
     return {"action": action, "path": name, **({"to": destination} if action == "rename" else {})}
 
 
@@ -362,6 +361,133 @@ async def git_diff(root: Path, path: str) -> dict:
             "staged_clipped": staged_clipped, "unstaged_clipped": unstaged_clipped}
 
 
+class _Index:
+    """The visible entries under one root, in the order `search_files` ranks them.
+
+    ``everything`` and ``only_files`` are ``(output path, casefolded relative path, casefolded name)`` tuples, each
+    pre-sorted by the rank's tie-break (depth, directories first, path), so a query is a few filtered passes that
+    stop at ``limit`` and never sort.
+    """
+
+    __slots__ = ("built", "dirty", "everything", "only_files")
+
+    def __init__(self, entries: list[tuple[str, bool]], built: float) -> None:
+        rows = sorted(
+            (relative.count("/"), 0 if is_dir else 1, relative + "/" if is_dir else relative, relative, is_dir)
+            for relative, is_dir in entries
+        )
+        self.everything = [(path, full.casefold(), full.rsplit("/", 1)[-1].casefold()) for _, _, path, full, _ in rows]
+        self.only_files = [
+            (path, full.casefold(), full.rsplit("/", 1)[-1].casefold()) for _, _, path, full, is_dir in rows if not is_dir
+        ]
+        self.built = built
+        self.dirty = False
+
+
+_indexes: dict[str, _Index] = {}
+_building: dict[str, asyncio.Task[_Index]] = {}
+_MAX_INDEXES = 8
+
+
+def invalidate_index(root: Path | str | None = None) -> None:
+    """Mark the cached search index for ``root`` (or every root) stale; the next search rebuilds it first."""
+    if root is None:
+        for index in _indexes.values():
+            index.dirty = True
+        return
+    try:
+        key = str(Path(root).resolve())
+    except OSError:
+        key = str(root)
+    if index := _indexes.get(key):
+        index.dirty = True
+
+
+def _walk_visible(workspace: Path, visible: tuple[frozenset[str], frozenset[str]] | None) -> list[tuple[str, bool]]:
+    """The bounded walk behind the index: `(relative path, is_dir)` for every visible entry, in walk order.
+
+    Symlinks are never listed or entered, so every entry reached from the resolved ``workspace`` stays inside it
+    and needs no per-entry ``resolve()``.
+    """
+    found: list[tuple[str, bool]] = []
+    visited = 0
+    stack: list[tuple[str, str]] = [(str(workspace), "")]
+    while stack and visited < MAX_FILE_SEARCH_ENTRIES:
+        current, prefix = stack.pop()
+        try:
+            with os.scandir(current) as iterator:
+                entries = sorted(
+                    itertools.islice(iterator, MAX_FILE_SEARCH_ENTRIES - visited),
+                    key=lambda entry: entry.name,
+                )
+        except (OSError, RuntimeError, ValueError):
+            continue
+        directories: list[tuple[str, str]] = []
+        for entry in entries:
+            visited += 1
+            if visited > MAX_FILE_SEARCH_ENTRIES:
+                break
+            name = entry.name
+            if name.startswith("."):
+                continue
+            try:
+                if entry.is_symlink():
+                    continue
+                relative = prefix + name
+                if any(ord(char) < 32 or ord(char) == 127 for char in relative):
+                    continue
+                relative.encode("utf-8", errors="strict")
+                is_directory = entry.is_dir(follow_symlinks=False)
+                is_file = not is_directory and entry.is_file(follow_symlinks=False)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if visible is not None and relative not in (visible[1] if is_directory else visible[0]):
+                continue
+            if is_directory:
+                directories.append((entry.path, relative + "/"))
+                found.append((relative, True))
+            elif is_file:
+                found.append((relative, False))
+        stack.extend(reversed(directories))
+    return found
+
+
+async def _build_index(workspace: Path) -> _Index:
+    visible = await _git_visible(workspace)
+    entries = await asyncio.to_thread(_walk_visible, workspace, visible)
+    return await asyncio.to_thread(_Index, entries, time.monotonic())
+
+
+async def _index_for(workspace: Path) -> _Index:
+    """The root's index: awaited when missing or invalidated; past the TTL the old one is served while a refresh runs."""
+    key = str(workspace)
+    index = _indexes.get(key)
+    task = _building.get(key)
+    if index is not None and not index.dirty:
+        if time.monotonic() - index.built >= _GIT_LIST_TTL and task is None:
+            _start_build(key, workspace)
+        return index
+    if task is None:
+        task = _start_build(key, workspace)
+    return await asyncio.shield(task)
+
+
+def _start_build(key: str, workspace: Path) -> asyncio.Task[_Index]:
+    task = asyncio.get_running_loop().create_task(_build_index(workspace))
+
+    def done(finished: asyncio.Task[_Index]) -> None:
+        _building.pop(key, None)
+        if finished.cancelled() or finished.exception() is not None:
+            return
+        if len(_indexes) >= _MAX_INDEXES and key not in _indexes:
+            _indexes.pop(min(_indexes, key=lambda name: _indexes[name].built))
+        _indexes[key] = finished.result()
+
+    _building[key] = task
+    task.add_done_callback(done)
+    return task
+
+
 async def search_files(
     root: Path,
     query: str,
@@ -374,7 +500,9 @@ async def search_files(
     The walk never opens files. It skips hidden entries, all symlinks and anything
     that resolves outside ``root``; in a Git work tree it also keeps only paths Git
     would not ignore. With ``include_directories`` matching visible directories are
-    returned too, with a trailing ``/``. Results are ranked by ``_rank``.
+    returned too, with a trailing ``/``. Results are ranked by ``_rank``. The walk
+    result is kept per root as an in-memory index (see ``_Index``), refreshed after
+    ``_GIT_LIST_TTL`` seconds or when ``invalidate_index`` is called.
     """
     if not isinstance(query, str) or len(query) > MAX_FILE_SEARCH_QUERY:
         raise ValueError("file search query must be a string of at most 256 characters")
@@ -391,63 +519,18 @@ async def search_files(
     if limit == 0:
         return []
 
-    workspace = root.resolve()
-    visible = await _git_visible(workspace)
+    index = await _index_for(root.resolve())
     needle = query.casefold()
-    found: list[str] = []
-    visited = 0
-    stack = [workspace]
-    while stack and visited < MAX_FILE_SEARCH_ENTRIES:
-        current = stack.pop()
-        try:
-            if current.is_symlink() or not current.resolve().is_relative_to(workspace):
-                continue
-            with os.scandir(current) as iterator:
-                entries = sorted(
-                    itertools.islice(iterator, MAX_FILE_SEARCH_ENTRIES - visited),
-                    key=lambda entry: entry.name,
-                )
-        except (OSError, RuntimeError, ValueError):
-            continue
-
-        directories: list[Path] = []
-        for entry in entries:
-            visited += 1
-            if visited > MAX_FILE_SEARCH_ENTRIES:
-                break
-            name = entry.name
-            if name.startswith(".") or entry.is_symlink():
-                continue
-            path = Path(entry.path)
-            try:
-                relative = path.relative_to(workspace).as_posix()
-                relative_path = PurePosixPath(relative)
-                if (
-                    relative_path.is_absolute()
-                    or ".." in relative_path.parts
-                    or any(part.startswith(".") for part in relative_path.parts)
-                    or any(ord(char) < 32 or ord(char) == 127 for char in relative)
-                ):
-                    continue
-                relative.encode("utf-8", errors="strict")
-                if not path.resolve().is_relative_to(workspace):
-                    continue
-                is_directory = entry.is_dir(follow_symlinks=False)
-                is_file = entry.is_file(follow_symlinks=False)
-            except (OSError, RuntimeError, ValueError):
-                continue
-            if visible is not None and relative not in (
-                visible[1] if is_directory else visible[0]
-            ):
-                continue
-            if is_directory:
-                directories.append(path)
-                if include_directories and needle in relative.casefold():
-                    found.append(relative + "/")
-            elif is_file and needle in relative.casefold():
-                found.append(relative)
-        stack.extend(reversed(directories))
-    return sorted(found, key=lambda path: _rank(path, needle))[:limit]
+    rows = index.everything if include_directories else index.only_files
+    # `_rank`'s tiers as three passes, each already in tie-break order and cut at `limit`.
+    out = [p for p, _, n in itertools.islice((r for r in rows if r[2].startswith(needle)), limit)]
+    if len(out) < limit:
+        out += [p for p, _, n in itertools.islice(
+            (r for r in rows if needle in r[2] and not r[2].startswith(needle)), limit - len(out))]
+    if len(out) < limit:
+        out += [p for p, _, n in itertools.islice(
+            (r for r in rows if needle in r[1] and needle not in r[2]), limit - len(out))]
+    return out
 
 
 def _rank(path: str, needle: str) -> tuple[int, int, int, str]:
@@ -461,31 +544,25 @@ async def _git_visible(root: Path) -> tuple[frozenset[str], frozenset[str]] | No
     """Files Git would not ignore, plus their parent directories, relative to ``root``.
 
     ``None`` means "not a Git work tree, or Git failed": the search falls back to the
-    plain walk. The list is cached for a few seconds so per-keystroke searches do not
-    run Git each time.
+    plain walk. Called once per index build, not per query.
     """
-    key = str(root)
-    now = time.monotonic()
-    cached = _git_cache.get(key)
-    if cached is not None and now - cached[0] < _GIT_LIST_TTL:
-        return cached[1]
-    result: tuple[frozenset[str], frozenset[str]] | None = None
     try:
         ok, output = await _git(
             root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."
         )
     except ValueError:  # output over the _git limit
-        ok, output = False, ""
-    if ok and len(output.encode("utf-8", "surrogateescape")) <= _GIT_LIST_MAX_BYTES:
-        files = frozenset(name for name in output.split("\0") if name)
-        directories = frozenset(
-            "/".join(parts[:index])
-            for name in files
-            for parts in (name.split("/"),)
-            for index in range(1, len(parts))
-        )
-        result = (files, directories)
-    if len(_git_cache) > 16:
-        _git_cache.clear()
-    _git_cache[key] = (now, result)
-    return result
+        return None
+    if not ok or len(output.encode("utf-8", "surrogateescape")) > _GIT_LIST_MAX_BYTES:
+        return None
+    names = frozenset(name for name in output.split("\0") if name)
+    return await asyncio.to_thread(_with_parents, names)
+
+
+def _with_parents(names: frozenset[str]) -> tuple[frozenset[str], frozenset[str]]:
+    directories: set[str] = set()
+    for name in names:
+        parent = name.rpartition("/")[0]
+        while parent and parent not in directories:
+            directories.add(parent)
+            parent = parent.rpartition("/")[0]
+    return names, frozenset(directories)

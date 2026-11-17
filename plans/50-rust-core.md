@@ -88,10 +88,55 @@ Why Python is enough for most of it, and where it is not:
 
 ### Phase 3 — PyO3 for proven hot spots (workstream E)
 
-- [ ] First candidate: the `@` file index and search (ARCHITECTURE.md § Speed): a Python walk of up to 50,000
-  entries per keystroke. Benchmark it on a large repo first (after Phase 1b moves it off the loop). Only if it misses
-  its budget (p95 < 20 ms warm on 100k files): a `nexus_native` module (PyO3 + maturin in the uv project) with a warm
-  index (`ignore` + `notify`), same ranking and confinement rules, GIL released.
+- [x] First candidate: the `@` file index and search (workstream E, 2026-11-17). **Decision: no PyO3 module.** A
+  pure-Python per-root index meets the budget with margin; R7 is not met, so `nexus_native` is not built.
+  Reproduce with `cd nexus-core && uv run python scripts/bench_file_search.py --dirs --profile` (synthetic repos
+  are cached under `$TMPDIR/nexus-bench-files`; `--sizes`, `--repo`, `--rounds`).
+
+  Method: 12 keystroke-like queries (`s`, `sr`, `src`, `src/`, `src/ma`, `src/mai`, `main`, `comp`, `index.ts`,
+  a no-match, `test_`, `util`) x 3 rounds, `limit=30`, `directories=true`, in-process on one Apple-silicon Mac, warm
+  filesystem cache. Synthetic repos are git-initialised (all files `git add`ed), depth 2 to 7, plus an ignored
+  `node_modules` of 20% extra files. "Cold" is the first query after dropping every cache.
+
+  | Repo | Before cold | Before warm p50 / p95 | After cold | After warm p50 / p95 |
+  | --- | --- | --- | --- | --- |
+  | synthetic 10k | 574 ms | 507 / 586 ms | 119 ms | 0.1 / 0.9 ms |
+  | synthetic 100k | 3185 ms | 2811 / 3080 ms | 887 ms | 0.1 / 4.8 ms |
+  | this repo (310 tracked) | 134 ms | 89 / 94 ms | 28 ms | 0.2 / 0.3 ms |
+
+  Budget: warm p95 < 20 ms on 100k (4.8 ms: met); first query on a cold root < 1 s (0.89 s: met, with little
+  margin).
+
+  Profile before (warm, 100k): 100% of the time was the per-query walk, and it ran on the event loop. About a fifth in
+  `Path.resolve()` per entry (an `lstat` storm), a quarter in `Path.relative_to`, a third in `PurePosixPath.parts`
+  checks and path-object construction, the rest in `scandir`, sorting and the `visible` set lookups. The walk stops at 50,000 visited
+  entries, so a 100k repo was only half searchable. The matching and ranking were never the cost.
+
+  Profile after (warm): the whole sweep is 4 ms of generator passes over the index; the only real cost is cold. Cold
+  100k splits as `git ls-files --cached --others --exclude-standard` 500 to 630 ms (git's own stat of 100k files),
+  the bounded walk 215 ms, building and pre-sorting the index 23 ms, parsing the Git list 20 ms. Git is the floor
+  for a pure-Python or a Rust design that keeps Git's ignore semantics; only an `ignore`-crate walker (its own
+  `.gitignore` engine, parallel) would remove most of it, and then ignore rules would differ from Git's (global
+  excludes, `info/exclude`, tracked-but-ignored files), which the existing tests treat as the contract.
+
+  What changed (all in `nexus-core/nexus/files.py`, same request/response contract, same ranking, same
+  confinement): `search_files` now answers from an in-memory `_Index` per root (at most 8 roots). It is built off
+  the event loop (Git async, walk and sort in threads, single-flight per root), rebuilt before answering after
+  `mutate_path` or a watcher `files.changed`/`git.changed` (`files.invalidate_index`, called from
+  `file_watch.py`), and refreshed in the background once 3 s old (stale-while-revalidate: that query is answered
+  from the older index, so the staleness bound is unchanged from the old 3 s Git cache). A query is three filtered
+  passes (basename prefix, basename substring, path substring) over rows pre-sorted by the rank tie-break (depth,
+  directories first, path), each cut at `limit`; `_rank` stays as the specification and
+  `tests/test_file_search_index.py` checks the index against it. The per-entry `resolve()` is dropped: symlinks are
+  never listed or entered, so every reached entry is already inside the resolved root. Watchers are leased and only
+  run while a client has the file panel open, so the TTL, not the watcher, is the general invalidation.
+
+  Risks and proposals (not done, need the user): (1) the 50,000-visited-entry cap is kept, so a repo over 50k
+  visible entries is still partly searchable (before and after); with an index the cap could rise to 200k at a
+  memory cost of about 100 bytes per entry, a behaviour change needing a ledger row. (2) A fuzzy matcher (`nucleo`)
+  stays a deliberate ranking change. (3) Revisit R7 only if a real repo shows a cold first query over 1 s with
+  Git's cost removed from the picture, or the index memory matters; if a module is ever built, per-platform wheels
+  (macOS arm64/x64, Linux x64/arm64), `install.sh`, `nexus doctor` and a pure-Python fallback are required.
 - [ ] Each further candidate (row conversion, token counting, diffing) needs the R7 evidence first.
 - [ ] If a module lands: per-platform wheels in the release, `install.sh` and `nexus doctor` updated.
 

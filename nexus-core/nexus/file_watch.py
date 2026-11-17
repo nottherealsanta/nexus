@@ -111,9 +111,11 @@ class FileWatches:
             excluded = await ignored_paths(root, selected)
             visible = [name for name in selected if name not in excluded]
             if visible or len(names) > MAX_PATHS:
+                files.invalidate_index(root)
                 self._event(key, "files.changed", paths=visible, omitted=max(0, len(names) - MAX_PATHS))
                 git_changed = True
         if git_changed:
+            files.invalidate_index(root)  # an ignore rule, the index or a checkout can change what is visible
             self._event(key, "git.changed")
 
     async def _run(self, key: tuple[str, str]) -> None:

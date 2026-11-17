@@ -1405,8 +1405,12 @@ visible paths. Results rank basename prefix matches, then basename matches, then
 path matches; shallower paths come first, and directories rank ahead of files of
 equal rank. `limit` defaults to 30 and is capped at 100. The walk never opens
 files, skips hidden entries and all symlinks, and stops after 50,000 entries.
-Inside a Git work tree only paths Git would not ignore are listed, and the list is
-cached for 3 seconds. Invalid input returns 400: `q` must be at most 256
+Inside a Git work tree only paths Git would not ignore are listed. The result of
+the walk is kept per root as an in-memory index (at most 8 roots): queries filter
+it and never touch the disk. The index is built off the event loop on the first
+query, rebuilt before answering after a file mutation or a watcher
+`files.changed`/`git.changed`, and refreshed in the background once it is 3
+seconds old (that query is answered from the older index). Invalid input returns 400: `q` must be at most 256
 characters, contain no NUL or backslash, and not start with `/` or contain a `..`
 segment; `limit` must be a non-negative integer.
 

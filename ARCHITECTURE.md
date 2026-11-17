@@ -128,7 +128,7 @@ Gaps to close for this table to hold:
 | Provider streaming, the loop | network, the model | yes |
 | Tools (bash, edit, read) | the process or disk | yes |
 | SQLite writes, event fan-out | SQLite, a few events per token | yes for now; measure under several clients |
-| `@` search (`files.search_files`) | a Python walk of up to 50,000 entries, `git ls-files` parsed into sets, per keystroke (Git list cached 3 s) | **no**: tens to hundreds of ms on a large repo, and it holds the event loop |
+| `@` search (`files.search_files`) | a Python walk of up to 50,000 entries, `git ls-files` parsed into sets, per keystroke (Git list cached 3 s) | **was no, now yes** (2026-11-17): a per-root in-memory index in Python answers warm queries in about 5 ms p95 on 100k files; see [plan 50 Phase 3](plans/50-rust-core.md) |
 | Directory listing with Git status | a `git status` subprocess per call | borderline |
 | Git status and diff | subprocess plus parsing | borderline |
 | Token counts for the starting context (N10) | tokenizer in Python | likely no |
