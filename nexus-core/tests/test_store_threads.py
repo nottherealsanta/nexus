@@ -227,3 +227,28 @@ async def test_retention_pass_runs_off_the_loop(env):
     rt, _store, _client, _session = env
     summary = await rt.retention.run_once_async()
     assert "events" in summary and rt.retention.last_summary is summary
+
+
+async def test_a_read_route_that_writes_falls_back_to_the_loop(env):
+    """A stored snapshot rebuilt for an old session is a write; the reader refuses it and the loop redoes the call."""
+    _rt, store, client, session = env
+    store.db.execute("delete from session_snapshot where session_id = ?", (session.id,))
+    store.db.commit()
+    assert store.snapshot(session.id) is None
+    for _ in range(2):  # the reader connection is still usable after the refused write
+        response = await client.get(f"/api/session/{session.id}")
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == session.id
+    assert store.snapshot(session.id) is not None  # the loop wrote the rebuilt snapshot
+    assert (await client.get(f"/api/session/{session.id}/message?limit=5")).status_code == 200
+
+
+async def test_a_refused_write_on_a_reader_rolls_back_cleanly(env):
+    _rt, store, _client, session = env
+
+    def bad(s: Store):
+        s.db.execute("insert into project(id, name, path) values ('x','x','/x')")
+
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        await store.r.run(bad)
+    assert await store.r.run(lambda s: s.session(session.id).id) == session.id

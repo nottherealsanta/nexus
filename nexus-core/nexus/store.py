@@ -48,6 +48,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import threading
 import time
 from collections.abc import Iterable, Iterator
@@ -3106,7 +3107,10 @@ class Store:
             try:
                 yield
             finally:
-                self.db.execute("commit")
+                # SQLite may already have ended the transaction (a failed write on a read-only connection rolls
+                # it back); end ours without masking the error that is propagating.
+                if self.db.in_transaction:
+                    self.db.rollback() if sys.exc_info()[0] else self.db.commit()
 
     def state_snapshot(self, *, session_id: str | None = None, message_limit: int = 200) -> dict[str, Any]:
         """Projects, sessions, pending state and an optional bounded session view at one log head."""
