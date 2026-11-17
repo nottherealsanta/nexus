@@ -3334,13 +3334,31 @@ class Runtime:
 
     def turn_summaries(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
         page = self.store.turn_summaries(session_id, **kwargs)
+        self._overlay_live(session_id, page["turns"])
+        return page
+
+    def _overlay_live(self, session_id: str, turns: list[dict[str, Any]]) -> None:
+        """The running request's in-memory partial replaces its stored checkpoint."""
         live = self.live_partials.get(session_id)
         if live is not None:
-            for turn in page["turns"]:
+            for turn in turns:
                 for request in turn["requests"]:
                     if request["id"] == live.request_id and request["message_id"] is None:
                         request["partial"] = live.json()
-        return page
+
+    def open_session(self, session_id: str, *, limit: int = 200) -> dict[str, Any]:
+        """Everything a client reads to open a session, in one bounded bundle (docs/api.md, Open a session)."""
+        session = self.session(session_id)
+        bundle = self.store.open_bundle(session_id, limit=limit)
+        self._overlay_live(session_id, bundle["turns"])
+        return {"session": self.session_json(session), "starting": self.snapshot_for(session), **bundle,
+                "approvals": self.pending_approvals(session_id), "questions": self.pending_questions(session_id)}
+
+    def older_history(self, session_id: str, *, before: int, limit: int) -> dict[str, Any]:
+        """A page of older messages with the turn summaries covering them."""
+        bundle = self.store.older_bundle(session_id, before=before, limit=limit)
+        self._overlay_live(session_id, bundle["turns"])
+        return bundle
 
     async def _run(self, session_id: str, user_text: str | Message | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None, input_id: str | None = None,

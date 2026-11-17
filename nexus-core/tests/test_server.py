@@ -99,7 +99,7 @@ async def test_an_anonymous_server_answers_without_a_token(tmp_path, monkeypatch
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 5}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 6}
     assert info["version"] == version("nexus10")
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retention_status",
                          "retry", "idempotency"}

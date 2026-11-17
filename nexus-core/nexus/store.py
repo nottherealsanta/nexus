@@ -356,6 +356,7 @@ create table if not exists turn (
   final_answer_message_id text
 );
 create index if not exists turn_session on turn(session_id, started);
+create index if not exists turn_session_seq on turn(session_id, start_seq);
 create index if not exists turn_open on turn(status, recovery);
 create table if not exists turn_request (
   id text primary key,
@@ -618,6 +619,7 @@ USAGE_KEYS = ("input", "cached", "output", "reasoning")  # their names in the AP
 UNKNOWN_MODEL = "unknown"  # ledger key for a request whose model was never recorded
 TURN_PAGE = 50
 TURN_PAGE_MAX = 200
+OPEN_TURNS_MAX = 500  # turns one open or older-history page returns, at most
 MUTATION_BODY_MAX = 64 * 1024  # retained response bytes; larger results replay as a bounded accepted record
 
 
@@ -3168,18 +3170,78 @@ class Store:
                 more_before, more_after = len(rows) > limit, before is not None
                 rows = list(reversed(rows[:limit]))
             turns = self._summaries(rows)
-            covered = self.db.execute(
-                "select min(start_seq) from turn where session_id = ?", (session_id,)).fetchone()[0]
-            if covered is None:  # no turn rows: no message has a summary
-                covered = self.db.execute(
-                    "select coalesce(max(seq), 0) from message where session_id = ?", (session_id,)).fetchone()[0]
-            if covered > 0 and not self.db.execute(
-                    "select 1 from message where session_id = ? and seq <= ? and coalesce(delivery, '') != 'handoff' limit 1",
-                    (session_id, covered)).fetchone():
-                covered = 0  # only the handoff summary precedes the first turn: it never had one
+            floor = self._floor(session_id)
             return {"turns": turns, "more_before": more_before, "more_after": more_after,
-                    "floor": {"seq": covered + 1} if covered > 0 else None,
-                    "usage": self.session_usage(session_id)}
+                    "floor": floor, "usage": self.session_usage(session_id)}
+
+    def _floor(self, session_id: str) -> dict[str, int] | None:
+        """`{"seq": n}`: messages below `n` have no turn summary; `None` when every message has one."""
+        covered = self.db.execute(
+            "select min(start_seq) from turn where session_id = ?", (session_id,)).fetchone()[0]
+        if covered is None:  # no turn rows: no message has a summary
+            covered = self.db.execute(
+                "select coalesce(max(seq), 0) from message where session_id = ?", (session_id,)).fetchone()[0]
+        if covered > 0 and not self.db.execute(
+                "select 1 from message where session_id = ? and seq <= ? and coalesce(delivery, '') != 'handoff' limit 1",
+                (session_id, covered)).fetchone():
+            covered = 0  # only the handoff summary precedes the first turn: it never had one
+        return {"seq": covered + 1} if covered > 0 else None
+
+    # -- open bundle: messages with the turns that cover them (plan 50 D) ---------
+    # Kept apart from the rest of the store: these are read-only and take no state.
+
+    def turns_for_messages(self, session_id: str, *, min_seq: int | None, before: int | None = None,
+                           limit: int = OPEN_TURNS_MAX) -> dict[str, Any]:
+        """Summaries of the turns that cover messages from `min_seq` up, oldest first.
+
+        A turn owns the messages after its `start_seq`, so the turn holding message
+        `min_seq` is the newest one with a smaller `start_seq`; every turn from it on
+        is included (the running one too). `before` (a message seq) leaves out turns
+        that started at or after it: an older page of messages needs no newer turns.
+        With no messages (`min_seq` None) the newest `limit` turns are returned. At
+        most `limit` turns are returned, the newest ones; `more_before` says older
+        turns exist (their messages, if any, are loaded with the next older page).
+        """
+        where, params = "session_id = ?", [session_id]
+        if min_seq is not None:
+            lower = self.db.execute(
+                "select max(start_seq) from turn where session_id = ? and start_seq < ?",
+                (session_id, min_seq)).fetchone()[0]
+            if lower is not None:
+                where += " and start_seq >= ?"
+                params.append(lower)
+        if before is not None:
+            where += " and start_seq < ?"
+            params.append(before)
+        rows = self.db.execute(
+            f"select * from turn where {where} order by started desc, id desc limit ?",
+            (*params, limit + 1)).fetchall()
+        cut = len(rows) > limit
+        rows = list(reversed(rows[:limit]))
+        more_before = cut or bool(rows and self.db.execute(
+            "select 1 from turn where session_id = ? and (started, id) < (?, ?) limit 1",
+            (session_id, rows[0]["started"], rows[0]["id"])).fetchone())
+        return {"turns": self._summaries(rows), "more_before": more_before}
+
+    def open_bundle(self, session_id: str, *, limit: int = 200) -> dict[str, Any]:
+        """The newest `limit` messages, the turn summaries covering them, the floor and the ledger."""
+        with self.read_transaction():
+            page = self.messages_page(session_id, limit=limit)
+            turns = self.turns_for_messages(session_id, min_seq=page["oldest_seq"])
+            return {"messages": page["messages"], "messages_more": page["more"], "oldest_seq": page["oldest_seq"],
+                    "turns": turns["turns"], "turns_more_before": turns["more_before"],
+                    "floor": self._floor(session_id), "usage": self.session_usage(session_id)}
+
+    def older_bundle(self, session_id: str, *, before: int, limit: int = 100) -> dict[str, Any]:
+        """A page of messages before `before` with the turns covering them (older history on scroll)."""
+        with self.read_transaction():
+            page = self.messages_page(session_id, before=before, limit=limit)
+            if page["messages"]:
+                turns = self.turns_for_messages(session_id, min_seq=page["oldest_seq"], before=before)
+            else:
+                turns = {"turns": [], "more_before": False}
+            return {**page, "turns": turns["turns"], "turns_more_before": turns["more_before"],
+                    "floor": self._floor(session_id)}
 
     def turn_summary(self, turn_id: str) -> dict[str, Any] | None:
         """One turn's summary, the same entry `turn_summaries` returns."""

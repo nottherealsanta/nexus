@@ -160,7 +160,7 @@ MAX_SPEAK_CHARS = 1200  # one Manager sentence is at most 400; this leaves room 
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
-API_VERSION = {"major": 1, "minor": 5}
+API_VERSION = {"major": 1, "minor": 6}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -1687,11 +1687,27 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 before = int(request.query_params["before"]) if request.query_params.get("before") else None
             except ValueError:
                 raise ValueError("limit and before must be integers") from None
+            if request.query_params.get("turns") in ("1", "true"):  # older history: the turns covering the page too
+                if before is None:
+                    raise ValueError("turns needs before")
+                return JSONResponse(runtime.older_history(p(request, "id"), before=before, limit=limit))
             return JSONResponse(runtime.store.messages_page(p(request, "id"), before=before, limit=limit))
         return JSONResponse([message_json(m) for m in runtime.store.messages(p(request, "id"))])
 
     async def context(request: Request) -> Response:
-        return JSONResponse(await runtime.context_usage(p(request, "id")))
+        data = await runtime.context_usage(p(request, "id"))
+        if request.query_params.get("summary") in ("1", "true"):  # the figures only, not the request body
+            data = {k: data[k] for k in ("used", "window", "exact", "context_complete") if k in data}
+        return JSONResponse(data)
+
+    async def open_session(request: Request) -> Response:
+        """One bounded bundle to open a session: row, starting context, newest messages and their turns."""
+        try:
+            limit = max(1, min(500, int(request.query_params.get("limit", "200"))))
+        except ValueError:
+            raise ValueError("limit must be an integer") from None
+        return JSONResponse(runtime.open_session(p(request, "id"), limit=limit),
+                            headers={"cache-control": "no-store"})
 
     async def draft_context(request: Request) -> Response:
         body = await _body(request)
@@ -2067,6 +2083,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/session/{id}/event", route(stored_events)),
         Route("/api/session/{id}/diagnostics", route(diagnostics), methods=["GET", "POST"]),
         Route("/api/session/{id}/turn", route(turns)),
+        Route("/api/session/{id}/open", route(open_session)),
         Route("/api/session/{id}/inspect", route(native_inspector)),
         Route("/api/session/{id}/inspect/head", route(native_inspector_head)),
         Route("/api/session/{id}/inspect/record", route(native_inspector_record)),
