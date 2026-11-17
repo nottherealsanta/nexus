@@ -11,6 +11,7 @@ from typing import Any
 from .codec import message_from_json
 from .llmhub.types import Message
 from .store import Store, new_id
+from .storeio import READER
 
 
 class InputNotFound(Exception):
@@ -22,8 +23,13 @@ class InputBusy(Exception):
 
 
 class Inputs:
+    @property
+    def store(self) -> Store:
+        """The store; inside `Runtime.read()` it is that call's read-only view."""
+        return READER.get() or self._store
+
     def __init__(self, store: Store) -> None:
-        self.store = store
+        self._store = store
         store.db.executescript("""
         create table if not exists pending_input (
           id text primary key, session_id text not null references session(id) on delete cascade,

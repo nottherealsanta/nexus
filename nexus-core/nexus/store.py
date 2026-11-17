@@ -3294,7 +3294,7 @@ def _serialize_methods(cls: type[Store]) -> None:
     import functools
     import inspect
 
-    skip = {"read_transaction", "close", "_open_reader"}
+    skip = {"read_transaction", "close", "_open_reader", "log_generation", "is_hidden"}
     for name, fn in list(vars(cls).items()):
         if name.startswith("__") or name in skip or not inspect.isfunction(fn) or inspect.isgeneratorfunction(fn):
             continue

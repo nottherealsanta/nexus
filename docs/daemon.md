@@ -198,6 +198,48 @@ Switching agents never changes a session's model. A session that was running its
 A subagent without an explicit model, a configured `[agents.models]` pool (with a connected provider) or a
 pinning agent inherits its parent's current model.
 
+## Storage threading (`nexus/storeio.py`, plan 50 phase 1a)
+
+SQLite work must not run on the event loop. The store has **one write connection**, used by one thread at a time, and
+**read-only connections** (one per reader thread, `mode=ro`, `query_only`) that WAL lets read beside the writer.
+
+- **The lock.** Every `Store` method holds one re-entrant lock for its whole body, and `store.db` is a
+  `LockedConnection`: each statement runs under the lock and its rows are fetched before it is released, and
+  `with store.db:` holds it for the transaction. So a synchronous call site on the loop and a job on the writer
+  thread never interleave statements of one transaction. `log_generation` and `is_hidden` touch no SQLite and take
+  no lock.
+- **Async facade.** `await store.w.<method>(...)` runs any store method on the single writer thread (a FIFO
+  queue, so writes keep call order); `await store.w.run(fn, *args)` runs `fn(store, *args)` there, one lock hold
+  for several statements. `await store.r.<method>(...)` (read methods only, `store.READ_METHODS`) and
+  `await store.r.run(fn)` run on one of four reader threads, inside one read snapshot (`begin` ... `commit`), so a
+  multi-query read is consistent. A write on a reader raises `OperationalError` (readonly).
+- **Durability and order.** A store method commits before it returns, so an awaited write is durable when the await
+  completes; commits are not batched (`synchronous = normal` in WAL does not sync per commit, so there is nothing to
+  gain without weakening that). The writer queue is FIFO. A write queued from a task that is then cancelled still
+  runs (the await is shielded), as a cancelled synchronous call would have finished its statement.
+- **Read your writes.** A reader opens its snapshot when the read starts, so any write whose await (or synchronous
+  call) returned earlier is visible; nothing else is promised across two concurrent calls.
+- **Whole-route reads.** `Runtime.read(fn)` runs `fn()` on a reader thread with `runtime.store` (and `runtime.inputs`)
+  answering with that read-only connection, so existing code such as `session_json` runs unchanged. `fn` must not
+  publish, touch the loop or write; if it tries to write (a snapshot rebuilt for an old session) the call repeats on
+  the loop. `Runtime.read_session(id, fn)` first checks the session in the same snapshot.
+- **Bus.** `Bus.publish` is unchanged and synchronous (commit, then deliver, under the bus lock).
+  `await Bus.apublish(...)` commits on the writer thread and delivers on the loop; events committed on the thread wait
+  in `_pending`, and every loop-side delivery, `open()` and `deliver_stored` drains that first, so delivery is in
+  event-id order and a new subscriber never receives an event its replay already covers.
+- **Retention.** `Retention.run_once_async` runs the whole pass on the writer thread (`run_once` is the same pass on
+  the calling thread, for tests); the announcements it committed are delivered on the loop afterwards.
+
+Moved off the loop: `GET /api/info`, `/api/snapshot`, `/api/session` (list and `?parent=`) and `/children`,
+`/api/session/{id}/message` (page and full), `/turn`, `/usage`, stored `/events`, artifact list,
+`/diagnostics`, `/api/project` list, prompt history, search (writer: it spends a slice of the index backfill),
+`/api/manager/audit`, the SSE replay pages and the retention pass. Still synchronous on the loop (each a short
+point query or write that waits on the lock only while the writer thread is inside a transaction): the ~175
+`self.store.*` calls in `runtime.py` (turn execution, session create/update/delete, approvals, inputs, the
+`bus.publish` commit per event), the remaining `runtime.session()` lookups, the Manager service and the terminal and
+usage services that hold `store.db`. Next: `apublish` on the turn loop and the Manager, and read-model-backed routes
+(phase 2).
+
 ## Durable event log
 
 `nexus/bus.py` commits durable events before delivering them. Their stable row

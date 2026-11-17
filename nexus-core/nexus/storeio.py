@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
@@ -29,6 +30,10 @@ if TYPE_CHECKING:
     from .store import Store
 
 READERS = 4
+
+# Inside `Runtime.read()` this is the read-only store of the thread running the call; components that keep a
+# store (`Runtime`, `Inputs`) answer `.store` with it, so shared read code runs unchanged on a reader.
+READER: contextvars.ContextVar[Store | None] = contextvars.ContextVar("nexus_reader_store", default=None)
 
 
 class Rows:

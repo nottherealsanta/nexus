@@ -60,9 +60,38 @@ Why Python is enough for most of it, and where it is not:
 ### Phase 1 — Stop blocking the loop
 
 1a. **Async store (workstream B).**
-- [ ] A writer thread owning the only write connection (a queue; commits batched per few ms or per turn step) and a
-  small read pool used via `asyncio.to_thread`. Call sites in `runtime.py`/`server.py` move to `await`. Schema and
-  behaviour unchanged; crash-recovery guarantees unchanged (an awaited write is durable when it returns).
+
+*Design (2026-11-17).* The store has about 175 call sites in `runtime.py`, 37 in `server.py` and more in the Manager,
+terminals and usage services, interleaved with `with store.db:` blocks, so a big-bang conversion to `await` is not
+safe in one change. Instead the store becomes thread-correct first and call sites migrate behind it:
+
+- One write connection, serialized by a re-entrant lock held for the whole of every `Store` method and every
+  `with store.db:` block (`store.db` is a `LockedConnection` that fetches rows under the lock). A synchronous caller on
+  the loop and the writer thread never interleave a transaction. A transaction spanning several statements is one
+  method, or one `await store.w.run(fn)` (one lock hold on the writer thread).
+- One writer thread (single-worker executor, FIFO): `await store.w.<method>()`. Each method commits before it returns,
+  so an awaited write is durable on return and idempotency/recovery ordering is the call order, unchanged. Commits are
+  not batched: WAL with `synchronous = normal` does not sync per commit, and batching would break "durable when the
+  API says done". The await is shielded, so a cancelled caller cannot drop a queued write.
+- Four reader threads, each with its own read-only (`query_only`) connection, one snapshot per call:
+  `await store.r.<method>()` for whitelisted reads, `Runtime.read(fn)` for whole route bodies (`runtime.store` and
+  `runtime.inputs.store` resolve to the reader inside it). Read-your-writes holds because a write's commit precedes
+  its await returning and a reader's snapshot starts after that.
+- Event log and bus: `Bus.publish` stays synchronous (persist, then deliver, one lock). `Bus.apublish` commits on the
+  writer and delivers on the loop; thread-committed events queue in `_pending` and every loop-side delivery drains it
+  first, so delivery order is id order and `open()` cannot hand a subscriber an event its replay covers.
+- Migration order: hottest reads first (messages, turns, stored events, snapshot, session lists, usage, replay,
+  retention), then the turn loop's writes.
+
+- [x] A writer thread owning the only write connection and a read pool; durable-on-return, FIFO, shielded.
+- [x] Async facade (`store.w`, `store.r`, `Runtime.read`, `Bus.apublish`) with tests (`tests/test_store_threads.py`):
+  a slow read or write does not hold other requests; a 12 MB read does not stall the loop; read-your-writes;
+  snapshot consistency; ordering.
+- [x] Hot reads and the retention pass off the loop (list in docs/daemon.md § Storage threading).
+- [ ] Remaining synchronous on the loop: the turn loop's `store.*` writes and `bus.publish` commits in `runtime.py`,
+  session create/update/delete, the Manager service, `inputs` writes, terminals and usage services, `runtime.session()`
+  lookups on non-migrated routes. Convert with `apublish`/`store.w` route by route; then add the R2 check that
+  forbids `store.db` outside the store.
 
 1b. **Fast encoding, off-loop CPU, watchdog (workstream C).**
 - [ ] JSON responses and SSE frames encode with `orjson` (or `msgspec`), output byte-compatible where clients care.
