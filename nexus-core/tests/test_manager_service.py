@@ -6,7 +6,7 @@ import time
 
 import pytest
 from manager_seed import seed
-from manager_support import Harness
+from manager_support import Harness, until
 
 
 @pytest.fixture
@@ -88,10 +88,7 @@ async def test_the_holder_closing_its_stream_ends_the_call_but_not_a_session(h):
     stream = h.open_stream()
     await h.start()
     stream.close()
-    for _ in range(100):
-        if not h.manager.call.active:
-            break
-        await asyncio.sleep(0.02)
+    await until(lambda: not h.manager.call.active, what="the call to end")
     assert not h.manager.call.active
     assert h.rt.store.session(session.id) is not None
     assert (await h.client.get("/api/manager")).json()["call"] is None
@@ -104,7 +101,7 @@ async def test_stop_ends_the_call_with_a_state_event_and_never_touches_sessions(
     started = await h.start()
     response = await h.client.post("/api/manager/stop", json={"stream_id": h.stream.stream_id})
     assert response.status_code == 204
-    await asyncio.sleep(0.05)
+    await h.flush()
     last = h.of("manager.state")[-1]["data"]
     assert last["call_id"] == started["call_id"] and last["active"] is False
     assert len(h.store.sessions()) == 1
@@ -225,10 +222,7 @@ async def test_cancel_before_any_side_effect_interrupts_the_turn(h, monkeypatch)
     h.open_stream()
     await h.start()
     await h.say("go on", wait=False)
-    for _ in range(100):
-        if h.spoken():
-            break
-        await asyncio.sleep(0.02)
+    await until(h.spoken, what="the first spoken words")
     response = await h.client.post("/api/manager/cancel", json={"stream_id": h.stream.stream_id})
     assert response.json()["cancelled"] is True and response.json()["muted"] is True
     await h.settle()
@@ -265,7 +259,7 @@ async def test_activity_and_card_dismiss_are_accepted_from_the_holder(h):
     stale = await h.client.post("/api/manager/card/dismiss", json={"stream_id": h.stream.stream_id, "card_id": "card_old"})
     assert stale.status_code == 204 and h.manager.stage.card is not None  # a stale id changes nothing
     done = await h.client.post("/api/manager/card/dismiss", json={"stream_id": h.stream.stream_id, "card_id": card["id"]})
-    await asyncio.sleep(0.05)
+    await h.flush()
     assert done.status_code == 204 and h.card() is None and h.manager.stage.card is None
     bad = await h.client.post("/api/manager/activity", json={"stream_id": h.stream.stream_id, "listening": "yes", "speaking": False})
     assert bad.status_code == 400

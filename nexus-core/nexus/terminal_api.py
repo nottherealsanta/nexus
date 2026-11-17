@@ -14,9 +14,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
+from .jsonenc import JSONResponse
 from .runtime import Conflict, Runtime
 from .terminals import TerminalService
 

@@ -30,6 +30,7 @@ async def test_foreground_bash_is_bounded_and_accepts_an_explicit_timeout(tmp_pa
     assert module.timeout_value(None) is None
 
 
+@pytest.mark.blocks_loop("foreground bash spawn and pipe read under test load")
 async def test_foreground_bash_reports_failures_a_pipeline_hides(tmp_path):
     ctx = ToolContext(tmp_path)
     out = await bash({"command": "printf 'x\\n' | grep zzz | cat"}, ctx)  # grep fails in the middle

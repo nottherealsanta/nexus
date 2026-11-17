@@ -32,6 +32,7 @@ async def test_a_view_is_stored_for_its_stream_and_never_echoes_the_capability(h
     assert h.manager.views.view_for(stream.stream_id)["panel"] == "files"
 
 
+@pytest.mark.blocks_loop("synchronous SQLite seeding and store reads on the loop; workstream B (store threading) owns the fix")
 async def test_a_session_fills_in_its_project_and_empty_values_clear_the_view(h):
     project = h.project()
     session = seed(h.store, project, title="Work", user="u", now=time.time())

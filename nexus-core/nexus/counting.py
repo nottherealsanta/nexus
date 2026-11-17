@@ -5,9 +5,10 @@ that subsequently appended context has already been tokenized by the provider.
 """
 from __future__ import annotations
 
-import json
 import math
 from typing import Any
+
+from .jsonenc import dumps
 
 IMAGE_TOKENS = 1_000  # a flat cost per inline image; its base64 characters are not tokens
 
@@ -25,7 +26,7 @@ def _without_images(value: Any) -> Any:
 
 def estimate_tokens(value: Any) -> int:
     """The character-based estimate `budget` falls back to, for one part of a request."""
-    text = value if isinstance(value, str) else json.dumps(_without_images(value), ensure_ascii=False, separators=(",", ":"))
+    text = value if isinstance(value, str) else dumps(_without_images(value)).decode()
     return math.ceil(len(text) / 4)
 
 

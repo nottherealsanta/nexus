@@ -5,6 +5,7 @@ from importlib.metadata import version
 import httpx
 import pytest
 from conftest import remembering
+from waiting import until
 
 from nexus import runtime as runtime_module
 from nexus.llmhub.types import Done, PartDone, Text, ToolCall
@@ -45,11 +46,7 @@ def setup(tmp_path, monkeypatch):
 
 
 async def _wait_idle(rt, session_id):
-    for _ in range(200):
-        if session_id not in rt.turns:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("turn did not finish")
+    await until(lambda: session_id not in rt.turns, f"turn {session_id} to finish")
 
 
 async def test_token_is_required(setup):
@@ -166,10 +163,7 @@ async def test_interrupt_closes_a_waiting_tool_call(setup):
     provider.replies = [[ToolCall("c1", "bash", '{"command": "true"}')]]
     session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
     await client.post(f"/api/session/{session['id']}/prompt", json={"text": "go"})
-    for _ in range(100):
-        if rt.pending_approvals(session["id"]):
-            break
-        await asyncio.sleep(0.01)
+    await until(lambda: rt.pending_approvals(session["id"]), 'rt.pending_approvals(session["id"])')
     assert (await client.post(f"/api/session/{session['id']}/prompt", json={"text": "again"})).status_code == 409
     assert (await client.post(f"/api/session/{session['id']}/interrupt")).status_code == 204
     await _wait_idle(rt, session["id"])
@@ -282,11 +276,7 @@ async def test_code_nested_write_needs_no_approval_and_kernel_api(setup):
     session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "ask"})).json()
     sid = session["id"]
     await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
-    for _ in range(100):
-        pending = rt.pending_approvals(sid)
-        if pending:
-            break
-        await asyncio.sleep(0.01)
+    pending = await until(lambda: rt.pending_approvals(sid), 'rt.pending_approvals(sid)')
     # The nested write needed no approval; the nested bash still asks.
     assert len(pending) == 1 and pending[0]["tool"] == "bash"
     assert (workspace / "x.txt").read_text() == "hi"
@@ -343,11 +333,7 @@ async def test_code_in_a_child_uses_the_child_approval_and_events(setup):
     provider.replies = [[ToolCall("cc1", "code", json.dumps({"code": 'await bash(command="printf kid > child.txt")'}))],
                         [Text("done")]]
     await client.post(f"/api/session/{child['id']}/prompt", json={"text": "go"})
-    for _ in range(100):
-        pending = rt.pending_approvals(child["id"])
-        if pending:
-            break
-        await asyncio.sleep(0.01)
+    pending = await until(lambda: rt.pending_approvals(child["id"]), 'rt.pending_approvals(child["id"])')
     [request] = pending
     assert request["session_id"] == child["id"] and request["tool"] == "bash"
     assert request["call_id"] == "cc1:1:1"
@@ -459,19 +445,19 @@ async def test_background_bash_notice_output_api_and_session_delete(setup):
     await _wait_idle(rt, sid)
     [job] = (await client.get('/api/bash')).json()
     jid = job['id']
-    for _ in range(200):
-        current = (await client.get(f'/api/bash/{jid}')).json()
-        if current['status'] != 'running':
-            break
-        await asyncio.sleep(0.02)
+    async def finished():
+        return (await client.get(f'/api/bash/{jid}')).json()['status'] != 'running'
+
+    await until(finished, "the background job to finish")
+    current = (await client.get(f'/api/bash/{jid}')).json()
     assert current['status'] == 'done' and current['output'] == 'helloworld'
 
     # The finish notice is context, and wakes an idle session.
-    for _ in range(200):
+    async def noticed():
         messages = (await client.get(f'/api/session/{sid}/message')).json()
-        if any('→ Background Shell Done:' in (p.get('text') or '') for m in messages for p in m['parts']):
-            break
-        await asyncio.sleep(0.02)
+        return any('→ Background Shell Done:' in (p.get('text') or '') for m in messages for p in m['parts'])
+
+    await until(noticed, "the finish notice")
     await _wait_idle(rt, sid)
     messages = (await client.get(f'/api/session/{sid}/message')).json()
     notice = next(p['text'] for m in messages for p in m['parts'] if '→ Background Shell Done:' in (p.get('text') or ''))
@@ -509,11 +495,11 @@ async def test_bash_kill_tool_stops_a_job(setup):
     await _wait_idle(rt, sid)
     current = (await client.get(f"/api/bash/{job['id']}")).json()
     assert current['status'] == 'killed'
-    for _ in range(100):
+    async def killed_notice():
         messages = (await client.get(f'/api/session/{sid}/message')).json()
-        if any('→ Background Shell Done:' in (p.get('text') or '') and 'killed' in (p.get('text') or '') for m in messages for p in m['parts']):
-            break
-        await asyncio.sleep(0.02)
+        return any('→ Background Shell Done:' in (p.get('text') or '') and 'killed' in (p.get('text') or '') for m in messages for p in m['parts'])
+
+    await until(killed_notice, "the killed notice")
     await _wait_idle(rt, sid)
     messages = (await client.get(f'/api/session/{sid}/message')).json()
     outputs = [p['output'] for m in messages for p in m['parts'] if p['type'] == 'tool_result' and job['id'] in p['output']]
@@ -859,10 +845,7 @@ async def test_turn_summary_event_equals_the_turn_entry_for_every_close(setup):
 
     provider.replies = [[ToolCall("c1", "bash", '{"command": "true"}')]]
     await client.post(f"/api/session/{sid}/prompt", json={"text": "three"})
-    for _ in range(100):
-        if rt.pending_approvals(sid):
-            break
-        await asyncio.sleep(0.01)
+    await until(lambda: rt.pending_approvals(sid), 'rt.pending_approvals(sid)')
     assert (await client.post(f"/api/session/{sid}/interrupt")).status_code == 204
     await _wait_idle(rt, sid)
 
@@ -907,11 +890,7 @@ async def test_missing_pending_input_is_404(setup):
 
 
 async def _pending(rt, sid, after=None):
-    for _ in range(200):
-        if pending := [a for a in rt.pending_approvals(sid) if a["id"] != after]:
-            return pending[0]
-        await asyncio.sleep(0.01)
-    raise AssertionError("no approval was asked")
+    return (await until(lambda: [a for a in rt.pending_approvals(sid) if a["id"] != after], "an approval to be asked"))[0]
 
 
 async def test_allow_for_session_covers_the_same_command_only(setup):

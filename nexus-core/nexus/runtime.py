@@ -2211,7 +2211,8 @@ class Runtime:
             return body | {"used": None, "window": None, "exact": False, "context_complete": False}
         model = self.session_json(self.session(session_id))["model"]
         window = await self.window_for(model)
-        return body | budget(body, window, self.measured_input(session_id, model))
+        measured = self.measured_input(session_id, model)
+        return body | await asyncio.to_thread(budget, body, window, measured)  # pure CPU: token estimate of a big body
 
     async def draft_context(self, project: Project, *, model: str | None = None, effort: str | None = None,
                             agent: str | None = None, disabled_tools: list[str] | None = None,

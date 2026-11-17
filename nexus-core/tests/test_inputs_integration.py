@@ -409,6 +409,7 @@ async def test_archive_and_delete_refuse_pending_inputs_unless_drop_is_explicit(
     assert second_input != input_id
 
 
+@pytest.mark.blocks_loop("synchronous SQLite seeding and store reads on the loop; workstream B (store threading) owns the fix")
 async def test_recovery_does_not_duplicate_delivered_event_after_publish_crash(setup_inputs):
     runtime, client, _, workspace = setup_inputs
     session_id = await _session(client, workspace)

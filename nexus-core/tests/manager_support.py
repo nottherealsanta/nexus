@@ -74,16 +74,23 @@ class Harness:
         stream = stream or self.stream or self.open_stream()
         response = await self.client.post("/api/manager/start", json={"stream_id": stream.stream_id, "client_id": client_id})
         assert response.status_code == 200, response.text
-        await asyncio.sleep(0.05)  # let the event pump see the call's first events
+        await self.flush()  # let the event pump see the call's first events
         return response.json()
 
-    async def settle(self, timeout: float = 10.0) -> None:
+    async def flush(self) -> None:
+        """Wait until every open stream's pump has taken what the bus queued for it."""
+        await until(lambda: all(s.subscription._queue.empty() for s in self.streams if not s.subscription.closed),
+                    what="the event pumps to catch up")
+        for _ in range(5):  # a pump that just took the last event appends it on its next step
+            await asyncio.sleep(0)
+
+    async def settle(self, timeout: float = 60.0) -> None:
         """Wait until the Manager has nothing queued or running."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.005)
             if self.manager.turn is None and self.manager._queue.empty():
-                await asyncio.sleep(0.05)
+                await self.flush()
                 if self.manager.turn is None and self.manager._queue.empty():
                     return
         raise AssertionError("the Manager did not settle")
@@ -94,7 +101,7 @@ class Harness:
         assert response.status_code == 202, response.text
         if wait:
             await self.settle()
-            await asyncio.sleep(0.05)
+            await self.flush()
         return response.json()
 
     def of(self, kind: str) -> list[dict[str, Any]]:
@@ -109,17 +116,16 @@ class Harness:
 
     async def answer_navigation(self, ok: bool = True, reason: str | None = None) -> None:
         """Play the client: answer the next `manager.navigate` event."""
-        for _ in range(200):
-            nav = [e for e in self.of("manager.navigate") if e["data"]["request_id"] not in getattr(self, "_answered", set())]
-            if nav:
-                self._answered = getattr(self, "_answered", set()) | {nav[-1]["data"]["request_id"]}
-                response = await self.client.post("/api/manager/navigate/result", json={
-                    "stream_id": self.stream.stream_id, "request_id": nav[-1]["data"]["request_id"], "ok": ok,
-                    **({"reason": reason} if reason else {})})
-                assert response.status_code == 204, response.text
-                return
-            await asyncio.sleep(0.02)
-        raise AssertionError("no manager.navigate event arrived")
+        def fresh() -> list[dict[str, Any]]:
+            return [e for e in self.of("manager.navigate") if e["data"]["request_id"] not in getattr(self, "_answered", set())]
+
+        await until(fresh, what="a manager.navigate event")
+        nav = fresh()
+        self._answered = getattr(self, "_answered", set()) | {nav[-1]["data"]["request_id"]}
+        response = await self.client.post("/api/manager/navigate/result", json={
+            "stream_id": self.stream.stream_id, "request_id": nav[-1]["data"]["request_id"], "ok": ok,
+            **({"reason": reason} if reason else {})})
+        assert response.status_code == 204, response.text
 
     async def report_view(self, project: str | None, session: str | None, panel: str | None = None) -> None:
         response = await self.client.post("/api/client/view", json={
@@ -136,13 +142,14 @@ class Harness:
         await self.client.aclose()
 
 
-async def until(check, timeout: float = 8.0, what: str = "the condition") -> None:
-    """Poll `check()` until it is truthy; the Manager's own turns take a moment to start (catalog lookup)."""
+async def until(check, timeout: float = 60.0, what: str = "the condition") -> None:
+    """Poll `check()` until it is truthy. The ceiling only bounds a hang: under load a Manager turn can take
+    seconds to start (catalog lookup, thread pool), and a satisfied check returns at once."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check():
             return
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.005)
     raise AssertionError(f"{what} never became true")
 
 

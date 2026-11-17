@@ -465,6 +465,7 @@ for i in range(100):
     assert len([e for e in events if e.kind == "result"]) == 1
 
 
+@pytest.mark.blocks_loop("synchronous ZMX process probe (ps) on the loop; documented in plan 50")
 async def test_terminal_control_expansion_is_bounded(tmp_path):
     worker = fake_agy(tmp_path, """
 init()

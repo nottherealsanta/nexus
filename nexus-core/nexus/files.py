@@ -79,6 +79,20 @@ def _open(root: Path, name: str, *, directory: bool) -> int:
         raise ValueError(str(exc)) from exc
 
 
+def _directory_entries(fd: int, name: str, statuses: dict[str, str], ignored: str) -> list[dict]:
+    """Scan and annotate one directory: stat calls plus a status match per entry, so a thread's work."""
+    ignored_paths = set(ignored.split("\0"))
+    entries = []
+    with os.scandir(fd) as iterator:
+        directory_entries = sorted(iterator, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.casefold()))
+    for entry in directory_entries:
+        stat = entry.stat(follow_symlinks=False)
+        rel = (Path(name) / entry.name).as_posix().removeprefix("./")
+        status = statuses.get(rel) or next((code for path, code in statuses.items() if path.startswith(rel + "/")), None)
+        entries.append({"name": entry.name, "kind": "symlink" if entry.is_symlink() else "directory" if entry.is_dir(follow_symlinks=False) else "file", "size": stat.st_size, "mtime": stat.st_mtime, "git_status": status, "ignored": rel == ".git" or rel in ignored_paths or rel + "/" in ignored_paths or any(rel.startswith(path.rstrip("/") + "/") for path in ignored_paths if path)})
+    return entries
+
+
 async def list_directory(root: Path, name: str) -> dict:
     fd = _open(root, name, directory=True)
     try:
@@ -96,15 +110,7 @@ async def list_directory(root: Path, name: str) -> dict:
                 statuses[path[len(prefix):]] = code
             if "R" in record[:2] or "C" in record[:2]:
                 next(records, None)
-        ignored_paths = set(ignored.split("\0"))
-        entries = []
-        with os.scandir(fd) as iterator:
-            directory_entries = sorted(iterator, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.casefold()))
-        for entry in directory_entries:
-            stat = entry.stat(follow_symlinks=False)
-            rel = (Path(name) / entry.name).as_posix().removeprefix("./")
-            status = statuses.get(rel) or next((code for path, code in statuses.items() if path.startswith(rel + "/")), None)
-            entries.append({"name": entry.name, "kind": "symlink" if entry.is_symlink() else "directory" if entry.is_dir(follow_symlinks=False) else "file", "size": stat.st_size, "mtime": stat.st_mtime, "git_status": status, "ignored": rel == ".git" or rel in ignored_paths or rel + "/" in ignored_paths or any(rel.startswith(path.rstrip("/") + "/") for path in ignored_paths if path)})
+        entries = await asyncio.to_thread(_directory_entries, fd, name, statuses, ignored)
         return {"path": name, "entries": entries}
     except OSError as exc:
         raise ValueError(str(exc)) from exc

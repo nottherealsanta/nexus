@@ -113,7 +113,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
@@ -128,6 +128,8 @@ from .config import ConfigConflict, ConfigFile
 from .doctor import source_fingerprint
 from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .inputs import InputBusy, InputNotFound
+from .jsonenc import JSONResponse, ajson
+from .jsonenc import dumps as json_dumps
 from .llmhub import catalog
 from .llmhub.auth import SIGN_INS, ApiKeyAuth, AuthError, CredentialError
 from .llmhub.auth.claude import cli_path as claude_cli_path
@@ -335,7 +337,7 @@ def sse(event: dict[str, Any]) -> str:
     if event.get("id") is not None:
         lines.append(f"id: {event.get('cursor') or event['id']}")
     lines.append(f"event: {event['type']}")
-    lines.append(f"data: {json.dumps(event)}")
+    lines.append("data: " + json_dumps(event).decode())
     return "\n".join(lines) + "\n\n"
 
 
@@ -743,7 +745,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return out
 
     async def providers(request: Request) -> Response:
-        live = set(connected())
+        live = set(await asyncio.to_thread(connected))  # may run the Claude CLI (cached)
         return JSONResponse([
             {"id": i.id, "label": i.label, "dialect": i.dialect, "base_url": i.base_url, "catalog": i.catalog_id,
              "connected": i.id in live, "verified": i.verified} | sign_in(i.id)
@@ -766,7 +768,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         wanted = request.query_params.get("provider")
         # ZMX models carry `zmx: true`; clients list them in subagent pools only, never in a root picker.
         out = [to_json(m) | {"ref": m.ref} | ({"zmx": True} if pid in ("claude-code", "agy") else {})
-               for pid in connected() if not wanted or pid == wanted for m in await catalog.list_models(data, pid)]
+               for pid in await asyncio.to_thread(connected) if not wanted or pid == wanted
+               for m in await catalog.list_models(data, pid)]
         out.sort(key=lambda m: (_version(m["name"]), m.get("released") or ""), reverse=True)
         return JSONResponse({"source": source, "models": out})
 
@@ -1278,7 +1281,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if request.method == "PUT":
             return await project_file_write(request)
         try:
-            return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
+            return await ajson(await asyncio.to_thread(files.read_file, file_root(request), request.query_params.get("path", "")))
         except ValueError as exc:
             raise (_missing(exc) or exc) from exc
 
@@ -1479,7 +1482,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 if lost:
                     data["omitted"].append({"kind": "section", "bytes": lost, "reason": f"{name} clipped to {insp.EXTRA_MAX} bytes"})
             data["text"] = head + label + "\n" + data["text"]
-        return JSONResponse(data, headers={"cache-control": "no-store"})
+        return await ajson(data, headers={"cache-control": "no-store"})
 
     async def native_inspector_head(request: Request) -> Response:
         from . import inspector_data as insp
@@ -1498,7 +1501,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         found = insp.record(runtime.store, sid, kind, ident)
         if found is None:
             raise NotFound(f"no {kind} record {ident} in this session tree")
-        return JSONResponse(found, headers={"cache-control": "no-store"})
+        return await ajson(found, headers={"cache-control": "no-store"})
 
     async def turns(request: Request) -> Response:
         """Turn summaries, oldest first: the newest page, or one page after/before a turn."""
@@ -1530,7 +1533,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         data["questions"] = runtime.pending_questions()
         data["inputs"] = runtime.inputs.list()
         data["held_sessions"] = [r["session_id"] for r in runtime.store.db.execute("select session_id from input_hold")]
-        return JSONResponse(data, headers={"x-nexus-log-generation": data["watermark"]["generation"],
+        return await ajson(data, headers={"x-nexus-log-generation": data["watermark"]["generation"],
                                            "cache-control": "no-store"})
 
     async def children(request: Request) -> Response:
@@ -1687,11 +1690,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 before = int(request.query_params["before"]) if request.query_params.get("before") else None
             except ValueError:
                 raise ValueError("limit and before must be integers") from None
-            return JSONResponse(runtime.store.messages_page(p(request, "id"), before=before, limit=limit))
-        return JSONResponse([message_json(m) for m in runtime.store.messages(p(request, "id"))])
+            return await ajson(runtime.store.messages_page(p(request, "id"), before=before, limit=limit))
+        return await ajson([message_json(m) for m in runtime.store.messages(p(request, "id"))])
 
     async def context(request: Request) -> Response:
-        return JSONResponse(await runtime.context_usage(p(request, "id")))
+        return await ajson(await runtime.context_usage(p(request, "id")))
 
     async def draft_context(request: Request) -> Response:
         body = await _body(request)
@@ -1713,7 +1716,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse(await runtime.handoff(p(request, "id")), status_code=201)
 
     async def session_snapshot_json(request: Request) -> Response:
-        return JSONResponse(runtime.snapshot_json(p(request, "id")))
+        return await ajson(runtime.snapshot_json(p(request, "id")))
 
     async def session_export(request: Request) -> Response:
         sid = p(request, "id")
@@ -1963,7 +1966,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         }
 
         async def body() -> AsyncIterator[str]:
-            yield f"event: server.connected\ndata: {json.dumps(connected)}\n\n"
+            yield f"event: server.connected\ndata: {json_dumps(connected).decode()}\n\n"
             async for event in stream.events():
                 yield sse(event)
 

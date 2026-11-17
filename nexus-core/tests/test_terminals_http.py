@@ -263,6 +263,7 @@ async def test_remote_cannot_replay_a_tokenless_local_terminal_mutation(tmp_path
             assert (await local.delete("/api/terminal/" + terminal_id)).status_code == 200
 
 
+@pytest.mark.blocks_loop("synchronous SQLite seeding and store reads on the loop; workstream B (store threading) owns the fix")
 async def test_token_mode_requires_bearer_and_keeps_the_origin_check(tmp_path, monkeypatch):
     app, _, project, workspace = _terminal_app(tmp_path, monkeypatch, token="secret")
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "remote"}

@@ -1243,6 +1243,12 @@ body), and every session-history load (`kind: history`, with `phases.first_ms`
 for the four parallel requests and `older_pages`/`older_ms` for the older turn
 pages read one after another).
 
+JSON bodies and SSE frames encode with orjson (`nexus/jsonenc.py`): compact UTF-8, key order kept, non-ASCII
+written raw (SSE `data:` lines no longer escape to `\uXXXX` or use `", "` separators), NaN and infinities become
+`null`, `1e16` is written `1e16`, and integers beyond 64 bits or lone surrogates fall back to the stdlib encoder.
+All decode to the same values in serde_json, `JSON.parse` and Python. Large bodies (`/context`, `/snapshot`, the
+inspector, message pages, file reads) encode in a thread (`ajson`), so the loop regains the GIL every few ms.
+
 `nexus perf` prints both side by side (`--json` for the raw data). Read it as:
 a high `core_ms` with high `cpu_ms` is Python work in that handler; a high
 `core_ms` with low CPU is waiting (disk, a lock); a low `core_ms` with a high

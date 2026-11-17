@@ -88,6 +88,7 @@ async def test_commit_branch_switch_and_safe_delete(repo):
             await git_ops.action(repo, repo, "switch", value=bad)
 
 
+@pytest.mark.blocks_loop("runs real git subprocesses (pull, fetch) synchronously inside the loop; git ops are not threaded yet")
 async def test_pull_is_fast_forward_only_with_a_local_bare_remote(repo, tmp_path):
     remote = tmp_path / "remote.git"
     git(tmp_path, "init", "--bare", "-q", str(remote))
