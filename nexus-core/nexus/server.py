@@ -12,6 +12,7 @@ are in docs/api.md.
 | method | path | what |
 | --- | --- | --- |
 | GET | /api/info | daemon identity: version, pid, home, url, log generation and head |
+| GET | /api/debug/perf | request timings per route, slow requests, event-loop stalls with the requests in flight (docs/api.md#performance) |
 | GET | /api/provider | the provider table, with `connected` |
 | GET | /api/model | models of connected providers (models.dev); `?provider=` |
 | GET | /api/model/last | `{model, source}`: the model a new session for this project and agent starts with |
@@ -139,6 +140,7 @@ from .manager.service import LIVE_CONSENT_REF, Forbidden
 from .mcp import manager as mcp_manager
 from .oneshot import OneshotError
 from .paths import home
+from .perf import Perf
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
 from .skills import install as skills_install
 from .store import TURN_PAGE, TURN_PAGE_MAX, Store
@@ -591,6 +593,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         login_tasks[provider] = asyncio.create_task(run())
         return JSONResponse(dict(state), status_code=202)
 
+    perf = Perf()
+
     def route(handler: Handler) -> Handler:
         async def inner(request: Request) -> Response:
             try:
@@ -678,9 +682,30 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 return JSONResponse(payload, status_code=409)
             except (ValueError, TypeError) as exc:
                 return _error(400, str(exc))
-        return wrapped
+
+        name = handler.__name__
+
+        async def timed(request: Request) -> Response:
+            trace = (request.headers.get("x-nexus-trace") or "")[:64] or None
+            started = perf.begin(name, trace)
+            try:
+                response = await wrapped(request)
+            except BaseException:
+                perf.end(started, method=request.method, status=500, size=None)
+                raise
+            body = getattr(response, "body", None)
+            entry = perf.end(started, method=request.method, status=response.status_code,
+                             size=len(body) if isinstance(body, (bytes, bytearray)) else None)
+            response.headers["server-timing"] = f"app;dur={entry['ms']}, cpu;dur={entry['cpu_ms']}"
+            if trace is not None:
+                response.headers["x-nexus-trace"] = trace
+            return response
+        return timed
 
     p = lambda request, name: request.path_params[name]
+
+    async def perf_report(request: Request) -> Response:
+        return JSONResponse(perf.json())
 
     async def info(request: Request) -> Response:
         generation = runtime.store.log_generation()
@@ -1956,6 +1981,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     routes = [
         Route("/inspector", inspector),
         Route("/api/info", route(info)),
+        Route("/api/debug/perf", route(perf_report)),
         Route("/api/config", route(config_api), methods=["GET", "PATCH"]),
         Route("/api/question", route(all_questions)),
         Route("/api/bash", route(bash_jobs)),
@@ -2085,6 +2111,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             zmx_warm_agy_models()
         watcher = asyncio.create_task(watch_config())
         usage_watcher = asyncio.create_task(usage_cache.run())
+        perf_watcher = asyncio.create_task(perf.watch())
         try:
             yield
         finally:
@@ -2094,6 +2121,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 await asyncio.gather(*login_tasks.values(), return_exceptions=True)
             watcher.cancel()
             usage_watcher.cancel()
+            perf_watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await usage_watcher
             with suppress(asyncio.CancelledError):
@@ -2107,6 +2135,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     # Raw per-stream registry for the future Manager; it does not choose a call holder.
     app.state.client_views = client_views
     app.state.file_watches = file_watches
+    app.state.perf = perf
     return app
 
 

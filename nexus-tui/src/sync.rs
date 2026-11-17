@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::api::{
@@ -1139,12 +1139,33 @@ pub const MESSAGE_PAGE: u32 = 200;
 /// The newest page of messages, the starting context and every turn summary, fetched together.
 /// The event log is not read: the timeline's details come from summaries.
 async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
+    let started = std::time::Instant::now();
+    let (h, phases) = load_history_pages(api, sid).await?;
+    crate::perf::event(
+        "history",
+        json!({
+            "session": sid,
+            "ms": crate::perf::ms(started.elapsed()),
+            "messages": h.messages.len(),
+            "turns": h.turns.len(),
+            "error": h.turns_error,
+            "phases": phases,
+        }),
+    );
+    Some(h)
+}
+
+/// The history, and how long its first parallel requests and the older turn
+/// pages that follow them (one at a time) took.
+async fn load_history_pages(api: &CoreApi, sid: &str) -> Option<(History, Value)> {
+    let started = std::time::Instant::now();
     let (messages, starting, session, page) = tokio::join!(
         api.messages_page(sid, None, MESSAGE_PAGE),
         api.snapshot_json(sid),
         api.session(sid),
         api.turns(sid, None, None, Some(TURN_PAGE)),
     );
+    let first = crate::perf::ms(started.elapsed());
     // A page that cannot be decoded must never leave the timeline silently blank: say why (plan 10).
     let (messages, messages_more, messages_error) = match messages {
         Ok((messages, more)) => (messages, more, None),
@@ -1172,10 +1193,12 @@ async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
         }
         Err(e) => {
             h.turns_error = Some(format!("turn details failed to load ({e})"));
-            return Some(h);
+            return Some((h, json!({ "first_ms": first })));
         }
     }
     // Older pages, newest first, until the start or the cap.
+    let older = std::time::Instant::now();
+    let mut older_pages = 0;
     for _ in 1..TURN_PAGES {
         let Some(oldest) = h
             .turns
@@ -1185,6 +1208,7 @@ async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
         else {
             break;
         };
+        older_pages += 1;
         match api.turns(sid, None, Some(&oldest), Some(TURN_PAGE)).await {
             Ok(page) => {
                 h.more_before = page.more_before;
@@ -1201,7 +1225,12 @@ async fn load_history(api: &CoreApi, sid: &str) -> Option<History> {
             }
         }
     }
-    Some(h)
+    let phases = json!({
+        "first_ms": first,
+        "older_pages": older_pages,
+        "older_ms": crate::perf::ms(older.elapsed()),
+    });
+    Some((h, phases))
 }
 
 /// After a dropped stream resumed from its cursor: the turns that started

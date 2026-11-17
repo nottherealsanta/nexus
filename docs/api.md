@@ -110,6 +110,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/config` | | `{revision, values, defaults, schema, errors, zmx_unavailable}` for the initial settings; `zmx_unavailable` is why ZMX cannot run on this machine (non-POSIX), else null |
 | PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
+| GET | `/api/debug/perf` | | request timings per route, slow requests, event-loop stalls and what was in flight; see [Performance](#performance) |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title", "user" or "final_answer", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET, POST | `/api/usage` | | GET reads the saved snapshot; POST refreshes it. `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}` ([Usage](#usage-k11)) |
@@ -1208,6 +1209,46 @@ user it could not confirm the move.
 **Hidden sessions.** `/api/session`, `/api/project`, `/api/snapshot` and `/api/search` never list a Manager
 episode or its project. The snapshot's raw `sessions` rows now include `kind` (`"user"`), `topic` (a one-sentence
 description once written, else `null`) and `topic_seq`.
+
+## Performance
+
+Core times every API request in its route wrapper (`nexus/perf.py`) and answers
+with `server-timing: app;dur=<ms>, cpu;dur=<ms>`: `app` is the handler's wall
+time (auth, the idempotency lock, the handler and JSON encoding), `cpu` the CPU
+the event-loop thread used while it was open. A request may carry
+`x-nexus-trace: <id>` (up to 64 characters); Core echoes it and keeps it with
+the timing. Requests at least `NEXUS_PERF_SLOW_MS` (default 250) are logged to
+`logs/daemon.log` as `slow request …`.
+
+A watcher wakes every 100 ms and records how late it woke. Lateness of 100 ms or
+more is a stall: something ran on the event loop without yielding (SQLite runs
+synchronously in handlers, so a slow query stalls every other request), and the
+stall lists the requests that were open. Stalls are logged as `event loop
+stalled …`.
+
+`GET /api/debug/perf` returns, since the daemon started: `{since, pid, slow_ms,
+cpu_percent, loop: {ticks, max_late_ms, late: {100ms, 250ms, 1s}, tasks},
+routes: [{route, count, errors, mean_ms, p50_ms, p95_ms, max_ms, mean_bytes}],
+slow: [{at, route, status, ms, cpu_ms, bytes, trace}], stalls: [{at, late_ms,
+inflight: [{route, open_ms, trace}]}], inflight}`. Routes are named
+`<METHOD> <handler>` (`GET turns`); percentiles cover the last 512 requests of a
+route; `slow` and `stalls` keep the newest 200. Only route names, sizes and
+timings are kept, never bodies, query strings or headers.
+
+The TUI sends a trace id (`tui-<pid>-<n>`) with every request and appends JSON
+lines to `logs/tui-perf.jsonl` (restarted past 4 MB, one `.1` kept): each request
+of 50 ms or more (`kind: request`, with `ms`, Core's `core_ms`, and
+`outside_core_ms`, the time queued in Core's loop, on the wire or reading the
+body), and every session-history load (`kind: history`, with `phases.first_ms`
+for the four parallel requests and `older_pages`/`older_ms` for the older turn
+pages read one after another).
+
+`nexus perf` prints both side by side (`--json` for the raw data). Read it as:
+a high `core_ms` with high `cpu_ms` is Python work in that handler; a high
+`core_ms` with low CPU is waiting (disk, a lock); a low `core_ms` with a high
+`outside_core_ms` is a request queued behind a stall; a history load dominated
+by `older_ms` is the client's sequential paging. To see inside a slow handler,
+profile the daemon with `py-spy record --pid <pid>`.
 
 ## Crash recovery
 

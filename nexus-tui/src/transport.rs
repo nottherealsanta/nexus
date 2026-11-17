@@ -270,9 +270,39 @@ impl Http {
             if let Some(body) = body {
                 req = req.json(body);
             }
+            let trace = crate::perf::trace_id();
+            req = req.header("x-nexus-trace", &trace);
+            let started = std::time::Instant::now();
             match req.send().await {
-                Ok(resp) => return read_reply(resp).await,
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let server = crate::perf::server_ms(
+                        resp.headers()
+                            .get("server-timing")
+                            .and_then(|v| v.to_str().ok()),
+                    );
+                    let (reply, bytes) = read_reply_sized(resp).await;
+                    crate::perf::request(
+                        method.as_str(),
+                        path,
+                        &trace,
+                        started.elapsed(),
+                        Some(status),
+                        server,
+                        bytes,
+                    );
+                    return reply;
+                }
                 Err(e) => {
+                    crate::perf::request(
+                        method.as_str(),
+                        path,
+                        &trace,
+                        started.elapsed(),
+                        None,
+                        None,
+                        None,
+                    );
                     last = Some(Error::from(e));
                     if attempt < attempts {
                         tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
@@ -402,20 +432,33 @@ impl Http {
 }
 
 async fn read_reply(resp: reqwest::Response) -> Result<Reply, Error> {
+    read_reply_sized(resp).await.0
+}
+
+/// The reply and the size of its (decoded) body, when the body was read.
+async fn read_reply_sized(resp: reqwest::Response) -> (Result<Reply, Error>, Option<usize>) {
     let status = resp.status().as_u16();
     let replayed = resp
         .headers()
         .get("idempotent-replayed")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-    let text = resp.text().await?;
+    let text = match resp.text().await {
+        Ok(text) => text,
+        Err(e) => return (Err(e.into()), None),
+    };
+    let size = Some(text.len());
+    (parse_reply(status, replayed, &text), size)
+}
+
+fn parse_reply(status: u16, replayed: bool, text: &str) -> Result<Reply, Error> {
     if status >= 400 {
-        return Err(Error::Api(ApiError::from_body(status, &text)));
+        return Err(Error::Api(ApiError::from_body(status, text)));
     }
     let body = if text.trim().is_empty() {
         Value::Null
     } else {
-        serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))?
+        serde_json::from_str(text).map_err(|e| Error::Decode(e.to_string()))?
     };
     Ok(Reply {
         status,

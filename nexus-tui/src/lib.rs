@@ -36,6 +36,7 @@ pub mod mermaid;
 pub use nexus_mermaid::text as mermaid_text;
 pub mod paint;
 pub mod partial;
+pub mod perf;
 pub mod prefs;
 pub mod program_status;
 pub mod reduce;

@@ -119,6 +119,10 @@ Gaps to close for this table to hold:
 
 ### Where Python is the limit, and where it is not
 
+> Revisited 2026-11-17 in [plans/50-rust-core.md](plans/50-rust-core.md): client timings show requests queued
+> behind a blocked event loop, and the plan proposes design rules plus a staged move of Core to Rust.
+
+
 | Path | Bound by | Python OK? |
 | --- | --- | --- |
 | Provider streaming, the loop | network, the model | yes |

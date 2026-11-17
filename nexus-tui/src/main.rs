@@ -173,6 +173,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    nexus_tui::perf::init(&home);
     let mut cfg = SyncConfig::new(home.clone());
     cfg.bootstrap = std::env::var_os("NEXUS_TUI_NO_START").is_none();
     let code = if args.once {

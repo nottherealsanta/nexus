@@ -897,6 +897,29 @@ async def _export(client: Client, args: argparse.Namespace) -> None:
             temp.unlink(missing_ok=True)
 
 
+async def _perf(args: argparse.Namespace) -> int:
+    """Core's /api/debug/perf next to the TUI's logs/tui-perf.jsonl (docs/api.md#performance)."""
+    from . import perf
+    from .paths import home
+
+    core = None
+    found = daemon.discover()
+    if found is not None:
+        client = Client(found["url"], found["token"])
+        try:
+            core = await client.call("GET", "/api/debug/perf")
+        except (ApiError, httpx.HTTPError) as exc:
+            print(f"{YELLOW}Core did not answer /api/debug/perf ({exc}){RESET}", file=sys.stderr)
+        finally:
+            await client.close()
+    tui = perf.read_client_log(home() / "logs" / "tui-perf.jsonl")
+    if args.json:
+        print(json.dumps({"core": core, "tui": tui}, indent=2))
+    else:
+        print(perf.render(core, tui, top=args.top))
+    return 0
+
+
 async def _workspace(args: argparse.Namespace) -> None:
     """Workspace controls through the API: activation, a directory move, worktrees."""
     client = Client.connect()
@@ -1117,6 +1140,9 @@ def main(argv: list[str] | None = None) -> int:
 
     doctor = sub.add_parser("doctor", help="check the install: daemon code, sign-ins, catalog, config, search, MCP, voice, rg")
     doctor.add_argument("--json", action="store_true", help="print the rows as JSON")
+    perf = sub.add_parser("perf", help="where time goes: Core request timings, event-loop stalls and the TUI's own timings")
+    perf.add_argument("--json", action="store_true", help="print Core's report and the TUI lines as JSON")
+    perf.add_argument("--top", type=int, default=12, help="rows per section")
     workers = sub.add_parser("workers", help="ZMX vendor-CLI processes that outlived Nexus")
     workers.add_argument("action", choices=["list", "clean"], help="`clean` stops listed processes whose pid and start time still match")
     update = sub.add_parser("update", help="check for a newer release (never installs anything)")
@@ -1228,6 +1254,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
         elif args.command == "doctor":
             return _doctor(args.json)
+        elif args.command == "perf":
+            return asyncio.run(_perf(args))
         elif args.command == "workers":
             from .workers import records
             found = records.orphans()
