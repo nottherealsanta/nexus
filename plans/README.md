@@ -34,6 +34,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | # | File | State | Next step |
 | --- | --- | --- | --- |
 | 50 | [Core performance: Python first, Rust for proven hot spots](50-rust-core.md) | **new 2026-11-17**; trivial routes waited up to 1.3 s on Core's event loop; five workstreams (A–E) in worktrees | Merge workstreams; user restarts the daemon and collects a week of `nexus perf` |
+| 49 | [Markdown links](49-markdown-links.md) | **partial 2026-11-17** | Extend link clicks beyond assistant timeline Markdown; verify both clients |
+| 48 | [Context header: draft, then fixed](48-context-header-modes.md) | **landed 2026-11-17** except screenshots | Paired TUI/NSH screenshots in `reports/48-context-header-modes/`; try a real session with the switch on |
 | 46 | [Adaptive orchestration and handoffs](46-adaptive-orchestration.md) | **prompts landed 11-13**; 60 offline tests pass | Observe scope, acceptance and repeated discovery on subsequent user tasks; improvement not yet measured |
 | 44 | [Tooling and prompts from a session review](44-session-review-tooling.md) | **landed 2026-11-12** except background-job pipe status | Re-run its measurement queries after a week of use; revisit triggers are in the file |
 | 43 | [Use ghostty-web for NSH terminals](43-ghostty-web-terminal.md) | **new** | Spike WASM packaging, API compatibility and web/macOS WebViews |

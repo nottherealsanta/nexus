@@ -390,6 +390,7 @@ The ZMX item is section 6.
 - [ ] **Real OpenAI and Ollama calls** (also in section 2).
 - [ ] **Claude (Agent SDK) remaining:**
   - [x] Record the installed Claude Code CLI version in wire metadata, without adding prompt text. Bounded cached lookup invalidates on binary change; 24 offline Claude tests pass (11-07).
+  - [x] User images and tool-result images are sent as real SDK image blocks after their JSON history message; live `claude-haiku-5-5` read a red image in both positions (11-18).
   - decide whether to show the SDK's hidden additions (`sdk_adds`: two system lines, `StructuredOutput`, the
     account's email in the first user message, an `# Environment` message) in the clients' starting context, and
     whether sending the email is acceptable; the 420 tokens of fixed overhead are unexplained;

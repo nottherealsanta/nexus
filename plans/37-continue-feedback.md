@@ -60,6 +60,8 @@ mobile too (it has all slash commands).
 
 ## Landed 2026-11-16 (still open)
 
+Follow-up 2026-11-17: `/continue` is available after a successful turn as well as an interrupted or failed one; Core's existing session checks still apply.
+
 Both clients (and mobile NSH) show the pending row, phases, queueing with one idempotency key, Esc cancel, refusal strip and Retry after 10 s; `/prompt` sends share the row (D3); Core uses `Store.has_messages`. Debug timing: TUI `NEXUS_TUI_TIMING=<file>`, NSH pref `debug.timing`. Tests: `nexus-tui/tests/pending_turn.rs`, `nexus-nsh/pending-turn.test.tsx`, `tests/test_continuation.py`. Captures: `reports/37-continue-feedback/`.
 
 Not done: the five recorded timing runs per client against a scripted delayed Core (the flag exists; the numbers are not recorded), so the plan stays open on that item. Not verified on a real device or with a real provider.

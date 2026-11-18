@@ -16,7 +16,9 @@ replaces the header session strip, the file/diff modal and the terminal dock. Sp
 
 A **tab** has a kind and a resource id; the pair is its identity, so the same file or session can be open in two
 groups and shares one buffer or one live state.
+While a session's history is loading and no content is available yet, its timeline says **Loading session…**.
 Tabs have square corners in both clients.
+The workspace header does not repeat the active session's name; session names remain in the group tabs.
 
 | Kind | Shows |
 | --- | --- |
@@ -41,6 +43,8 @@ The inspector stays its own web page.
   zones (left, right, top, bottom split; centre moves into the group). Dividers resize. Esc cancels. The TUI uses the
   mouse in Ghostty as well as the keyboard actions.
 - **Close** closes the active tab. The last tab of a group removes the group and its space goes to the sibling.
+  In the TUI, middle-click closes the pointed tab, using the same confirmations; NSH does not handle middle-click
+  (client-specific difference approved 2026-11-17).
 - **Limits:** a split that would leave a pane below the minimum (TUI about 20 × 5 cells) is refused with a toast saying why.
 
 ## Terminals and unsaved files
