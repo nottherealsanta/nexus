@@ -174,8 +174,8 @@ Each `ToolResult` becomes its own `tool` message.
 ([stream-events.md](stream-events.md#conversation)).
 The daemon validates attachments before it creates the turn
 ([api.md](api.md#image-prompts)) and precedes each new image with a text
-part `[Image A]`, `[Image B]`, and so on in attachment order. Both dialects
-send each label immediately before its image, so a reference in the user's text
+part `[Image A]`, `[Image B]`, and so on in attachment order. Every dialect
+sends each label immediately before its image, so a reference in the user's text
 maps to the right image, and the labels survive replay.
 
 - **Responses:** an image becomes `{"type": "input_image", "image_url": <data
@@ -185,8 +185,14 @@ maps to the right image, and the labels survive replay.
   `{"type": "text", "text": …}` and `{"type": "image_url", "image_url": {"url":
   <data URL>}}` items in part order. A text-only user message keeps its plain
   string `content`.
+- **Agent SDK (claude):** the history is one JSON text prompt (the CLI does not
+  replay assistant/tool messages from input), so an image is a real
+  `{"type": "image", "source": {"type": "base64", "media_type": …, "data": …}}`
+  content block that follows the JSON message naming it. With images the prompt
+  is several text blocks around those image blocks; without them it stays one
+  JSON string. See [Claude Agent SDK](#claude-agent-sdk).
 
-Stored images replay in both dialects whichever provider the session switches
+Stored images replay in every dialect whichever provider the session switches
 to. Whether the model understands them depends on the selected model; Nexus
 does not check.
 
@@ -227,6 +233,7 @@ fixture test (see `tests/test_tool_media.py`) plus a real call, as for any provi
 | --- | --- | --- |
 | Responses | `function_call_output.output` becomes `[{"type": "input_text", "text": …}, {"type": "input_image", "image_url": <data URL>}, …]` | codex `gpt-6-luna`, copilot `gpt-6-luna`, grok `grok-4.7` (2026-10-29) |
 | Chat | the `role: "tool"` message keeps the text; one `role: "user"` message follows the group with `[Image returned by tool call <id>: <name>]` then an `image_url` part per image | copilot `claude-sonnet-5` (2026-10-29) |
+| Agent SDK (`claude`) | the JSON `tool_result` keeps the text; an `image` block follows that message's JSON, preceded by `[Image returned by tool call <id>: <name>]` | claude `claude-haiku-5-5` (2026-11-18) |
 | Messages (Anthropic, J4) | planned: `tool_result.content` is an array of `text` and `image` blocks (`{"type":"image","source":{"type":"base64","media_type":…,"data":…}}`); that dialect supports it natively | not built |
 
 Things that are easy to get wrong:
@@ -287,7 +294,8 @@ persistence. Nexus tools are offered as SDK MCP tools whose handlers only record
 tool call, before the SDK can treat it as a result, and Nexus approves and runs it like any other. The next request carries
 the real result in the history.
 
-`provider.body(request)` describes the SDK input. At dispatch, the wire request
+`provider.body(request)` describes the SDK input: `prompt` is the content of the one user message handed to
+`ClaudeSDKClient.query`, and `history` is the same conversation as logical JSON blocks for inspection. At dispatch, the wire request
 adds `claude_code_version` (the installed CLI's `--version`, or null when
 unavailable). This diagnostic field is not model prompt text. Version lookup runs
 off the event loop, times out after two seconds and caches at most eight binaries,
@@ -302,12 +310,25 @@ invalidating when a binary's size or modification time changes.
   "history": [{"role": "user", "content": [{"type": "text", "text": "..."}]},
               {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read", "input": {"path": "a"}}]},
               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "...", "is_error": false}]}],
+  "prompt": [{"type": "text", "text": "{\"history\": [...]}"}],
   "tools": [{"name": "read", "description": "...", "input_schema": {"...": "..."}}],
   "schema": {"...": "structured output: {text, tool_calls[{name, arguments}]}"},
   "sdk_adds": {"...": "what the CLI adds itself, see below"},
   "effort": "high"
 }
 ```
+
+**Images.** The SDK's streaming input accepts user messages whose `content` is an Anthropic content array, and an image
+block in that array reaches the API as an image. Assistant and tool messages cannot be replayed that way: measured on
+2026-11-18 with CLI 2.1.327, a stream of user/assistant/user messages was reordered and its user texts merged before the
+request, so the history stays one JSON text prompt. A user image and a tool-result image therefore become real
+`{"type": "image", "source": {"type": "base64", "media_type": …, "data": …}}` blocks inside that one user message, after
+the JSON message that names them: `[Image: <name>]` for a user image, and
+`[Image returned by tool call <id>: <name>]` for a tool result, matching the [Chat](#chat-completions-copilot-opencode)
+wording. With images, the prompt is several text blocks around those image blocks, one JSON message per text block;
+without images it stays the single JSON string. The image bytes appear in the wire body and in `prompt`, as they do for
+the other dialects. Both a user image and a tool-result image were verified live with `claude-haiku-5-5` on 2026-11-18
+(the model named a solid green user image and a solid blue tool-result image; the names did not mention the colours).
 
 Cancellation kills the isolated worker's entire POSIX process group, including
 the CLI child; an offline real-subprocess regression verifies this.
@@ -321,8 +342,8 @@ Limits, each visible rather than hidden:
 | Limit | Behaviour |
 | --- | --- |
 | No streaming | The reply is buffered; text arrives as one delta when the request ends |
-| Text only | A user or tool-result image makes the request fail with "the Agent SDK takes text only", before anything is sent |
 | No thinking | The SDK returns none, and reasoning parts in the history are not sent |
+| History is text | Tool calls and results are JSON text, not native SDK messages, because the CLI does not replay them; images are the exception and are real blocks |
 | Extra framing | The CLI adds text Nexus does not write; see below. `Usage` reports what was billed |
 | Errors | A failed worker gives `ProviderError` with the SDK's stderr tail (bounded) in `body`, kept in the daemon log; never a token |
 

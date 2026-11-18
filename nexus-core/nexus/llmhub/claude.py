@@ -9,13 +9,16 @@ approves and executes the call and sends the real result in the next request.
 What differs from the HTTP dialects, and is announced rather than hidden:
 
 - The reply is buffered: text arrives as one delta when the request finishes.
-- Images and documents are refused (`ProviderError`), not silently dropped.
+- Images are real SDK image blocks, in order after the JSON message that holds
+  them; the history itself stays JSON text because the CLI does not accept
+  assistant/tool messages as replay.
 - Thinking is not returned, and reasoning parts in the history are not sent.
-- `body()` is everything Nexus gives the SDK: the system prompt including the
-  framing sentence added here, the whole history, the tool schemas, the model and
-  the effort. The CLI adds a little of its own (`SDK_ADDS`, listed under `sdk_adds`
-  in the body). It also makes a second, hidden request to title the session unless
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set, which the worker does.
+- `body()` is everything Nexus gives the SDK: the one user message (`prompt`,
+  whose text carries the whole history as JSON), the tool schemas, the model and
+  the effort. The CLI adds a little of its own (`SDK_ADDS`, listed under
+  `sdk_adds` in the body). It also makes a second, hidden request to title the
+  session unless `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set, which the
+  worker does.
 """
 from __future__ import annotations
 
@@ -77,24 +80,68 @@ SDK_ADDS = {
 }
 
 
+def _image_source(data_url: str | None) -> dict[str, str] | None:
+    """Split a base64 data URL into an Anthropic image source, or None when it is not one."""
+    if not data_url:
+        return None
+    header, sep, data = data_url.partition(",")
+    if not sep or not data or not header.startswith("data:") or ";base64" not in header:
+        return None
+    media_type = header[len("data:"):].split(";", 1)[0].strip()
+    return {"type": "base64", "media_type": media_type, "data": data} if media_type.startswith("image/") else None
+
+
 def history(req: Request) -> list[dict[str, Any]]:
-    """The conversation as JSON blocks. Reasoning is not sent; images are refused."""
+    """The conversation as JSON blocks. Reasoning is not sent. An image is a named placeholder here; its real
+    block is in `prompt`, right after the message that holds it (see `conversation`)."""
+    return conversation(req)[0]
+
+
+def conversation(req: Request) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
+    """The JSON history plus, per history message, the real image blocks that follow it in the prompt."""
     out: list[dict[str, Any]] = []
+    images: list[list[dict[str, Any]]] = []
     for message in req.messages:
         blocks: list[dict[str, Any]] = []
+        following: list[dict[str, Any]] = []
         for part in message.parts:
-            if isinstance(part, Image) or (isinstance(part, ToolResult) and tool_images(part)):
-                raise ProviderError("claude: the Agent SDK takes text only; remove the image from this conversation or use another model",
-                                    phase="transport")
             if isinstance(part, Text):
                 blocks.append({"type": "text", "text": part.text})
+            elif isinstance(part, Image):
+                source = _image_source(part.data_url)
+                if source is None:
+                    continue
+                blocks.append({"type": "image", "name": part.name, "media_type": source["media_type"]})
+                following += [{"type": "text", "text": f"[Image: {part.name}]"}, {"type": "image", "source": source}]
             elif isinstance(part, ToolCall):
                 blocks.append({"type": "tool_use", "id": part.id, "name": part.name, "input": _loads(part.arguments)})
             elif isinstance(part, ToolResult):
                 blocks.append({"type": "tool_result", "tool_use_id": part.call_id, "content": part.output, "is_error": part.is_error})
+                for media in tool_images(part):
+                    source = _image_source(media.data_url)
+                    if source is None:
+                        continue
+                    blocks.append({"type": "image", "name": media.name, "media_type": source["media_type"], "tool_use_id": part.call_id})
+                    label = f"[Image returned by tool call {part.call_id}{': ' + media.name if media.name else ''}]"
+                    following += [{"type": "text", "text": label}, {"type": "image", "source": source}]
         if blocks:
             out.append({"role": "user" if message.role in ("user", "tool") else "assistant", "content": blocks})
-    return out
+            images.append(following)
+    return out, images
+
+
+def prompt_content(messages: list[dict[str, Any]], images: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """The one user message the SDK receives. Text-only history keeps the old single JSON string; with images,
+    each JSON message is its own text block and the message's image blocks follow it, in order."""
+    if not any(images):
+        return [{"type": "text", "text": json.dumps({"history": messages})}]
+    blocks = [{"type": "text", "text": "History follows as JSON, one message per line in order; an image block follows the "
+                                       "message that holds it.\n{\"history\": [\n"}]
+    for index, message in enumerate(messages):
+        blocks.append({"type": "text", "text": json.dumps(message) + ("," if index + 1 < len(messages) else "") + "\n"})
+        blocks += images[index]
+    blocks.append({"type": "text", "text": "]}"})
+    return blocks
 
 
 def _loads(text: str) -> Any:
@@ -119,10 +166,12 @@ def schema_for(names: list[str]) -> dict[str, Any]:
 
 
 def build_body(req: Request) -> dict[str, Any]:
+    history_messages, images = conversation(req)
     return {
         "model": req.model,
         "system": (req.instructions + "\n\n" if req.instructions else "") + FRAMING,
-        "history": history(req),
+        "history": history_messages,
+        "prompt": prompt_content(history_messages, images),
         "tools": [{"name": t.name, "description": t.description, "input_schema": t.parameters} for t in req.tools],
         "schema": schema_for([t.name for t in req.tools]),
         "effort": req.reasoning_effort if req.reasoning_effort in EFFORTS else None,

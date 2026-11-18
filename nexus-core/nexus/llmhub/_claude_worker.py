@@ -9,8 +9,16 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import AsyncIterator
+from typing import Any
 
 MAX_BYTES = 8 * 1024 * 1024
+
+
+async def _message(content: list[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+    """The SDK's streaming input: one user message whose content may hold text and image blocks. Assistant and
+    tool messages cannot be replayed this way; the JSON history in the text block carries them."""
+    yield {"type": "user", "message": {"role": "user", "content": content}}
 
 
 async def run(payload: dict, sdk=None) -> dict:
@@ -47,7 +55,8 @@ async def run(payload: dict, sdk=None) -> dict:
     declared = {"mcp__nexus__" + t["name"]: t["name"] for t in payload["tools"]}
     result: dict = {"error": "the SDK ended without a result", "detail": "\n".join(stderr)}
     async with sdk.ClaudeSDKClient(options=options) as client:
-        await client.query(json.dumps({"history": payload["history"]}))
+        content = payload.get("prompt") or [{"type": "text", "text": json.dumps({"history": payload["history"]})}]
+        await client.query(_message(content))
         async for message in client.receive_response():
             if isinstance(message, sdk.AssistantMessage):
                 calls = []

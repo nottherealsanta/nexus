@@ -33,6 +33,7 @@ from nexus.llmhub.types import (
 )
 
 READ = ToolSpec("read", "Read a file", {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
+PNG = "data:image/png;base64," + "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lP+2WQAAAABJRU5ErkJggg=="
 
 
 def request(*messages: Message, tools=(READ,), effort=None) -> Request:
@@ -56,6 +57,7 @@ def test_body_is_everything_the_sdk_gets():
     ]
     assert body["tools"][0]["input_schema"] == READ.parameters
     assert body["schema"]["properties"]["tool_calls"]["items"]["properties"]["name"]["enum"] == ["read"]
+    assert body["prompt"] == [{"type": "text", "text": json.dumps({"history": body["history"]})}]
     assert ClaudeProvider().body(req) == body
 
 
@@ -65,10 +67,38 @@ def test_unknown_effort_is_not_sent_and_no_tools_gets_placeholder_enum():
     assert body["schema"]["properties"]["tool_calls"]["items"]["properties"]["name"]["enum"] == ["__none__"]
 
 
-@pytest.mark.parametrize("part", [Image("data:image/png;base64,AA=="), ToolResult("c", "o", media=(Media("a", "image/png", data_url="data:x"),))])
-def test_images_are_refused_not_dropped(part):
-    with pytest.raises(ProviderError, match="text only"):
-        build_body(request(Message("user" if isinstance(part, Image) else "tool", (part,))))
+def test_user_images_are_real_sdk_image_blocks_after_their_message():
+    body = build_body(request(Message("user", (Text("[Image A]"), Image(PNG, "clipboard.png")))))
+    assert body["history"] == [{"role": "user", "content": [
+        {"type": "text", "text": "[Image A]"}, {"type": "image", "name": "clipboard.png", "media_type": "image/png"}]}]
+    prompt = body["prompt"]
+    assert '"clipboard.png"' in prompt[1]["text"] and prompt[1]["text"].endswith("}\n")
+    assert prompt[2:4] == [{"type": "text", "text": "[Image: clipboard.png]"},
+                           {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                        "data": PNG.partition(",")[2]}}]
+
+
+def test_tool_result_images_are_real_sdk_image_blocks_with_their_call():
+    req = request(
+        Message("user", (Text("look"),)),
+        Message("assistant", (ToolCall("c1", "read", '{"path":"a"}'),)),
+        Message("tool", (ToolResult("c1", "seen", media=(Media("art", "image/png", "shot.png", PNG),)),)),
+    )
+    body = build_body(req)
+    assert body["history"][-1] == {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "c1", "content": "seen", "is_error": False},
+        {"type": "image", "name": "shot.png", "media_type": "image/png", "tool_use_id": "c1"}]}
+    assert body["prompt"][4:6] == [{"type": "text", "text": "[Image returned by tool call c1: shot.png]"},
+                                   {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                                "data": PNG.partition(",")[2]}}]
+
+
+def test_an_image_without_sendable_bytes_is_not_sent():
+    req = request(Message("tool", (ToolResult("c", "seen", media=(Media("art", "image/png", "shot.png", None),)),)))
+    body = build_body(req)
+    assert body["history"] == [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "c", "content": "seen", "is_error": False}]}]
+    assert body["prompt"] == [{"type": "text", "text": json.dumps({"history": body["history"]})}]
 
 
 def test_reply_becomes_parts_usage_and_done():
@@ -117,10 +147,14 @@ def fake_sdk(script):
         def __init__(self, **kw): self.__dict__.update(kw)
 
     class Client:
+        last = None
         def __init__(self, options): self.options = options
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
-        async def query(self, prompt): self.prompt = prompt
+        async def query(self, prompt):
+            self.prompt = prompt
+            self.sent = [message async for message in prompt]
+            type(self).last = self
         async def receive_response(self):
             for m in script(self):
                 yield m
@@ -156,6 +190,15 @@ def test_worker_returns_structured_output_and_reports_failures():
     assert "error" in asyncio.run(_claude_worker.run(payload(), bad))
     empty = fake_sdk(lambda c: [])
     assert "without a result" in asyncio.run(_claude_worker.run(payload(), empty))["error"]
+
+
+def test_worker_streams_the_prompt_as_content_blocks_so_images_stay_images():
+    sdk = fake_sdk(lambda c: [sdk.ResultMessage(structured_output={"text": "hi", "tool_calls": []})])
+    content = [{"type": "text", "text": "describe it"},
+               {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}]
+    asyncio.run(_claude_worker.run(payload(prompt=content), sdk))
+    assert sdk.ClaudeSDKClient.last.sent == [
+        {"type": "user", "message": {"role": "user", "content": content}}]
 
 
 # -- the provider process -------------------------------------------------------
