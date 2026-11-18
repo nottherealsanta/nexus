@@ -355,7 +355,7 @@ All of these require a real user utterance in the current turn.
 
 | Tool | Does | Target session shows |
 | --- | --- | --- |
-| `start_session(project, prompt, title?, agent?, model?, worktree=false)` | Starts a root session in the project's main checkout. With `worktree=true`, only when the user asked (D3), the first message also tells the session to create and move into a new worktree before working, with the `worktree` and `change_session_directory` tools every new session reaches through `expose_workspace_tools` | First user message, labelled `via Manager`, with the worktree instruction visible in it |
+| `start_session(project, prompt, title?, agent?, model?, worktree=false)` | Starts a root session in the project's main checkout. With `worktree=true`, only when the user asked (D3), the session is created with `worktree: true` (plan 48): it starts with the workspace tools active and a `[Nexus notice: start in a worktree]` notice before the first message, the same as the clients' worktree switch | The notice, then the first user message labelled `via Manager`, unchanged |
 | `send_to_session(handle, text, mode=steer\|queue)` | Messages any session, un-archiving as needed | User message, labelled `via Manager` |
 | `answer_question(handle, question, answers)` | Answers a pending `ask` | `question.replied`, `via Manager` |
 | `decide_approval(handle, approval, allow, note?)` | Answers an approval, `once` only (section 9) | `permission.replied`, `via Manager` + heard words |
@@ -885,7 +885,7 @@ Settled with the user on 2026-11-03.
 | **D4** | Order | **Pipeline first.** The Manager is just "the Manager"; no separate name for its thinking part |
 | **D5** | Hidden how far? | **The user never manages the Manager's context.** Typed and spoken lines share one conversation; captions show the current exchange; the full log is in the inspector only |
 | **D6** | Hands-free or tap to talk | **Tap to talk now; VAD in the next phase** (M6) |
-| **D7** | Lasting preferences | **None in v1.** A worktree only when asked: the Manager tells the new session, in its first message, to create and move into a worktree |
+| **D7** | Lasting preferences | **None in v1.** A worktree only when asked: the new session is created with `worktree: true`, whose starting notice asks it to create and move into a worktree (plan 48) |
 | **D8** | One Manager across every project | **Yes** |
 | **D9** | Background calls, phone with the Mac at home | **Allowed by the design, not a v1 goal;** iOS checked in M6 |
 | **D10** | Default model | **`copilot/gpt-6-luna`**; effort measured in M0 |
@@ -908,7 +908,7 @@ Settled with the user on 2026-11-03.
 | Moving the user's view is disorienting | Only on a user utterance; any card closes so they see where they landed; "go back" always works |
 | The stage gets in the way of work | Nothing is captured at rest; only a card following an utterance takes keys; proactive cards are unfocused and collapse (10.1) |
 | Cards drift into a second UI to maintain | A small fixed catalog in the manifest, drawn natively, covered by shared mock scenarios in both clients |
-| A worktree instruction is ignored by the new session | The Manager checks the session's directory after its first turn starts and says if it did not move |
+| A worktree instruction is ignored by the new session | The session's `worktree_request.state` becomes `not_entered` when its first turn ends without the move (plan 48); clients warn under the header and the Manager can say so |
 
 ## 14. Stage and view decisions
 

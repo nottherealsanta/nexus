@@ -134,6 +134,21 @@ CHILD_RESULT_CHARS = 30_000
 MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
 MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
+WORKTREE_NOTICE = "[Nexus notice: start in a worktree]"
+
+
+def worktree_notice(offer: dict[str, Any]) -> str:
+    """The nudge a session started with the worktree switch gets before the user's first message (plan 48)."""
+    base = f"{offer['branch']} at {offer['head']}" if offer.get("branch") else offer["head"]
+    text = (f"{WORKTREE_NOTICE} The user asked for this session to work in a new Git worktree. Before you change "
+            f"anything, create one for this task with the `worktree` tool (choose a short branch name that describes "
+            f"the task; base it on {base}) and move into it with `change_session_directory`. Do all of the work "
+            f"there.\nRepository: {offer['repository']}")
+    if offer.get("dirty"):
+        count = offer.get("changes") or 0
+        text += (f"\nThe checkout has {count} uncommitted change{'' if count == 1 else 's'}; they are not in the new "
+                 "worktree.")
+    return text
 # A fork's task message starts with this fixed text (only the parent id varies), so forks taken from the same point
 # share their request prefix up to the task itself. The `fork` tool description, which the fork also has, says what a
 # fork is; the marker only says that this session is one, and that it is read-only.
@@ -628,6 +643,7 @@ class Runtime:
         if s.kind == "manager":
             return self.manager.session_json(s)
         snapshot_info: dict[str, Any] | None = None
+        worktree_request: dict[str, Any] | None = None
         state: dict[str, Any] = {}
         skills: list[dict[str, Any]] = []
         servers: list[dict[str, Any]] = []
@@ -642,6 +658,7 @@ class Runtime:
             starting = snapshot.get("directory", s.directory)
             state = snapshot.get("workspace") or {}
             skills, servers = self._switches(snapshot, s.disabled())
+            worktree_request = self._worktree_request(s, snapshot)
         except ValueError as exc:
             snapshot_info = {"error": str(exc)}
             tools = []
@@ -663,6 +680,7 @@ class Runtime:
             "skills": skills, "mcp": servers,
             "workspace": {"entry": bool(state.get("entry")), "active": bool(state.get("activated"))},
             "starting_directory": starting,
+            "worktree_request": worktree_request,
             "directory_changed": str(Path(s.directory).resolve()) != starting,
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
@@ -673,6 +691,19 @@ class Runtime:
             # A child's spend, for its card in the parent; no ledger query for root sessions.
             **({"tokens": None if worker and worker.get("usage") is None else self._spent_tokens(s.id)} if s.parent_id else {}),
         }
+
+    def _worktree_request(self, s: Session, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+        """A session started with the worktree switch: `requested` until the model moves into a new worktree,
+        `entered` after, `not_entered` once a turn has ended without the move (plan 48)."""
+        request = snapshot.get("start_in_worktree")
+        if request is None:
+            return None
+        out = {key: request.get(key) for key in ("repository", "branch", "head", "dirty")}
+        if request.get("entered"):
+            return out | {"state": "entered", "path": request["entered"]["path"],
+                          "entered_branch": request["entered"].get("branch")}
+        ended = any(t["status"] != "running" for t in self.store.turns_for_session(s.id))
+        return out | {"state": "not_entered" if ended else "requested"}
 
     def _session_busy(self, session: Session) -> bool:
         return session.id in self.turns or any(c.id in self.turns for c in self.store.children(session.id))
@@ -1215,10 +1246,15 @@ class Runtime:
 
     def _plan_session(self, project: Project, *, model: str | None, permission: str | None, effort: str | None,
                       agent: str | None, parent: Session | None, disabled_tools: list[str] | None,
-                      directory: str | None) -> dict[str, Any]:
-        """Every field a new session starts with, snapshot included; nothing is stored."""
+                      directory: str | None, worktree: bool = False) -> dict[str, Any]:
+        """Every field a new session starts with, snapshot included; nothing is stored.
+
+        `worktree`: the session starts with the workspace tools active, so the worktree nudge can be acted on at once.
+        """
         if permission not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
+        if worktree and parent is not None:
+            raise ValueError("worktree applies to root sessions only")
         if parent is not None:
             # A caller may hold an immutable Session fetched before archiving.
             parent = self.session(parent.id)
@@ -1280,6 +1316,7 @@ class Runtime:
         snapshot = self._build_snapshot(
             project=project, directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
             child=parent is not None, project_path=project.path, carry=carry,
+            workspace={"entry": True, "activated": True} if worktree else None,
         )
         return {"model": model, "permission": permission, "effort": effort, "agent": agent, "disabled_tools": disabled_tools,
                 "directory": directory, "snapshot": snapshot, "spec": spec, "parent": parent}
@@ -1288,9 +1325,13 @@ class Runtime:
                        effort: str | None = None, agent: str | None = None, parent: Session | None = None,
                        parent_call_id: str | None = None, launched_by: str = "user",
                        disabled_tools: list[str] | None = None, directory: str | None = None,
-                       continued_from: str | None = None) -> Session:
+                       continued_from: str | None = None, start_in_worktree: dict[str, Any] | None = None) -> Session:
+        """`start_in_worktree`: a `worktrees.start_offer` result; the session gets the worktree nudge (plan 48)."""
+        if start_in_worktree is not None and not start_in_worktree.get("available"):
+            raise ValueError("a worktree needs a Git repository with at least one commit")
         plan = self._plan_session(project, model=model, permission=permission, effort=effort, agent=agent, parent=parent,
-                                  disabled_tools=disabled_tools, directory=directory)
+                                  disabled_tools=disabled_tools, directory=directory,
+                                  worktree=start_in_worktree is not None)
         model, permission, effort, agent = plan["model"], plan["permission"], plan["effort"], plan["agent"]
         disabled_tools, directory, snapshot = plan["disabled_tools"], plan["directory"], plan["snapshot"]
         parent = plan["parent"]
@@ -1345,7 +1386,16 @@ class Runtime:
                                             parent_call_id=parent_call_id, launched_by=launched_by,
                                             disabled_tools=disabled_tools, snapshot=snapshot,
                                             directory=directory, continued_from=continued_from)
+        if start_in_worktree is not None:
+            snapshot["start_in_worktree"] = {
+                key: start_in_worktree.get(key) for key in ("repository", "checkout", "branch", "head", "dirty", "changes")
+            } | {"entered": None}
+            self.store.set_snapshot(session.id, snapshot)
         self.bus.publish("session.created", self.session_json(session), session_id=session.id)
+        if start_in_worktree is not None:
+            # Before the user's first message: what the model is asked to do comes first in its context.
+            stored = self.store.append_message(session.id, Message("user", (Text(worktree_notice(start_in_worktree)),)))
+            self._publish_message(session.id, stored)
         return session
 
     def _switch_notices(self, session: Session, before: set[str], after: set[str]) -> list[str]:
@@ -1377,6 +1427,16 @@ class Runtime:
 
     async def create_session_ready(self, project: Project, **fields: Any) -> Session:
         """`create_session` after every enabled, switched-on MCP server is online (a failure does not block the session)."""
+        worktree = fields.pop("worktree", False)
+        if not isinstance(worktree, bool):
+            raise TypeError("worktree must be true or false")
+        if worktree:
+            if fields.get("parent") is not None:
+                raise ValueError("worktree applies to root sessions only")
+            offer = await worktrees.start_offer(fields.get("directory") or project.path)
+            if not offer.get("available"):
+                raise ValueError(f"{project.path} is not a Git repository with a commit; start without a worktree")
+            fields["start_in_worktree"] = offer
         if fields.get("parent") is None:
             disabled = fields.get("disabled_tools")
             if disabled is None:
@@ -1760,6 +1820,10 @@ class Runtime:
             "instructions": {key: record[key] for key in ("path", "status", "bytes", "sha256")},
         })
         snapshot["directory_changes"] = changes[-20:]
+        request = snapshot.get("start_in_worktree")
+        if request is not None and request.get("entered") is None and change.get("worktree") \
+                and str(Path(change["worktree"]).resolve()) != str(Path(request.get("checkout") or "").resolve()):
+            request["entered"] = {"path": change["to"], "branch": change.get("branch")}
         self.store.set_snapshot(session_id, snapshot)
         self.bus.publish("session.directory_changed", {
             "from": change["from"], "to": change["to"], "branch": change["branch"],
@@ -2250,7 +2314,7 @@ class Runtime:
 
     async def draft_context(self, project: Project, *, model: str | None = None, effort: str | None = None,
                             agent: str | None = None, disabled_tools: list[str] | None = None,
-                            directory: str | None = None) -> dict[str, Any]:
+                            directory: str | None = None, worktree: bool = False) -> dict[str, Any]:
         """The request a new session would send first (K4): same planning as `create_session`, nothing stored.
 
         Takes the creation fields and returns `context_usage`'s shape plus `model` and the `snapshot` summary, with
@@ -2258,8 +2322,12 @@ class Runtime:
         """
         disabled = disabled_tools if disabled_tools is not None else ConfigFile().read()["values"]["tools"]["disabled"]
         await self.connect_mcp(project, set(disabled))
+        if not isinstance(worktree, bool):
+            raise TypeError("worktree must be true or false")
+        offer = await worktrees.start_offer(directory or project.path)
+        worktree = worktree and bool(offer.get("available"))
         plan = self._plan_session(project, model=model, permission=None, effort=effort, agent=agent, parent=None,
-                                  disabled_tools=disabled_tools, directory=directory)
+                                  disabled_tools=disabled_tools, directory=directory, worktree=worktree)
         snapshot, spec = plan["snapshot"], plan["spec"]
         ref = plan["model"] or spec.model
         if not ref:
@@ -2282,7 +2350,9 @@ class Runtime:
                                                     "details": details,
                                                     "snapshot": snapshots.summary(snapshot), "tool_info": info,
                                                     "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers,
-                                                    "session": {"model": plan["model"], "effort": plan["effort"]}}
+                                                    "session": {"model": plan["model"], "effort": plan["effort"]},
+                                                    "worktree": offer | {"on": worktree},
+                                                    **({"notice": worktree_notice(offer)} if worktree else {})}
 
     @staticmethod
     def _draft_details(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -3256,10 +3326,11 @@ class Runtime:
                 self._start_input(session_id, item)
             return {"input_id": item["id"], "mode": mode, "state": "pending"}
         if session.title == "New session":
-            quick = " ".join(text.split())[:TITLE_CHARS] or "Image"
+            full = "".join(part.text for part in text_parts) if text else ""
+            quick = " ".join(full.split())[:TITLE_CHARS] or "Image"
             self.update_session(session_id, title=quick)
-            if text.strip() and self.background_requests:
-                self.background.add(task := asyncio.ensure_future(self._retitle(session_id, text, quick)))
+            if full.strip() and self.background_requests:
+                self.background.add(task := asyncio.ensure_future(self._retitle(session_id, full, quick)))
                 task.add_done_callback(self.background.discard)
         labelled_parts = tuple(part for index, image in enumerate(parts) for part in (
             Text(f"[Image {chr(ord('A') + index)}]"), image,
@@ -3696,6 +3767,11 @@ class Runtime:
                     if continuation.get("reconciliation"):
                         idle["reconciled"] = continuation["reconciliation"]
                 self.bus.publish("session.status", idle, session_id=session_id)
+                if session is not None and session.parent_id is None:
+                    request = (self.store.snapshot(session_id) or {}).get("start_in_worktree")
+                    if request is not None and request.get("entered") is None:
+                        # The worktree request's state changes from `requested` to `not_entered` with the first turn.
+                        self.bus.publish("session.updated", self.session_json(session), session_id=session_id)
                 if completed and self.background_requests and self.store.session(session_id) is not None \
                         and not (self._model_ref(session_id) or "mock/").startswith("mock/"):
                     self.background.add(task := asyncio.ensure_future(self._auto_handoff(session_id)))

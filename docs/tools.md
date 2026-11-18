@@ -177,6 +177,9 @@ never ask for approval or an `ask` question.
   unless `disabled_tools` contains it. An agent's `tools` list does not grant or
   remove it. `expose_workspace_tools` is not in `DEFAULT_TOOLS`; it is added by
   the session snapshot.
+- **Started in a worktree** (`worktree: true` on create, plan 48): the session starts with
+  `workspace.activated` set and both definitions stored, so the starting notice can be acted on in
+  the first call; the draft context with the switch on shows the same tools and counts.
 - **Existing sessions** keep their stored snapshot and do not silently gain the
   entry point or the two tools. `POST /api/session/{id}/workspace-tools`
   activates them explicitly (also for a reconstructed old session).
@@ -1010,8 +1013,9 @@ Instructions…  (bundled files: scripts/…, references/…)
   record). A skill that is added or changed after the session started is **not** injected
   and not loadable in it (`skill` says "no skill named"): only a new session has it, and
   clients tell the user with `skills.changed`. The system prompt is never rewritten.
-- **Switches.** `skill:<name>` entries in `disabled_tools`, from the context header (both
-  clients). Only skills the session started with can be switched; one that was off at the start
+- **Switches.** `skill:<name>` entries in `disabled_tools`. Before the first message the draft's
+  context header switches them; from the first send the header is fixed (read-only, plan 48), and
+  `/skills` (servers: `/mcp`) is the only way to switch them in a started session (both clients). Only skills the session started with can be switched; one that was off at the start
   is `locked` and a PATCH that turns it on returns 400 ("start a new session"). A mid-session
   switch injects one JSON notice, visible in the timeline, and `skill` refuses a switched-off
   skill: `{"skill_unavailable": {"name": "x"}}`, `{"skill_available": {"name": "x"}}`. The

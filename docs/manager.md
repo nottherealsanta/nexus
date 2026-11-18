@@ -139,7 +139,7 @@ refused.
 | Group | Tools |
 | --- | --- |
 | read | `overview`, `find_sessions`, `session_status`, `read_session` (`last_answer`, `last_user`, `recent`, `question`, `changes`), `search_conversations`, `current_view` |
-| act | `start_session` (`worktree=true` writes the worktree instruction into the first message), `send_to_session` (un-archives as needed), `answer_question`, `decide_approval`, `interrupt_session`, `archive_session`, `unarchive_session` |
+| act | `start_session` (`worktree=true` creates the session with Core's worktree notice, plan 48), `send_to_session` (un-archives as needed), `answer_question`, `decide_approval`, `interrupt_session`, `archive_session`, `unarchive_session` |
 | see and show | `navigate`, `show`, `clear_stage` |
 
 There is no tool for files, shell, web, MCP, settings, models, permissions, deletion, worktree deletion or merging.

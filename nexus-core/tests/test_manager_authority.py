@@ -6,6 +6,7 @@ then a few end-to-end cases drive the scripted model through the HTTP API.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 
 import pytest
@@ -14,6 +15,7 @@ from manager_support import Harness, until
 
 from nexus.manager.context import data_block, neutralize, quoted
 from nexus.manager.turn import TurnState
+from nexus.runtime import WORKTREE_NOTICE
 from nexus.store import new_id
 from nexus.tools.base import ToolError
 
@@ -343,16 +345,32 @@ async def test_start_session_creates_a_session_labelled_via_the_manager(h):
     assert h.store.audit()[0]["ok"] and h.store.audit()[0]["heard"] == "start fix the dictation cue in nexus"
 
 
-async def test_a_worktree_start_puts_the_instruction_in_the_first_message(desk):
+def _git_repo(path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty",
+                    "-m", "init"], cwd=path, check=True)
+
+
+async def test_a_worktree_start_uses_the_starting_worktree_notice(desk):
+    _git_repo(desk.h.tmp / "nexus")
     desk.turn("start it in a worktree")
     out = await desk.call("start_session", project="nexus", prompt="fix the cue", worktree=True)
-    assert "worktree instruction" in out
+    assert "asked to work in a new worktree" in out
     session = desk.h.store.sessions()[0]
     assert session.title == "fix the cue"
-    await until(lambda: desk.h.store.messages(session.id), what="the session's first message")
-    first = desk.h.store.messages(session.id)[0]
-    assert "expose_workspace_tools" in first.message.parts[0].text and first.message.parts[0].text.endswith("fix the cue")
-    assert first.origin == "manager"
+    await until(lambda: len(desk.h.store.messages(session.id)) >= 2, what="the notice and the first message")
+    notice, first = desk.h.store.messages(session.id)[:2]
+    # The same notice as the clients' worktree switch (plan 48); the user's words stay exactly theirs.
+    assert notice.message.parts[0].text.startswith(WORKTREE_NOTICE)
+    assert first.message.parts[0].text == "fix the cue" and first.origin == "manager"
+    assert desk.h.rt.session_json(session)["workspace"]["active"]
+
+
+async def test_a_worktree_start_outside_git_fails_plainly(desk):
+    desk.turn("start it in a worktree")
+    with pytest.raises(ToolError, match="not a Git repository"):
+        await desk.call("start_session", project="nexus", prompt="fix the cue", worktree=True)
+    assert desk.h.store.sessions() == []
 
 
 async def test_a_message_to_an_archived_session_brings_it_back_and_says_so(desk):

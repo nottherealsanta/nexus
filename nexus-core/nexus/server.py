@@ -1389,7 +1389,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 target = runtime.project(body["project"]) if body.get("project") else runtime.open_project(body["directory"])
             session = await runtime.create_session_ready(
                 target, title=body.get("title"), model=body.get("model"), permission=body.get("permission"),
-                effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"))
+                effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"),
+                worktree=body.get("worktree", False))
             if parent is None and body.get("model"):
                 runtime.remember_model(session.project_id, session.agent, body["model"])
             if parent is None and isinstance(body.get("effort"), str):
@@ -1737,7 +1738,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         target = runtime.project(body["project"]) if body.get("project") else runtime.open_project(body["directory"])
         return JSONResponse(await runtime.draft_context(
             target, model=body.get("model"), effort=body.get("effort"), agent=body.get("agent"),
-            disabled_tools=body.get("disabled_tools")))
+            disabled_tools=body.get("disabled_tools"), worktree=body.get("worktree", False)))
 
     async def btw(request: Request) -> Response:
         if request.method == "GET":

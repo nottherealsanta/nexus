@@ -54,12 +54,6 @@ TEXT_CLIP = 2000
 EXCHANGE_CLIP = 600
 MAX_PROMPT = 8000
 
-WORKTREE_INSTRUCTION = (
-    "[Instruction from the Manager, as the user asked: work in a new git worktree.] Before you change anything, call "
-    "expose_workspace_tools, then create a new worktree for this task with the worktree tool and move into it with "
-    "change_session_directory. Do all of the work there.\n\n"
-)
-
 
 def _def(name: str, description: str, properties: dict[str, Any] | None = None, required: list[str] | None = None) -> dict[str, Any]:
     return {"name": name, "description": description,
@@ -685,11 +679,17 @@ class ManagerTools:
             worktree = args.get("worktree", False)
             if not isinstance(worktree, bool):
                 raise ToolError("worktree must be true or false")
-            text = (WORKTREE_INSTRUCTION if worktree else "") + prompt.strip()
+            text = prompt.strip()
             runtime = svc.runtime
-            session = await runtime.create_session_ready(
-                project, title=args.get("title") or " ".join(prompt.split())[:60], model=args.get("model") or None, permission=None,
-                effort=None, agent=args.get("agent") or None)
+            # The worktree nudge is Core's starting notice, the same one the clients' worktree switch adds (plan 48).
+            try:
+                session = await runtime.create_session_ready(
+                    project, title=args.get("title") or " ".join(prompt.split())[:60], model=args.get("model") or None,
+                    permission=None, effort=None, agent=args.get("agent") or None, worktree=worktree)
+            except ValueError as exc:
+                if worktree:
+                    raise ToolError(str(exc)) from exc
+                raise
             if args.get("model"):
                 runtime.remember_model(session.project_id, session.agent, args["model"])
             started = runtime.prompt(session.id, text, via="manager")
@@ -698,7 +698,7 @@ class ManagerTools:
                 raise ToolError("the session was created but its first message did not start a turn")
             self._pending_target = session
             return (f"Started a new session in {project.name} as {handle}"
-                    f"{' with a worktree instruction' if worktree else ''}. It is working now.")
+                    f"{', asked to work in a new worktree' if worktree else ''}. It is working now.")
 
         result = await self._act("start_session", "start_session", args, run, target=False)
         created = getattr(self, "_pending_target", None)

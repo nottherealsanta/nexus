@@ -170,7 +170,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/project/{id}/mcp/{name}` | | one project MCP row plus `tool_names` and `log`; never starts a server |
 | POST | `/api/project/{id}/mcp/{name}/restart` | | close and reconnect a project server; returns the row |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
-| POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
+| POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?, worktree?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`); `worktree: true` asks the agent to start in a new worktree ([below](#starting-in-a-worktree)) |
 | GET | `/api/session/{id}` | | `Session` |
 | PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?, disabled_tools?, expected_revision?}` (`""` clears model or effort; `If-Match` also accepted) | `Session`; a stale revision is 409 |
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
@@ -498,6 +498,9 @@ Limits and intent: [tools.md](tools.md#workspace-control-tools-on-demand).
 stored context. It is an explicit client action: reconnecting, reading a
 session, restarting the daemon and startup recovery never continue a session by
 themselves.
+
+`/continue` is available for any idle session, including after a successful turn;
+Core still rejects an empty, archived, busy or unreconciled session.
 
 Client behaviour (plan 37): the clients show a pending working row the moment the user
 runs `/continue` or sends, without waiting for the 202 or the `busy` event. While Core is
@@ -1599,6 +1602,26 @@ the lists the session would start with: `tools` (names, in request order),
 MCP servers are connected first, as for creation. Clients draw the new-session
 context from these lists alone: they keep no tool list of their own and show
 "loading" until it answers.
+
+The draft also takes `worktree` and always answers `worktree`: `{available, on, repository, checkout, branch, head,
+dirty, changes}` (`available: false` alone outside Git or in a repository with no commit; clients then hide the row).
+With `worktree: true` where it is available, the answer is the session's first request with the switch on: the
+workspace tools are in `tools` and their schemas in the counts, and `notice` is the text the session will receive.
+
+### Starting in a worktree
+
+`worktree: true` on `POST /api/session` (plan 48) applies to root sessions in a Git checkout with a commit; anything
+else is 400. Core does not create a worktree. The session starts with the workspace tools already active
+(`workspace.active` in the session JSON), and before the user's first message its context gets a visible notice, a
+user-role message starting `[Nexus notice: start in a worktree]`, asking the model to create a new worktree with
+`worktree` (choosing the branch name; base and repository given) and move into it with `change_session_directory`,
+and saying how many uncommitted changes stay in the checkout. Clients show it as a notice row.
+
+The session JSON carries `worktree_request` (null without the switch): `{repository, branch, head, dirty, state}`, where
+`state` is `requested`, `entered` (with `path` and `entered_branch`, once the session moved into a worktree other than
+the checkout it started in) or `not_entered` (a turn ended without that move). `session.updated` is published when the
+first turn ends, so clients show `not_entered` as a warning line under the fixed header. The warning is for the user
+and is not sent to the model. The Manager's `start_session(worktree=true)` uses the same flag.
 
 ## Pending inputs: steer and queue
 

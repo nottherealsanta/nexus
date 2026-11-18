@@ -978,3 +978,81 @@ async def test_tool_move_cannot_replace_an_already_pending_api_move(env):
         await env.rt.change_directory(sid, str(second), source="tool")
     assert env.rt.pending_directories[sid]["to"] == str(first.resolve())
     await env.rt.shutdown()
+
+
+# -- plan 48: the new-session worktree switch -----------------------------------------------------
+
+
+async def test_worktree_switch_adds_the_nudge_before_the_first_message_and_activates_the_tools(env):
+    (env.workspace / "a.txt").write_text("changed\n")  # one uncommitted change stays in the checkout
+    draft = (await env.client.post("/api/draft/context", json={"directory": str(env.workspace), "worktree": True})).json()
+    assert draft["worktree"]["available"] and draft["worktree"]["on"] and draft["worktree"]["dirty"]
+    assert draft["worktree"]["branch"] == "main" and draft["worktree"]["changes"] == 1
+    assert draft["notice"].startswith(runtime_module.WORKTREE_NOTICE)
+    assert {"worktree", "change_session_directory"} <= set(draft["tools"])
+    plain = (await env.client.post("/api/draft/context", json={"directory": str(env.workspace)})).json()
+    assert plain["worktree"]["on"] is False and "worktree" not in plain["tools"] and "notice" not in plain
+
+    session = await _create(env.client, env.workspace, worktree=True)
+    sid = session["id"]
+    assert session["workspace"] == {"entry": True, "active": True}
+    assert session["tools"] == draft["tools"]  # the draft preview is what the session starts with
+    assert session["worktree_request"]["state"] == "requested"
+    assert session["directory"] == str(env.workspace.resolve())  # Core never creates or moves into a worktree
+
+    worktree = env.tmp_path / "proj-task"
+    env.provider.replies = [
+        [ToolCall("w1", "worktree", json.dumps({"action": "create", "path": str(worktree), "branch": "fix-task"}))],
+        [ToolCall("d1", "change_session_directory", json.dumps({"directory": str(worktree)}))],
+        [Text("moved")],
+    ]
+    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "fix the task"})
+    await _idle(env.rt, sid)
+
+    messages = await _messages_of(env.client, sid)
+    first, second = messages[0]["parts"][0]["text"], messages[1]["parts"][0]["text"]
+    assert first.startswith(runtime_module.WORKTREE_NOTICE) and "1 uncommitted change;" in first
+    assert "base it on main at " in first and second == "fix the task"
+    # The model received the nudge, in order, before the user's words.
+    sent = env.provider.requests[0].messages
+    assert sent[0].parts[0].text == first and sent[1].parts[0].text == "fix the task"
+    assert "worktree" in [t.name for t in env.provider.requests[0].tools]
+
+    refreshed = (await env.client.get(f"/api/session/{sid}")).json()
+    assert refreshed["worktree_request"]["state"] == "entered"
+    assert refreshed["worktree_request"]["entered_branch"] == "fix-task"
+    assert Path(refreshed["worktree_request"]["path"]) == worktree.resolve()
+    await env.rt.shutdown()
+
+
+async def test_worktree_request_reads_not_entered_after_a_turn_without_the_move(env):
+    session = await _create(env.client, env.workspace, worktree=True)
+    sid = session["id"]
+    env.provider.replies = [[Text("did it here")]]
+    await env.client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    await _idle(env.rt, sid)
+    refreshed = (await env.client.get(f"/api/session/{sid}")).json()
+    assert refreshed["worktree_request"]["state"] == "not_entered"
+    updates = [e for e in await _events(env.client, sid, "session.updated")
+               if (e["data"].get("worktree_request") or {}).get("state") == "not_entered"]
+    assert updates, "clients learn the state change without polling"
+    await env.rt.shutdown()
+
+
+async def test_worktree_switch_is_refused_outside_git_and_for_children(env, tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    draft = (await env.client.post("/api/draft/context", json={"directory": str(plain), "worktree": True})).json()
+    assert draft["worktree"] == {"available": False, "on": False} and "notice" not in draft
+    response = await env.client.post("/api/session", json={"directory": str(plain), "worktree": True})
+    assert response.status_code == 400 and "not a Git repository" in response.text
+    assert not [s for s in env.store.sessions() if s.directory == str(plain.resolve())]
+
+    parent = await _create(env.client, env.workspace)
+    response = await env.client.post("/api/session", json={"parent": parent["id"], "worktree": True})
+    assert response.status_code == 400 and "root sessions only" in response.text
+    response = await env.client.post("/api/session", json={"directory": str(env.workspace), "worktree": "yes"})
+    assert response.status_code == 400
+    plain_session = await _create(env.client, env.workspace)
+    assert plain_session["worktree_request"] is None
+    await env.rt.shutdown()

@@ -258,6 +258,12 @@ loss.
 activated: `{active: true, entry, tools}`. It is stored in the session's event
 log; the tool result (or the API notice) holds the definitions.
 
+A session created with `worktree: true` (plan 48) starts with the tools active and gets its
+`[Nexus notice: start in a worktree]` notice as an ordinary `message.created` (user role) before the
+first user message. Its `worktree_request` state is carried by `session.created` / `session.updated`;
+`session.updated` is published when a turn ends while the request is still unmet
+([api.md](api.md#starting-in-a-worktree)).
+
 `browser.failed` and `browser.tools_changed` (the browser tools' process) are session-scoped and carry the same payloads as their
 `mcp.*` counterparts.
 

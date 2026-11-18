@@ -233,6 +233,23 @@ async def git_state(directory: str | Path) -> dict[str, Any] | None:
     }
 
 
+async def start_offer(directory: str | Path) -> dict[str, Any]:
+    """What the new-session worktree switch needs: whether it applies, the base commit and uncommitted changes.
+
+    `available` is false outside Git and in a repository with no commit, where there is nothing to cut a worktree from.
+    """
+    state = await git_state(directory)
+    if state is None:
+        return {"available": False}
+    try:
+        head = (await _git("rev-parse", "--short", "HEAD", cwd=directory)).strip()
+    except WorktreeError:
+        return {"available": False}
+    dirty, changes = await _status(Path(state["worktree"]))
+    return {"available": True, "repository": state["repository"], "checkout": state["worktree"],
+            "branch": state["branch"], "head": head, "dirty": bool(dirty), "changes": changes}
+
+
 async def _check_branch(repo_main: Path, branch: str) -> None:
     if branch.startswith("-"):
         raise WorktreeError(f"invalid branch name {branch!r}")
