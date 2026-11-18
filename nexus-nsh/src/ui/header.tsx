@@ -165,7 +165,7 @@ export function Header() {
       style={{ paddingTop: safeArea().top, ...(lights() ? { paddingLeft: lights() + 8 } : {}) }}>
       <View class="flex-row items-center gap-0.5 shrink-0" style={leftDocked() ? { width: leftSidebarWidth() + (railShown() ? RAIL_PX : 0) } : {}}>
         <View class="items-center justify-center" style={{ width: railShown() ? RAIL_PX : 48 }}><IconButton icon="panel-left" label="Toggle left sidebar" testID="toggle-left" selected={isNarrow() ? drawer() === "left" : leftOpen()} onPress={() => run("sidebar.left.toggle")} reason={key("sidebar.left.toggle") ?? undefined} /></View>
-        <If when={leftDocked()}><View class="mx-1 h-4 w-px shrink-0 bg-border" accessible={false} /><SidebarTabs /></If>
+        <If when={leftDocked()}><SidebarTabs /></If>
       </View>
       <View class="flex-1 min-w-0 h-full flex-row items-center px-2">
         <View class="flex-1 min-w-0 flex-row items-center gap-2">

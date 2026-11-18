@@ -143,12 +143,27 @@ fn terminal_safe(text: &str) -> String {
 /// result is visually identical to per-grapheme spans but has far fewer
 /// allocations and later clones (timeline caching depends on that).
 pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    wrap_linked_spans(spans, &[], width)
+        .into_iter()
+        .map(|(spans, _)| spans)
+        .collect()
+}
+
+/// One wrapped row and the link destinations on it, as `(start, end, url)` columns.
+type LinkedRow = (Vec<Span<'static>>, Vec<(usize, usize, String)>);
+
+pub fn wrap_linked_spans(
+    spans: &[Span<'static>],
+    links: &[(usize, String)],
+    width: usize,
+) -> Vec<LinkedRow> {
     #[derive(Clone, Copy)]
     struct Cell<'a> {
         text: &'a str,
         style: Style,
         width: usize,
         space: bool,
+        link: Option<&'a str>,
     }
 
     let width = width.max(1);
@@ -156,7 +171,11 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
     let mut row: Vec<Cell<'_>> = Vec::new();
     let mut cols = 0;
     let mut break_at = None;
-    for span in spans {
+    for (index, span) in spans.iter().enumerate() {
+        let link = links
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, url)| url.as_str());
         for grapheme in span.content.graphemes(true) {
             let w = grapheme.width();
             let space = grapheme.chars().all(char::is_whitespace);
@@ -190,6 +209,7 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
                 style: span.style,
                 width: w,
                 space,
+                link,
             });
             cols += w;
             if space {
@@ -201,16 +221,31 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
     rows.into_iter()
         .map(|cells| {
             let mut runs: Vec<(String, Style)> = Vec::new();
+            let mut link_ranges: Vec<(usize, usize, String)> = Vec::new();
+            let mut col = 0;
             for cell in cells {
+                if let Some(link) = cell.link {
+                    if let Some((_, end, _)) = link_ranges
+                        .last_mut()
+                        .filter(|(_, end, target)| *end == col && target == link)
+                    {
+                        *end += cell.width;
+                    } else {
+                        link_ranges.push((col, col + cell.width, link.to_owned()));
+                    }
+                }
+                col += cell.width;
                 if let Some((text, _)) = runs.last_mut().filter(|(_, s)| *s == cell.style) {
                     text.push_str(cell.text);
                 } else {
                     runs.push((cell.text.to_owned(), cell.style));
                 }
             }
-            runs.into_iter()
+            let spans = runs
+                .into_iter()
                 .map(|(text, style)| Span::styled(text, style))
-                .collect()
+                .collect();
+            (spans, link_ranges)
         })
         .collect()
 }
@@ -221,6 +256,7 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
 pub struct Row {
     pub prefix: Vec<Span<'static>>,
     pub spans: Vec<Span<'static>>,
+    pub links: Vec<(usize, String)>,
     pub bg: Option<ratatui::style::Color>,
     pub blank: bool,
     /// Index of the fenced code block this row draws (see [`fence_sources`]).
@@ -237,6 +273,7 @@ struct Walker<'a> {
     width: usize,
     rows: Vec<Row>,
     cur: Vec<Span<'static>>,
+    cur_links: Vec<(usize, String)>,
     marker: Option<String>,
     levels: Vec<Level>,
     quote: usize,
@@ -297,9 +334,11 @@ impl<'a> Walker<'a> {
         }
         let (prefix, _) = self.prefix();
         let spans = std::mem::take(&mut self.cur);
+        let links = std::mem::take(&mut self.cur_links);
         self.rows.push(Row {
             prefix,
             spans,
+            links,
             bg: None,
             blank: false,
             image: None,
@@ -351,6 +390,9 @@ impl<'a> Walker<'a> {
                 self.flush();
             }
             if !part.is_empty() {
+                if let Some(link) = self.links.last() {
+                    self.cur_links.push((self.cur.len(), link.clone()));
+                }
                 self.cur.push(Span::styled(part.to_string(), style));
             }
         }
@@ -415,6 +457,7 @@ impl<'a> Walker<'a> {
                 blank: false,
                 image: None,
                 fence: Some(index),
+                links: Vec::new(),
             });
         }
         let label = Style::default().fg(self.p.quiet);
@@ -429,6 +472,7 @@ impl<'a> Walker<'a> {
             blank: false,
             image: None,
             fence: Some(index),
+            links: Vec::new(),
         });
         true
     }
@@ -459,6 +503,7 @@ impl<'a> Walker<'a> {
             blank: false,
             image: None,
             fence: Some(index),
+            links: Vec::new(),
         });
         true
     }
@@ -490,6 +535,7 @@ impl<'a> Walker<'a> {
                 blank: false,
                 image: None,
                 fence: Some(index),
+                links: Vec::new(),
             });
         }
         let label = Style::default().fg(self.p.quiet);
@@ -504,6 +550,7 @@ impl<'a> Walker<'a> {
             blank: false,
             image: None,
             fence: Some(index),
+            links: Vec::new(),
         });
         true
     }
@@ -518,6 +565,7 @@ impl<'a> Walker<'a> {
             blank: false,
             image: None,
             fence: Some(index),
+            links: Vec::new(),
         });
     }
     fn finish_table(&mut self) {
@@ -842,6 +890,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
         width,
         rows: Vec::new(),
         cur: Vec::new(),
+        cur_links: Vec::new(),
         marker: None,
         levels: Vec::new(),
         quote: 0,
@@ -1017,7 +1066,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                     if w.bold > 0 {
                         style = style.add_modifier(Modifier::BOLD);
                     }
-                    w.cur.push(Span::styled(format!(" {value} "), style));
+                    w.text(&format!(" {value} "), style);
                 }
             }
             Event::Text(value) if w.code_block.is_some() => fence_body.push_str(&value),
@@ -1115,6 +1164,32 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains("unsupported diagram"));
+    }
+
+    #[test]
+    fn wrapped_link_segments_keep_their_destinations() {
+        let palette = Palette::from_theme(&Theme::new(Options::default()));
+        let rows = lines(
+            "[wide link label](src/main.rs) and [site](https://example.test)",
+            &palette,
+            12,
+        );
+        let segments: Vec<_> = rows
+            .iter()
+            .flat_map(|row| wrap_linked_spans(&row.spans, &row.links, 8))
+            .collect();
+        let targets: Vec<_> = segments
+            .iter()
+            .flat_map(|(_, links)| links.iter().map(|(_, _, target)| target.as_str()))
+            .collect();
+        assert!(
+            targets
+                .iter()
+                .filter(|target| **target == "src/main.rs")
+                .count()
+                >= 2
+        );
+        assert!(targets.contains(&"https://example.test"));
     }
 
     #[test]

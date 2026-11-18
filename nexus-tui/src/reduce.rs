@@ -74,6 +74,7 @@ pub struct Streaming {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SelectedView {
     pub session_id: String,
+    pub loaded: bool,
     pub messages: Vec<Message>,
     pub messages_more: bool,
     /// Live events of this session since its newest turn summary, in id
@@ -479,6 +480,7 @@ impl Model {
         let Some(view) = self.view_mut(&h.session_id) else {
             return;
         };
+        view.loaded = true;
         // Messages held but not fetched are kept, ordered by seq: ones applied
         // live after the fetch, and older pages a cached view already read.
         let floor = h.messages.first().map(|m| m.seq);

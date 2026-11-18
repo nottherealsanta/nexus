@@ -20,10 +20,39 @@ fn rows(a: &mut nexus_tui::app::App) -> Vec<String> {
 }
 
 #[test]
+fn markdown_links_open_web_and_file_targets() {
+    use nexus_tui::app::Effect;
+    let mut a = app();
+    let v = serde_json::json!({"id": 61, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:61",
+        "data": {"id": "msg_links", "session_id": SESSION, "seq": 61, "created": 1793113400.0,
+                 "role": "assistant", "parts": [{"type": "text", "text": "[website](https://example.test) [file](src/main.rs)"}]}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &v)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    let drawn = rows(&mut a);
+    let (y, row) = drawn
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.contains("website"))
+        .unwrap();
+    let web = row.find("website").unwrap() as u16;
+    let file = row.find("file").unwrap() as u16;
+    click(&mut a, web, y as u16);
+    assert!(a
+        .effects
+        .contains(&Effect::OpenUrl("https://example.test".into())));
+    click(&mut a, file, y as u16);
+    assert!(a.ui.file_open);
+}
+
+#[test]
 fn mouse_drag_selects_and_copies_timeline_text_without_activating_the_block() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use nexus_tui::app::Effect;
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
 
     let mut a = app();
     let drawn = rows(&mut a);
@@ -41,13 +70,94 @@ fn mouse_drag_selects_and_copies_timeline_text_without_activating_the_block() {
         row: y,
         modifiers: KeyModifiers::NONE,
     };
+    let (before, _) = draw(&mut a, 120, 36);
+    let Color::Rgb(r, g, b) = before[(x, y)].bg else {
+        panic!("expected a truecolor background")
+    };
+    let half = |value: u8| ((u16::from(value) + 256) / 2) as u8;
+    let expected = Color::Rgb(half(r), half(g), half(b));
     a.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x));
     a.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), x + 4));
     let (buf, _) = draw(&mut a, 120, 36);
-    assert!(buf[(x, y)].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(x, y)].bg, expected);
     a.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), x + 4));
     assert!(a.effects.contains(&Effect::Copy("Hello".into())));
-    assert!(rows(&mut a).join("\n").contains("Hello"));
+    let (released, _) = draw(&mut a, 120, 36);
+    assert_eq!(
+        released[(x, y)].bg,
+        expected,
+        "selection stays visible after release"
+    );
+    a.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x + 8));
+    let (cleared, _) = draw(&mut a, 120, 36);
+    assert_eq!(
+        cleared[(x, y)].bg,
+        before[(x, y)].bg,
+        "the next click clears it"
+    );
+}
+
+#[test]
+fn timeline_selection_survives_scrolling_in_both_directions() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use nexus_tui::app::Effect;
+    let mut a = app();
+    let text = (0..90)
+        .map(|i| format!("line {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let v = serde_json::json!({"id": 61, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:61",
+        "data": {"id": "msg_long", "session_id": SESSION, "seq": 61, "created": 1793113400.0,
+                 "role": "assistant", "parts": [{"type": "text", "text": text}]}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &v)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    rows(&mut a);
+    let area = a.regions.timeline;
+    let x = area.x + 4;
+    let y = area.y + area.height / 2;
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    a.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    for _ in 0..5 {
+        a.handle_mouse(mouse(MouseEventKind::ScrollUp));
+        rows(&mut a);
+    }
+    assert!(a.timeline_drag.as_ref().unwrap().0.dragged());
+    a.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+    let copied = a
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Copy(text) => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert!(copied.matches("line ").count() >= 5, "{copied:?}");
+    a.effects.clear();
+    a.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    for _ in 0..5 {
+        a.handle_mouse(mouse(MouseEventKind::ScrollDown));
+        rows(&mut a);
+    }
+    a.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+    let copied = a
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Copy(text) => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert!(copied.matches("line ").count() >= 5, "{copied:?}");
 }
 
 #[test]
@@ -549,6 +659,7 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
         .unwrap();
     let key = group.key.clone();
     assert_eq!(group.default_open, Some(true));
+    assert!(line_text(&live.lines[group.start]).contains("▼ Working"));
     assert!(live.blocks.iter().any(|b| b.key == "tool:c1"));
     assert_eq!(
         live.lines[group.start].spans.len(),
@@ -613,6 +724,7 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
         .unwrap();
     assert_eq!(group.key, key);
     assert_eq!(group.default_open, Some(false));
+    assert!(line_text(&done.lines[group.start]).contains("▶ 1 command"));
     assert!(!done.blocks.iter().any(|b| b.kind == BlockKind::Tool));
 }
 
@@ -1191,7 +1303,7 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
 }
 
 #[test]
-fn session_tool_grid_keeps_individual_click_targets_after_a_message() {
+fn session_tool_grid_is_fixed_after_a_message_and_names_open_details() {
     let mut a = app();
     a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
     a.ui.scroll.follow = false;
@@ -1203,13 +1315,13 @@ fn session_tool_grid_keeps_individual_click_targets_after_a_message() {
         .expect("tools share a row");
     let line = &lines[y];
     let bash = nexus_tui::text::width(&line[..line.find("bash").unwrap()]);
+    // Plan 48: the marker switches nothing once the session has started.
+    a.effects.clear();
     click(&mut a, (bash - 2) as u16, y as u16);
-    let expected = a
-        .context_items()
-        .iter()
-        .position(|item| item.key == "bash")
-        .unwrap();
-    assert_eq!(a.ui.context_cursor, expected);
+    assert!(!a.effects.iter().any(|e| matches!(
+        e,
+        nexus_tui::app::Effect::Api(nexus_tui::actions::ApiCall::SetDisabledTools { .. })
+    )));
     let (_, lines) = draw(&mut a, 120, 36);
     let y = lines
         .iter()

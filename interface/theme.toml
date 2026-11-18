@@ -34,6 +34,9 @@ scrollbar_fade_ms = 400
 [annotation]
 ink = ["#ff3b30", "#ffcc00", "#34c759", "#0a84ff"]
 
+[text_selection]
+opacity = 0.5
+
 # ---------------------------------------------------------------- dark
 [dark.surface]
 canvas = "#0B0B0B"      # the page: timeline and centre column
@@ -158,13 +161,14 @@ speaking  = "#a84e16"   # = interactive.accent
 idle      = "#7f868d"   # = text.faint
 
 # Agent names are casefolded, then FNV-1a 32-bit selects a slot. Built-ins
-# are pinned; custom names select from the unpinned slots (rose, sky, gold).
+# are pinned; custom names select from the unpinned slots (rose, gold).
 [agent_pins]
 orchestrate = "amber"
 build = "blue"
 quick = "green"
 scout = "teal"
 plan = "violet"
+fork = "sky"
 
 # ---------------------------------------------------------------- roles
 # Timeline roles are theme-independent: each names tokens, so both themes

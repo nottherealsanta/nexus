@@ -127,12 +127,16 @@ The NSH terminal target is retired. Use `nexus tui` for the maintained Rust term
 client. Its former launcher, rendering branches and captures are preserved in the
 Git tag `archive/nsh-terminal-backend`.
 
-A new session's first message appears immediately below its context preview as
-`You · Sending…`. The chosen settings stay visible until Core's message and history
+A new session's first message appears immediately below its context preview in a
+user-message band. The chosen settings stay visible until Core's message and history
 arrive; there is no intermediate loading/default-header flash. This is local
 submission state, not model context. Failures restore the draft in the new-session
 view or, if creation succeeded, the created session. Prompt submission starts
 without waiting for the session-history read.
+
+Timeline text selection uses the platform's selection and manual-copy behavior.
+Unlike the TUI, NSH does not automatically copy a selection on mouse release; this
+client difference was approved for the TUI-first change in the porting ledger.
 
 Final dictation adds the editable note `[Voice transcript — may contain errors.]`
 at the top of the composer, once per message (including mixed typed/dictated
@@ -215,13 +219,13 @@ notices/recovery messages and `via Manager` decisions stay in the timeline. A tu
 once the turn is done, and the live thought stays inside the active activity
 group. Settled history is rebuilt only on structural changes; text and reasoning
 deltas update a coalesced live tail, and wire-only events do not redraw, so a long
-session does not re-walk every message and tool detail per token. A session's first message is pinned to the top once it settles (as in the TUI): the list's bottom padding is a spacer (`pinSpacer`, view height less what the message and reply take) and the offset is the message row's top, re-applied as rows measure; the pin ends when the reader moves the view, and only the first send pins. A session opens at its latest message the first time and at its saved offset afterwards; it follows new content until the reader scrolls up (any upward scroll leaves follow at once, so streamed content never pulls the reader back), which shows the jump pill, and jumping or scrolling back to the end follows again. Height changes above the viewport keep the first visible row anchored. Durations read `0.4s`, `4.2s`, `1m 05s` and
+session does not re-walk every message and tool detail per token. A new session stays at the top when its first message settles, keeping the context header in view without a first-message pin or spacer. Other sessions open at their latest message the first time and at their saved offset afterwards; they follow new content until the reader scrolls up (any upward scroll leaves follow at once, so streamed content never pulls the reader back), which shows the jump pill, and jumping or scrolling back to the end follows again. Height changes above the viewport keep the first visible row anchored. Durations read `0.4s`, `4.2s`, `1m 05s` and
 `1h 02m`. The finish time is omitted when unavailable or while the turn is
 running. Activity groups are 28 px rows with the TUI's content: counts in first-seen
 order (edits count the files they touch), `+N −M` beside the summary from
 edits that were neither failed nor denied, and `· N denied`; a failed member keeps its `✕`, first error line and a muted `failed`,
 and the folded heading never counts failures. A live group reads `Working` with a shimmer, and a group that has just finished
-flashes its chevron the accent, unless animations are off. Group headers, thoughts, tools, child cards and notices
+flashes its marker the accent, unless animations are off. Group markers are `▼` open and `▶` closed. Group headers, thoughts, tools, child cards and notices
 share one left icon column and label edge, without a member tree or extra indentation. Tool and thought icons
 are optically sized to match the chevrons (9–14 px SVG canvases; shell 12 px and code 14 px).
 Members use verb icons (the status glyph replaces the icon while running, failed, denied or waiting) and read
@@ -231,7 +235,7 @@ member's detail stays indented with `raw` on its row: `$ command` rows, then the
 behind `↑ N earlier lines · enter show all` (a press, Enter or `o` restores them), while a diff or the raw view keeps a head and
 a tail, 100 lines each or 30 and 20 at high detail. Code instead shows its cell source and marks its output hidden; raw reveals the result. Thoughts show `◇ Thought · preview`, with the body behind a rail, and no time;
 the one-line preview strips raw Markdown emphasis. A thought still arriving stays open and keeps its last 10 lines; a thought with no tool beside it is a single row, never a group, and shows the diamond where a group would show its chevron.
-Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog. A finished background subagent is instead `⣿ Subagent done · Agent · title`, with `failed` or `interrupted` in the error colour; pressing it opens a modal with the agent, title, model, duration and the exact notice text the model received, plus an **Open session** button for the child.
+Clipping is announced and the control restores the whole output. In the context card, the system prompt and instruction file open as rendered Markdown; Tools, Skills and MCP open a list of entries with their descriptions, and opening an entry shows a tool's schema, a skill's full text or a server's facts. The user message, assistant reply and activity chevrons share a left text edge; child sessions use the same inset. A child session is one row, `Scout <prompt>` with `Background`, then its model and time, and a failure or a wait below; pressing it opens the child. A notice is one row, `context · … · show details`, whose text opens in a dialog. A finished background subagent is instead `⣿ Agent · title`, with `failed` or `interrupted` in the error colour; pressing it opens a modal with the agent, title, model, duration and the exact notice text the model received, plus an **Open session** button for the child.
 
 The app sets a 16 px default with 24 px leading; the shared kit's title, body and
 code roles use that size, and hierarchy comes from weight and colour rather than
@@ -409,8 +413,11 @@ The starting-context section lists the prompt, tools, instructions, skills and M
 servers with estimates and the catalog window share. Its text uses a consistent
 16 px size, compact section counts, gray status dots and a three-column list of
 all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
-has no inline preview (its detail remains available by clicking its title). Skills and servers have
-per-session switches. Skills remain inline at 12 or fewer; above 12 only the clickable
+has no inline preview (its detail remains available by clicking its title). In a draft, skills,
+servers and tools switch from the header, and a `Worktree` switch (`context-worktree`, Git checkouts
+only) follows `total`. From the first send the header is fixed (plan 48): `context-sections-fixed`
+has no `bg-card`, markers are state, dialogs are read-only, and `/skills` and `/mcp` open live
+switches for the session (or the draft). Test: `context-modes.test.tsx`. Skills remain inline at 12 or fewer; above 12 only the clickable
 `Skills [N]` heading remains. At any count the heading opens a scrollable two-column
 card picker with description excerpts and separate enable/disable switches. A card name
 or an inline skill name opens a second Markdown modal. Cards are borderless dark gray,
@@ -444,7 +451,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects. The sidebar lists the current project's sessions only, with three actions (`New session`, `Search sessions`, `Show archived`) pinned above the list under a rule, even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archived lists archived sessions after the active ones, with a rule between the two.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects, each three text cells high with no gap between them or below Settings. The sidebar lists the current project's sessions only, with three actions (`New session`, `Search sessions`, `Show archived`) pinned above the list under a rule, even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archived lists archived sessions after the active ones, with a rule between the two.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -490,7 +497,9 @@ the row's end. Expanded folders keep their state across tab switches and reset w
 header names the project and the checkout branch. Files open as tabs in the focused group (Ctrl/Cmd+click, the row menu or **Open to the side** puts one in the group to the right), with long lines wrapped, using `Editor` and `DiffView` from `nsh/base`; one buffer serves every tab of a file, a dot marks unsaved changes and closing asks Save / Discard / Cancel. Markdown files (`.md`, `.markdown`) open as rendered prose (Mermaid fences drawn as in the timeline), and the header's
 Source control shows the numbered source, returning to the preview on a second press. `cmd+f`
 opens a find bar (plain text, a case toggle, previous/next and the match count) after returning to the source;
-Esc closes the bar; it never closes the file tab. Links in assistant prose, Markdown previews,
+Esc closes the bar; it never closes the file tab. Assistant prose links open HTTP(S) targets in
+the browser and workspace file targets in a file tab. Line fragments and `:line` suffixes do
+not navigate to that line. On phones, file tabs remain unavailable. Links in Markdown previews,
 new-session prose and context details open in the browser.
 
 The left Git tab (plan 40) shows the active worktree only (the open session's, else the main checkout): a

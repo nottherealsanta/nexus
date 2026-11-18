@@ -297,6 +297,7 @@ describe("questions (plan 30)", () => {
     const body = JSON.parse(posts[0].body as string);
     expect(body.answers[0].selected).toEqual(["safe"]);
     expect(body.answers[0].text).toBe("z");
+    expect(app.shows("id:toast")).toBe(false);
 
     flags.question = "replied";
     await app.waitUntil(() => !app.shows("id:waiting-card"), { timeout: 8000 });

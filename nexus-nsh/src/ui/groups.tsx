@@ -15,7 +15,7 @@ import { TerminalPane } from "./terminal";
 import { byId, keyLabel, run } from "../commands";
 import { attention as attentionGlyph, statusGlyphs } from "../gen/theme";
 import { uiText } from "../gen/manifest";
-import { config, isNarrow, m, model, rootOf, touch, viewed } from "../store";
+import { config, currentProject, draft, isNarrow, m, model, rootOf, touch, viewed } from "../store";
 import { textCellPoints, workspaceTabCells } from "./geometry";
 import { terminalItems } from "../terminal-panel";
 import { dividers, dropZone, tabKey, zoneRect, type Rect, type Tab, type Zone } from "../layout";
@@ -24,6 +24,9 @@ import {
   layoutSize, newTabShown, newTerminalTab, activateTab, registerStrip, resizeDivider, sessionOwner, shownRects, splitFocused, joinFocused, tabDirty, tabTitle, collapsedNow, layoutEnabled,
   groupMenuFor, pointerMods, pressMods, trackMods, type DragTarget,
 } from "../layout-state";
+
+/** A new session with text typed in it keeps its tab while another session is viewed. */
+const newDraftHasText = () => ((draft()[`new:${currentProject() ?? ""}`] ?? "").trim().length > 0);
 
 /** A group's tab strip height, in points (the existing tab box, h-8). */
 export const STRIP_H = 32;
@@ -215,9 +218,9 @@ function GroupStrip(p: { id: string; width: () => number }) {
                 <GroupTab group={p.id} tab={t()} width={tabW()} />
               </View>}
             </Each>
-            <If when={newTabShown() && p.id === focusedGroupId()}>
-              <Button selected onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" style={{ width: tabW() }} class={`${tabBox()} bg-background px-2.5 ${FOCUS}`}>
-                <Text style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.secondary} font-medium text-foreground`}>New session</Text>
+            <If when={(newTabShown() || newDraftHasText()) && p.id === focusedGroupId()}>
+              <Button selected={newTabShown()} onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab" style={{ width: tabW() }} class={`${tabBox()} ${newTabShown() ? "bg-background" : "hover:bg-accent"} px-2.5 ${FOCUS}`}>
+                <Text style={{ numberOfLines: 1 }} class={`min-w-0 flex-1 ${TS.secondary} font-medium ${newTabShown() ? "text-foreground" : "text-muted-foreground"}`}>New session</Text>
               </Button>
             </If>
             <If when={p.id === focusedGroupId()}>

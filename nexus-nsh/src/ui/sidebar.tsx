@@ -227,9 +227,9 @@ export function SessionRail() {
         </Each>
         </View>
       </Scroll>
-      <View class="w-full items-center pt-2" style={{ paddingBottom: safeArea().bottom + 16 }}>
-        <IconButton icon="plus" label="Add project" testID="rail-add-project" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
-        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={centre() === "settings" ? "bg-selection" : ""} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
+      <View class="w-full items-center" style={{ paddingBottom: safeArea().bottom }}>
+        <IconButton icon="plus" label="Add project" testID="rail-add-project" class="w-full h-[72px]" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
+        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={`w-full h-[72px] ${centre() === "settings" ? "bg-selection" : ""}`} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
       </View>
     </View>
   );

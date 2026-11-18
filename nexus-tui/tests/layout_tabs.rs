@@ -569,6 +569,37 @@ fn a_file_in_two_groups_shares_one_buffer_and_one_dirty_dot() {
 }
 
 #[test]
+fn middle_click_closes_the_pointed_tab_and_respects_unsaved_changes() {
+    let mut app = app_at(160, 48);
+    open_file(&mut app, "a.txt", "alpha\n");
+    let g = app.groups().focused;
+    let tab = app.hits.rect_of(&Target::GroupTab(g, 1)).unwrap();
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Middle),
+        tab.x,
+        tab.y,
+        KeyModifiers::NONE,
+    );
+    assert!(!app.groups().contains(&Tab::file("a.txt")));
+
+    open_file(&mut app, "b.txt", "beta\n");
+    typing(&mut app, "Z");
+    draw(&mut app, 160, 48);
+    let tab = app.hits.rect_of(&Target::GroupTab(g, 1)).unwrap();
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Middle),
+        tab.x,
+        tab.y,
+        KeyModifiers::NONE,
+    );
+    let (_, rows) = draw(&mut app, 160, 48);
+    assert!(rows.join("\n").contains("Save changes to b.txt?"));
+    assert!(app.groups().contains(&Tab::file("b.txt")));
+}
+
+#[test]
 fn closing_a_dirty_file_asks_save_discard_cancel() {
     let mut app = app_at(160, 48);
     open_file(&mut app, "a.txt", "alpha\n");

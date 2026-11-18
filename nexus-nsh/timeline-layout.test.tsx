@@ -119,12 +119,13 @@ describe("timeline reading column", () => {
     expect(app.shows("id:activity-bar")).toBe(true);
   });
 
-  test("the started-session context uses the same column and card as the draft", async () => {
+  test("the started-session context uses the draft's column, fixed: no card (plan 48)", async () => {
     const app = await open("./App.tsx", { network: network([session], starting), width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:session-ses_1");
     await app.press("id:session-ses_1");
     await app.waitFor("id:context-section");
-    expect(app.shows("id:context-sections")).toBe(true);
+    expect(app.shows("id:context-sections-fixed")).toBe(true);
+    expect(app.shows("id:context-sections")).toBe(false);
     expect(app.count("id:timeline-row")).toBe(1);
     expect(app.shows("id:new-session-column")).toBe(false);
     // The root session keeps the blank heading row; it does not repeat the tab title.

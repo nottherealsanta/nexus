@@ -106,7 +106,7 @@ describe("skills and MCP", () => {
 });
 
 describe("starting-context skills and MCP switches", () => {
-  test("a running session shows tool counts and errors, patches an unlocked row and hints on locked rows", async () => {
+  test("a running session shows tool counts and errors; /skills patches an unlocked row and hints on locked rows", async () => {
     const session = {
       ...snapshot.sessions[0], skills: [
         { name: "design", description: "Design system", scope: "project", state: "on", locked: false },
@@ -131,13 +131,19 @@ describe("starting-context skills and MCP switches", () => {
     });
     await app.waitFor("text:Refactor loader");
     await app.press("text:Refactor loader");
-    await app.waitFor("id:ctx-skill-row-design");
+    await app.waitFor("id:ctx-skill-row-design-state");
     expect(app.texts().join("\n").includes("5 tools")).toBe(true);
     expect(app.texts().includes("P") || app.texts().includes("A")).toBe(false);
     expect(app.texts().join("\n").includes("connection refused")).toBe(true);
-    await app.press("id:ctx-skill-row-late");
+    // The started header is fixed (plan 48): state, no switch; /skills switches the session.
+    expect(app.count("id:ctx-skill-row-design")).toBe(0);
+    expect(app.count("id:ctx-skill-row-design-state")).toBe(1);
+    await app.type("id:composer-input", "/skills");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:skill-toggle-late");
+    await app.press("id:skill-toggle-late");
     await app.waitFor("text:Available in a new session.");
-    await app.press("id:ctx-skill-row-design");
+    await app.press("id:skill-toggle-design");
     await app.waitUntil(() => app.requests().some((r) => r.method === "PATCH" && r.url.endsWith("/api/session/ses_1")));
     const patch = app.requests().find((r) => r.method === "PATCH" && r.url.endsWith("/api/session/ses_1")) as any;
     expect(JSON.parse(patch.body)).toEqual({ disabled_tools: ["skill:design"] });
@@ -158,8 +164,8 @@ function selectedSessionNetwork(extra: Record<string, unknown> = {}) {
 
 describe("agent colours", () => {
   test("pins and hashes match the TUI", () => {
-    expect(["orchestrate", "build", "quick", "scout", "plan", "review", "tester"].map(agentSlot))
-      .toEqual(["amber", "blue", "green", "teal", "violet", "rose", "sky"]);
+    expect(["orchestrate", "build", "quick", "scout", "plan", "fork", "review", "tester"].map(agentSlot))
+      .toEqual(["amber", "blue", "green", "teal", "violet", "sky", "rose", "gold"]);
     expect(agentSlot("BUILD")).toBe("blue");
   });
 });

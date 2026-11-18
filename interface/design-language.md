@@ -80,12 +80,22 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   surface so the state remains visible without colour.
 - Primary text carries content and headings. Secondary text carries labels;
   muted text carries metadata and instructions. Status colour is paired with
-  a word or glyph. Agent colours identify agent names, not whole rows.
+  a word or glyph. Agent colours identify agent names, not whole rows. Forks use sky blue,
+  including their child and completion markers, rather than an error-like red.
 - The composer is a soft card (half-row edges, no rail, no status band) whose
   control row names the agent in its colour and ends with the `╱` meter and
   `82k · 41%`, explained on hover (tokens, price tier and window). A model change requested during a
   turn is marked until the next call; narrow rows shed effort and provider
   before names or the agent.
+- The context header has two modes (plan 48). **Draft** (no session yet): a box on the panel surface
+  whose `●`/`○` markers switch tools, skills and servers, and, in a Git checkout, a `Worktree` switch
+  row under `total` (`ask the agent to start in a new worktree`, then `N uncommitted changes stay in
+  the checkout` on its own line; hidden, not disabled, outside Git). **Fixed** (from the first send,
+  `You · Sending…`, onward): the same rows and padding on the timeline's background, with markers as
+  plain state (off struck through) and no switches; headings and names still open their dialogs,
+  read-only, whose hint names `/skills` or `/mcp`. A session started with the switch shows
+  `⌥ new worktree requested`, `⌥ <branch> · worktree entered`, or the warning
+  `⌥ new worktree requested · not entered` under `total`.
 - Timeline items follow model context order. The user message is a band across
   the whole page width on the raised surface: the rail `▌` at its left edge
   (muted, the focus colour when focused), padding rows above and below, the fold
@@ -114,7 +124,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   remains accessible, and any clipped output is labelled. Reduced motion and
   monochrome stay static.
 - A finished background subagent is one row: the child glyph `⣿` in the agent's
-  colour, `Subagent done`, then `· Agent · title` muted, and `failed` or
+  colour, then `Agent · title` muted, and `failed` or
   `interrupted` in the error colour. Its modal is titled `Subagent done`, shows
   the agent, title, model and duration, then the full notice text exactly as the
   model received it (scrollable and selectable), and its footer action opens the

@@ -476,6 +476,34 @@ fn draw_peer_composer(
 }
 
 fn draw_session_stub(cx: &Cx, buf: &mut Buffer, body: Rect, id: &str) {
+    let view = cx
+        .app
+        .state
+        .model
+        .selected
+        .as_ref()
+        .filter(|v| v.session_id == id)
+        .or_else(|| {
+            cx.app
+                .state
+                .model
+                .cached
+                .iter()
+                .find(|v| v.session_id == id)
+        });
+    if view.is_none_or(|v| !v.loaded && v.messages.is_empty() && v.starting.is_none()) {
+        let label = "Loading session…";
+        let x = body.x + body.width.saturating_sub(width(label) as u16) / 2;
+        put(
+            buf,
+            x,
+            body.y + body.height / 2,
+            label,
+            cx.st(SECONDARY, CANVAS),
+            body.right().saturating_sub(x),
+        );
+        return;
+    }
     let key = (id.to_owned(), body.width.saturating_sub(2));
     if let Some((_, timeline)) = cx.app.ui.groups.bg.get(&key) {
         if !timeline.lines.is_empty() && body.width >= 4 {

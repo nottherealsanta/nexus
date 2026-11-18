@@ -298,6 +298,7 @@ export async function sendPrompt(rawText: string, images: import("./images").Dra
       if (selected.model) fields.model = selected.model;
       if (selected.effort !== undefined) fields.effort = selected.effort;
       if (selected.disabled_tools !== undefined) fields.disabled_tools = selected.disabled_tools;
+      if (selected.worktree) fields.worktree = true;
       firstPrompts.update((all) => ({ ...all, [project]: { text: raw, images: images.length, choices: selected } }));
       draft.update((d) => ({ ...d, [source]: "" }));
       imageDrafts.update((d) => ({ ...d, [source]: (d[source] ?? []).filter((i) => !images.includes(i)) }));
@@ -437,6 +438,10 @@ export function installLearnChecklist(selected: string[]) {
   void installSkills(plan, selected);
 }
 export function closeLearnChecklist() { if (!learnChecklist()?.busy) learnChecklist.set(null); }
+
+export function toggleDraftWorktree() {
+  sessionDraft.update((draft) => ({ ...draft, worktree: !draft.worktree }));
+}
 
 export function toggleDraftInventory(kind: InventoryKind, name: string, locked = false) {
   if (locked) { toast("info", "Available in a new session."); return; }
@@ -833,6 +838,9 @@ on("files.delete", async () => {
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
+// The only way to switch a started session's skills or servers: its context header is fixed (plan 48).
+on("skills.configure", () => contextDetail.set({ title: "Skills", detail: "", live: "skills" }), true);
+on("mcp.configure", () => contextDetail.set({ title: "MCP", detail: "", live: "mcp" }), true);
 on("session.archive", () => archive(), true);
 on("session.unarchive", () => archive(undefined, true), true);
 on("session.delete", () => askDelete(), true);

@@ -12,6 +12,11 @@ sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
 gutters on terminal, web and native targets. This does not change the Rust client's
 existing layout or controls.
 
+In a session timeline, hold the left mouse button and scroll to extend a text
+selection beyond the visible rows. Releasing the button copies the selected text;
+the half-opacity highlight remains until the next click. Limited-colour terminals
+use a palette highlight, and monochrome uses reverse video.
+
 **Terminal** in the command palette, and ``Ctrl+` `` from anywhere (including while
 the terminal screen owns the keys), focus the most recent terminal tab, or open a new
 terminal in a split below the focused group when there is none. ``Ctrl+Shift+` `` /
@@ -65,8 +70,8 @@ notes (what was left out and why) show below it. Esc closes without changing the
 session or draft. All keys are the `inspector.*` commands in `interface/manifest.toml`.
 See [the inspector guide](../docs/inspector.md).
 
-A new session's first message appears immediately below its context preview as
-`You · Sending…`, without waiting for MCP startup. The chosen agent/model/tool
+A new session's first message appears immediately below its context preview in a
+user-message band, without waiting for MCP startup. The chosen agent/model/tool
 settings remain visible until Core's message and starting history arrive, avoiding
 a default-header flash. Pending text is local submission state, not model context;
 failed creation restores the new-session draft, and failed submission after creation
@@ -110,8 +115,9 @@ attention (purple) and unread (blue) on top, running (green) and idle (white) be
 counting root sessions, with archived sessions left out and subagents counted under
 their root. Counts above nine display `*`, and a project with no counts shows a
 three-cell muted rule. Hovering shows the full project name and `N attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
-Add project control and Settings are pinned together at the rail's foot, below the projects
-(a right-click opens a project's actions). Activating a project restores
+Add project control and Settings are pinned together at the rail's foot, below the projects,
+each three cells high with no gap between them or below Settings. A right-click opens a project's
+actions. Activating a project restores
 its open tabs and last selected session or new-session view in this client; pressing
 the project already open toggles its Sessions sidebar. On first
 selection it falls back to its newest unarchived root session or an empty new-session
@@ -151,7 +157,8 @@ but have no action icons. The keyboard path is unchanged: Enter edits, Backspace
 removes, Shift+↑/↓ moves. Up from an empty composer selects the last pending row;
 on a held queue, `n` or the shared **Send next** control releases the next input.
 The centre is a tree of groups of tabs (plan 45, [docs/layout.md](../docs/layout.md); `groups.rs` is the pure
-tree, `app/tabs.rs` the glue and `render/groups_ui.rs` the strips). Each group has a one-row strip of tabs
+tree, `app/tabs.rs` the glue and `render/groups_ui.rs` the strips). Middle-click closes the pointed tab with the usual
+confirmations. Each group has a one-row strip of tabs
 (`×`, `+` for a new session, `⋯` for the group menu; `alt+x`, `alt+[`, `alt+]` act on the focused group) in
 one cell width for every tab, so a long title ellipsises, and a gap-free strip scrolls around the active tab with a
 `…`. A group that is not focused still shows its session's own timeline, read-only (its view is pinned and watched
@@ -165,7 +172,12 @@ Turn footer token counts use `K` for thousands and `M` for millions.
 The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::context_rows`, one
 renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools, Skills,
 MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
-on/off state; click a row or focus the timeline and use ↑/↓ then Enter/Space to switch it.
+on/off state. In a draft, click a row or focus the timeline and use ↑/↓ then Enter/Space to switch
+it; the `Worktree` row under `total` (Git checkouts only; the switch index after the last inventory row is the last
+cursor stop) asks the agent to start in a new worktree. From the first send the header is fixed
+(plan 48): no `PANEL` background, no `ContextToggle` targets, read-only dialogs, and `/skills` /
+`/mcp` switch the started session. Tests: `behaviour.rs` `draft_worktree_*`,
+`the_header_is_fixed_from_the_first_send`, `started_header_is_fixed_and_slash_skills_switches_the_session`.
 Tools use up to four columns as space allows, both before and after a message.
 Skills stay inline through 12 entries; above 12 only the clickable `Skills [N]` heading remains.
 The heading opens a scrollable two-column card picker at any count. Names open a separate
@@ -339,9 +351,10 @@ underlined, followed by `(url)` unless the target is a file path; task items
 show `[✓]` (success) or `[ ]`. Mermaid uses the shared `nexus-mermaid` renderer: pie/Gantt/timeline
 as text rows, other diagrams as the shared PNG through the terminal image protocol (half blocks
 where none is available), and the source as the fallback. The box-art renderer stays here for
-monochrome. Not done yet: OSC 8
-hyperlinks (the buffer has no cell for escape sequences) and `path:line` links
-that open the file view.
+monochrome. In assistant timeline Markdown, clicking a link opens an HTTP(S)
+target in the browser or a workspace file target in a file tab. Line fragments
+and `:line` suffixes are removed when opening a file; they do not navigate to
+that line. Links in other Markdown surfaces are not yet clickable.
 
 An expanded Code tool shows its cell source and marks its output hidden; raw view reveals the result.
 
@@ -438,7 +451,8 @@ only.
 
 Alerts: a session that waits for approval or an answer is announced with a
 terminal notification (OSC 9, or OSC 777 in foot, kitty, Ghostty and WezTerm),
-only while it is out of view. Settings › Notifications › Terminal notifications
+only for root sessions while they are out of view; subagent events do not send
+terminal notifications. Settings › Notifications › Terminal notifications
 sets off, waiting only (the default) or waiting, done and errors (a finished
 turn or a failed session too). Terminal focus is not tracked, so a session in
 view never notifies. Settings › Notifications › Notification sounds (on by
@@ -458,7 +472,7 @@ its text has scrolled off the top, `sticky.rs` pins a copy under
 the header (three rows at most, a `░` shade row with `↑ N lines of this turn
 above`); the next band pushes it up and a click scrolls back. The timeline keeps one
 scroll per session and adopts it after a sync-driven selection, so a root's pinned
-band never appears over a child. A session's first message is pinned: once Core confirms it, the timeline scrolls so that message's turn starts at the top and a spacer (blank rows, never drawn) lets the view reach it even while the reply is empty. The reply grows below without moving the view, the spacer shrinks as it grows, and the pin ends the moment the reader scrolls. Only the first send pins; later sends follow the end as before (`FirstPin` in `app.rs`, applied in `draw_timeline`). While the reader scrolls, a subdued
+band never appears over a child. A new session stays at the top of its timeline when the first message is confirmed, keeping the context header in view instead of pinning the message or adding a spacer. While the reader scrolls, a subdued
 `interactive.scrollbar` bar shows in the timeline's right gutter and fades out after
 about a second; Settings → Appearance → Scroll bar turns it off. It never takes
 content space or shifts the layout. The turn footer is
@@ -467,7 +481,7 @@ row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
 counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
 `3 thoughts, 50 commands, 8 tools, 9 reads` with `+N −M` and `✕ N failed`; a live group is
-`Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
+`Working` (shimmer) over its newest five members and `… N earlier`. Group markers are `▼` open and `▶` closed (ASCII `v` and `>`); the marker
 flashes the accent for six frames when it finishes (not with reduced motion).
 A parent's `fork` call (PLAN.md section 10, F6) is a minor task run like a tool
 call, so it is a tool member, not a child card: `Fork ‹title›` in its activity
@@ -501,7 +515,7 @@ fold, including inside an expanded group; ASCII `o Thought`;
 no duration, see Interface notes) and strips raw Markdown emphasis from the
 one-line preview. It stays open with its last ten wrapped lines while it streams,
 with a count of earlier lines hidden. Once finished, opening it shows the full
-text. A finished background subagent is one row, `⣿ Subagent done · Agent · title`
+text. A finished background subagent is one row, `⣿ Agent · title`
 with `failed` or `interrupted` in the error colour; Enter opens a modal with the
 agent, title, model, duration and the exact notice text the model received, and
 `enter open session` opens the child. Other context notices keep
@@ -606,8 +620,9 @@ ignored and replaced by the next save. Flags and the environment override the
 file for the run and are not written back: `--dark|--light` over the saved mode,
 `--mono|--256|--16` or `NO_COLOR` over monochrome, and `--reduced-motion` or
 `NEXUS10_REDUCED_MOTION` over animations. Theme offers System, Light and Dark;
-System detects `COLORFGBG` at startup (or when selected), falling back to dark.
-It cannot detect live terminal appearance changes. A saved explicit mode wins over it.
+System follows macOS appearance at startup and while running (checked every three
+seconds). On other platforms, or if macOS detection fails, it uses `COLORFGBG`
+at startup or when selected, falling back to dark. A saved explicit mode wins over it.
 
 Environment:
 

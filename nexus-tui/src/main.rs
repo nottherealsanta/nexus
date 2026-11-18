@@ -31,7 +31,7 @@ const HELP: &str = "nexus-tui - terminal client for Nexus Core
 USAGE: nexus-tui [options]
 
 Display options (flags override the environment):
-  --dark | --light       colour mode (default: COLORFGBG, else dark)
+  --dark | --light       colour mode (default: system, else COLORFGBG or dark)
   --mono                 monochrome (also NO_COLOR or TERM=dumb)
   --256 | --16           colour tier when COLORTERM does not say truecolor
   --ascii                ASCII glyphs (also NEXUS10_ASCII=1 or a non-UTF-8 locale)
@@ -535,6 +535,7 @@ impl Interactive {
 }
 
 enum Wake {
+    SystemTheme(Option<Mode>),
     Terminal(Option<nexus_tui::terminal_panel::TerminalEvent>),
     Input(Option<Event>),
     Sync(Option<SyncMsg>),
@@ -618,6 +619,24 @@ async fn run(
     let (capture_tx, mut capture_rx) =
         mpsc::unbounded_channel::<nexus_tui::dictation::CaptureEvent>();
     let (terminal_tx, mut terminal_rx) = mpsc::unbounded_channel();
+    let (theme_tx, mut theme_rx) = mpsc::unbounded_channel();
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(move || {
+        let mut last = None;
+        loop {
+            let mode = nexus_tui::theme::system_mode();
+            if last != Some(mode) {
+                if theme_tx.send(mode).is_err() {
+                    break;
+                }
+                last = Some(mode);
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
+    drop(theme_tx);
+    let mut theme_open = true;
     let mut inter = Interactive {
         app,
         terminal,
@@ -676,11 +695,14 @@ async fn run(
             res = done_rx.recv(), if done_open => Wake::Done(res.map(Box::new)),
             res = capture_rx.recv(), if capture_open => Wake::Capture(res),
             res = terminal_rx.recv() => Wake::Terminal(res),
+            mode = theme_rx.recv(), if theme_open => Wake::SystemTheme(mode),
             _ = splash_tick.tick(), if splash_animating => Wake::Splash,
             _ = indicator_tick.tick(), if indicator_animating => Wake::Indicator,
             _ = tick.tick() => Wake::Tick,
         };
         match wake {
+            Wake::SystemTheme(Some(mode)) => dirty |= inter.app.update_system_theme(mode),
+            Wake::SystemTheme(None) => theme_open = false,
             Wake::Terminal(Some(event)) => {
                 inter.app.terminal_event(event);
                 let applied = inter.settle()?;

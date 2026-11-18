@@ -458,12 +458,22 @@ impl App {
                 }
             }
         }
-        if self.viewed_id().is_some() {
+        if self.viewed_id().is_some() && !self.new_session_has_text() {
             self.ui
                 .groups
                 .layout
                 .remove_resource(&GTab::session(String::new()));
         }
+    }
+
+    /// Whether the new-session composer of the current project holds text.
+    fn new_session_has_text(&self) -> bool {
+        self.ui
+            .drafts
+            .get(&Self::new_session_draft_key(
+                self.ui.project.as_deref().unwrap_or(""),
+            ))
+            .is_some_and(|c| c.has_text())
     }
 
     /// Keep the text of the live file for tabs that are not focused, and give
@@ -641,8 +651,11 @@ impl App {
     pub fn groups_note_open(&mut self, tab: GTab) {
         if tab.kind == Kind::Session && !tab.id.is_empty() {
             let blank = GTab::session(String::new());
+            let keep = self.new_session_has_text();
             let layout = &mut self.ui.groups.layout;
-            if layout.active_tab() == Some(&blank) {
+            if keep {
+                // Text typed in the new session is work in progress: its tab stays.
+            } else if layout.active_tab() == Some(&blank) {
                 layout.replace_tab(&blank, tab.clone());
             } else {
                 layout.remove_resource(&blank);
@@ -1724,6 +1737,13 @@ impl App {
         }
         let (x, y) = (ev.column, ev.row);
         match ev.kind {
+            MouseEventKind::Down(MouseButton::Middle) => match self.hits.at(x, y).cloned() {
+                Some(Target::GroupTab(g, i) | Target::GroupTabClose(g, i)) => {
+                    self.group_tab_close_click(g, i);
+                    true
+                }
+                _ => false,
+            },
             MouseEventKind::Down(MouseButton::Left) => match self.hits.at(x, y).cloned() {
                 Some(Target::GroupTab(g, i)) => {
                     self.ui.groups.drag = Some(Drag::Tab {

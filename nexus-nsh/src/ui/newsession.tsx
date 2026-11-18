@@ -5,16 +5,16 @@
 import { Scroll, Text, View, effect, signal } from "nsh";
 import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, PROSE, T, TS } from "./kit";
-import { run, toggleDraftInventory } from "../commands";
+import { run, toggleDraftInventory, toggleDraftWorktree, toggleSessionInventory } from "../commands";
 import {
-  type ContextEntry, contextDetail, agentCatalog, currentProject, info, pendingFirstPrompt, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome,
+  type ContextEntry, contextDetail, agentCatalog, currentProject, draftLastAnswer, draftWorktreeOffer, info, pendingFirstPrompt, phone, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome, viewed,
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { ProjectMcpPanel } from "./project-mcp";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
-import { TimelineColumn } from "./reading-column";
+import { TimelineColumn, USER_BAND_INSET } from "./reading-column";
 import { contextGrid } from "./geometry";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
@@ -212,13 +212,17 @@ export function inColumns<T>(items: T[], most: number): T[][] {
 const HEAD = TS.base;
 
 /** A switch cell, as the TUI draws it: the marker switches and the name opens its information. */
-function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string; error?: string | null; label: string; testID: string; onToggle: () => void; onInfo: () => void }) {
+function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string; error?: string | null; label: string; testID: string; onToggle?: () => void; onInfo: () => void }) {
+  const marker = () => <Text class={`text-[10px] leading-5 ${p.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.on ? "●" : "○"}</Text>;
   return (
     <View class="w-full min-w-0">
       <View class="flex-row items-center min-w-0 h-6">
-        <Button role="switch" selected={p.on} onPress={p.onToggle} accessibilityLabel={p.label} testID={p.testID} class={`shrink-0 w-5 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
-          <Text class={`text-[10px] leading-5 ${p.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.on ? "●" : "○"}</Text>
-        </Button>
+        {/* Without `onToggle` the header is fixed (plan 48): the marker is state, not a switch. */}
+        <If when={!!p.onToggle} else={<View class="shrink-0 w-5 h-6 items-center justify-center" testID={`${p.testID}-state`} accessibilityLabel={p.label}>{marker()}</View>}>
+          <Button role="switch" selected={p.on} onPress={() => p.onToggle?.()} accessibilityLabel={p.label} testID={p.testID} class={`shrink-0 w-5 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+            {marker()}
+          </Button>
+        </If>
         <Button onPress={p.onInfo} accessibilityLabel={`${p.name} details`} testID={`${p.testID}-info`} class={`shrink min-w-0 flex-row items-center gap-2 rounded-(--radius) px-1 h-6 hover:bg-accent ${FOCUS} ${p.locked ? "opacity-60" : ""}`}>
           <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} ${p.on ? "text-foreground-secondary" : "text-muted-foreground line-through opacity-60"}`}>{p.name}</Text>
           <If when={!!p.status}><Text style={{ numberOfLines: 1 }} class={T.meta}>{p.status!}</Text></If>
@@ -254,7 +258,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
               <View class="min-w-0 shrink-0" style={{ width: grid(4).cell }}>
                 <Each of={column()} key={(c) => c.name}>
                   {(c) => <Cell name={c().name} on={c().on} label={`${c().name} ${c().on ? "on" : "off"}`} testID={`ctx-chip-${c().name}`}
-                    onToggle={() => p.onInventoryToggle?.("tool", c().name, false)} onInfo={() => p.onItem(c().name)} />}
+                    onToggle={p.onInventoryToggle ? () => p.onInventoryToggle?.("tool", c().name, false) : undefined} onInfo={() => p.onItem(c().name)} />}
                 </Each>
               </View>
             )}
@@ -270,7 +274,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
                   {(item) => <Cell name={item().name} on={item().on} locked={item().locked} error={item().error}
                     status={[item().meta, item().tools === null || item().tools === undefined ? "" : `${item().tools} tools`, item().locked ? "new session" : ""].filter(Boolean).join(" · ")}
                     label={`${item().name} ${item().on ? "on" : "off"}${item().locked ? ", new session" : ""}`} testID={`ctx-${item().kind}-row-${item().name.replace(/[^A-Za-z0-9_-]/g, "-")}`}
-                    onToggle={() => p.onInventoryToggle?.(item().kind, item().name, item().locked)} onInfo={() => p.onItem(item().name)} />}
+                    onToggle={p.onInventoryToggle ? () => p.onInventoryToggle?.(item().kind, item().name, item().locked) : undefined} onInfo={() => p.onItem(item().name)} />}
                 </Each>
               </View>
             )}
@@ -348,9 +352,11 @@ function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?:
               <Text class={`${TS.base} font-semibold text-foreground ${focused() === entry().key && focusedAction() === "name" ? "underline" : ""}`}>{entry().name}</Text>
             </View>
             <Text style={{ numberOfLines: 2 }} class={T.sec}>{entry().description}</Text>
-            <View role="switch" focusable accessibilityState={{ selected: row()?.on ?? false }} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">
-              <Text class={`${T.sec} ${focused() === entry().key && focusedAction() === "toggle" ? "underline" : ""}`}>{row()?.locked ? "Locked · new session" : row()?.on ? "● Enabled" : "○ Disabled"}</Text>
-            </View>
+            <If when={!!p.toggle} else={<Text testID={`skill-state-${entry().key}`} class={`self-start px-2 py-1 ${T.sec}`}>{row()?.locked ? "Locked · new session" : row()?.on ? "● Enabled" : "○ Disabled"}</Text>}>
+              <View role="switch" focusable accessibilityState={{ selected: row()?.on ?? false }} onFocus={() => { focused.set(entry().key); focusedAction.set("toggle"); }} onPress={() => p.toggle?.("skill", entry().key, row()?.locked ?? true)} accessibilityLabel={`${entry().name} ${row()?.on ? "on" : "off"}`} testID={`skill-toggle-${entry().key}`} class="self-start px-2 py-1 hover:bg-accent focus-visible:outline-none">
+                <Text class={`${T.sec} ${focused() === entry().key && focusedAction() === "toggle" ? "underline" : ""}`}>{row()?.locked ? "Locked · new session" : row()?.on ? "● Enabled" : "○ Disabled"}</Text>
+              </View>
+            </If>
           </View>;
         }}</Each>
       </View>}</Each>
@@ -366,9 +372,48 @@ function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?:
 }
 
 /** A single detail dialog remains mounted even when the context section is folded. */
+/** `/skills` or `/mcp`: the current session's (or the draft's) switches, live, switching it (plan 48). */
+function liveDetail(kind: "skills" | "mcp") {
+  const session = viewed();
+  const project = currentProject();
+  // The names come from Core's last answer; their on/off from the draft, so a switch shows at once.
+  const core = !session && project ? draftLastAnswer(project) : null;
+  const rows = session
+    ? sessionInventoryRows(session.skills ?? [], session.mcp ?? [], disabledOf(session))
+    : sessionInventoryRows(core?.skills ?? [], core?.mcp ?? [], sessionDraft().disabled_tools ?? []);
+  const section = inventorySections(rows).find((s) => s.key === kind)!;
+  const toggle = (k: InventoryKind, name: string, locked: boolean) => session ? void toggleSessionInventory(k, name, locked) : toggleDraftInventory(k, name, locked);
+  const items = section.body.kind === "inventory" ? section.body.items : [];
+  return { ...section, items, toggle };
+}
+
+/** A server row in `/mcp`: its switch, then its name and facts, which open the details. */
+function McpSwitchRow(p: { entry: () => ContextEntry; row: () => InventoryRow | undefined; toggle: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+  const r = () => p.row();
+  const id = p.entry().key.replace(/[^A-Za-z0-9_-]/g, "-");
+  return <View class="flex-row items-start gap-1">
+    <Button role="switch" selected={r()?.on ?? false} onPress={() => p.toggle("mcp", p.entry().key, r()?.locked ?? true)} accessibilityLabel={`${p.entry().name} ${r()?.on ? "on" : "off"}${r()?.locked ? ", new session" : ""}`} testID={`mcp-toggle-${id}`} class={`shrink-0 w-6 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+      <Text class="text-[10px] leading-5 text-muted-foreground">{r()?.locked ? " " : r()?.on ? "●" : "○"}</Text>
+    </Button>
+    <View class="flex-1 min-w-0"><EntryRow entry={p.entry} focus={false} /></View>
+  </View>;
+}
+
 export function ContextDetailModal() {
   const detail = contextDetail;
-  const body = () => detail()!;
+  const live = () => { const d = detail(); return d?.live ? liveDetail(d.live) : null; };
+  const body = () => {
+    const d = detail()!;
+    const l = live();
+    if (!l) return d;
+    return { ...d, entries: l.entries, detail: l.detail, skillRows: d.live === "skills" ? { rows: l.items, toggle: l.toggle } : undefined };
+  };
+  const hints = () => {
+    const d = body();
+    const command = d.title === "MCP" ? "/mcp" : "/skills";
+    if (d.fixed && (d.title === "Skills" || d.title === "MCP")) return `esc close · ${command} switches`;
+    return d.skillRows || detail()?.live === "mcp" ? "tab focus · enter activate · esc close" : "esc close";
+  };
   return <If when={detail()}>{() => <Modal size="large" label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
     <View class="gap-3">
       <ModalTitle title={body().title} />
@@ -380,19 +425,35 @@ export function ContextDetailModal() {
         }>
           <If when={body().skillRows} else={<View class="gap-0.5">
             <If when={(body().entries ?? []).length === 0}><Text class={T.sec}>{body().detail}</Text></If>
-            <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <EntryRow entry={entry} focus={body().focus === entry().key} />}</Each>
+            <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <If when={detail()?.live === "mcp"} else={<EntryRow entry={entry} focus={body().focus === entry().key} />}>
+              <McpSwitchRow entry={entry} row={() => live()?.items.find((item) => item.name === entry().key)} toggle={live()!.toggle} />
+            </If>}</Each>
           </View>}>
             <SkillPicker entries={body().entries ?? []} rows={body().skillRows!.rows} toggle={body().skillRows!.toggle} focus={body().focus} />
           </If>
         </If>
       </Scroll>
-      <ModalFooter hints={body().skillRows ? "tab focus · enter activate · esc close" : "esc close"} />
+      <ModalFooter hints={hints()} />
     </View>
   </Modal>}</If>;
 }
 
 /** The sections and the total as text (no bar). */
-export function ContextSections(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+/** The draft's worktree switch (plan 48): shown after the total when Core says the project is a Git checkout. */
+export type DraftWorktree = { on: boolean; changes: number; onToggle: () => void };
+/** The fixed header's worktree line: requested, entered (with its branch) or, once a turn ended without the move, a warning. */
+export type WorktreeStatus = { text: string; warning: boolean };
+
+/** The same text as the TUI's `worktree_status`, from the session's `worktree_request`. */
+export function worktreeStatus(session: object | null | undefined): WorktreeStatus | null {
+  const request = (session as any)?.worktree_request;
+  if (!request || typeof request !== "object") return null;
+  if (request.state === "entered") return { text: `⌥ ${request.entered_branch || "detached"} · worktree entered`, warning: false };
+  if (request.state === "not_entered") return { text: "⌥ new worktree requested · not entered", warning: true };
+  return { text: "⌥ new worktree requested", warning: false };
+}
+
+export function ContextSections(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void; fixed?: boolean; worktree?: DraftWorktree; worktreeStatus?: WorktreeStatus }) {
   const pct = () => share(p.total, p.window);
   const detail = contextDetail;
   const cardWidth = signal(0);
@@ -404,29 +465,43 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
     }
   });
     return (
-    <View class="w-full bg-card px-4 py-6 gap-4" testID="context-sections"
+    // A draft is a card; from the first send the header is fixed and loses its background (plan 48).
+    <View class={`w-full ${p.fixed ? "" : "bg-card"} px-4 py-6 gap-4`} testID={p.fixed ? "context-sections-fixed" : "context-sections"}
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => {
-        const open = (name?: string) => detail.set({ ...s(), focus: name, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.onInventoryToggle } : undefined });
-        return <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => open()} onItem={open} onInventoryToggle={p.onInventoryToggle} />;
+        const open = (name?: string) => detail.set({ ...s(), focus: name, fixed: p.fixed, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.fixed ? undefined : p.onInventoryToggle } : undefined });
+        return <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => open()} onItem={open} onInventoryToggle={p.fixed ? undefined : p.onInventoryToggle} />;
       }}</Each>
       <View class="flex-row items-center gap-2" testID="context-total">
         <Text class={`${HEAD} font-semibold text-foreground-secondary`}>total</Text>
         <Text class={`${HEAD} text-foreground-secondary tabular-nums`}>{`${p.estimated ? "~" : ""}${thousands(p.total)} tok`}</Text>
         <If when={!!pct()}><Text class={`${HEAD} text-muted-foreground`}>{`· ${pct()} of the window`}</Text></If>
       </View>
+      <If when={!p.fixed && !!p.worktree}>
+        <View class="pl-1" testID="context-worktree">
+          <View class="flex-row items-center min-w-0 h-6 gap-1">
+            <Button role="switch" selected={!!p.worktree?.on} onPress={() => p.worktree?.onToggle()} accessibilityLabel={`Worktree ${p.worktree?.on ? "on" : "off"}`} testID="context-worktree-toggle" class={`shrink-0 flex-row items-center gap-1 rounded-(--radius) pr-1 h-6 hover:bg-accent ${FOCUS}`}>
+              <View class="w-5 items-center"><Text class={`text-[10px] leading-5 ${p.worktree?.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.worktree?.on ? "●" : "○"}</Text></View>
+              <Text class={`${TS.base} ${p.worktree?.on ? "text-foreground-secondary" : "text-muted-foreground"}`}>Worktree</Text>
+            </Button>
+            <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-muted-foreground`}>ask the agent to start in a new worktree</Text>
+          </View>
+          <If when={(p.worktree?.changes ?? 0) > 0}><Text class={`pl-6 ${TS.base} text-muted-foreground`} testID="context-worktree-dirty">{`${p.worktree?.changes} uncommitted change${p.worktree?.changes === 1 ? " stays" : "s stay"} in the checkout`}</Text></If>
+        </View>
+      </If>
+      <If when={!!p.worktreeStatus}><Text testID="context-worktree-status" class={`${TS.base} ${p.worktreeStatus?.warning ? "text-warning" : "text-muted-foreground"}`}>{p.worktreeStatus?.text ?? ""}</Text></If>
     </View>
   );
 }
 
 /** The starting context in the timeline and before a session starts: one card, one width. */
-export function StartingContext(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
+export function StartingContext(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void; fixed?: boolean; worktree?: DraftWorktree; worktreeStatus?: WorktreeStatus }) {
   return (
     <View class="w-full my-4" testID="context-section">
       <ContextSections
         sections={p.sections} total={p.total} estimated={p.estimated} window={p.window} reconstructed={p.reconstructed}
-        onInventoryToggle={p.onInventoryToggle}
+        onInventoryToggle={p.onInventoryToggle} fixed={p.fixed} worktree={p.worktree} worktreeStatus={p.worktreeStatus}
       />
     </View>
   );
@@ -477,6 +552,7 @@ export function NewSessionView() {
     const home = (userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "")).replace(/\/$/, "");
     return home && (p.path === home || p.path.startsWith(`${home}/`)) ? `~${p.path.slice(home.length)}` : p.path;
   };
+  const worktreeOffer = () => { const p = project(); return p ? draftWorktreeOffer(p.id) : null; };
   const preview = () => {
     const p = project()!;
     return previewSections({
@@ -500,13 +576,20 @@ export function NewSessionView() {
         {() => (
           <Scroll class="flex-1 min-h-0">
             <TimelineColumn class="items-center py-3" testID="new-session-column">
-              <StartingContext sections={preview().sections} total={preview().total} estimated window={window()} onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)} />
+              {/* From the first send the header is fixed; a failed create restores the draft (plan 48). */}
+              <StartingContext sections={preview().sections} total={preview().total} estimated window={window()}
+                fixed={!!pendingFirstPrompt()}
+                onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)}
+                worktree={worktreeOffer() ? { on: !!sessionDraft().worktree, changes: worktreeOffer()!.changes ?? 0, onToggle: toggleDraftWorktree } : undefined}
+                worktreeStatus={pendingFirstPrompt() && sessionDraft().worktree && worktreeOffer() ? { text: "⌥ new worktree requested", warning: false } : undefined} />
               <View class="w-full px-4"><ProjectMcpPanel /></View>
               <If when={pendingFirstPrompt()}>
-                {() => <View class="w-full px-4 py-3 gap-2" testID="first-prompt-sending">
-                  <Text class={T.sec}>You</Text>
-                  <Text class={`${TS.body} text-foreground`}>{pendingFirstPrompt()!.text}</Text>
-                  <If when={pendingFirstPrompt()!.images > 0}><Text class={T.sec}>{`[${pendingFirstPrompt()!.images} image${pendingFirstPrompt()!.images === 1 ? "" : "s"}]`}</Text></If>
+                {() => <View class="w-full pt-4 pb-2" testID="first-prompt-sending">
+                  <View class={`relative w-full bg-band py-3 ${phone ? "rounded-2xl px-4" : USER_BAND_INSET}`} testID="pending-user-band">
+                    <If when={!phone}><View class="absolute left-0 top-0 bottom-0 w-0.5 bg-border-strong" /></If>
+                    <If when={pendingFirstPrompt()!.images > 0}><Text class={`${T.sec} pb-2`}>{`[${pendingFirstPrompt()!.images} image${pendingFirstPrompt()!.images === 1 ? "" : "s"}]`}</Text></If>
+                    <Text style={{ userSelect: "text", fontFamily: "Monaspace Argon" }} class="text-[14px] leading-6 text-foreground">{pendingFirstPrompt()!.text}</Text>
+                  </View>
                 </View>}
               </If>
             </TimelineColumn>

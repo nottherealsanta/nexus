@@ -223,6 +223,11 @@ if (data) { if (data.length > 8388608) throw Error('Image exceeds 8 MiB'); data.
         return Err("Clipboard image exceeds 8 MiB".into());
     }
     if !status.success() {
+        // Linux clipboard tools exit nonzero when the requested image target is absent.
+        // Try text instead; a text-only clipboard is not an image read error.
+        if cfg!(target_os = "linux") {
+            return Ok(None);
+        }
         return Err("Could not read clipboard image".into());
     }
     if cfg!(target_os = "macos") {

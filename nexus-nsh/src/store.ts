@@ -25,7 +25,9 @@ export type Toast = { id: number; level: "success" | "info" | "warning" | "error
 export const model = new Model();
 /** A tool, skill or server in the context modal: its description, and its full definition once opened. */
 export type ContextEntry = { key: string; name: string; description: string; full?: string; load?: () => Promise<string>; markdown?: boolean };
-export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows } | null>(null);
+/** `live`: opened by `/skills` or `/mcp`, so its rows follow the session or draft and switch it (plan 48). */
+/** `fixed`: opened from a started session's header, so it shows state and names the command that switches it. */
+export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows; live?: "skills" | "mcp"; fixed?: boolean } | null>(null);
 /** The `Subagent done` modal: the exact model text and the facts Core attached to it. */
 export const subagentDone = signal<{ text: string; notice: SubagentNotice } | null>(null);
 type InventorySkillRows = { rows: import("./skills-mcp").InventoryRow[]; toggle?: (kind: import("./skills-mcp").InventoryKind, name: string, locked: boolean) => void };
@@ -274,9 +276,10 @@ export const confirmDialog = signal<null | { title: string; body: string; confir
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
-export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[] }>({});
+/** `worktree`: ask the agent to start in a new Git worktree (plan 48); off for every new draft. */
+export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string; disabled_tools?: string[]; worktree?: boolean }>({});
 export const firstPrompts = signal<Record<string, { text: string; images: number; session?: string; choices: ReturnType<typeof sessionDraft> }>>({});
-/** The session whose first message just settled: its timeline pins that message to the top. */
+/** The session whose first message just settled. */
 export const firstPin = signal<string | null>(null);
 export function pendingFirstPrompt() {
   m();
@@ -294,10 +297,13 @@ function finishFirstPrompt() {
 }
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
-export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null } } } | null>(null);
+export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null }; worktree?: WorktreeOffer } } | null>(null);
+/** Core's answer about the draft's worktree switch (`POST /api/draft/context`). */
+export type WorktreeOffer = { available: boolean; on?: boolean; branch?: string | null; head?: string; dirty?: boolean; changes?: number };
 let draftSeq = 0;
-export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null]);
-/** The draft fields that change the context itself. Effort steers the model; it is not context. */
+export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null, !!d.worktree]);
+/** The draft fields that change the context itself. Effort steers the model; it is not context. The worktree switch
+ * adds two workspace tools, but the last plan stays on screen until Core answers, so the rows keep their places. */
 export const draftContextPlanKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.disabled_tools ?? null]);
 /** Core's plan for the current draft's context. An effort change keeps it while Core re-plans. */
 export function draftPlanContext(project: string) {
@@ -312,11 +318,22 @@ export async function loadDraftContext(project: string, force = false) {
   draftAsked = key;
   const seq = ++draftSeq;
   try {
-    const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort, disabled_tools: d.disabled_tools } });
+    const data = await request<any>("POST", "/api/draft/context", { body: { project, agent: d.agent, model: d.model || undefined, effort: d.effort, disabled_tools: d.disabled_tools, ...(d.worktree ? { worktree: true } : {}) } });
     if (seq === draftSeq) draftContext.set({ key, planKey: draftContextPlanKey(project, d), data });
   } catch {
     if (seq === draftSeq) draftAsked = null; // the client-side estimate stays; the next change asks again
   }
+}
+/** Core's last draft answer for the project, kept while a changed draft is asked again (so rows do not blink). */
+export function draftLastAnswer(project: string) {
+  const answer = draftContext();
+  if (!answer) return null;
+  try { return JSON.parse(answer.key)[0] === project ? answer.data : null; } catch { return null; }
+}
+/** The project's worktree switch, from Core's last draft answer for it; null outside Git or before Core answers. */
+export function draftWorktreeOffer(project: string): WorktreeOffer | null {
+  const worktree = draftLastAnswer(project)?.worktree;
+  return worktree?.available ? worktree : null;
 }
 /** A project-rail drag in progress: the dragged project, its insertion index among the rail's projects, and whether Esc cancelled it. */
 export const railDrag = signal<{ id: string; to: number; cancelled: boolean } | null>(null);

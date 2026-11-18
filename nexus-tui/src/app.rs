@@ -95,6 +95,8 @@ impl Notify {
 /// Commands this shell implements against an existing Core API. Everything
 /// else is shown disabled with a reason, never as a control that appears to work.
 pub const WIRED: &[&str] = &[
+    "skills.configure",
+    "mcp.configure",
     "terminal.open",
     "terminal.new",
     "terminal.acquire",
@@ -768,6 +770,8 @@ pub struct Draft {
     pub effort: Option<String>,
     /// Session-local tool, skill and MCP switches for the next session.
     pub disabled_tools: Vec<String>,
+    /// Ask the agent to start in a new Git worktree (plan 48). Off for every new draft.
+    pub worktree: bool,
 }
 
 impl Draft {
@@ -785,6 +789,9 @@ impl Draft {
         }
         if !self.disabled_tools.is_empty() {
             f.insert("disabled_tools".into(), json!(self.disabled_tools));
+        }
+        if self.worktree {
+            f.insert("worktree".into(), true.into());
         }
         Value::Object(f)
     }
@@ -840,14 +847,6 @@ pub struct PendingFirstPrompt {
     pub choices: Draft,
 }
 
-/// The first-send pin: the session, and the scroll it applied once drawn (a different scroll means the
-/// reader moved, which ends the pin).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FirstPin {
-    pub session: String,
-    pub applied: Option<Scroll>,
-}
-
 pub struct Ui {
     /// Sessions opened as tabs, in the order they were opened. Where each
     /// tab sits is `groups` (plan 45).
@@ -864,8 +863,6 @@ pub struct Ui {
     pub pending_failed: HashMap<String, String>,
     /// Debug timing marks per session (`NEXUS_TUI_TIMING`).
     pub timing: HashMap<String, Vec<(String, Instant)>>,
-    /// A session's first message is pinned to the top of the timeline until the reader scrolls.
-    pub first_pin: Option<FirstPin>,
     pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
@@ -1001,6 +998,9 @@ pub struct Ui {
     pub timeline_blocks: Vec<crate::timeline::Block>,
     /// Selected switch row in the starting-context inventory.
     pub context_cursor: usize,
+    /// The open skills/MCP dialog came from `/skills` or `/mcp`, so it switches a started
+    /// session. From the fixed header it is read-only (plan 48).
+    pub context_switch: bool,
     /// The directory Nexus was launched from, until it has been opened as a project.
     pub launch_dir: Option<String>,
     /// The launch directory's project is being opened: then show its new-session screen.
@@ -1053,7 +1053,8 @@ pub struct App {
     /// The session `ui.scroll` belongs to, so another session's offset is never reused.
     scroll_session: Option<String>,
     pub timeline_screen: Option<ratatui::buffer::Buffer>,
-    pub timeline_drag: Option<(crate::selection::Selection, Option<Target>)>,
+    pub timeline_drag: Option<(crate::selection::TimelineSelection, Option<Target>)>,
+    pub timeline_selection: Option<(String, crate::selection::TimelineSelection)>,
     /// Rendered message bodies, keyed by content/width/theme (timeline.rs).
     pub layout: std::cell::RefCell<crate::timeline::LayoutCache>,
     /// Bumped whenever a sync message may change the timeline's model inputs.
@@ -1361,7 +1362,6 @@ impl App {
                 pending_turns: HashMap::new(),
                 pending_failed: HashMap::new(),
                 timing: HashMap::new(),
-                first_pin: None,
                 focus: Focus::Composer,
                 left_open: true,
                 last_project_session: HashMap::new(),
@@ -1450,6 +1450,7 @@ impl App {
                 timeline_sel_key: None,
                 timeline_blocks: Vec::new(),
                 context_cursor: 0,
+                context_switch: false,
                 launch_dir: None,
                 launch_new: false,
                 inventories: HashMap::new(),
@@ -1475,6 +1476,7 @@ impl App {
             scroll_session: None,
             timeline_screen: None,
             timeline_drag: None,
+            timeline_selection: None,
             layout: std::cell::RefCell::new(crate::timeline::LayoutCache::default()),
             timeline_revision: std::cell::Cell::new(0),
             timeline_cache: std::cell::RefCell::new(None),
@@ -1956,6 +1958,7 @@ impl App {
     /// The modal behind a context heading: Markdown for the prompt and the
     /// instruction file; a list of entries for tools, skills and servers.
     fn open_context_section(&mut self, section: &str, focus: Option<usize>, text: Option<String>) {
+        self.ui.context_switch = false;
         if matches!(section, "Tools" | "Skills" | "MCP") {
             let items = self.context_items_for(section);
             let entries: Vec<crate::ui::ContextEntry> =
@@ -2397,6 +2400,14 @@ impl App {
     }
 
     /// Copy one value from the open worktree modal through OSC 52.
+    /// Copy text the user selected and say how much was copied.
+    fn copy_selection(&mut self, text: String) {
+        let chars = text.chars().count();
+        self.effects.push(Effect::Copy(text));
+        let unit = if chars == 1 { "char" } else { "chars" };
+        self.toast(Level::Success, format!("Copied - {chars} {unit}"));
+    }
+
     fn copy_worktree_value(&mut self, which: WorktreeCopy) {
         let Some(Overlay {
             kind: OverlayKind::WorktreeInfo(info),
@@ -6665,7 +6676,7 @@ impl App {
                     if selection.dragged() {
                         let text = selection.text();
                         if !text.is_empty() {
-                            self.effects.push(Effect::Copy(text));
+                            self.copy_selection(text);
                         }
                     }
                 }
@@ -6923,6 +6934,16 @@ impl App {
                 Level::Info,
                 "Type /learn followed by owner/repo, a GitHub URL or ./folder",
             ),
+            // The only way to switch a started session's skills or servers (plan 48).
+            "skills.configure" | "mcp.configure" => {
+                let section = if id == "skills.configure" {
+                    "Skills"
+                } else {
+                    "MCP"
+                };
+                self.open_context_section(section, None, None);
+                self.ui.context_switch = true;
+            }
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
             "composer.history_search" => self.open_palette(PaletteMode::History),
             // The new-session screen; the session exists once the first message is sent.
@@ -8050,23 +8071,6 @@ impl App {
             .then_some(pending)
     }
 
-    /// The line a pinned first message starts at, while its pin holds.
-    pub fn first_pin_top(&self, blocks: &[crate::timeline::Block]) -> Option<usize> {
-        let pin = self.ui.first_pin.as_ref()?;
-        if self.viewed_id() != Some(pin.session.as_str()) {
-            return None;
-        }
-        blocks
-            .iter()
-            .find(|block| {
-                matches!(
-                    block.kind,
-                    crate::timeline::BlockKind::User | crate::timeline::BlockKind::Turn
-                )
-            })
-            .map(|block| block.start)
-    }
-
     fn first_prompt_confirmed(&self, pending: &PendingFirstPrompt) -> bool {
         self.messages().iter().any(|m| m.role == "user")
             && (pending.history_loaded
@@ -8089,12 +8093,10 @@ impl App {
             return;
         }
         let pending = self.ui.first_prompts.remove(&project).unwrap();
-        if let Some(session) = self.viewed_id().map(str::to_owned) {
-            self.ui.first_pin = Some(FirstPin {
-                session,
-                applied: None,
-            });
-        }
+        self.ui.scroll = Scroll {
+            follow: false,
+            top: 0,
+        };
         if self.ui.draft == pending.choices {
             self.ui.draft = Draft::default();
         }
@@ -8231,6 +8233,9 @@ impl App {
         self.ui.draft.agent.hash(&mut h);
         self.ui.draft.model.hash(&mut h);
         self.ui.draft.disabled_tools.hash(&mut h);
+        self.ui.draft.worktree.hash(&mut h);
+        self.draft_worktree_offer().is_some().hash(&mut h);
+        self.context_fixed().hash(&mut h);
         h.finish()
     }
 
@@ -8710,7 +8715,7 @@ impl App {
                 if kind == "session.status" && data["status"] == "busy" {
                     self.ui.failed_sessions.remove(&sid);
                 }
-                if viewed_root.as_deref() != Some(root.as_str()) {
+                if sid == root && viewed_root.as_deref() != Some(root.as_str()) {
                     if let Some(text) = self.notice(&root, &kind) {
                         self.effects.push(Effect::Notify(text));
                     }
@@ -9487,7 +9492,8 @@ impl App {
                 } else if !matches!(
                     done.call,
                     ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. }
-                ) {
+                ) && !done.call.done_label().is_empty()
+                {
                     self.toast(Level::Success, done.call.done_label());
                 }
                 if matches!(done.call, ApiCall::Provider { .. }) {
@@ -10083,16 +10089,45 @@ impl App {
     }
 
     /// Whether two draft requests start the same context. Reasoning effort steers the model but
-    /// is not part of what it reads, so changing it keeps Core's last plan on screen.
+    /// is not part of what it reads, so changing it keeps Core's last plan on screen. The worktree
+    /// switch does change the plan (two workspace tools), but the last plan stays on screen until
+    /// Core answers the new request, so the switch rows keep their places (plan 48).
     fn same_draft_context(asked: &Value, now: &Value) -> bool {
         fn without_effort(request: &Value) -> Value {
             let mut request = request.clone();
             if let Some(fields) = request.as_object_mut() {
                 fields.remove("effort");
+                fields.remove("worktree");
             }
             request
         }
         without_effort(asked) == without_effort(now)
+    }
+
+    /// Core's last answer about the draft's worktree switch, when the project can have one.
+    /// The last answer is kept while a changed draft is asked again, so the row does not blink.
+    pub fn draft_worktree_offer(&self) -> Option<&Value> {
+        if self.viewed_id().is_some() {
+            return None;
+        }
+        let (_, answer) = self.state.draft_context.as_ref()?;
+        let offer = &answer.as_ref().ok()?["worktree"];
+        offer["available"]
+            .as_bool()
+            .unwrap_or(false)
+            .then_some(offer)
+    }
+
+    /// Whether the skills/MCP switches act: always in a draft; in a started session only from
+    /// `/skills` or `/mcp`, since its header is fixed (plan 48).
+    pub fn context_switchable(&self) -> bool {
+        !self.context_fixed() || self.ui.context_switch
+    }
+
+    /// The header is fixed from the first send on (plan 48): while `You · Sending…` and once
+    /// the session exists. Only a draft that has not been sent switches from the header.
+    pub fn context_fixed(&self) -> bool {
+        self.viewed_id().is_some() || self.pending_first_prompt().is_some()
     }
 
     /// Core's starting context when it answers the current draft; `None` while asking or after a failure.
@@ -10494,7 +10529,17 @@ impl App {
         };
         if name == "ctrl+c" || name == "ctrl+x" {
             if let Some(text) = edit.buf.selection() {
+                let chars = text.chars().count();
                 self.effects.push(Effect::Copy(text));
+                let unit = if chars == 1 { "char" } else { "chars" };
+                let handled = self
+                    .ui
+                    .file_edit
+                    .as_mut()
+                    .map(|e| e.buf.key(*ev, area))
+                    .unwrap_or(false);
+                self.toast(Level::Success, format!("Copied - {chars} {unit}"));
+                return handled;
             }
         }
         edit.buf.key(*ev, area)
@@ -11013,7 +11058,7 @@ impl App {
                     && self.ui.edit.is_none();
                 if composer && self.composer_ref().selection().is_some() {
                     if let Some(text) = self.composer_ref().selected_text() {
-                        self.effects.push(Effect::Copy(text));
+                        self.copy_selection(text);
                     }
                     return;
                 }
@@ -11582,11 +11627,12 @@ impl App {
             ..
         }) = &self.ui.overlay
         {
-            if title == "Skills" && open.is_none() {
+            if (title == "Skills" || title == "MCP") && open.is_none() {
                 let cursor = *cursor;
+                let section = title.clone();
                 match name {
                     "space" => {
-                        if let Some(item) = self.context_items_for("Skills").get(cursor) {
+                        if let Some(item) = self.context_items_for(&section).get(cursor) {
                             let index = item.index;
                             if !item.locked {
                                 self.toggle_context_item(index);
@@ -11594,7 +11640,7 @@ impl App {
                         }
                         return true;
                     }
-                    "left" | "right" | "tab" | "shift+tab" => {
+                    "left" | "right" | "tab" | "shift+tab" if section == "Skills" => {
                         let columns = self.context_items_for("Skills").len().div_ceil(2) as isize;
                         self.overlay_move(match name {
                             "left" => -columns,
@@ -12432,10 +12478,16 @@ impl App {
     }
 
     fn context_key(&mut self, name: &str) -> bool {
-        if !self.context_keyboard_active() || self.context_items().is_empty() {
+        // A started session's header is fixed: nothing in it switches (plan 48).
+        if self.context_fixed() || !self.context_keyboard_active() {
             return false;
         }
-        let last = self.context_items().len().saturating_sub(1);
+        // The worktree switch follows the last inventory switch.
+        let count = self.context_items().len() + self.draft_worktree_offer().is_some() as usize;
+        if count == 0 {
+            return false;
+        }
+        let last = count - 1;
         match name {
             "up" | "k" => self.ui.context_cursor = self.ui.context_cursor.saturating_sub(1),
             "down" | "j" => self.ui.context_cursor = (self.ui.context_cursor + 1).min(last),
@@ -12496,9 +12548,30 @@ impl App {
     }
 
     fn toggle_context_item(&mut self, index: usize) {
-        let Some(item) = self.context_items().get(index).cloned() else {
+        let items = self.context_items();
+        if index == items.len() && !self.context_fixed() {
+            if self.draft_worktree_offer().is_some() {
+                self.ui.draft.worktree = !self.ui.draft.worktree;
+                self.ui.context_cursor = index;
+                self.ui.focus = Focus::Timeline;
+            }
+            return;
+        }
+        let Some(item) = items.get(index).cloned() else {
             return;
         };
+        if !self.context_switchable() {
+            let command = if item.key.starts_with("mcp:") {
+                "/mcp"
+            } else {
+                "/skills"
+            };
+            self.toast(
+                Level::Info,
+                format!("The starting context is fixed; {command} switches it for this session."),
+            );
+            return;
+        }
         let skill_index = self
             .context_items_for("Skills")
             .iter()
@@ -13086,6 +13159,18 @@ impl App {
             top,
         };
         self.note_scroll();
+    }
+
+    pub fn timeline_top(&self) -> usize {
+        let max = self
+            .ui
+            .timeline_total
+            .saturating_sub(self.ui.timeline_height);
+        if self.ui.scroll.follow {
+            max
+        } else {
+            self.ui.scroll.top.min(max)
+        }
     }
 
     /// Show the timeline scroll bar for a moment after the user scrolls.
@@ -13753,6 +13838,17 @@ impl App {
             ),
             _ => None,
         }
+    }
+
+    /// Apply a device appearance update only while System is selected.
+    pub fn update_system_theme(&mut self, mode: Mode) -> bool {
+        if !self.theme_system || self.theme.opts.mode == mode {
+            return false;
+        }
+        let mut options = self.theme.opts;
+        options.mode = mode;
+        self.theme = self.theme.with(options);
+        true
     }
 
     /// Pick an option of a segmented Settings row, as clicking it in NSH does.
@@ -15510,6 +15606,9 @@ impl App {
             }
         };
         self.mouse = Some((ev.column, ev.row));
+        if ev.kind == MouseEventKind::Down(MouseButton::Left) {
+            self.timeline_selection = None;
+        }
         if self.annotate_mouse(&ev, pixel) {
             return;
         }
@@ -15613,13 +15712,13 @@ impl App {
                 {
                     if let Some(screen) = self.timeline_screen.clone() {
                         let area = self.regions.timeline;
-                        let point = (ev.column, ev.row);
-                        let selection = crate::selection::Selection {
+                        let selection = crate::selection::TimelineSelection::new(
                             area,
-                            screen,
-                            start: point,
-                            end: point,
-                        };
+                            &screen,
+                            ev.column,
+                            ev.row,
+                            self.timeline_top(),
+                        );
                         self.timeline_drag =
                             Some((selection, self.hits.at(ev.column, ev.row).cloned()));
                         if matches!(
@@ -15773,8 +15872,9 @@ impl App {
                     }
                     return;
                 }
+                let top = self.timeline_top();
                 if let Some((selection, _)) = self.timeline_drag.as_mut() {
-                    selection.set_end(ev.column, ev.row);
+                    selection.set_end(ev.column, ev.row, top);
                     return;
                 }
                 if let Some((start, top)) = self.ui.composer_drag {
@@ -15829,11 +15929,14 @@ impl App {
                     return;
                 }
                 if let Some((mut selection, target)) = self.timeline_drag.take() {
-                    selection.set_end(ev.column, ev.row);
+                    selection.set_end(ev.column, ev.row, self.timeline_top());
                     if selection.dragged() {
                         let text = selection.text();
                         if !text.is_empty() {
-                            self.effects.push(Effect::Copy(text));
+                            self.copy_selection(text);
+                            if let Some(session) = self.viewed_id() {
+                                self.timeline_selection = Some((session.to_owned(), selection));
+                            }
                         }
                     } else if let Some(target) = target {
                         self.click(target);
@@ -15914,7 +16017,6 @@ impl App {
     }
 
     fn wheel(&mut self, x: u16, y: u16, delta: isize) {
-        self.timeline_drag = None;
         if self.ui.overlay.is_some() {
             return self.overlay_move(delta.signum());
         }
@@ -15952,6 +16054,10 @@ impl App {
             }
         } else if contains(self.regions.timeline, x, y) && self.ui.view == View::Session {
             self.scroll_timeline(delta);
+            let top = self.timeline_top();
+            if let Some((selection, _)) = self.timeline_drag.as_mut() {
+                selection.set_end(x, y, top);
+            }
         }
     }
 
@@ -16088,6 +16194,11 @@ impl App {
             }
             Target::ContextEntry(index) => self.context_entry_toggle(index),
             Target::ContextToggle(index) => self.toggle_context_item(index),
+            Target::ContextInfo(index)
+                if !self.context_fixed() && index == self.context_items().len() =>
+            {
+                self.toggle_context_item(index)
+            }
             Target::ContextInfo(index) => {
                 let section = self.context_items().into_iter().nth(index).map(|item| {
                     match item.key.split_once(':') {
@@ -16179,6 +16290,42 @@ impl App {
                     text: paste.text.clone(),
                     top: 0,
                 });
+            }
+            Target::MarkdownLink(target) => {
+                if target.starts_with("https://") || target.starts_with("http://") {
+                    self.effects.push(Effect::OpenUrl(target));
+                } else if (!target.contains("://") || target.starts_with("file://"))
+                    && !target.starts_with('#')
+                {
+                    let target = target.strip_prefix("file://").unwrap_or(&target);
+                    let path = target.split('#').next().unwrap_or(target);
+                    let path = path
+                        .rsplit_once(':')
+                        .filter(|(_, line)| line.parse::<usize>().is_ok())
+                        .map_or(path, |(path, _)| path);
+                    let path = std::path::Path::new(path);
+                    let relative = if path.is_absolute() {
+                        self.files_root().and_then(|root| {
+                            path.strip_prefix(root)
+                                .ok()
+                                .map(|p| p.to_string_lossy().into_owned())
+                        })
+                    } else {
+                        Some(path.to_string_lossy().into_owned())
+                    };
+                    if let Some(path) = relative.filter(|p| !p.is_empty()) {
+                        self.stash_edit();
+                        self.terminal_focused = false;
+                        self.ui.diff_open = None;
+                        self.ui.file_open = true;
+                        self.ui.file_scroll = 0;
+                        self.ui.file_source = false;
+                        self.ui.file_search = None;
+                        self.groups_note_open(crate::groups::Tab::file(path.clone()));
+                        self.request_files(path, true);
+                        self.ui.focus = Focus::Timeline;
+                    }
+                }
             }
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,

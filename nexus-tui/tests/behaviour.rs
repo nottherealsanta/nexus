@@ -386,7 +386,7 @@ fn escape_cancels_the_learn_checklist_without_installing() {
 }
 
 #[test]
-fn context_switches_patch_the_full_session_list_and_locked_items_refuse() {
+fn started_header_is_fixed_and_slash_skills_switches_the_session() {
     let mut a = app();
     a.state.model.selected.as_mut().unwrap().starting = Some(serde_json::json!({
         "tools": ["read", "bash"],
@@ -425,7 +425,20 @@ fn context_switches_patch_the_full_session_list_and_locked_items_refuse() {
         .position(|item| item.key == "skill:planner")
         .unwrap();
     a.ui.context_cursor = planner;
+    // Plan 48: the header of a started session switches nothing, by key or by click.
     press(&mut a, &["enter"]);
+    a.click(Target::ContextToggle(planner));
+    assert!(!a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::SetDisabledTools { .. }))));
+    // `/skills` is the way: its dialog switches the session.
+    a.execute("skills.configure");
+    assert!(matches!(
+        a.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(OverlayKind::ContextEntries { title, .. }) if title == "Skills"
+    ));
+    a.click(Target::ContextToggle(planner));
     assert!(matches!(
         a.effects.last(),
         Some(Effect::Api(ApiCall::SetDisabledTools {
@@ -496,6 +509,110 @@ fn draft_context_switches_are_sent_with_new_session_fields() {
         a.ui.draft.fields()["disabled_tools"],
         serde_json::json!(["skill:writer"])
     );
+}
+
+#[test]
+fn draft_worktree_switch_follows_the_inventory_and_goes_in_the_create_fields() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": ["read"], "skills": [], "mcp": [],
+            "worktree": {"available": true, "on": false, "branch": "main", "head": "abc1234", "dirty": true, "changes": 2}
+        })),
+    });
+    assert!(a.draft_worktree_offer().is_some());
+    let worktree = a.context_items().len();
+    a.click(Target::ContextToggle(worktree));
+    assert!(a.ui.draft.worktree);
+    assert_eq!(a.ui.draft.fields()["worktree"], serde_json::json!(true));
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(screen.contains("Worktree  ask the agent to start in a new worktree"));
+    assert!(screen.contains("2 uncommitted changes stay in the checkout"));
+    a.click(Target::ContextToggle(worktree));
+    assert!(a.ui.draft.fields().get("worktree").is_none());
+}
+
+#[test]
+fn the_header_is_fixed_from_the_first_send() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({
+            "tools": ["read"], "skills": [], "mcp": [],
+            "worktree": {"available": true, "on": false, "branch": "main", "head": "abc1234", "dirty": false, "changes": 0}
+        })),
+    });
+    let worktree = a.context_items().len();
+    a.click(Target::ContextToggle(worktree));
+    assert!(a.ui.draft.worktree);
+    draw(&mut a, 120, 36);
+    assert!(a.hits.rect_of(&Target::ContextToggle(worktree)).is_some());
+    // `You · Sending…`: the draft's choices stay, but nothing in the header switches them.
+    let project = a.current_project().unwrap();
+    a.ui.first_prompts.insert(
+        project,
+        nexus_tui::app::PendingFirstPrompt {
+            text: "go".into(),
+            images: 0,
+            session: None,
+            history_loaded: false,
+            choices: a.ui.draft.clone(),
+        },
+    );
+    assert!(a.context_fixed());
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(screen.contains("new worktree requested"), "{screen}");
+    assert!(!screen.contains("ask the agent to start in a new worktree"));
+    assert!(a.hits.rect_of(&Target::ContextToggle(worktree)).is_none());
+    a.click(Target::ContextToggle(worktree));
+    assert!(a.ui.draft.worktree, "a fixed header does not switch");
+    // A failed create gives the draft back: the header switches again.
+    a.ui.first_prompts.clear();
+    assert!(!a.context_fixed());
+    draw(&mut a, 120, 36);
+    assert!(a.hits.rect_of(&Target::ContextToggle(worktree)).is_some());
+}
+
+#[test]
+fn draft_worktree_row_is_hidden_outside_git() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(serde_json::json!({"tools": ["read"], "skills": [], "mcp": [], "worktree": {"available": false, "on": false}})),
+    });
+    assert!(a.draft_worktree_offer().is_none());
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(!screen.contains("Worktree"));
+    let worktree = a.context_items().len();
+    a.click(Target::ContextToggle(worktree));
+    assert!(!a.ui.draft.worktree);
+}
+
+#[test]
+fn fixed_header_shows_the_worktree_request_state() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().starting = Some(serde_json::json!({
+        "tools": ["read"], "tool_definitions": {}, "instruction_file": {"status": "missing"}
+    }));
+    let session = a.state.model.sessions.get_mut(SESSION).unwrap();
+    session.extra.insert(
+        "worktree_request".into(),
+        serde_json::json!({"state": "not_entered", "branch": "main"}),
+    );
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(screen.contains("new worktree requested · not entered"));
+    let session = a.state.model.sessions.get_mut(SESSION).unwrap();
+    session.extra.insert(
+        "worktree_request".into(),
+        serde_json::json!({"state": "entered", "entered_branch": "fix-cue"}),
+    );
+    a.timeline_revision.set(a.timeline_revision.get() + 1);
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(screen.contains("fix-cue · worktree entered"));
 }
 
 #[test]
@@ -2176,6 +2293,79 @@ fn terminal_notifications_fire_only_for_sessions_out_of_view() {
     assert!(a
         .effects
         .contains(&Effect::Notify("Nexus: Other failed".into())));
+}
+
+#[test]
+fn terminal_notifications_ignore_subagent_events() {
+    let mut a = app();
+    a.ui.sound = false;
+    a.ui.notify = Notify::All;
+    feed(
+        &mut a,
+        17,
+        "session.created",
+        "ses_2",
+        r#"{"id":"ses_2","title":"Other","agent":"build"}"#,
+    );
+    feed(
+        &mut a,
+        18,
+        "session.created",
+        "ses_child",
+        r#"{"id":"ses_child","title":"Child","agent":"build","parent_id":"ses_2"}"#,
+    );
+    feed(
+        &mut a,
+        19,
+        "session.created",
+        "ses_grandchild",
+        r#"{"id":"ses_grandchild","title":"Grandchild","agent":"build","parent_id":"ses_child"}"#,
+    );
+    a.effects.clear();
+    for (id, kind, session, data) in [
+        (
+            20,
+            "permission.asked",
+            "ses_child",
+            r#"{"id":"per_child","session_id":"ses_child","tool":"bash","call_id":"c","args":{}}"#,
+        ),
+        (
+            21,
+            "question.asked",
+            "ses_child",
+            r#"{"id":"qst_child","session_id":"ses_child","call_id":"d","created":0,"questions":[]}"#,
+        ),
+        (
+            22,
+            "turn_end",
+            "ses_child",
+            r#"{"type":"turn_end","stop":"end_turn","steps":1}"#,
+        ),
+        (
+            23,
+            "session.error",
+            "ses_grandchild",
+            r#"{"message":"boom"}"#,
+        ),
+    ] {
+        feed(&mut a, id, kind, session, data);
+        assert!(
+            !a.effects.iter().any(|e| matches!(e, Effect::Notify(_))),
+            "{kind}: {:?}",
+            a.effects
+        );
+        a.effects.clear();
+    }
+    feed(
+        &mut a,
+        24,
+        "turn_end",
+        "ses_2",
+        r#"{"type":"turn_end","stop":"end_turn","steps":1}"#,
+    );
+    assert!(a
+        .effects
+        .contains(&Effect::Notify("Nexus: Other finished".into())));
 }
 
 #[test]

@@ -5,6 +5,7 @@ import { open } from "./open-bundle";
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Task", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]", status: "idle" };
 const messages = [
   { id: "m1", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "do the thing" }], created: 1 },
+  { id: "m2", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "text", text: "Done." }], created: 2 },
 ];
 const sse = (frames: string) => `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n${frames}`;
 const frame = (id: number, type: string, data: unknown) => `id: ${id}\nevent: ${type}\ndata: ${JSON.stringify({ id, type, session_id: "ses_1", cursor: `log_t:${id}`, data })}\n\n`;

@@ -71,9 +71,28 @@ describe("shared first prompt scenario", () => {
     } finally { globalThis.fetch = original; }
   });
 
+  test("the worktree switch goes in the create body; a failed create gives the draft back with it on (plan 48)", async () => {
+    setup();
+    sessionDraft.set({ agent: scenario.agent, model: scenario.model, worktree: true });
+    const original = globalThis.fetch;
+    let body: any = null;
+    globalThis.fetch = async (url, init) => {
+      if (init?.method === "POST" && String(url).split("?")[0].endsWith("/api/session")) body = JSON.parse(String(init.body));
+      return reply({ error: "Cannot create session" }, 400);
+    };
+    try {
+      expect(await sendPrompt(scenario.text)).toBe(false);
+      expect(body?.worktree).toBe(true);
+      // Back to an editable draft: nothing pending, the switch still on.
+      expect(pendingFirstPrompt()).toBe(null);
+      expect(sessionDraft().worktree).toBe(true);
+    } finally { globalThis.fetch = original; }
+  });
+
   test("pending submission keeps the context card and avoids a loading placeholder", async () => {
     const app = await open("./FirstPromptFixture.tsx", { width: 1440, height: 900, platform: "web" });
     await app.waitFor("id:first-prompt-sending");
+    await app.waitFor("id:pending-user-band");
     for (const fact of scenario.expect) expect(app.texts().join("\n")).toContain(fact);
     for (const fact of scenario.absent) expect(app.texts().join("\n").includes(fact)).toBe(false);
   });

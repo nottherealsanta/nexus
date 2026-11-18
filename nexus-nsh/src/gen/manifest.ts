@@ -2171,9 +2171,10 @@ export const manifest = {
    "category": "session",
    "slash": "continue",
    "when": [
-    "session.interrupted"
+    "has_session",
+    "!session.busy"
    ],
-   "unavailable_reason": "Continue is offered after an interrupted or failed turn; not while a turn is running.",
+   "unavailable_reason": "Continue needs an idle session.",
    "placement": [
     "palette",
     "composer",
@@ -2598,7 +2599,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "status": "blocked_core"
+   "note": "Switch this session's skills. Before the first message the context header does it; after, the header is fixed and /skills is the way (plan 48)."
   },
   {
    "id": "skills.learn",
@@ -2627,7 +2628,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "status": "blocked_core"
+   "note": "Switch this session's MCP servers. Before the first message the context header does it; after, the header is fixed and /mcp is the way (plan 48)."
   },
   {
    "id": "turn.fold_toggle",

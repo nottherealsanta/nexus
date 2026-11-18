@@ -1486,8 +1486,8 @@ id = "session.continue"
 title = "Continue"
 category = "session"
 slash = "continue"
-when = ["session.interrupted"]
-unavailable_reason = "Continue is offered after an interrupted or failed turn; not while a turn is running."
+when = ["has_session", "!session.busy"]
+unavailable_reason = "Continue needs an idle session."
 placement = ["palette", "composer", "timeline"]
 
 [[command]]
@@ -1740,7 +1740,7 @@ slash = "skills"
 when = ["has_project"]
 unavailable_reason = "Open a project first."
 placement = ["palette"]
-status = "blocked_core"
+note = "Switch this session's skills. Before the first message the context header does it; after, the header is fixed and /skills is the way (plan 48)."
 
 [[command]]
 id = "skills.learn"
@@ -1760,7 +1760,7 @@ slash = "mcp"
 when = ["has_project"]
 unavailable_reason = "Open a project first."
 placement = ["palette"]
-status = "blocked_core"
+note = "Switch this session's MCP servers. Before the first message the context header does it; after, the header is fixed and /mcp is the way (plan 48)."
 
 [[command]]
 id = "turn.fold_toggle"

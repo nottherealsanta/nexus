@@ -59,6 +59,14 @@ pub fn shimmer(
 
 const SOURCE: &str = include_str!("../../interface/theme.toml");
 
+pub fn text_selection_opacity() -> f32 {
+    static OPACITY: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *OPACITY.get_or_init(|| {
+        let table: toml::Value = toml::from_str(SOURCE).expect("interface/theme.toml is invalid");
+        table["text_selection"]["opacity"].as_float().unwrap_or(0.5) as f32
+    })
+}
+
 #[derive(Deserialize)]
 pub struct ShimmerMotion {
     pub cycle_frames: usize,
@@ -204,6 +212,35 @@ pub enum Mode {
     Light,
 }
 
+/// Resolve the device appearance where available, then the terminal hint.
+pub fn system_mode() -> Mode {
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+    {
+        if output.status.success() {
+            return if String::from_utf8_lossy(&output.stdout).trim() == "Dark" {
+                Mode::Dark
+            } else {
+                Mode::Light
+            };
+        }
+        // The key is absent in the default (light) appearance.
+        if String::from_utf8_lossy(&output.stderr).contains("Could not find key") {
+            return Mode::Light;
+        }
+    }
+    mode_from_colorfgbg(std::env::var("COLORFGBG").ok().as_deref())
+}
+
+fn mode_from_colorfgbg(value: Option<&str>) -> Mode {
+    match value.and_then(|v| v.rsplit(';').next().and_then(|b| b.parse::<u8>().ok())) {
+        Some(b) if b == 7 || (9..=15).contains(&b) => Mode::Light,
+        _ => Mode::Dark,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     TrueColor,
@@ -222,8 +259,8 @@ pub struct Options {
 }
 
 impl Options {
-    /// Detect from the environment: `NO_COLOR`, `TERM`, `COLORTERM`,
-    /// `COLORFGBG`, `NEXUS10_ASCII`, `NEXUS10_REDUCED_MOTION`, locale.
+    /// Detect system appearance and environment capabilities: `NO_COLOR`, `TERM`,
+    /// `COLORTERM`, `COLORFGBG`, `NEXUS10_ASCII`, `NEXUS10_REDUCED_MOTION`, locale.
     pub fn from_env() -> Self {
         let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         let term = get("TERM").unwrap_or_default();
@@ -238,13 +275,7 @@ impl Options {
         } else {
             Tier::Ansi16
         };
-        // COLORFGBG is "fg;bg": a light background has index 7 or 9..=15.
-        let mode = match get("COLORFGBG")
-            .and_then(|v| v.rsplit(';').next().and_then(|b| b.parse::<u8>().ok()))
-        {
-            Some(b) if b == 7 || (9..=15).contains(&b) => Mode::Light,
-            _ => Mode::Dark,
-        };
+        let mode = system_mode();
         let locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().find_map(|k| get(k));
         let non_utf8 = locale.is_some_and(|l| {
             let l = l.to_ascii_lowercase();
@@ -597,6 +628,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_background_hint_fallback() {
+        assert_eq!(mode_from_colorfgbg(Some("0;15")), Mode::Light);
+        assert_eq!(mode_from_colorfgbg(Some("15;0")), Mode::Dark);
+        assert_eq!(mode_from_colorfgbg(None), Mode::Dark);
+    }
+
+    #[test]
     fn agent_pins_and_hash_are_stable() {
         let theme = Theme::new(Options::default());
         for (name, slot) in [
@@ -605,8 +643,9 @@ mod tests {
             ("quick", "green"),
             ("scout", "teal"),
             ("plan", "violet"),
+            ("fork", "sky"),
             ("review", "rose"),
-            ("tester", "sky"),
+            ("tester", "gold"),
         ] {
             assert_eq!(theme.agent_slot(name), slot);
         }

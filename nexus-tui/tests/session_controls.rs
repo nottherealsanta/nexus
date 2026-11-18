@@ -1184,6 +1184,36 @@ fn an_unrelated_archive_event_keeps_a_reopened_archived_tab() {
 }
 
 #[test]
+fn a_successful_answer_creates_no_notification() {
+    let mut app = app();
+    ask(
+        &mut app,
+        serde_json::json!([{
+            "id": "text", "question": "Release note?", "options": [],
+            "multiple": false, "allow_free_text": true
+        }]),
+    );
+    typing(&mut app, "My answer");
+    press(&mut app, &["enter"]);
+    let call = app
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Api(call @ ApiCall::Answer { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("answer POST");
+    let history = app.ui.alerts.history.len();
+    let toasts = app.ui.alerts.toasts.len();
+    app.apply_done(nexus_tui::actions::ActionDone {
+        call,
+        result: Ok(nexus_tui::actions::Done::default()),
+    });
+    assert_eq!(app.ui.alerts.history.len(), history);
+    assert_eq!(app.ui.alerts.toasts.len(), toasts);
+}
+
+#[test]
 fn a_failed_answer_keeps_the_answer_and_allows_one_retry() {
     let mut app = app();
     ask(
@@ -1208,6 +1238,12 @@ fn a_failed_answer_keeps_the_answer_and_allows_one_retry() {
         call,
         result: Err("Temporary answer failure".into()),
     });
+    assert!(app
+        .ui
+        .alerts
+        .history
+        .iter()
+        .any(|alert| alert.text.contains("Temporary answer failure")));
     assert!(!app.ask_current().unwrap().sent);
     press(&mut app, &["enter"]);
     let after = sent_answers(&app);

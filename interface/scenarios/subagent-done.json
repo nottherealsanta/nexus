@@ -147,15 +147,14 @@
   ],
   "notice": "m6",
   "expect": [
-    "Subagent done",
-    "Build",
-    "Subagent heading and root-back navigation",
+    "Build · Subagent heading and root-back navigation",
     "failed",
     "Quick check",
     "Background Shell Done",
     "Delegating focused tests"
   ],
   "absent": [
+    "Subagent done",
     "**Delegating",
     "→ Background Shell Done",
     "context · Notification: sub agent finished"

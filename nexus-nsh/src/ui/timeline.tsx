@@ -6,11 +6,11 @@ import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { Btn, FOCUS, Icon, IconButton, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
 import { DiffView } from "./diff";
-import { disabledOf, startingSections, StartingContext, zmxSections } from "./newsession";
+import { disabledOf, startingSections, StartingContext, worktreeStatus, zmxSections, type WorktreeStatus } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
-import { byId, copyText, jump, keyLabel, openLinked, run, toggleSessionInventory } from "../commands";
-import { pendingTurns, tick, config, contextDetail, firstPin, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import { byId, copyText, jump, keyLabel, openLinked, run } from "../commands";
+import { pendingTurns, tick, config, contextDetail, firstPin, firstPrompts, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
 import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -18,8 +18,9 @@ import type { IconName } from "../icons";
 import { motionDurations, roles, statusGlyphs } from "../gen/theme";
 import { pasteLabel } from "../pastes";
 import { keepIdentity } from "./keep-identity";
+import { openMarkdownLink } from "../markdown-links";
 import { listSlots } from "./list-slots";
-import { END_SLOP, followsAfterScroll, mayFollowQueued, pinReleased, pinSpacer } from "../scroll-follow";
+import { END_SLOP, followsAfterScroll, mayFollowQueued } from "../scroll-follow";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import { Modal, ModalTitle, modalBodyHeight } from "./modal";
@@ -53,7 +54,7 @@ type RowKind =
       tools: number; duration: string; status: TurnStatus;
     }
   | {
-      key: string; kind: "context"; reconstructed?: boolean;
+      key: string; kind: "context"; reconstructed?: boolean; worktree?: WorktreeStatus | null;
       sections: CtxSection[]; total: number; window?: number;
     }
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone; subagent?: SubagentNotice }
@@ -582,7 +583,7 @@ function buildStableRows(): Row[] {
       r: [{
         key: `context-${sid}`, kind: "context",
         reconstructed: s.origin === "reconstructed",
-        sections, total, window,
+        sections, total, window, worktree: worktreeStatus(session),
       }],
     });
   }
@@ -976,7 +977,8 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
-            return <StartingContext sections={c.sections} total={c.total} estimated window={c.window} reconstructed={!!c.reconstructed} onInventoryToggle={(kind, name, locked) => { if (p.peer) p.peer(); else void toggleSessionInventory(kind, name, locked); }} />;
+            // A started session's header is fixed (plan 48): `/skills` and `/mcp` switch it.
+            return <StartingContext fixed sections={c.sections} total={c.total} estimated window={c.window} reconstructed={!!c.reconstructed} worktreeStatus={c.worktree ?? undefined} />;
           }}
         </If>
         <If when={r().kind === "user"}>
@@ -1011,7 +1013,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
         <If when={r().kind === "assistant"}>
           <View class={phone ? "py-3 px-1" : `py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
             <TextView
-              selectable links="open" markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
+              selectable onLinkPress={({ url }) => openMarkdownLink(url)} markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => {
                 const source = (r() as any).text as string;
                 return block.language === "mermaid" && closedFenceSources(source).includes(block.code.trimEnd())
@@ -1121,12 +1123,12 @@ function NoticeRow(p: { text: () => string }) {
   );
 }
 
-/** `<icon> Subagent done · Build · title · failed`: one row whose modal shows the exact model text. */
+/** `<icon> Build · title · failed`: one row whose modal shows the exact model text. */
 function SubagentDoneRow(p: { text: () => string; notice: () => SubagentNotice }) {
   const notice = p.notice;
   const label = () => {
     const n = notice();
-    return ["Subagent done", capitalize(n.agent), n.title].filter(Boolean).join(" · ");
+    return [capitalize(n.agent), n.title].filter(Boolean).join(" · ");
   };
   const outcome = () => notice().state === "failed" ? "failed" : notice().state === "interrupted" ? "interrupted" : "";
   return (
@@ -1135,8 +1137,7 @@ function SubagentDoneRow(p: { text: () => string; notice: () => SubagentNotice }
         accessibilityLabel={`${label()}${outcome() ? `, ${outcome()}` : ""}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Text class={`${TS.base} ${agentColor(notice().agent)}`}>⣿</Text></View>
-        <Text class={`shrink-0 ${TS.base} text-foreground`}>Subagent done</Text>
-        <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-muted-foreground`}>{` · ${capitalize(notice().agent)}${notice().title ? ` · ${notice().title}` : ""}`}</Text>
+        <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-muted-foreground`}>{`${capitalize(notice().agent)}${notice().title ? ` · ${notice().title}` : ""}`}</Text>
         <If when={!!outcome()}><Text class={`shrink-0 ${TS.base} text-error`}>{` · ${outcome()}`}</Text></If>
       </Button>
     </View>
@@ -1448,7 +1449,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
     <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
-        <View class={ACTIVITY_CHEVRON}><Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class={flash() ? "tint-primary" : "tint-muted-foreground"} /></View>
+        <View class={ACTIVITY_CHEVRON}><Text class={`${META} ${flash() ? "text-primary" : "text-muted-foreground"}`}>{r().open ? "▼" : "▶"}</Text></View>
         <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.secondary}`}>{r().summary}</Text>}>
           <Shimmer text={r().summary} reduced={reduced()} testID="group-working" />
         </If>
@@ -1516,7 +1517,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={activityIconSize("diamond")} class="tint-muted-foreground" /></View>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
-          <Text class={`${TS.base} font-medium text-muted-foreground`}>{roles.reasoning.label}</Text>
+          <Text class={`${TS.base} text-muted-foreground`}>{roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>
             {() => <>
               <Text class={`${TS.base} text-muted-foreground`}>·</Text>
@@ -1688,6 +1689,8 @@ export function Timeline() {
   // scrolling back to the end returns to it. The list's `autoscrollToBottomThreshold` is not used: it pulled a reader
   // within its distance of the end back down whenever content grew, including rows measured above the viewport.
   let following = true;
+  let firstHold = false;
+  let firstStarted = false;
   let lastY = 0;
   let endQueued = false;
   let restoring = 0; // a session's saved offset, applied until its rows settle
@@ -1705,7 +1708,7 @@ export function Timeline() {
     endQueued = true;
     setTimeout(() => { endQueued = false; if (mayFollowQueued(sid, viewId(), following)) toEnd(); }, 0);
   };
-  jump.fn = () => { follow(true); toEnd(); };
+  jump.fn = () => { firstHold = false; follow(true); toEnd(); };
   // Follow state is per view: a scroll position from the session just left must
   // not keep the next one pinned or count its unseen rows. A session opens at its
   // latest message the first time; afterwards it opens where it was left.
@@ -1722,9 +1725,16 @@ export function Timeline() {
     seenSessions.add(sid);
     // A session at its end (or never opened) follows; one left further up returns to its offset.
     const atEnd = first || atEndOf()[sid] !== false;
-    // The first message of a session just created pins to the top; nothing else scrolls it.
-    if (untracked(firstPin) === sid) { startPin(sid); return; }
-    pin.set(null);
+    if (untracked(firstPin) === sid || Object.values(untracked(firstPrompts)).some((p) => p.session === sid)) {
+      firstStarted = true;
+      firstHold = true;
+      follow(false);
+      scrolledUp.set(false);
+      restoringSid = null;
+      return;
+    }
+    firstStarted = false;
+    firstHold = false;
     follow(atEnd);
     scrolledUp.set(atEnd ? false : true);
     restoringSid = atEnd ? null : sid;
@@ -1763,45 +1773,17 @@ export function Timeline() {
       try { ref?.scrollToIndex({ index: at, viewOffset: fromTop, animated: false }); } catch {}
     }, 0);
   });
-  // The pinned first message: its row's top is the scroll offset, held as rows measure.
-  const pin = signal<string | null>(null);
-  let pinTarget = 0;
-  let pinAt = 0;
-  const startPin = (sid: string) => {
-    firstPin.set(null);
-    pin.set(sid);
-    pinTarget = 0;
-    pinAt = Date.now();
-    follow(false);
-    scrolledUp.set(false);
-    restoringSid = null;
-  };
-  // The first message can settle after this timeline is already showing its session.
-  effect(() => { const sid = firstPin(); if (sid && sid === untracked(viewId) && sid === scopedSession) untracked(() => startPin(sid)); });
-  const pinned = () => pin() !== null && pin() === viewId();
-  const pinFrom = (heights: Record<string, number>, sid: string) => {
-    const all = rows();
-    const at = all.findIndex((r) => r.kind === "user");
-    if (at < 0) return null;
-    let before = LIST_PAD, below = 0;
-    all.forEach((r, i) => { const h = heights[heightKey(sid, r.key)] ?? ROW_ESTIMATE; if (i < at) before += h; else below += h; });
-    return { before, below };
-  };
-  const spacer = computed(() => {
-    if (!pinned()) return 0;
-    const geo = pinFrom(rowHeights(), viewId());
-    return geo ? pinSpacer(geo.below + LIST_PAD, viewHOf(viewId())) : 0;
-  });
   effect(() => {
-    if (!pinned()) return;
-    const sid = viewId();
-    const geo = pinFrom(rowHeights(), sid);
-    viewHOf(sid); spacer();
-    if (!geo) return;
-    pinTarget = geo.before;
-    pinAt = Date.now();
-    try { ref?.scrollToOffset({ offset: pinTarget, animated: false }); } catch {}
-    lastY = pinTarget;
+    const sid = firstPin();
+    if (sid && sid === untracked(viewId) && sid === scopedSession) {
+      firstPin.set(null);
+      if (!firstStarted) {
+        firstStarted = true;
+        firstHold = true;
+        follow(false);
+        scrolledUp.set(false);
+      }
+    }
   });
   // A restored offset is applied again as rows arrive and measure, until it holds.
   effect(() => {
@@ -1828,7 +1810,7 @@ export function Timeline() {
     <View class="relative flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + spacer() }} scrollbar={false}
+          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
           onViewableItemsChange={({ viewableItems }) => {
             const first = viewableItems.reduce<typeof viewableItems[number] | null>((best, item) => !best || item.index < best.index ? item : best, null);
             const sid = viewId();
@@ -1855,10 +1837,10 @@ export function Timeline() {
             const gap = Math.max(0, height - (y + e.size.height));
             // Any upward scroll leaves follow immediately; streaming content must never
             // pull a reader back. Only scrolling back down to the end resumes it.
-            const now = followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
+            if (firstHold && Math.abs(y - lastY) > 0.5) firstHold = false;
+            const now = firstHold ? false : followsAfterScroll({ y, lastY, gap, following, contentH: height, viewH: e.size.height });
             if (now !== following) follow(now);
             atEndOf.update((all) => all[sid] === (gap <= END_SLOP) ? all : { ...all, [sid]: gap <= END_SLOP });
-            if (pin() === sid && pinReleased({ y, target: pinTarget, sinceApplied: Date.now() - pinAt, contentH: height, viewH: e.size.height })) pin.set(null);
             lastY = y;
             if (restoringSid === sid && Math.abs(y - restoring) <= 1) restoringSid = null;
           }}
@@ -1867,7 +1849,6 @@ export function Timeline() {
           {(slot) => <RowView r={() => slot().value()} sid={viewId()} />}
         </List>
       </If>
-      <If when={pinned()}><View testID="first-pin" class="absolute w-px h-px" style={{ pointerEvents: "none" }} /></If>
       <If when={scrollBar()}>
         {() => {
           const b = scrollBar()!;
@@ -1923,7 +1904,7 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
   effect(() => { rowHeights(); rows(); untracked(keepEnd); });
   return (
     <View class="relative flex-1 min-h-0" testID={`peer-timeline-${p.sid}`}>
-      <If when={rows().length > 0} else={<View class="flex-1 items-center justify-center p-6"><Text class={T.sec}>{loaded() ? "No messages yet" : "Loading…"}</Text></View>}>
+      <If when={rows().length > 0} else={<View class="flex-1 items-center justify-center p-6"><Text class={T.sec}>{loaded() ? "No messages yet" : "Loading session…"}</Text></View>}>
         <List
           ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
           onLayout={() => keepEnd()}
@@ -1945,7 +1926,7 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
 function EmptyTimeline() {
   return (
     <View class="flex-1 items-center justify-center gap-1 p-6">
-      <If when={viewed() && model.selected?.loaded} else={<Text class={T.sec}>{viewed() ? "Loading…" : "Select a session"}</Text>}>
+      <If when={viewed() && model.selected?.loaded} else={<Text class={T.sec}>{viewed() ? "Loading session…" : "Select a session"}</Text>}>
         <Text class={`${TS.body} font-medium text-foreground`}>No messages yet</Text>
         <Text class={T.sec}>Send a message below to start this session.</Text>
       </If>

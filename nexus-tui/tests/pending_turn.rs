@@ -52,7 +52,6 @@ fn interrupted(a: &mut App) {
 #[test]
 fn continue_shows_the_pending_row_in_the_same_frame_and_phases_follow_events() {
     let mut a = app();
-    interrupted(&mut a);
     a.effects.clear();
     a.execute("session.continue");
     let first = text(&mut a);

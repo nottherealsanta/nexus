@@ -55,8 +55,10 @@ fn project_rail_pins_add_above_settings_with_sidebar_open_or_closed() {
             .expect("rail settings");
         assert_eq!(add.x, rail.x);
         assert_eq!(settings.x, rail.x);
-        assert_eq!(add.y + 4, settings.y);
-        assert_eq!(settings.bottom() + 1, rail.bottom());
+        assert_eq!(add.height, 3);
+        assert_eq!(settings.height, 3);
+        assert_eq!(add.bottom(), settings.y);
+        assert_eq!(settings.bottom(), rail.bottom());
     }
 }
 
@@ -630,7 +632,7 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     || head.ends_with('\u{25e8}'),
                 "{head:?}"
             );
-            assert!(head.contains("New session"), "{head:?}");
+            assert!(!head.contains("New session"), "{head:?}");
             // the session's messages, in order
             let hi = all.find("hi").expect("user message");
             let hello = all.find("Hello").expect("assistant message");
@@ -1996,6 +1998,16 @@ fn system_theme_can_be_selected_and_restored() {
         restored.theme.opts.mode,
         nexus_tui::theme::Options::from_env().mode
     );
+    let other = match restored.theme.opts.mode {
+        Mode::Dark => Mode::Light,
+        Mode::Light => Mode::Dark,
+    };
+    assert!(restored.update_system_theme(other));
+    assert_eq!(restored.theme.opts.mode, other);
+    assert!(!restored.update_system_theme(other));
+    restored.theme_system = false;
+    assert!(!restored.update_system_theme(nexus_tui::theme::Options::from_env().mode));
+    assert_eq!(restored.theme.opts.mode, other);
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -3471,15 +3483,7 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
     let left = app.regions.left.unwrap();
     let toggle = app.hits.rect_of(&Target::ToggleLeft).unwrap();
     assert!(rows[0].contains("[Sessions] [Files]"), "{:?}", rows[0]);
-    let title_row = rows
-        .iter()
-        .skip(2)
-        .find(|row| row.contains("New session") && !row.contains("+ New session"))
-        .unwrap();
-    assert_eq!(
-        col_of(&rows[0], "[Sessions]"),
-        col_of(title_row, "New session")
-    );
+    assert_eq!(col_of(&rows[0], "[Sessions]"), left.x as usize);
     let glyph_x = toggle.x + toggle.width / 2;
     assert_ne!(buf[(glyph_x, 0)].symbol(), " ");
     let mut prev = toggle.right();
@@ -3502,9 +3506,16 @@ fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
 #[test]
 fn every_manifest_sidebar_tab_is_clickable_at_the_default_and_a_wide_sidebar() {
     // 28 is the default width: Git must fit there (it used to be omitted below 33).
-    for width in [28u16, 40] {
+    for width in [22u16, 23, 24, 28, 40] {
         let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
         app.ui.left_width = width;
+        let (_, rows) = draw(&mut app, 160, 40);
+        let expected = match width {
+            22 => "[Sessio] [Files] [Git]",
+            23 => "[Session] [Files] [Git]",
+            _ => "[Sessions] [Files] [Git]",
+        };
+        assert!(rows[0].contains(expected), "{:?}", rows[0]);
         for entry in &Manifest::load().navigation.left_sidebar.tab {
             draw(&mut app, 160, 40);
             let tab = nexus_tui::ui::Tab::from_id(&entry.id).unwrap();
@@ -3544,12 +3555,11 @@ fn sidebar_search_shortcut_tracks_the_right_edge_when_resized() {
 fn a_viewed_subagent_keeps_the_root_tab_and_names_itself_below() {
     let mut app = subagent_fixture();
     let (_, rows) = draw(&mut app, 160, 40);
-    // the group's strip names the root only; the child has no tab, and the
-    // header's breadcrumb names the chain
+    // The group's strip names the root only; the child has no tab.
     let strip = app.ui.groups.rects[0].1.y as usize;
     assert!(rows[strip].contains("Root task"), "{:?}", rows[strip]);
     assert!(!rows[strip].contains("Child task"), "{:?}", rows[strip]);
-    assert!(rows[0].contains("Child task"), "{:?}", rows[0]);
+    assert!(!rows[0].contains("Child task"), "{:?}", rows[0]);
     assert_eq!(app.tab_ids(), vec!["ses_parent".to_string()]);
     // The one heading row names the viewed child on the left and its four metadata
     // values on the right; there is no second subagent-tab row.
@@ -3787,9 +3797,13 @@ fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
         // Input at x+3 inside the card, a blank row, the control row.
         let input = card(r.y + 2);
         assert!(input[input.char_indices().nth(x + 2).unwrap().0..].starts_with("Type a message"));
+        // Only the composer's span: the rail beside it has its own controls on this row.
+        let blank: String = (r.x..r.right())
+            .map(|x| buf[(x, r.y + 3)].symbol())
+            .collect();
         assert!(
-            card(r.y + 3).replace('\u{2502}', "").trim().is_empty(),
-            "{w}: blank row"
+            blank.replace('\u{2502}', "").trim().is_empty(),
+            "{w}: blank row: {blank:?}"
         );
         let control = card(r.bottom() - 4);
         assert!(control
@@ -5431,7 +5445,7 @@ fn a_narrow_drawer_sits_over_the_scrim_and_hit_tests_inside_and_out() {
     assert_eq!((side, rect.width), (Side::Left, 34));
     // the page behind is dimmed by the scrim; the header keeps its toggles
     assert_ne!(buf[probe].fg, before, "scrim over the centre");
-    assert!(rows[0].contains("New session"), "{:?}", rows[0]);
+    assert!(!rows[0].contains("New session"), "{:?}", rows[0]);
     assert_eq!(buf[(1, 0)].fg, plain[(1, 0)].fg, "the header is not dimmed");
     // inside the drawer: its own targets; outside: the scrim, which closes it
     assert!(app
@@ -5463,7 +5477,7 @@ fn a_narrow_drawer_sits_over_the_scrim_and_hit_tests_inside_and_out() {
 }
 
 #[test]
-fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
+fn the_narrow_header_keeps_the_toggles_without_a_session_title() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (60, 24));
     let (_, rows) = draw(&mut app, 60, 24);
     let head = &rows[0];
@@ -5471,22 +5485,19 @@ fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
         head.trim_start().starts_with('\u{25e7}') || head.trim_start().starts_with('\u{25a1}'),
         "{head:?}"
     );
-    assert!(head.contains("New session"), "{head:?}");
+    assert!(!head.contains("New session"), "{head:?}");
     // no tab strip: no `+` new-session tab and no close crosses
     assert!(
         !head.contains('\u{d7}') && !head.contains(" + "),
         "{head:?}"
     );
-    // a long title keeps its end and loses its start
+    // A long session title does not appear in the header either.
     let id = app.viewed_id().unwrap().to_owned();
     app.state.model.sessions.get_mut(&id).unwrap().title =
         "An exceedingly long session title that cannot fit the header".into();
     let (_, rows) = draw(&mut app, 60, 24);
     let head = &rows[0];
-    assert!(
-        head.contains("\u{2026}") && head.contains("cannot fit the header"),
-        "{head:?}"
-    );
+    assert!(!head.contains("cannot fit the header"), "{head:?}");
     assert!(!head.contains("An exceedingly"), "{head:?}");
     // the wide layout has the tab in the group's strip, not the header
     app.set_size(120, 36);
@@ -5742,16 +5753,17 @@ fn bottom_rule_shows_context_and_activity() {
     let r = app.regions.composer;
     let y = r.bottom() - 1;
     let accent = app.theme.agent_style("build").fg.unwrap();
-    let active = (r.x + 2..r.right() - 2)
+    let start = r.x + 3;
+    let width = (r.width - 6) as usize;
+    let active = (start..start + width as u16)
         .filter(|&x| buf[(x, y)].fg == accent)
         .count();
-    let width = (r.width - 4) as usize;
     assert!((active as f64 / width as f64 - 0.41).abs() < 0.02);
     busy(&mut app);
     let (buf, _) = draw(&mut app, 160, 48);
     // The pulse has soft edges: cells fading to the rule colour around its core.
-    let rule = app.theme.fg("border.default").fg.unwrap();
-    let lit = (r.x + 2..r.right() - 2)
+    let rule = app.theme.fg("surface.panel").fg.unwrap();
+    let lit = (start..start + width as u16)
         .filter(|&x| buf[(x, y)].fg != rule)
         .count();
     assert!(lit > 0 && lit <= width / 5 + 4, "{lit}");

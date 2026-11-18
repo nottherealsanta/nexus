@@ -768,7 +768,7 @@ function ActivityBar(p: { busy: boolean; fraction: number; slot: string }) {
   const left = () => activityOffsetPercent(phase());
   // This rule is the card's single bottom edge; the pulse is overlaid on that line.
   return <View class="w-full -mt-1 px-5" testID="composer-bottom-edge">
-      <View class="relative w-full h-0.5 bg-border" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
+      <View class="relative w-full h-0.5 bg-card" testID="activity-bar" accessibilityLabel={p.busy ? "Working" : `Context ${Math.round(p.fraction * 100)}% used`}>
         <If when={p.busy}>
           <View class={`absolute top-0 h-0.5 ${AGENT_TEXT[p.slot] ?? ""}`} testID="activity-pulse" style={{ left: `${left()}%`, width: "20%", backgroundImage: "linear-gradient(90deg, transparent, currentColor, transparent)" }} />
         </If>
@@ -985,7 +985,7 @@ function LocationStrip(p: { working: boolean }) {
   };
   return (
     <If when={phone ? p.working : (project() && directory()) || p.working}>
-      <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${phone ? "" : "px-4"}`} testID="location-strip"
+      <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${phone ? "" : "pl-5 pr-4"}`} testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
         <View class={phone ? "size-0 overflow-hidden" : "flex-1 w-0 min-w-0 overflow-hidden flex-row items-center gap-2"} accessible={!phone}>

@@ -752,6 +752,7 @@ pub enum Target {
     AnnotateDone,
     /// A collapsed paste marker in a user message: open its full text.
     TimelinePaste(std::rc::Rc<crate::timeline::PasteText>),
+    MarkdownLink(String),
     JumpLatest,
     Composer,
     ComposerAgent,

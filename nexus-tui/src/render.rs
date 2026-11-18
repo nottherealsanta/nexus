@@ -338,9 +338,20 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 }
             }
             timeline_screen = Some(screen);
-            if let Some((selection, _)) = &a.timeline_drag {
+            let selection = a.timeline_drag.as_ref().map(|(s, _)| s).or_else(|| {
+                a.timeline_selection
+                    .as_ref()
+                    .and_then(|(session, s)| (a.viewed_id() == Some(session.as_str())).then_some(s))
+            });
+            if let Some(selection) = selection {
                 if selection.dragged() && selection.area == regions.timeline {
-                    selection.highlight(buf);
+                    let max = metrics.0.saturating_sub(metrics.1);
+                    let top = if a.ui.scroll.follow {
+                        max
+                    } else {
+                        a.ui.scroll.top.min(max)
+                    };
+                    selection.highlight(buf, top, cx.t);
                 }
             }
         }
@@ -479,6 +490,15 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
     }
     app.hits = hits;
     app.ui.groups.tab_rects = tab_rects;
+    let max = metrics.0.saturating_sub(metrics.1);
+    let top = if app.ui.scroll.follow {
+        max
+    } else {
+        app.ui.scroll.top.min(max)
+    };
+    if let (Some(screen), Some((selection, _))) = (&timeline_screen, &mut app.timeline_drag) {
+        selection.capture(screen, top);
+    }
     app.timeline_screen = timeline_screen;
     app.regions = regions;
     app.ui.timeline_total = metrics.0;
@@ -495,27 +515,10 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         }
         app.ui.timeline_sel = app.ui.timeline_sel.map(|i| i.min(n.saturating_sub(1)));
     }
-    // The first-send pin holds the scroll at the first message until the reader moves it.
-    let pin_top = timeline.as_ref().and_then(|t| app.first_pin_top(&t.blocks));
-    if let Some(top) = pin_top {
-        let held = Scroll { follow: false, top };
-        let applied = app.ui.first_pin.as_ref().and_then(|p| p.applied);
-        match applied {
-            Some(was) if was != app.ui.scroll => app.ui.first_pin = None,
-            _ => {
-                app.ui.scroll = held;
-                if let Some(pin) = app.ui.first_pin.as_mut() {
-                    pin.applied = Some(held);
-                }
-            }
-        }
-    } else if app.ui.first_pin.is_some() && timeline.is_some() {
-        app.ui.first_pin = None;
-    }
     // keep the stored scroll honest after clamping
-    if pin_top.is_none() && !app.ui.scroll.follow {
+    if !app.ui.scroll.follow {
         let max_top = metrics.0.saturating_sub(metrics.1);
-        if app.ui.scroll.top >= max_top {
+        if max_top > 0 && app.ui.scroll.top >= max_top {
             app.ui.scroll = Scroll::default();
         }
     }
@@ -1158,15 +1161,11 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     if tr.width < 3 {
         return;
     }
-    // The session tabs live in the groups' strips (plan 45); the header keeps
-    // the breadcrumb and the run status.
+    // The session tabs live in the groups' strips; the header keeps the run status.
     draw_crumb(cx, buf, tr);
 }
 
-/// The narrow header (DESIGN_PLAN.md D17): the toggles stay at the corners and
-/// the tab strip gives way to the breadcrumb of the viewed session, cut from
-/// the left so the current session stays readable. The run status keeps the
-/// right edge.
+/// The header keeps the run status at the right edge.
 fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
     let a = cx.app;
     let status = header_status(cx);
@@ -1177,20 +1176,8 @@ fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
     }
     let parts: Vec<String> = if a.ui.view == View::Settings {
         vec!["Settings".to_owned()]
-    } else if let Some(id) = a.viewed_id() {
-        let chain = a.ancestors_of(id);
-        if chain.len() > 1 {
-            chain.iter().map(|s| s.title.clone()).collect()
-        } else {
-            vec![a
-                .state
-                .model
-                .sessions
-                .get(id)
-                .map_or_else(|| id.to_owned(), |s| s.title.clone())]
-        }
     } else {
-        vec!["New session".to_owned()]
+        Vec::new()
     };
     let sep = format!(" {} ", cx.t.structure("breadcrumb"));
     let room = (tr.width as usize).saturating_sub(status_w + 2);
@@ -1697,39 +1684,52 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
     if rail {
         return out;
     }
-    for (i, t) in cx
+    let y = if cx.app.narrow() {
+        r.y
+    } else {
+        r.y.saturating_sub(1)
+    };
+    let labels: Vec<(Tab, &'static str, String)> = cx
         .app
         .manifest
         .navigation
         .left_sidebar
         .tab
         .iter()
-        .enumerate()
-    {
-        let Some(tab) = Tab::from_id(&t.id) else {
-            continue;
-        };
-        let glyph = match tab {
-            Tab::Sessions => "tab_sessions",
-            Tab::Files => "tab_files",
-            Tab::Git => "tab_files",
-        };
-        // Sessions is 10 cells; the rest take their bracketed label's width after an
-        // 8-cell stride, so Files keeps its place and Git fits the 28-cell sidebar.
-        let i = i as u16;
-        let w = if i == 0 {
-            10
-        } else {
-            t.label.chars().count() as u16 + 2
-        };
-        let off = if i == 0 { 0 } else { 11 + (i - 1) * 8 };
-        let rect = if cx.app.narrow() {
-            Rect::new(r.x + 3 + off, r.y, w, 1)
-        } else {
-            Rect::new(r.x + 4 + off, r.y.saturating_sub(1), w, 1)
-        };
+        .filter_map(|t| Some((Tab::from_id(&t.id)?, t.label.clone())))
+        .map(|(tab, label)| {
+            let glyph = match tab {
+                Tab::Sessions => "tab_sessions",
+                Tab::Files | Tab::Git => "tab_files",
+            };
+            (tab, glyph, label)
+        })
+        .collect();
+    let mut lengths = vec![0; labels.len()];
+    let mut available =
+        (r.width as usize).saturating_sub(labels.len() * 3 - usize::from(!labels.is_empty()));
+    while available > 0 {
+        let mut grew = false;
+        for (length, (_, _, label)) in lengths.iter_mut().zip(&labels) {
+            if available > 0 && *length < label.chars().count() {
+                *length += 1;
+                available -= 1;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut x = r.x;
+    for ((tab, glyph, label), length) in labels.into_iter().zip(lengths) {
+        let head: String = label.chars().take(length).collect();
+        let text = format!("[{head}]");
+        let w = text.chars().count() as u16;
+        let rect = Rect::new(x, y, w, 1);
+        x += w + 1;
         if rect.right() <= r.right() && rect.bottom() <= r.bottom() {
-            out.push((tab, rect, t.label.clone(), glyph));
+            out.push((tab, rect, text, glyph));
         }
     }
     out
@@ -1737,7 +1737,7 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
 
 fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
-    for (tab, rect, _, _) in tab_icons(cx, r) {
+    for (tab, rect, label, _) in tab_icons(cx, r) {
         let active = a.ui.tab == tab;
         let mut style = if active {
             cx.st(PRIMARY, SIDEBAR)
@@ -1750,12 +1750,7 @@ fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         if active || cx.hovered(rect) {
             clear(buf, rect, style);
         }
-        let label = match tab {
-            Tab::Sessions => "[Sessions]",
-            Tab::Files => "[Files]",
-            Tab::Git => "[Git]",
-        };
-        put(buf, rect.x, rect.y, label, style, rect.width);
+        put(buf, rect.x, rect.y, &label, style, rect.width);
         if active && cx.t.mono() {
             buf.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
         }
@@ -1793,13 +1788,13 @@ pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
         out.push((RailItem::Project(i), Rect::new(r.x, y, r.width, RAIL_ITEM)));
         y += RAIL_ITEM;
     }
-    if r.height >= 8 {
-        out.push((RailItem::Add, Rect::new(r.x, r.bottom() - 8, r.width, 3)));
+    if r.height >= 6 {
+        out.push((RailItem::Add, Rect::new(r.x, r.bottom() - 6, r.width, 3)));
     }
-    if r.height >= 4 {
+    if r.height >= 3 {
         out.push((
             RailItem::Settings,
-            Rect::new(r.x, r.bottom() - 4, r.width, 3),
+            Rect::new(r.x, r.bottom() - 3, r.width, 3),
         ));
     }
     out
@@ -4037,7 +4032,26 @@ fn preview_rows(
         }
     }
     let (sections, total) = preview_sections(cx);
-    let rows = std::rc::Rc::new(paint::context_rows(&sections, total, layout));
+    let mut rows = paint::context_rows(&sections, total, layout);
+    if a.context_fixed() {
+        // Sent: the fixed header's line, as the started session shows it (plan 48).
+        if a.ui.draft.worktree && a.draft_worktree_offer().is_some() {
+            rows.push(Vec::new());
+            rows.push(vec![(
+                "\u{2325} new worktree requested".to_owned(),
+                paint::CtxRole::Meta,
+            )]);
+        }
+    } else if let Some(offer) = a.draft_worktree_offer() {
+        rows.push(Vec::new());
+        rows.extend(paint::worktree_rows(
+            a.context_items().len(),
+            a.ui.draft.worktree,
+            offer["changes"].as_u64().unwrap_or(0),
+            layout,
+        ));
+    }
+    let rows = std::rc::Rc::new(rows);
     *a.preview_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&rows)));
     a.preview_builds.set(a.preview_builds.get() + 1);
     rows
@@ -4049,9 +4063,11 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
         return 0;
     }
     let sep = cx.sep();
-    let bold = |fg| cx.st(fg, PANEL).add_modifier(Modifier::BOLD);
-    // The same box as the header after the first message: panel surface, one
-    // padding row above and below the rows.
+    // A draft is the panel box; from the first send the header is fixed and sits on the
+    // timeline's background with nothing to switch (plan 48). Padding stays, so nothing jumps.
+    let fixed = a.context_fixed();
+    let surface = if fixed { CANVAS } else { PANEL };
+    let bold = |fg| cx.st(fg, surface).add_modifier(Modifier::BOLD);
     let boxed = r;
     let r = Rect::new(
         r.x + 2,
@@ -4095,7 +4111,7 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
     clear(
         buf,
         Rect::new(boxed.x, boxed.y, boxed.width, box_rows),
-        cx.st(MUTED, PANEL),
+        cx.st(MUTED, surface),
     );
     let top =
         a.ui.scroll
@@ -4185,19 +4201,19 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
                     .iter()
                     .any(|(i, rect, _)| x >= rect.x && x < rect.right() && lifted(*i, *rect))
             };
-            let bg = if on_cell { RAISED } else { PANEL };
+            let bg = if on_cell { RAISED } else { surface };
             let mut style = match role {
                 paint::CtxRole::Mark | paint::CtxRole::Meta | paint::CtxRole::Preview => {
-                    cx.st(MUTED, PANEL)
+                    cx.st(MUTED, surface)
                 }
                 paint::CtxRole::Title | paint::CtxRole::TotalLabel => bold(SECONDARY),
-                paint::CtxRole::Tokens => cx.st(SECONDARY, PANEL),
+                paint::CtxRole::Tokens => cx.st(SECONDARY, surface),
                 paint::CtxRole::ToggleOn(_) => cx.st(SECONDARY, bg),
                 paint::CtxRole::ToggleOff(_) => {
                     cx.st(MUTED, bg).add_modifier(Modifier::CROSSED_OUT)
                 }
                 paint::CtxRole::ToggleLocked(_) => cx.st(MUTED, bg),
-                paint::CtxRole::TotalFigure => cx.st(SECONDARY, PANEL),
+                paint::CtxRole::TotalFigure => cx.st(SECONDARY, surface),
             };
             if hovered_header || on_cell {
                 style = style.patch(cx.t.bg(RAISED));
@@ -4211,7 +4227,9 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
             }
         }
         for (index, rect, name) in &cells {
-            hits.add(*rect, Target::ContextToggle(*index));
+            if !fixed {
+                hits.add(*rect, Target::ContextToggle(*index));
+            }
             hits.add(*name, Target::ContextInfo(*index));
         }
     }
@@ -4242,6 +4260,26 @@ fn draw_timeline(
     hits.add(r, Target::Timeline);
     let inner = Rect::new(r.x + 1, r.y, r.width - 2, r.height);
     let lines = &timeline.lines;
+    if a.pending_first_prompt().is_none()
+        && a.viewed().is_some()
+        && a.state
+            .model
+            .selected
+            .as_ref()
+            .is_some_and(|v| !v.loaded && v.messages.is_empty() && v.starting.is_none())
+    {
+        let label = "Loading session…";
+        let x = inner.x + inner.width.saturating_sub(width(label) as u16) / 2;
+        put(
+            buf,
+            x,
+            inner.y + inner.height / 2,
+            label,
+            cx.st(SECONDARY, CANVAS),
+            inner.right().saturating_sub(x),
+        );
+        return (0, 0, None);
+    }
     if a.pending_first_prompt().is_some()
         || a.viewed().is_none()
         || (lines.is_empty() && a.messages().is_empty())
@@ -4262,8 +4300,6 @@ fn draw_timeline(
             let pending = a.pending_first_prompt();
             let mut sent = Vec::new();
             if let Some(p) = pending {
-                sent.push("You".to_owned());
-                sent.extend(text::wrap(&p.text, inner.width.saturating_sub(2) as usize));
                 if p.images > 0 {
                     sent.push(format!(
                         "[{} image{}]",
@@ -4271,11 +4307,15 @@ fn draw_timeline(
                         if p.images == 1 { "" } else { "s" }
                     ));
                 }
+                sent.extend(text::wrap(&p.text, inner.width.saturating_sub(3) as usize));
+                if sent.is_empty() {
+                    sent.push(String::new());
+                }
             }
             let reserved = if sent.is_empty() {
                 0
             } else {
-                (sent.len() + 1).min(inner.height.saturating_sub(4) as usize) as u16
+                (sent.len() + 2).min(inner.height.saturating_sub(4) as usize) as u16
             };
             // D10: the context is the view's content; no centred text.
             let total = draw_new_session_context(
@@ -4291,18 +4331,30 @@ fn draw_timeline(
             );
             if !sent.is_empty() {
                 let y = (inner.y + total as u16 + 4).min(inner.bottom().saturating_sub(reserved));
+                let bg = cx.t.role_style("user_text");
+                for row in y..y + reserved {
+                    clear(buf, Rect::new(inner.x, row, inner.width, 1), bg);
+                    put(
+                        buf,
+                        inner.x,
+                        row,
+                        cx.t.structure("rail"),
+                        cx.st(MUTED, "surface.raised"),
+                        1,
+                    );
+                }
                 for (i, line) in sent
                     .iter()
-                    .take(reserved.saturating_sub(1) as usize)
+                    .take(reserved.saturating_sub(2) as usize)
                     .enumerate()
                 {
                     put(
                         buf,
-                        inner.x + 2,
-                        y + i as u16,
+                        inner.x + 3,
+                        y + 1 + i as u16,
                         line,
-                        cx.st(if i == 0 { SECONDARY } else { PRIMARY }, CANVAS),
-                        inner.width.saturating_sub(2),
+                        bg,
+                        inner.width.saturating_sub(3),
                     );
                 }
             }
@@ -4404,13 +4456,9 @@ fn draw_timeline(
         return (0, r.height as usize, None);
     }
     let h = r.height as usize;
-    // The first message sits at the top; a spacer keeps the page from scrolling short of it.
-    let pin = a.first_pin_top(&timeline.blocks);
-    let total = pin.map_or(lines.len(), |s| lines.len().max(s + h));
+    let total = lines.len();
     let max_top = total.saturating_sub(h);
-    let top = if let Some(s) = pin {
-        s.min(max_top)
-    } else if a.ui.scroll.follow {
+    let top = if a.ui.scroll.follow {
         max_top
     } else {
         a.ui.scroll.top.min(max_top)
@@ -4614,6 +4662,24 @@ fn draw_timeline(
     for (rect, target) in paste_hits {
         hits.add(rect, target);
     }
+    for (n, line) in lines.iter().enumerate().take(top + h).skip(top) {
+        for (start, end, target) in &line.links {
+            let x = inner
+                .x
+                .saturating_add(line.indent)
+                .saturating_add(*start as u16)
+                .min(inner.right());
+            let right = inner
+                .x
+                .saturating_add(line.indent)
+                .saturating_add(*end as u16)
+                .min(inner.right());
+            hits.add(
+                Rect::new(x, r.y + (n - top) as u16, right.saturating_sub(x), 1),
+                Target::MarkdownLink(target.clone()),
+            );
+        }
+    }
     // Section headings open the exact frozen snapshot.
     for b in timeline
         .blocks
@@ -4645,15 +4711,11 @@ fn draw_timeline(
         }
     }
     for (n, line) in lines.iter().enumerate().take(top + h).skip(top) {
-        for &(index, start, name, end) in &line.context_items {
-            let start = inner.x.saturating_add(start as u16).min(inner.right());
+        // The header of a started session is fixed (plan 48): a name opens its details, nothing switches.
+        for &(index, _, name, end) in &line.context_items {
             let name = inner.x.saturating_add(name as u16).min(inner.right());
             let end = inner.x.saturating_add((end + 2) as u16).min(inner.right());
             let y = r.y + (n - top) as u16;
-            hits.add(
-                Rect::new(start, y, end.saturating_sub(start), 1),
-                Target::ContextToggle(index),
-            );
             hits.add(
                 Rect::new(name, y, end.saturating_sub(name), 1),
                 Target::ContextInfo(index),
@@ -4849,6 +4911,7 @@ fn draw_sticky(
                 context_items: Vec::new(),
                 paste: timeline.lines[pin.first + k].paste.clone(),
                 indent: timeline.lines[pin.first + k].indent,
+                links: Vec::new(),
             };
             if pin.clipped && k + 1 == pin.body {
                 crate::sticky::ellipsize(&mut line.spans, cx.ell());
@@ -6729,7 +6792,7 @@ fn draw_activity_line(cx: &Cx, buf: &mut Buffer, r: Rect) {
     let accent = cx
         .st(PRIMARY, CANVAS)
         .patch(cx.t.agent_style(&cx.app.current_agent()));
-    let rest = cx.st("border.default", CANVAS);
+    let rest = cx.st(PANEL, CANVAS);
     let soft = !cx.t.mono();
     let half = length as f64 / 2.0;
     let centre = pos + half;
@@ -6839,7 +6902,7 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .map(|b| truncate(b, 24, cx.ell()));
     let linked = worktree.is_some_and(|tree| tree["main"].as_bool() == Some(false));
     let y = r.bottom() - 1;
-    let start = r.x + 2;
+    let start = r.x + 3;
     let end = r.right().saturating_sub(2);
     let icon = cx.t.control("worktree");
     // Each indicator is absent when its corresponding resource count is zero.
@@ -10163,10 +10226,21 @@ fn draw_context_entries(
     let mut rows: Vec<(Option<usize>, Vec<Span<'static>>)> = Vec::new();
     let mut cursor_row = 0;
     let quiet = cx.st(MUTED, RAISED);
+    // `/mcp` lists the servers with their switch; elsewhere the state is in the description.
+    let servers = (title == "MCP").then(|| cx.app.context_items_for("MCP"));
     for (i, entry) in entries.iter().enumerate() {
         if i == cursor {
             cursor_row = rows.len();
         }
+        let marker = servers
+            .as_ref()
+            .and_then(|items| items.get(i))
+            .map(|item| match (item.locked, item.on) {
+                (true, _) => "  ",
+                (false, true) => "\u{25cf} ",
+                (false, false) => "\u{25cb} ",
+            })
+            .unwrap_or("");
         let style = if i == cursor {
             cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD)
         } else {
@@ -10175,7 +10249,7 @@ fn draw_context_entries(
         rows.push((
             Some(i),
             vec![Span::styled(
-                format!("{} {}", cx.t.fold(open == Some(i)), entry.name),
+                format!("{} {marker}{}", cx.t.fold(open == Some(i)), entry.name),
                 style,
             )],
         ));
@@ -10213,12 +10287,16 @@ fn draw_context_entries(
             hits.add(Rect::new(m.x, y, m.w, 1), Target::ContextEntry(*entry));
         }
     }
-    hint_row(
-        cx,
-        buf,
-        &m,
-        &[(updown(cx), "move"), ("enter", "details"), ("esc", "close")],
-    );
+    let mut hints = vec![(updown(cx), "move"), ("enter", "details")];
+    if title == "MCP" {
+        hints.push(if cx.app.context_switchable() {
+            ("space", "toggle")
+        } else {
+            ("/mcp", "switches")
+        });
+    }
+    hints.push(("esc", "close"));
+    hint_row(cx, buf, &m, &hints);
 }
 
 fn draw_skill_picker(
@@ -10300,7 +10378,7 @@ fn draw_skill_picker(
                 cx.st(SECONDARY, background),
                 width.saturating_sub(2),
             );
-            if !item.locked {
+            if !item.locked && cx.app.context_switchable() {
                 hits.add(
                     Rect::new(x + 1, y + 4, width.saturating_sub(2), 1),
                     Target::ContextToggle(item.index),
@@ -10308,6 +10386,11 @@ fn draw_skill_picker(
             }
         }
     }
+    let switch = if cx.app.context_switchable() {
+        ("space", "toggle")
+    } else {
+        ("/skills", "switches")
+    };
     hint_row(
         cx,
         buf,
@@ -10315,7 +10398,7 @@ fn draw_skill_picker(
         &[
             (updown(cx), "move"),
             ("enter", "details"),
-            ("space", "toggle"),
+            switch,
             ("esc", "close"),
         ],
     );

@@ -4,7 +4,8 @@ export const agentPins = {
   "build": "blue",
   "quick": "green",
   "scout": "teal",
-  "plan": "violet"
+  "plan": "violet",
+  "fork": "sky"
 } as const;
 export const agentSlots = ["amber", "blue", "violet", "green", "teal", "rose", "sky", "gold"] as const;
 export const roles = {

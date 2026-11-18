@@ -19,7 +19,6 @@ use crate::text::{self, truncate, width};
 use crate::theme::Theme;
 
 const CANVAS: &str = "surface.canvas";
-const PANEL: &str = "surface.panel";
 const PRIMARY: &str = "text.primary";
 const SECONDARY: &str = "text.secondary";
 const MUTED: &str = "text.muted";
@@ -51,6 +50,7 @@ pub struct TLine {
     /// Cells the whole row (band, rail and spans) is drawn in from the page's
     /// left edge: a fork's expanded inherited messages sit inside their block.
     pub indent: u16,
+    pub links: Vec<(usize, usize, String)>,
 }
 
 /// A collapsed text paste in a user message: the marker shown and the full text.
@@ -868,6 +868,32 @@ fn strip_pair(text: &str, marker: &str, word_boundary: bool) -> String {
     out
 }
 
+/// The fixed header's worktree line for a session started with the worktree switch (plan 48):
+/// the text and whether it warns (a turn ended and the agent did not move).
+pub(crate) fn worktree_status(session: &crate::api::Session) -> Option<(String, bool)> {
+    let request = session.extra.get("worktree_request")?;
+    let branch = |key: &str| {
+        request[key]
+            .as_str()
+            .filter(|b| !b.is_empty())
+            .map(str::to_owned)
+    };
+    match request["state"].as_str()? {
+        "entered" => Some((
+            format!(
+                "\u{2325} {} \u{00b7} worktree entered",
+                branch("entered_branch").unwrap_or_else(|| "detached".into())
+            ),
+            false,
+        )),
+        "not_entered" => Some((
+            "\u{2325} new worktree requested \u{00b7} not entered".to_owned(),
+            true,
+        )),
+        _ => Some(("\u{2325} new worktree requested".to_owned(), false)),
+    }
+}
+
 pub(crate) fn is_notice(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("→ Background Shell Done:")
@@ -1335,6 +1361,7 @@ impl Builder<'_> {
             context_items: Vec::new(),
             paste: None,
             indent: 0,
+            links: Vec::new(),
         }));
     }
     fn blank(&mut self) {
@@ -1923,6 +1950,10 @@ impl Builder<'_> {
                             if !line.spans.is_empty() {
                                 line.spans
                                     .insert(0, Span::raw(" ".repeat(ASSISTANT_INDENT)));
+                                for (start, end, _) in &mut line.links {
+                                    *start += ASSISTANT_INDENT;
+                                    *end += ASSISTANT_INDENT;
+                                }
                             }
                         }
                     },
@@ -2152,7 +2183,8 @@ impl Builder<'_> {
             });
         }
         let reconstructed = s["origin"].as_str() == Some("reconstructed");
-        self.paint_context(key, sections, total, window, reconstructed, true);
+        let worktree = self.app.viewed().and_then(worktree_status);
+        self.paint_context(key, sections, total, window, reconstructed, true, worktree);
     }
 
     /// The ZMX child's context header: Nexus never claims a complete context for a CLI-owned loop.
@@ -2224,9 +2256,10 @@ impl Builder<'_> {
             section("Settings", "CLI inherited".into()),
             section("Not applied", not_applied),
         ]);
-        self.paint_context(key, sections, 0, None, false, true);
+        self.paint_context(key, sections, 0, None, false, true, None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_context(
         &mut self,
         key: String,
@@ -2235,6 +2268,7 @@ impl Builder<'_> {
         window: Option<u64>,
         reconstructed: bool,
         estimated: bool,
+        worktree: Option<(String, bool)>,
     ) {
         use crate::paint::{CtxLayout, CtxRole};
         let sep = self.sep();
@@ -2254,9 +2288,10 @@ impl Builder<'_> {
                 columns: true,
             };
             let rows = crate::paint::context_rows(&sections, total, &layout);
-            // The header is a box on the panel surface, kept above the
-            // conversation for the whole session.
-            let pad = b.st(MUTED, PANEL);
+            // The header stays above the conversation for the whole session. Once the
+            // session has started it is fixed, so it sits on the timeline's own
+            // background with nothing to switch (plan 48); the draft is the panel box.
+            let pad = b.st(MUTED, CANVAS);
             b.line(Vec::new());
             Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
             for row in rows {
@@ -2280,17 +2315,17 @@ impl Builder<'_> {
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
-                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.st(MUTED, PANEL),
+                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.st(MUTED, CANVAS),
                         CtxRole::Title | CtxRole::TotalLabel => {
-                            b.st(SECONDARY, PANEL).add_modifier(Modifier::BOLD)
+                            b.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD)
                         }
-                        CtxRole::Tokens => b.st(SECONDARY, PANEL),
-                        CtxRole::ToggleOn(_) => b.st(SECONDARY, PANEL),
+                        CtxRole::Tokens => b.st(SECONDARY, CANVAS),
+                        CtxRole::ToggleOn(_) => b.st(SECONDARY, CANVAS),
                         CtxRole::ToggleOff(_) => {
-                            b.st(MUTED, PANEL).add_modifier(Modifier::CROSSED_OUT)
+                            b.st(MUTED, CANVAS).add_modifier(Modifier::CROSSED_OUT)
                         }
-                        CtxRole::ToggleLocked(_) => b.st(MUTED, PANEL),
-                        CtxRole::TotalFigure => b.st(SECONDARY, PANEL),
+                        CtxRole::ToggleLocked(_) => b.st(MUTED, CANVAS),
+                        CtxRole::TotalFigure => b.st(SECONDARY, CANVAS),
                     };
                     spans.push(Span::styled(text, style));
                 }
@@ -2298,6 +2333,13 @@ impl Builder<'_> {
                 Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
                 Rc::make_mut(b.out.last_mut().unwrap()).context_section = section;
                 Rc::make_mut(b.out.last_mut().unwrap()).context_items = context_items;
+            }
+            if let Some((text, warning)) = worktree {
+                b.line(Vec::new());
+                Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
+                let style = if warning { warn } else { b.st(MUTED, CANVAS) };
+                b.line(vec![Span::raw("  ".to_owned()), Span::styled(text, style)]);
+                Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
             }
             b.line(Vec::new());
             Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
@@ -2543,6 +2585,7 @@ impl Builder<'_> {
                 context_items: Vec::new(),
                 paste: None,
                 indent: 0,
+                links: Vec::new(),
             };
             b.out.push(Rc::new(pad()));
             let available = b.bw.saturating_sub(3);
@@ -2574,6 +2617,7 @@ impl Builder<'_> {
                         context_items: Vec::new(),
                         paste: None,
                         indent: 0,
+                        links: Vec::new(),
                     };
                     let prefix = || {
                         vec![
@@ -2613,6 +2657,7 @@ impl Builder<'_> {
                             context_items: Vec::new(),
                             paste: None,
                             indent: 0,
+                            links: Vec::new(),
                         }));
                     }
                     let mut bottom = prefix();
@@ -2647,6 +2692,7 @@ impl Builder<'_> {
                         context_items: Vec::new(),
                         paste: Some(Rc::clone(paste)),
                         indent: 0,
+                        links: Vec::new(),
                     }));
                 }
             }
@@ -2682,6 +2728,7 @@ impl Builder<'_> {
                     context_items: Vec::new(),
                     paste: None,
                     indent: 0,
+                    links: Vec::new(),
                 }));
             }
             if big && !folded {
@@ -2703,6 +2750,7 @@ impl Builder<'_> {
                     context_items: Vec::new(),
                     paste: None,
                     indent: 0,
+                    links: Vec::new(),
                 }));
             }
             b.out.push(Rc::new(pad()));
@@ -2988,7 +3036,7 @@ impl Builder<'_> {
         }
     }
 
-    /// `<icon> Subagent done · Agent · title`, with the outcome in the error
+    /// `<icon> Agent · title`, with the outcome in the error
     /// colour. Enter opens the modal; its footer opens the child session.
     fn subagent_notice_row(&mut self, m: &crate::api::Message, info: &SubagentNotice, text: &str) {
         let key = format!("notice:{}", m.id);
@@ -3002,8 +3050,8 @@ impl Builder<'_> {
             };
             let sep = b.sep();
             let tail = outcome.map(|o| format!("{sep}{o}")).unwrap_or_default();
-            let used = width(&marker) + width("Subagent done") + width(&tail);
-            let mut detail = format!("{sep}{}", crate::text::capitalize(&info.agent));
+            let used = width(&marker) + width(&tail);
+            let mut detail = crate::text::capitalize(&info.agent);
             if !info.title.is_empty() {
                 detail.push_str(&format!("{sep}{}", info.title));
             }
@@ -3012,7 +3060,6 @@ impl Builder<'_> {
                 Span::styled(" ".repeat(ACTIVITY_INDENT), b.meta()),
                 Span::styled(icon, b.t.agent_style(&info.agent)),
                 Span::styled(" ", b.meta()),
-                Span::styled("Subagent done".to_owned(), b.st(PRIMARY, CANVAS)),
                 Span::styled(detail, b.meta()),
             ];
             if let Some(o) = outcome {
@@ -3109,6 +3156,7 @@ impl Builder<'_> {
                         context_items: Vec::new(),
                         paste: None,
                         indent: 0,
+                        links: Vec::new(),
                     }));
                 };
                 let width_in = bw.saturating_sub(3);
@@ -3197,6 +3245,10 @@ impl Builder<'_> {
                 if !line.spans.is_empty() {
                     line.spans
                         .insert(0, Span::raw(" ".repeat(ASSISTANT_INDENT)));
+                    for (start, end, _) in &mut line.links {
+                        *start += ASSISTANT_INDENT;
+                        *end += ASSISTANT_INDENT;
+                    }
                 }
             }
         });
@@ -3356,7 +3408,17 @@ impl Builder<'_> {
                 b.animated.set(true);
             }
             let marker = Span::styled(
-                format!("{}{} ", " ".repeat(ACTIVITY_INDENT), b.t.fold(open)),
+                format!(
+                    "{}{} ",
+                    " ".repeat(ACTIVITY_INDENT),
+                    if b.t.opts.ascii {
+                        b.t.fold(open)
+                    } else if open {
+                        "▼"
+                    } else {
+                        "▶"
+                    }
+                ),
                 if flash {
                     b.st(ACCENT, CANVAS).add_modifier(Modifier::BOLD)
                 } else {
@@ -3475,7 +3537,7 @@ impl Builder<'_> {
             let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
             let mut head = vec![
                 Span::styled(prefix, muted),
-                Span::styled(label.clone(), muted.add_modifier(Modifier::BOLD)),
+                Span::styled(label.clone(), muted),
             ];
             if !open {
                 let preview = if encrypted {
@@ -3520,10 +3582,7 @@ impl Builder<'_> {
         self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
-            let mut head = vec![
-                Span::styled(prefix, muted),
-                Span::styled(label, muted.add_modifier(Modifier::BOLD)),
-            ];
+            let mut head = vec![Span::styled(prefix, muted), Span::styled(label, muted)];
             if !open {
                 let preview = first_line(text);
                 if !preview.is_empty() {
@@ -4148,6 +4207,7 @@ impl Builder<'_> {
             context_items: Vec::new(),
             paste: None,
             indent: 0,
+            links: Vec::new(),
         };
         self.block(
             key.clone(),
@@ -4175,6 +4235,7 @@ impl Builder<'_> {
                     context_items: Vec::new(),
                     paste: None,
                     indent: 0,
+                    links: Vec::new(),
                 }));
                 if !meta.is_empty() {
                     b.out.push(Rc::new(plain(meta.clone(), secondary)));
@@ -4454,8 +4515,8 @@ impl Builder<'_> {
                 .map(|span| crate::text::width(&span.content))
                 .sum();
             let width = self.bw.saturating_sub(prefix_width).max(1);
-            let parts = crate::markdown::wrap_spans(&row.spans, width);
-            for (index, part) in parts.into_iter().enumerate() {
+            let parts = crate::markdown::wrap_linked_spans(&row.spans, &row.links, width);
+            for (index, (part, links)) in parts.into_iter().enumerate() {
                 let mut spans = if index == 0 {
                     row.prefix.clone()
                 } else {
@@ -4463,6 +4524,14 @@ impl Builder<'_> {
                 };
                 spans.extend(part);
                 self.line(spans);
+                if let Some(line) = self.out.last_mut() {
+                    Rc::make_mut(line).links = links
+                        .into_iter()
+                        .map(|(start, end, target)| {
+                            (prefix_width + start, prefix_width + end, target)
+                        })
+                        .collect();
+                }
                 if let Some(background) = row.bg {
                     if let Some(line) = self.out.last_mut() {
                         Rc::make_mut(line).bg = Some(Style::default().bg(background));
