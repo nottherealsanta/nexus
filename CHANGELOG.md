@@ -15,6 +15,35 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.14.0](https://github.com/nottherealsanta/nexus/compare/v0.13.0...v0.14.0) (2026-11-18)
+
+
+### Features
+
+* **api:** GET /api/session/{id}/open bundle, turns with older message pages, context summary ([1c9b94e](https://github.com/nottherealsanta/nexus/commit/1c9b94e3e56ce596883853eff72c1752a11011f3))
+* **bench:** fixture generator and nexus bench ([13cbdba](https://github.com/nottherealsanta/nexus/commit/13cbdbaa155092f1e270ac1e5df2296f71562960))
+* **core:** start sessions from a worktree notice ([0e661cb](https://github.com/nottherealsanta/nexus/commit/0e661cbc5e76991b66a5ed9f242a444b687dcd0b))
+* **nsh:** open sessions with one /open request; older pages bring their turns; context summary ([bd6b53b](https://github.com/nottherealsanta/nexus/commit/bd6b53b41fd96e960842a3aca7ddfb717a10dd88))
+* **perf:** request timings, event-loop stall watch, nexus perf; plan 50 ([e3e4149](https://github.com/nottherealsanta/nexus/commit/e3e4149efc91a6d940c6b1076c1fa8cf314bcdba))
+* **store:** writer thread, read-only reader pool and async facade; hot read routes and retention off the loop (plan 50 1a) ([011b941](https://github.com/nottherealsanta/nexus/commit/011b9413729746f50213a5558aae4154f64709c2))
+* **tui,nsh:** draft then fixed context header, worktree switch and Markdown links ([ed82428](https://github.com/nottherealsanta/nexus/commit/ed82428f030d849328c4301deee88a713730b15f))
+* **tui:** open sessions with one /open request; older pages bring their turns ([c4978b9](https://github.com/nottherealsanta/nexus/commit/c4978b9e08e3fde3c5521a51201e6931c810b222))
+
+
+### Bug fixes
+
+* **claude:** send user and tool images as Agent SDK image blocks ([ebc7dce](https://github.com/nottherealsanta/nexus/commit/ebc7dceac97a3c2fe92b14b2b97b24ee1d397ca8))
+* **store:** read_transaction ends cleanly when sqlite already rolled back; test read-route write fallback ([40b7ba1](https://github.com/nottherealsanta/nexus/commit/40b7ba12222b460c97f8f3cae12f8236881e2a62))
+* **tui,nsh:** use triangular activity group markers ([25e166f](https://github.com/nottherealsanta/nexus/commit/25e166faa1eee992c914f407851cbbd2bdb0c1b8))
+
+
+### Performance
+
+* **core:** file search, directory listing and file reads off the loop; loop-stall test watchdog; deterministic waits ([e16db20](https://github.com/nottherealsanta/nexus/commit/e16db20a5693ee006b21a92dc1c7afb4f8d5d9e9))
+* **core:** models.dev catalog parse and MCP SDK import off the loop; stall marks after merging A-E ([d0d74ab](https://github.com/nottherealsanta/nexus/commit/d0d74abfba53b013226870894d6025d42f27c6d2))
+* **core:** orjson for API responses and SSE frames; large bodies encode off the loop ([fcd0b9c](https://github.com/nottherealsanta/nexus/commit/fcd0b9c242be9b72997db09d86192f13756e351c))
+* **files:** per-root in-memory index for @ file search; benchmark script; plan 50 phase 3 decision ([0ee7941](https://github.com/nottherealsanta/nexus/commit/0ee79416b9eecdcc4e9dad76514910c8c1f406be))
+
 ## [0.13.0](https://github.com/nottherealsanta/nexus/compare/v0.12.0...v0.13.0) (2026-11-16)
 
 
