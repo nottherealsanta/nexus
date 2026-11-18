@@ -985,6 +985,30 @@ fn the_layout_follows_the_viewed_sessions_worktree() {
     assert_eq!(app.groups().group_count(), 2);
 }
 
+#[test]
+fn new_session_from_a_worktree_session_stays_on_the_draft() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    let project = app.current_project().unwrap();
+    let main = app.state.model.projects[&project].path.clone();
+    let wt = format!("{main}-feature");
+    let listing = serde_json::json!({"worktrees": [{"path": main}, {"path": wt}]});
+    app.state.worktrees.insert(SESSION.into(), listing.clone());
+    app.state.project_worktrees.insert(project.clone(), listing);
+    // The session was first seen in the main checkout, so that layout keeps its tab.
+    app.state.model.sessions.get_mut(SESSION).unwrap().directory = main.clone();
+    draw(&mut app, 160, 48);
+    // It now lives in the worktree, whose layout is current.
+    app.state.model.sessions.get_mut(SESSION).unwrap().directory = wt.clone();
+    draw(&mut app, 160, 48);
+    app.run_command("session.new");
+    draw(&mut app, 160, 48);
+    draw(&mut app, 160, 48);
+    assert!(
+        app.state.model.selected.is_none(),
+        "the main checkout's session replaced the draft"
+    );
+}
+
 /// Two session tabs side by side: SESSION focused (live), "second" in the other group.
 fn two_sessions() -> App {
     let mut app = app_at(160, 48);

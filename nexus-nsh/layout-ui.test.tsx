@@ -289,6 +289,35 @@ describe("tabs and splits (desktop and web)", () => {
     expect(app.shows("id:session-tab-ses_gone")).toBe(false);
   });
 
+  test("New session from a session in a worktree stays on the draft, not the main checkout's session", async () => {
+    // ses_1 lives in a linked worktree; ses_2 in the main checkout, focused in the main checkout's saved layout.
+    const wt = { ...session, directory: "/work/demo-wt" };
+    const main = { ...session, id: "ses_2", continued_from: null, title: "Main checkout work" };
+    const listing = { worktrees: [{ path: "/work/demo", branch: "trunk", main: true }, { path: "/work/demo-wt", branch: "feature", main: false }] };
+    const tabs = (id: string) => JSON.stringify({ v: 1, seq: 1, focus: "g1", root: { type: "group", id: "g1", tabs: [{ kind: "session", id }], active: `session:${id}` } });
+    const net = {
+      ...inputs, ...network,
+      "GET */api/snapshot*": { body: { ...snapshot, sessions: [wt, main] } },
+      "GET */api/session/ses_1/worktrees": { body: { session_directory: "/work/demo-wt", project_directory: "/work/demo", ...listing } },
+      "GET */api/project/prj_1/worktrees": { body: { project_directory: "/work/demo", ...listing } },
+      "GET */api/session/ses_2/worktrees": { body: { session_directory: "/work/demo", project_directory: "/work/demo", ...listing } },
+      "GET */api/session/ses_2/message*": { body: { messages: [], more: false, oldest_seq: null } },
+      "GET */api/session/ses_2/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
+      "GET */api/session/ses_2/snapshot": { body: null },
+      "GET */api/session/ses_2": { body: main },
+      "GET */api/session/ses_1": { body: wt },
+    };
+    const storage = { ...core, "nexus.layout.prj_1.main": tabs("ses_2"), "nexus.layout.prj_1./work/demo-wt": tabs("ses_1") };
+    const app = await open("./App.tsx", { network: net, storage, width: 1500, height: 800, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:session-tab-ses_1");
+    await app.press("id:new-session-row");
+    await app.waitFor("id:new-session-tab");
+    await app.wait(500);
+    expect(app.shows("id:new-session-tab")).toBe(true);
+  });
+
   test("Ctrl+` opens a new terminal in a split below, and the tab shows its name", async () => {
     const app = await open("./App.tsx", { network: withTerminal, storage: core, width: 1500, height: 800, platform: "web" });
     await app.waitFor("text:Refactor loader");

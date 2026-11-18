@@ -59,6 +59,8 @@ no preview (italic) tabs.
 The layout is **client-local** (TUI prefs, NSH `Storage`), keyed by project and worktree, and is not shared through
 Core. On start a client rebuilds the saved layout. Tabs whose resource is gone (closed session, deleted file,
 terminated terminal) are dropped quietly and empty groups collapse. A fresh worktree gets one group with its sessions.
+A new-session draft has no worktree of its own, so it stays in the layout it was opened from; it never loads the main
+checkout's layout, whose focused session would otherwise replace the draft at once (both clients).
 
 Below the width that fits the layout's minimums, the client shows only the focused group, with a marker in its strip
 that others are hidden. The saved layout is kept, not rewritten.

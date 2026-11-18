@@ -398,6 +398,9 @@ export function installLayout() {
     if (!project || !layoutEnabled || (!live() && model.projects.size === 0)) return;
     const key = projectKeyNow();
     if (!key || key === loadedKey || key === loadingKey) return;
+    // A new-session draft has no worktree of its own: it stays in the layout it was opened from. Otherwise the main
+    // checkout's layout would load and its focused session would replace the draft at once.
+    if (!viewed() && centre() === "new_session" && loadedKey?.startsWith(storageKey(project, ""))) return;
     loadingKey = key;
     untracked(() => { void load(key).finally(() => { if (loadingKey === key) loadingKey = null; }); });
   });

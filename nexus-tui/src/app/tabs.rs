@@ -334,6 +334,15 @@ impl App {
         let Some(project) = self.current_project() else {
             return;
         };
+        // A new-session draft has no worktree of its own: it stays in the layout
+        // it was opened from. Otherwise the main checkout's layout would load and
+        // its active session would replace the draft at once.
+        if self.viewed_id().is_none()
+            && self.ui.groups.project.as_deref() == Some(project.as_str())
+            && self.active_tab() == Some(GTab::session(String::new()))
+        {
+            return;
+        }
         // One layout per project and worktree: the viewed session's worktree
         // decides, so moving to a session in another worktree swaps layouts as
         // a project switch does.
