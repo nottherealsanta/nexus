@@ -1449,7 +1449,7 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
     <View class={`py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-7")} hover:bg-accent ${FOCUS}`}>
-        <View class={ACTIVITY_CHEVRON}><Text class={`${META} ${flash() ? "text-primary" : "text-muted-foreground"}`}>{r().open ? "▼" : "▶"}</Text></View>
+        <View class={ACTIVITY_CHEVRON}><Text class={`${META} ${flash() ? "text-primary" : "text-muted-foreground"}`}>{r().open ? "⏷" : "⏵"}</Text></View>
         <If when={r().running} else={<Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${T.secondary}`}>{r().summary}</Text>}>
           <Shimmer text={r().summary} reduced={reduced()} testID="group-working" />
         </If>

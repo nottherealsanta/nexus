@@ -3414,9 +3414,9 @@ impl Builder<'_> {
                     if b.t.opts.ascii {
                         b.t.fold(open)
                     } else if open {
-                        "▼"
+                        "⏷"
                     } else {
-                        "▶"
+                        "⏵"
                     }
                 ),
                 if flash {

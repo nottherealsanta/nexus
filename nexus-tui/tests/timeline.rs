@@ -659,7 +659,7 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
         .unwrap();
     let key = group.key.clone();
     assert_eq!(group.default_open, Some(true));
-    assert!(line_text(&live.lines[group.start]).contains("▼ Working"));
+    assert!(line_text(&live.lines[group.start]).contains("⏷ Working"));
     assert!(live.blocks.iter().any(|b| b.key == "tool:c1"));
     assert_eq!(
         live.lines[group.start].spans.len(),
@@ -724,7 +724,7 @@ fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
         .unwrap();
     assert_eq!(group.key, key);
     assert_eq!(group.default_open, Some(false));
-    assert!(line_text(&done.lines[group.start]).contains("▶ 1 command"));
+    assert!(line_text(&done.lines[group.start]).contains("⏵ 1 command"));
     assert!(!done.blocks.iter().any(|b| b.kind == BlockKind::Tool));
 }
 

@@ -225,7 +225,7 @@ running. Activity groups are 28 px rows with the TUI's content: counts in first-
 order (edits count the files they touch), `+N −M` beside the summary from
 edits that were neither failed nor denied, and `· N denied`; a failed member keeps its `✕`, first error line and a muted `failed`,
 and the folded heading never counts failures. A live group reads `Working` with a shimmer, and a group that has just finished
-flashes its marker the accent, unless animations are off. Group markers are `▼` open and `▶` closed. Group headers, thoughts, tools, child cards and notices
+flashes its marker the accent, unless animations are off. Group markers are `⏷` open and `⏵` closed. Group headers, thoughts, tools, child cards and notices
 share one left icon column and label edge, without a member tree or extra indentation. Tool and thought icons
 are optically sized to match the chevrons (9–14 px SVG canvases; shell 12 px and code 14 px).
 Members use verb icons (the status glyph replaces the icon while running, failed, denied or waiting) and read

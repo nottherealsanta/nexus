@@ -481,7 +481,7 @@ row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
 counts. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
 `3 thoughts, 50 commands, 8 tools, 9 reads` with `+N −M` and `✕ N failed`; a live group is
-`Working` (shimmer) over its newest five members and `… N earlier`. Group markers are `▼` open and `▶` closed (ASCII `v` and `>`); the marker
+`Working` (shimmer) over its newest five members and `… N earlier`. Group markers are `⏷` open and `⏵` closed (ASCII `v` and `>`); the marker
 flashes the accent for six frames when it finishes (not with reduced motion).
 A parent's `fork` call (PLAN.md section 10, F6) is a minor task run like a tool
 call, so it is a tool member, not a child card: `Fork ‹title›` in its activity
