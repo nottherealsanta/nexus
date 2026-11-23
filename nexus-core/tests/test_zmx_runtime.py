@@ -187,18 +187,20 @@ async def test_normal_children_are_unchanged(env):
     assert [p.text for m in rt.store.messages(child.id) for p in m.message.parts if isinstance(p, Text)][-1] == "normal"
 
 
-@pytest.mark.blocks_loop("httpx builds its TLS context (loads the CA bundle, ~100 ms) on the loop at the first models.dev fetch; swap for a prebuilt context later")
-async def test_daemon_with_zmx_off_probes_no_cli_and_registers_no_provider(tmp_path, monkeypatch):
-    """Starting the daemon and serving its provider, model and config routes with ZMX off never looks for a CLI,
-    never spawns one and lists no ZMX provider or model."""
+@pytest.fixture
+def offline_workers_app(tmp_path, monkeypatch):
     import httpx
 
-    from nexus.llmhub.hub import connected
+    from nexus.llmhub.catalog import cache_path
     from nexus.server import build_app
     from nexus.workers import registry
 
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("NEXUS10_AGY_CLI", str(tmp_path / "must-not-run"))
+    catalog = cache_path()
+    catalog.parent.parent.mkdir(mode=0o700)
+    catalog.parent.mkdir()
+    catalog.write_text("{}")
 
     def forbidden(*_a, **_k):
         raise AssertionError("ZMX touched a CLI while switched off")
@@ -214,10 +216,20 @@ async def test_daemon_with_zmx_off_probes_no_cli_and_registers_no_provider(tmp_p
     monkeypatch.setattr(asyncio, "create_subprocess_exec", guarded_exec)
     rt = make_runtime(remembering(Store(tmp_path / "nexus.db"), "mock/m"))
     app = build_app(rt, token="t", url="http://test")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
-                                 headers={"authorization": "Bearer t"}) as client:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                             headers={"authorization": "Bearer t"})
+
+
+async def test_daemon_with_zmx_off_probes_no_cli_and_registers_no_provider(offline_workers_app):
+    """The provider, model and config routes with ZMX off never look for a CLI or list ZMX."""
+    from nexus.llmhub.hub import connected
+    from nexus.workers import registry
+
+    async with offline_workers_app as client:
         providers = (await client.get("/api/provider")).json()
-        models = (await client.get("/api/model")).json()["models"]
+        response = await client.get("/api/model")
+        assert response.status_code == 200, response.text
+        models = response.json()["models"]
         config = (await client.get("/api/config")).json()
     assert not [p for p in providers if p.get("zmx") or p["id"] in registry.IDS]
     assert not [m for m in models if m.get("zmx") or m["ref"].partition("/")[0] in registry.IDS]

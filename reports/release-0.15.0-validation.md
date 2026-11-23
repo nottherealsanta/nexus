@@ -7,9 +7,9 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 ## Continuation (2026-11-23)
 
 - [PR #106](https://github.com/nottherealsanta/nexus/pull/106) removes reverse DNS from the fake Firecrawl server's bind path and logs binding/listening milestones. Core now reports whether the child exited or the last health probe failed. This is not yet a confirmed root cause on hosted macOS. Local macOS: **16 Firecrawl tests passed**.
-- Hosted logs showed synchronous Git and bulk file setup in search tests and synchronous SQLite initialization in terminal HTTP tests. Those now run in synchronous fixtures. The Core suite can still use test catalog caches but no longer attempts live models.dev downloads. The **100 ms watchdog is unchanged**. Local macOS: **62 focused tests passed**; full Core run started.
+- Hosted logs showed synchronous Git and bulk file setup in search tests and synchronous SQLite initialization in terminal HTTP tests. Those now run in synchronous fixtures. The Core suite can still use test catalog caches but no longer attempts live models.dev downloads. The **100 ms watchdog is unchanged**. Local macOS: **62 focused tests passed**; first full pass found one workers-route test still depended on the public catalog (1,784 passed, 2 skipped, 1 failed). It now uses a local cache; rerun pending.
 - The [artifact dry run](https://github.com/nottherealsanta/nexus/actions/runs/45167639327) uses the full commit SHA. The previous attempt used a short SHA that checkout treated as a ref name and never reached the builds.
-- The release workflow currently disables `nsh-web` (v0.14.0 also shipped without it). The handoff lists the bundle, so either validate a hosted NSH build and include it, or get explicit agreement to omit it and say so in the notes. Firecrawl first-time binary redistribution also needs the sign-off recorded in [plan 51](../plans/51-firecrawl.md#not-verified).
+- The user requires the NSH web bundle and signed off on first-time Firecrawl 0.1.1 binary redistribution with its licence and source notice. The artifact workflow now enables `nsh-web` using the locally tested NSH revision and includes the same-origin host; hosted validation is pending.
 
 ## Core: blocking issues
 
@@ -51,6 +51,6 @@ uv run --locked pytest -q --durations=25
 
 ## Publication checklist
 
-1. Verify Core is green on macOS and Ubuntu for the current `main` candidate. Confirm the release PR includes any required fixes. Check the artifact dry run and record the Firecrawl redistribution sign-off and NSH packaging decision.
+1. Verify Core is green on macOS and Ubuntu for the current `main` candidate. Confirm the release PR includes any required fixes. Check the artifact dry run, including NSH web and all four Firecrawl binaries.
 2. Merge [#103](https://github.com/nottherealsanta/nexus/pull/103) to let release-please create `v0.15.0`. Watch the release workflow through the artifact upload step; a tag alone does not mean the assets are ready.
-3. Check the release for Core wheel and sdist, TUI binaries, NSH web bundle if in scope, installer, four Firecrawl binaries, third-party notice, and `SHA256SUMS`. Verify the assets against the checksums and disclose the known NSH issues in the release notes.
+3. Check the release for Core wheel and sdist, TUI binaries, NSH web bundle, installer, four Firecrawl binaries, third-party notice, and `SHA256SUMS`. Verify the assets against the checksums and disclose the known NSH issues in the release notes.

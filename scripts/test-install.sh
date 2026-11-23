@@ -24,7 +24,11 @@ printf 'wheel\n' > "$REL/$WHEEL"
 printf 'binary\n' > "$REL/$TUI"
 FC="firecrawl-local-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 printf 'scraper\n' > "$REL/$FC"
-(cd "$REL" && sums "$WHEEL" "$TUI" "$FC" > SHA256SUMS)
+mkdir -p "$TMP/web/Nexus"
+printf 'nsh web\n' > "$TMP/web/Nexus/index.html"
+printf 'nsh host\n' > "$TMP/web/serve.mjs"
+tar -C "$TMP/web" -czf "$REL/nexus-web.tar.gz" Nexus serve.mjs
+(cd "$REL" && sums "$WHEEL" "$TUI" "$FC" nexus-web.tar.gz > SHA256SUMS)
 
 cat > "$TMP/bin/uv" <<'EOF'
 #!/bin/sh
@@ -79,6 +83,8 @@ run "$TMP/one" > "$TMP/out" 2> "$TMP/err" || { cat "$TMP/err"; fail "a transient
 [ "$(cat "$TMP/one/bin/nexus-tui")" = binary ] || fail "the TUI was not installed"
 [ "$(cat "$TMP/one/bin/firecrawl-local")" = scraper ] || fail "firecrawl-local was not installed"
 [ -x "$TMP/one/bin/firecrawl-local" ] || fail "firecrawl-local is not executable"
+[ "$(cat "$TMP/one/share/nexus/web/Nexus/index.html")" = 'nsh web' ] || fail "the NSH web client was not installed"
+[ "$(cat "$TMP/one/share/nexus/web/serve.mjs")" = 'nsh host' ] || fail "the NSH web host was not installed"
 [ "$(cat "$TMP/attempts")" = 3 ] || fail "the TUI was downloaded $(cat "$TMP/attempts") times, not 3"
 grep -q 'retrying (2/3)' "$TMP/err" || { cat "$TMP/err"; fail "a retry was not announced"; }
 grep -q 'uv tool install .*--no-binary-package claude-agent-sdk .*'"$WHEEL" "$TMP/uv.log" || fail "the Core wheel must build Claude's SDK from source"

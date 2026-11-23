@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **v0.15 NSH release packaging.** Enable the NSH web artifact job, pin the locally validated NSH 0.4.0 revision, and include the loopback host alongside the web assets. The offline installer test covers installing both; hosted build tracked in the [release handoff](../reports/release-0.15.0-validation.md).
+
 - **Core release validation.** Search and terminal HTTP fixtures run blocking setup before the loop starts; the offline suite blocks live models.dev downloads without changing the 100 ms watchdog ([plan 50](50-rust-core.md)).
 
 - **Firecrawl startup diagnostics.** Core reports the child PID and either its exit code or the last health probe result; the stand-in server no longer depends on reverse DNS to listen. All 16 focused tests pass locally; hosted checks pending ([plan 51](51-firecrawl.md)).

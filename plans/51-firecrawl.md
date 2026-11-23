@@ -48,8 +48,8 @@ Playwright, Redis, RabbitMQ, Postgres) is not used. Behaviour is in [tools.md](.
   next release. Not tried: a downloaded macOS binary being quarantined or needing signing.
 - [ ] A release with no firecrawl binary (older releases) leaves the tool saying it is not installed; `install.sh` prints the
   `nexus firecrawl init` hint.
-- [ ] AGPL-3.0: Nexus now **redistributes** the unmodified binary, so the AGPL's source offer applies to it. The release
-  carries `THIRD-PARTY/firecrawl-local.md` (licence, pinned version, where the source is); Nexus talks to it over HTTP as a
-  separate program. Needs the user's or a lawyer's sign-off before the first release that includes it; this is not legal advice.
+- [x] AGPL-3.0: the user signed off on redistributing the unmodified Firecrawl Local 0.1.1 binaries for v0.15.0
+  with `THIRD-PARTY/firecrawl-local.md` (licence, pinned version, where the source is). Nexus talks to the binary over
+  HTTP as a separate program.
 - [ ] Upgrades: the version is pinned once, in `nexus/firecrawl.py` (`VERSION`); the release job, `install.sh` and `init` all
   read it. Moving it is a manual, tested change.
