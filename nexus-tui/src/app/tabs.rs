@@ -386,6 +386,21 @@ impl App {
             }
         }
         self.ui.groups.layout = layout;
+        // The viewed session chose this worktree's layout, so its tab comes
+        // forward (as in NSH). Otherwise the restored focused tab, a session of
+        // another worktree, would open, swap the layout back, and the two
+        // sessions would alternate every tick.
+        if let Some(viewed) = self.viewed_root() {
+            let tab = GTab::session(viewed);
+            let focused = self.ui.groups.layout.focused;
+            if !self.ui.groups.layout.contains(&tab) {
+                self.ui.groups.layout.append(focused, tab.clone());
+            }
+            let hits = self.ui.groups.layout.find(&tab);
+            if let Some(&(g, i)) = hits.iter().find(|(g, _)| *g == focused).or(hits.first()) {
+                self.ui.groups.layout.activate(g, i);
+            }
+        }
         self.ui.groups.key = Some(key);
         self.ui.groups.project = Some(project.clone());
         self.ui.groups.synced = None;

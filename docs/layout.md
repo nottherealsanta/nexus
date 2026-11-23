@@ -61,6 +61,9 @@ Core. On start a client rebuilds the saved layout. Tabs whose resource is gone (
 terminated terminal) are dropped quietly and empty groups collapse. A fresh worktree gets one group with its sessions.
 A new-session draft has no worktree of its own, so it stays in the layout it was opened from; it never loads the main
 checkout's layout, whose focused session would otherwise replace the draft at once (both clients).
+The viewed session chose the worktree, so a restored layout brings that session's tab forward rather than opening
+its own saved focused tab: a session of another worktree would swap the layout back, and the two would alternate
+(both clients).
 
 Below the width that fits the layout's minimums, the client shows only the focused group, with a marker in its strip
 that others are hidden. The saved layout is kept, not rewritten.

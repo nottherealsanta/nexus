@@ -986,6 +986,41 @@ fn the_layout_follows_the_viewed_sessions_worktree() {
 }
 
 #[test]
+fn switching_between_sessions_in_two_worktrees_does_not_alternate() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    let listing = serde_json::json!({"worktrees": [{"path": "/wt/a"}, {"path": "/wt/b"}]});
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "second".into();
+    other.title = "Second task".into();
+    other.directory = "/wt/b".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.state.model.sessions.get_mut(SESSION).unwrap().directory = "/wt/a".into();
+    app.state.worktrees.insert(SESSION.into(), listing.clone());
+    app.state.worktrees.insert("second".into(), listing);
+    draw(&mut app, 160, 48);
+    // Worktree a's layout gets both tabs; the user moves to the second session (worktree b).
+    app.open_session("second");
+    for _ in 0..4 {
+        draw(&mut app, 160, 48);
+    }
+    assert_eq!(app.viewed_id(), Some("second"));
+    // From worktree b's layout, back to the first session: worktree a's layout was saved with
+    // "second" focused, and restoring it must not reopen "second" (and so on, every tick).
+    let tab = Tab::session(SESSION.to_owned());
+    let (g, i) = app.groups().find(&tab)[0];
+    app.ui.groups.layout.activate(g, i);
+    for _ in 0..6 {
+        draw(&mut app, 160, 48);
+        assert_eq!(
+            app.viewed_id(),
+            Some(SESSION),
+            "the view flipped back to the other worktree's session"
+        );
+    }
+    assert_eq!(app.groups().active_tab(), Some(&tab));
+}
+
+#[test]
 fn new_session_from_a_worktree_session_stays_on_the_draft() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     let project = app.current_project().unwrap();
