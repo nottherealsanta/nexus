@@ -1,6 +1,6 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
-import { phoneRow } from "../mobile";
+import { activityCountsText, phoneRow, phoneActivityStatus, type GroupCount } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
@@ -24,6 +24,7 @@ import { END_SLOP, followsAfterScroll, mayFollowQueued } from "../scroll-follow"
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import { Modal, ModalTitle, modalBodyHeight } from "./modal";
+import { PhoneActivityRow } from "./mobile/activity";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
@@ -63,6 +64,8 @@ type RowKind =
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
   | {
       key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
+      /** The group's members from every item, before a running group truncates `items`; a phone summary counts these. */
+      counts: GroupCount[]; toolCount: number; waiting: boolean;
       open: boolean; defaultOpen: boolean; running: boolean; hidden: number; denied: number; diff?: Diff;
     }
   | {
@@ -905,7 +908,7 @@ export function buildRows(): Row[] {
 }
 
 type ActivityEntry = Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>;
-function activitySummary(items: ActivityEntry[]): string {
+function activityCounts(items: ActivityEntry[]): GroupCount[] {
   // Nouns in first-seen order. Edits count the files they touch, not the calls.
   const counts = new Map<string, number>();
   const editFiles = new Set<string>();
@@ -922,8 +925,7 @@ function activitySummary(items: ActivityEntry[]): string {
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
   }
   if (counts.has("edit")) counts.set("edit", Math.max(editFiles.size, 1));
-  // `3 thoughts, 50 commands, 8 tools, 9 reads`; a `search` takes `es`.
-  return [...counts.entries()].map(([noun, count]) => `${count} ${noun}${count === 1 ? "" : noun === "search" ? "es" : "s"}`).join(", ");
+  return [...counts.entries()].map(([noun, count]) => ({ noun, count }));
 }
 
 function groupActivities(rows: Row[], busy: boolean): Row[] {
@@ -937,6 +939,9 @@ function groupActivities(rows: Row[], busy: boolean): Row[] {
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
     const running = (busy && trailing) || items.some((item) => item.kind === "reasoning" ? item.running : item.state === "waiting" || (busy && item.state === "running"));
     const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
+    // A phone's summary row has no members to count, so carry the counts and the tool count over from every item,
+    // before a running group truncates `items` below.
+    const counts = activityCounts(items);
     const detail = timelineDetail();
     const defaultOpen = waiting || detail === "high" || (running && detail !== "low");
     const expanded = waiting || open(key, defaultOpen);
@@ -944,7 +949,8 @@ function groupActivities(rows: Row[], busy: boolean): Row[] {
     const hidden = running && !waiting && detail !== "high" && !explicit ? Math.max(0, items.length - 5) : 0;
     const diffs = tools.filter((tool) => tool.diff !== undefined);
     result.push({
-      key, kind: "activity", summary: running ? "Working" : activitySummary(items), items: items.slice(hidden), inherited: items[0].inherited,
+      key, kind: "activity", summary: running ? "Working" : activityCountsText(counts), items: items.slice(hidden), inherited: items[0].inherited,
+      counts, toolCount: tools.length, waiting,
       open: expanded, defaultOpen, running, hidden,
       denied: tools.filter((tool) => tool.state === "denied").length,
       diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
@@ -1030,7 +1036,16 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
           <ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} />
         </If>
         <If when={r().kind === "activity"}>
-          <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
+          {() => phone
+            // A phone gets one compact, non-expandable summary per group: no members, no tool detail.
+            ? <PhoneActivityRow
+                counts={() => (r() as Extract<Row, { kind: "activity" }>).counts}
+                running={() => (r() as Extract<Row, { kind: "activity" }>).running}
+                waiting={() => (r() as Extract<Row, { kind: "activity" }>).waiting}
+                denied={() => (r() as Extract<Row, { kind: "activity" }>).denied}
+                diff={() => (r() as Extract<Row, { kind: "activity" }>).diff}
+              />
+            : <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />}
         </If>
         <If when={r().kind === "fork"}>
           <ForkRow r={r as () => Extract<Row, { kind: "fork" }>} />

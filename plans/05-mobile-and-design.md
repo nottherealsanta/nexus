@@ -6,8 +6,9 @@ Moved from PLAN.md on 2026-11-11 (5.1 is the old section 5, unchanged). 5.2 and 
 ## 5.1 Mobile cut-down client: Sessions, Manager, Settings
 
 Decision (user, 2026-11-06): mobile (the NSH phone build, iOS and any other mobile target) has **three tabs only:
-Sessions, Manager and Settings**. A session view shows the session's status, the user's messages and the agent's replies
-and nothing else: no tool groups, no context header. Everything else (files, editor, Git, inspector, terminal, browser,
+Sessions, Manager and Settings**. A session view shows the session's status, the user's messages, the agent's replies
+and one compact summary row per tool group (approved 2026-11-23), and nothing else: no context header and no tool
+detail. Everything else (files, editor, Git, inspector, terminal, browser,
 projects overview and the other desktop surfaces) is desktop/web only. Adding anything beyond this needs the user's
 approval. `AGENTS.md` is updated with this change.
 
@@ -15,7 +16,7 @@ Decision (user, 2026-11-09): **mobile gets all slash commands** in its composer 
 
 Decision (user, 2026-11-12): **the iPad shows the desktop/web client, not the phone layout.** There is no iPad app and none is planned. Only `platform.idiom === "phone"` selects the cut-down client (`mobileClient` in `nexus-nsh/src/mobile.ts`); iPad and iPad-in-browser get the desktop layout with every desktop surface. A browser on an iPad is just the web build. If an iOS build ever runs on an iPad it is the desktop client too, so the iPhone-only guards (`desktopOnly`, Settings scope) do not apply to it. Touch targets still follow `touch` (phone or pad idiom).
 
-Implemented in the working tree for iPhone: three tabs, reduced timeline, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
+Implemented in the working tree for iPhone: three tabs, reduced timeline with tool-group summary rows, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
 
 - [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
@@ -23,8 +24,10 @@ Implemented in the working tree for iPhone: three tabs, reduced timeline, compac
 - [~] **Session view:** filtering and compact cards implemented; verified headless and at 390 px in a browser (2026-11-11), simulator open. Status, user messages, agent replies, composer. **Mobile can approve and answer everything a
   desktop client can** (user, 2026-11-06): allow once/always/deny, answer a question (options and free text), choose
   among offered choices, steer/queue/interrupt. It shows less, because the screen is small: a compact card with the
-  command or question and the choices, not the full diff, parameter table or tool group. Define the compact card once
-  and test it at 390 px. Allowed, since an answer is part of "status"; the other tool detail stays out.
+  command or question and the choices, not the full diff or parameter table. A tool group is one compact,
+  always-collapsed, non-expandable summary row (`1 thought, 2 commands`, running/waiting/done, `+N −M`), with no
+  members or tool detail (user, 2026-11-23). Define the compact card once and test it at 390 px. Allowed, since an
+  answer is part of "status"; the other tool detail stays out.
 - [x] **Settings:** mobile scope in the manifest selects the sections/rows that apply (Providers sign-in, Appearance, Notifications, Voice, About; hide Agents,
   Tools, Skills, MCP, Hooks, Files/Editor, Terminal). List them in the manifest under a `mobile` scope.
 - [x] **Remove** desktop capabilities from the iPhone build, including command and session-menu guards (4 rule tests pass). Excluded: Files tab, editor, Git, inspector, terminal, browser, overview, project rail
@@ -88,13 +91,23 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
 
 Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device.
 
-Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims; 2026-11-12 the conversation now slides aside by the drawer width, headless tests pass, not seen on a device). Search is the always-visible field in the list and drawer rather than a separate button.
+Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims; 2026-11-12 the conversation now slides aside by the drawer width, headless tests pass, not seen on a device). On 2026-11-23 the bottom tabs were kept visible in conversations so the three sections remain reachable; device verification remains open. Search is the always-visible field in the list and drawer rather than a separate button.
+
+Tool summaries (user, 2026-11-23): the phone timeline keeps tool groups in their original order as one raised rounded
+row each, always collapsed and non-expandable: a status badge (spinner while working, `◆` waiting, `✓` done), the
+group's counts from every member (`phoneActivityStatus`, `activityCountsText` in `nexus-nsh/src/mobile.ts`;
+`GroupCount` is carried before a running group truncates its members), its diff when it has one, and a trailing
+`Working` / `Waiting` / `Done` (or `N denied`). No command, path, output, diff detail or member row is rendered, and
+an approval keeps its own card above the composer. The spinner falls back to a still glyph under reduced motion.
+Desktop/web keep the expandable group unchanged. Tests: `phone-redesign.test.tsx` (order, no members, running counts
+past truncation, waiting and its approval) and `mobile.test.ts`; 390 px dark and light browser screenshots were checked,
+not a device.
 
 Questions for the user before building. **All four defaults confirmed by the user on 2026-11-11 (recorded in [decisions.md](decisions.md)); `nexus pair` is implemented:**
 
 | Question | Default |
 | --- | --- |
-| A `Used 22 tools · 1 failed` summary line between replies would add tool information to mobile, which AGENTS.md excludes | **Leave it out** unless the user approves it; it would then need a rule change in AGENTS.md |
+| A `Used 22 tools · 1 failed` summary line in the sessions list would add tool information mobile does not otherwise show | **Leave it out**; the conversation's tool-group summary rows are the approved exception (2026-11-23) |
 | Pinned sessions and a "Catch up" (unread digest) row: Nexus has neither concept today | Leave out; *Needs you* covers the urgent part |
 | Pairing needs a desktop command that prints a QR code / link with the Core address and token (e.g. `nexus pair`) | Add `nexus pair` to the Core CLI (prints address, token, QR in the terminal); no relay service |
 | Project switcher on mobile: does it filter the list or also set the project for new sessions? | Both, like the desktop rail |

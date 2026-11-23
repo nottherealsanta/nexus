@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Phone tool-group summaries.** The phone conversation keeps tool groups in order as compact, always-collapsed, non-expandable rows with working/waiting/done status, counts from every member and the diff, and no tool detail; approvals stay usable and desktop is unchanged ([plan 05](05-mobile-and-design.md)).
+
 - **Large-read regression test.** Assert reader and encoder thread placement for all three large history/snapshot responses rather than a scheduler-dependent ticker deadline. Worker and worktree test setup also moved off-loop; 42 focused tests passed ([plan 50](50-rust-core.md)).
 
 - **Core loop stalls from MCP setup.** Load the schema validator and construct transports off-loop; recheck the captured configuration before opening the transport. Worker tests also move database setup off-loop. 165 focused tests passed ([plan 50](50-rust-core.md)).
@@ -286,3 +288,6 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
 - **Plan 39 landed (2026-11-16).** A linked worktree header shows only when two or more root sessions of it are listed (archived filter and scope applied, recounted on change), in the TUI and NSH (NSH gained the header and the TUI order: main checkout, then worktrees by path). Captures in `reports/39-worktree-header/`. Also: the NSH project MCP panel is mounted in the new-session view again.
 - **Plan 37 landed in part (2026-11-16).** Pending working row, phases, queue-while-disconnected, refusal strip, Retry after 10 s in both clients and mobile; `/prompt` shares it; Core existence check. Timing runs still to record. `reports/37-continue-feedback/`.
 - **0.13.0 released (2026-11-16)** as is, at the user's request: `v0.13.0` published, assets verified; NSH full web suite stopped, plans 34/37 open items carried over ([validation](../reports/release-0.13.0-validation.md)).
+# 2026-11-23: Phone conversation navigation
+
+The Sessions, Manager and Settings tabs remain visible in a phone conversation; headless phone tests pass, physical-device verification remains open (plan 05).

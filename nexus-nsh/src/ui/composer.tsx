@@ -467,7 +467,7 @@ function EditableComposer() {
   );
   return (
     <View class="w-full" testID="composer-area">
-    <View class="w-full bg-background" style={{ paddingBottom: phone && keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="composer-dock"
+    <View class="w-full bg-background" style={{ paddingBottom: phone ? 0 : safeArea().bottom }} testID="composer-dock"
       onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
         <View

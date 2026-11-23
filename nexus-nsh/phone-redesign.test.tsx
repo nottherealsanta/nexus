@@ -53,13 +53,16 @@ function network(extra: Record<string, any> = {}) {
   } as Record<string, any>;
 }
 
-async function openPhone(extra: Record<string, any> = {}) {
-  const app = await open("./App.tsx", { network: network(extra), width: 390, height: 844, platform: "ios", storage: { "nexus.core": "http://nexus.invalid:4747" } });
+async function openPhone(extra: Record<string, any> = {}, routes: Record<string, any> = {}) {
+  const app = await open("./App.tsx", { network: { ...network(extra), ...routes }, width: 390, height: 844, platform: "ios", storage: { "nexus.core": "http://nexus.invalid:4747" } });
   await app.waitFor("id:splash", { state: "gone" });
   await app.waitFor("id:session-ses_1");
   return app;
 }
 const posts = (app: any, suffix: string) => app.requests().filter((r: any) => r.method === "POST" && r.url.endsWith(suffix));
+
+const message = (id: string, seq: number, role: string, parts: any[]) => ({ id, session_id: "ses_1", seq, role, parts, created: seq });
+const call = (id: string, name = "bash", args: Record<string, unknown> = { command: `echo ${id}` }) => ({ type: "tool_call", id, name, arguments: JSON.stringify(args) });
 
 describe("phone sessions (plans/05 5.2)", () => {
   test("lists Needs you with its count, Running, then Recent, and marks the waiting row", async () => {
@@ -143,13 +146,82 @@ describe("phone sessions (plans/05 5.2)", () => {
 describe("phone ignores the tab layout (plan 45)", () => {
   test("a session view has no group strip, tabs, splits or saved layout, and the three tabs stay", async () => {
     const app = await openPhone();
-    // The three tabs on the list screen; the conversation is a page over them (its drawer switches sessions).
+    // The three main tabs remain accessible on both the list and conversation screens.
     for (const tab of ["sessions", "manager", "settings"]) expect(app.shows(`id:phone-tab-${tab}`)).toBe(true);
     expect(app.count("id:phone-tabs")).toBe(1);
     await app.press("id:session-ses_1");
     await app.waitFor("id:phone-conversation");
+    for (const tab of ["sessions", "manager", "settings"]) expect(app.shows(`id:phone-tab-${tab}`)).toBe(true);
+    await app.press("id:phone-tab-settings");
+    await app.waitFor("id:connection-card");
+    await app.press("id:phone-tab-sessions");
+    await app.waitFor("id:session-ses_1");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:phone-conversation");
+    await app.press("id:phone-tab-manager");
+    await app.waitFor("id:phone-tab-title");
+    await app.press("id:phone-tab-sessions");
+    await app.waitFor("id:session-ses_1");
     for (const id of ["groups", "group-strip-g1", "group-menu-g1", "session-tab-ses_1", "new-session-tab", "terminal-panel", "file-panel"]) expect(app.shows(`id:${id}`)).toBe(false);
     expect(Object.keys(await app.storage()).some((k) => k.startsWith("nexus.layout."))).toBe(false);
+  });
+});
+
+describe("phone tool summaries (plans/05 5.1, user 2026-11-23)", () => {
+  test("keeps each tool group in order as one compact summary, with no members or tool detail", async () => {
+    const messages = [
+      message("m1", 1, "user", [{ type: "text", text: "First" }]),
+      message("m2", 2, "assistant", [call("a1"), call("a2")]),
+      message("m3", 3, "assistant", [{ type: "text", text: "Between" }]),
+      message("m4", 4, "assistant", [call("a3", "read", { path: "secret/a.txt" })]),
+    ];
+    const app = await openPhone({}, { "GET */api/session/ses_1/message*": { body: messages } });
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:phone-activity");
+    const texts = app.texts();
+    const at = (text: string) => texts.indexOf(text);
+    expect(at("First") >= 0 && at("2 commands") > at("First")).toBe(true);
+    expect(at("Between") > at("2 commands") && at("1 read") > at("Between")).toBe(true);
+    expect(app.count("id:phone-activity")).toBe(2);
+    expect(app.count("id:phone-activity-done")).toBe(2);
+    // Always collapsed and non-expandable: no member row, no tool row (so no command, path or diff), no earlier-items line.
+    expect(app.count("id:activity-member")).toBe(0);
+    expect(app.count("id:tool-row-a1")).toBe(0);
+    expect(texts.join(" ").includes("echo a1") || texts.join(" ").includes("secret/a.txt")).toBe(false);
+  });
+
+  test("a running group counts every member, including the ones it truncates", async () => {
+    const messages = [
+      message("m1", 1, "user", [{ type: "text", text: "Go" }]),
+      message("m2", 2, "assistant", [{ type: "reasoning", summary: "Splitting the rebuild into batches." }, ...Array.from({ length: 7 }, (_, i) => call(`a${i + 1}`))]),
+    ];
+    const snapshot = {
+      watermark: { generation: "log_t", head: 0, floor: 0, head_cursor: "log_t:0" },
+      projects, sessions: sessions.map((s) => s.id === "ses_1" ? { ...s, status: "busy" } : s),
+      running: [{ id: "trn_1", session_id: "ses_1" }], approvals: [approval], questions: [], selected: null,
+    };
+    const app = await openPhone({}, {
+      "GET */api/snapshot*": { body: snapshot },
+      "GET */api/session/ses_1": { body: { ...sessions[0], status: "busy" } },
+      "GET */api/session/ses_1/message*": { body: messages },
+    });
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:phone-activity-running");
+    expect(app.texts()).toContain("1 thought, 7 commands");
+    expect(app.texts()).not.toContain("1 thought, 5 commands");
+    expect(app.count("id:activity-member")).toBe(0);
+    expect(app.texts().join(" ").includes("earlier")).toBe(false);
+  });
+
+  test("a waiting group says so and leaves its approval card usable", async () => {
+    const messages = [message("m1", 1, "assistant", [call("c1", "bash", { command: "rm -rf build" }), call("c2")])];
+    const app = await openPhone({}, { "GET */api/session/ses_2/message*": { body: messages } });
+    await app.press("id:session-ses_2");
+    await app.waitFor("id:phone-activity-waiting");
+    await app.waitFor("id:phone-approval");
+    expect(app.texts()).toContain("2 commands");
+    await app.press("id:allow-once");
+    await app.waitUntil(() => posts(app, "/permission/perm_1").length === 1);
   });
 });
 

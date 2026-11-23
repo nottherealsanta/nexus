@@ -1,5 +1,5 @@
 import { describe, expect, test } from "nsh/test";
-import { PHONE_TABS, compactApproval, connectProblem, desktopOnly, healthSummary, mobileSettings, parsePairing, phoneRow, phoneStatus, mobileClient, projectDot, pushSample, rememberCore, sessionSections, traceBars, transportOf, phoneSessionGroups } from "./src/mobile";
+import { PHONE_TABS, activityCountsText, compactApproval, connectProblem, desktopOnly, healthSummary, mobileSettings, parsePairing, phoneActivityStatus, phoneRow, phoneStatus, mobileClient, projectDot, pushSample, rememberCore, sessionSections, traceBars, transportOf, phoneSessionGroups } from "./src/mobile";
 import { manifest } from "./src/gen/manifest";
 
 describe("mobile client rules", () => {
@@ -23,6 +23,16 @@ describe("mobile client rules", () => {
     expect(phoneRow({ kind: "diag", tone: "error" })).toBe(true);
     // A fork's inherited block stays on a phone, folded with the desktop's wording.
     expect(phoneRow({ kind: "fork" })).toBe(true);
+    // A tool group is one summary row (user, 2026-11-23); its members do not follow it.
+    expect(phoneRow({ kind: "activity", toolCount: 2 })).toBe(true);
+    expect(phoneRow({ kind: "activity", toolCount: 0 })).toBe(false);
+  });
+  test("summarizes a phone's tool group from every member and prioritizes its status", () => {
+    expect(activityCountsText([{ noun: "command", count: 3 }, { noun: "read", count: 1 }, { noun: "search", count: 2 }])).toBe("3 commands, 1 read, 2 searches");
+    expect(activityCountsText([])).toBe("");
+    expect(phoneActivityStatus({ waiting: true, running: true })).toEqual({ status: "waiting", word: "Waiting", tone: "warning" });
+    expect(phoneActivityStatus({ waiting: false, running: true })).toEqual({ status: "running", word: "Working", tone: "info" });
+    expect(phoneActivityStatus({ waiting: false, running: false })).toEqual({ status: "done", word: "Done", tone: "success" });
   });
   test("summarizes approvals and prioritizes waiting status", () => {
     expect(compactApproval({ tool: "bash", args: { command: "ls\npwd" } })).toBe("ls …");

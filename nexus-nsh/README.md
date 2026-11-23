@@ -153,11 +153,14 @@ and web are unchanged):
   `Working` with a spinner, or the project. Long press opens the row menu (Rename, Archive or Unarchive); pull down to
   refresh. Pinned sessions, a catch-up digest and a "Used N tools" line do not exist on mobile (decided 2026-11-11).
 - **A conversation** has a compact header (a sessions button, the title, the project and status as a subtitle, a status
-  ring, and an overflow menu with Rename and Archive), the user's messages and the agent's replies. The **session
+  ring, and an overflow menu with Rename and Archive), the user's messages and the agent's replies. A tool group is one
+  compact, always-collapsed summary row in timeline order: `1 thought, 2 commands` with a running, waiting or done
+  status and its `+N −M`; it never expands, so a command, path, output or diff is not shown. The **session
   drawer** (`EdgeDrawer`) slides over the conversation from the header button or a rightward drag from a 20 px strip on
   the left edge (it claims only a mostly horizontal move, so scrolling and a code block's own horizontal scroll are
   untouched; the app has no navigation stack, so there is no iOS back-swipe to fight). It is the Sessions list with the
-  same search and project switcher; a row opens that session and closes it. The tab bar is hidden in a conversation.
+  same search and project switcher; a row opens that session and closes it. The bottom tabs remain visible in a
+  conversation: Sessions returns to the list, and Manager and Settings open directly.
 - **Approvals** show the command in a compact block, `Allow once` and `Always allow` (this session) as two big
   buttons, then "Tell it what to do instead" with `Deny` (the text goes to the model with the refusal). All targets are
   at least 44 px; the shell pads by `keyboardFrame()` so the keyboard never covers the card or composer, and the bars

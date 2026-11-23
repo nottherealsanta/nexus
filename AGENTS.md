@@ -20,15 +20,17 @@ for deliberate changes from old Nexus.
 - **Mobile is a cut-down client.** iOS and any other mobile target (NSH) has three tabs only:
   Sessions, Manager and Settings (the user may talk to the Manager, view sessions and change the
   settings that apply). A session view shows the session's status, the
-  user's messages and the agent's replies, and nothing else: no tool groups and no
-  context header. Mobile can still approve and answer everything a desktop client can
-  (allow/deny, questions), through a compact card. Everything else (file explorer, file editor, Git management, the
+  user's messages, the agent's replies and one compact, always-collapsed, non-expandable summary row
+  per tool group (in timeline order: running/waiting/finished, the group's counts and diff, no member
+  or tool detail), and nothing else: no context header. Mobile can still approve and answer everything
+  a desktop client can (allow/deny, questions), through a compact card. Everything else (file explorer, file editor, Git management, the
   integrated terminal and browser, the inspector and the other desktop surfaces) is for
   the TUI and NSH on desktop and web only. The peer rule above applies between the TUI
   and NSH desktop/web. Mobile leaving something out needs no ledger row, but adding
   anything to mobile beyond this list needs the user's approval. Approved (2026-11-09): mobile
   gets all slash commands (for example `/btw`). Approved (2026-11-12): long-press Send offers Queue / Interrupt and send;
-  the iPad runs the desktop/web client, not this one (no iPad app).
+  the iPad runs the desktop/web client, not this one (no iPad app). Approved (2026-11-23): the phone
+  shows tool groups as summary rows, which replaces the earlier "no tool groups" rule.
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.

@@ -79,7 +79,7 @@ function EdgeSwipe() {
   return <View {...pan.panHandlers} class="absolute left-0 top-0 bottom-0 w-5" testID="phone-edge-swipe" accessible={false} />;
 }
 
-/** The phone client: Sessions, Manager and Settings tabs; a session opens full screen with a drawer of sessions. */
+/** The phone client: Sessions, Manager and Settings remain available during a conversation. */
 export function PhoneShell() {
   // Leaving the Manager tab closes the Manager's panel; opening the tab opens it, as the header indicator does on a desktop.
   effect(() => {
@@ -108,17 +108,15 @@ export function PhoneShell() {
       </If>
       <Drawers />
     </View>
-    <If when={!conversation()}>
       <View class="flex-row border-t border-border bg-sidebar" style={{ paddingTop: 10, paddingBottom: keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="phone-tabs">
         <Each of={PHONE_TABS} key={(tab) => tab.id}>
-          {(tab) => <Button onPress={() => phonePage.set(tab().id)} selected={phonePage() === tab().id} accessibilityLabel={tab().label} testID={`phone-tab-${tab().id}`} class={`relative flex-1 items-center justify-center gap-1 min-h-14 ${FOCUS}`}>
-            <Icon name={tab().icon} size={22} class={phonePage() === tab().id ? "tint-foreground" : "tint-muted-foreground"} />
-            <Text class={`font-(family-name:--font-ui) text-[12px] leading-4 ${phonePage() === tab().id ? "text-foreground font-semibold" : "text-muted-foreground font-medium"}`}>{tab().label}</Text>
+          {(tab) => <Button onPress={() => { Keyboard.dismiss(); phonePage.set(tab().id); }} selected={phonePage() === tab().id || (conversation() && tab().id === "sessions")} accessibilityLabel={tab().label} testID={`phone-tab-${tab().id}`} class={`relative flex-1 items-center justify-center gap-1 min-h-14 ${FOCUS}`}>
+            <Icon name={tab().icon} size={22} class={phonePage() === tab().id || (conversation() && tab().id === "sessions") ? "tint-foreground" : "tint-muted-foreground"} />
+            <Text class={`font-(family-name:--font-ui) text-[12px] leading-4 ${phonePage() === tab().id || (conversation() && tab().id === "sessions") ? "text-foreground font-semibold" : "text-muted-foreground font-medium"}`}>{tab().label}</Text>
             <If when={tab().id === "manager" && managerDot()}><View testID="phone-tab-manager-dot" class="absolute top-2 size-2 rounded-full bg-warning" style={{ marginLeft: 22 }} /></If>
           </Button>}
         </Each>
       </View>
-    </If>
     <PhoneSheets />
   </View>;
 }

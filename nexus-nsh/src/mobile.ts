@@ -62,13 +62,31 @@ export function desktopOnly(id: string): boolean {
 
 /**
  * The rows a phone session view keeps: the user's messages, the agent's replies (live ones too), the control that
- * loads older history, a fork's inherited block, and failures, which are the session's status. Context, thoughts, tools, children,
- * handoffs, turn footers and other notices stay on the desktop.
+ * loads older history, a fork's inherited block, failures, which are the session's status, and a tool group as one
+ * compact summary row (user, 2026-11-23). Context, individual tools and thoughts, children, handoffs, turn footers and
+ * other notices stay on the desktop.
  */
-export function phoneRow(row: { kind: string; tone?: string }): boolean {
+export function phoneRow(row: { kind: string; tone?: string; toolCount?: number }): boolean {
   // A fork's inherited block stays, folded with the desktop's wording; open, its messages are filtered like any other.
   if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork" || row.kind === "pending") return true;
+  // A group of only thoughts is no group (the timeline keeps each thought as its own row), so a group row always has
+  // at least one tool; the count is checked so a future caller cannot show an empty summary.
+  if (row.kind === "activity") return (row.toolCount ?? 0) > 0;
   return row.kind === "diag" && row.tone === "error";
+}
+
+export interface GroupCount { noun: string; count: number }
+
+/** `3 commands, 1 read`: a tool group's members, from every item even when a running group shows only its last five. */
+export function activityCountsText(counts: readonly GroupCount[]): string {
+  return counts.map(({ noun, count }) => `${count} ${noun}${count === 1 ? "" : noun === "search" ? "es" : "s"}`).join(", ");
+}
+
+/** The phone summary row's status, in the order the user acts on it: waiting outranks running, as the header does. */
+export function phoneActivityStatus(g: { waiting: boolean; running: boolean }): { status: "waiting" | "running" | "done"; word: string; tone: "warning" | "info" | "success" } {
+  if (g.waiting) return { status: "waiting", word: "Waiting", tone: "warning" };
+  if (g.running) return { status: "running", word: "Working", tone: "info" };
+  return { status: "done", word: "Done", tone: "success" };
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
