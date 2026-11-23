@@ -15,6 +15,19 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.15.0](https://github.com/nottherealsanta/nexus/compare/v0.14.0...v0.15.0) (2026-11-23)
+
+
+### Features
+
+* add onboarding, remote MCP, and external worker improvements ([dbc87f8](https://github.com/nottherealsanta/nexus/commit/dbc87f8decdd6e76ab84be6f38f1004ad3ac9232))
+
+
+### Bug fixes
+
+* **core:** unblock v0.15 release validation ([#106](https://github.com/nottherealsanta/nexus/issues/106)) ([de2d746](https://github.com/nottherealsanta/nexus/commit/de2d74637a939914be7da415fa144f2c12b088e1))
+* **tui,nsh:** New session from a worktree session stays on the draft ([077af1d](https://github.com/nottherealsanta/nexus/commit/077af1da863ac22e573634fc36212b71e8c9bbd8))
+
 ## [0.14.0](https://github.com/nottherealsanta/nexus/compare/v0.13.0...v0.14.0) (2026-11-18)
 
 
