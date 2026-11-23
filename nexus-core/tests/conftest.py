@@ -44,6 +44,8 @@ def remembering(store, model):
 #                                     tracked in plans/50-rust-core.md); the reason is required
 #
 # Wall time is measured, so a machine under heavy load can inflate a step; the limit leaves headroom for that.
+# Garbage-collection time inside a step is shown but not counted against the limit (see `_timed_run`). A step that
+# runs past half the limit has its stack sampled, so a stall names the code that was blocking.
 import asyncio.events as _events
 import os as _os
 import threading as _threading
@@ -57,21 +59,78 @@ _stalls: list[tuple[float, float, str]] = []
 _all_stalls: list[tuple[str, float, float, str]] = []
 _stalls_lock = _threading.Lock()
 
+# A stalled step's sampled stack says what was running (a callback repr like `task_wakeup` alone says nothing);
+# only the latest sample is kept per running step.
+_running: dict[int, list] = {}  # thread id -> [start, sampled stack or None, gc ms, gc start]
+
+
+def _gc_timer(phase: str, info: dict) -> None:
+    slot = _running.get(_threading.get_ident())
+    if slot is None:
+        return
+    if phase == "start":
+        slot[3] = _time.perf_counter()
+    elif slot[3] is not None:
+        slot[2] += (_time.perf_counter() - slot[3]) * 1000
+        slot[3] = None
+
+
+def _sample_stacks() -> None:
+    import sys
+    import traceback
+
+    while True:
+        _time.sleep(_STALL_MS / 4000)
+        now = _time.perf_counter()
+        frames = None
+        for tid, slot in list(_running.items()):
+            if now - slot[0] < _STALL_MS / 2000:
+                continue
+            frames = frames or sys._current_frames()
+            frame = frames.get(tid)
+            if frame is not None:
+                slot[1] = traceback.extract_stack(frame)
+
+
+def _format_stack(stack) -> str:
+    keep = [f for f in stack if "/asyncio/" not in f.filename and "/_pytest/" not in f.filename
+            and "/pluggy/" not in f.filename and "conftest.py" not in f.filename]
+    return "".join(f"      {f.filename.rsplit('/site-packages/', 1)[-1]}:{f.lineno} {f.name}\n" for f in keep[-12:])
+
+
 if _STALL_MS > 0:
     _original_run = _events.Handle._run
 
     def _timed_run(self):
-        wall, cpu = _time.perf_counter(), _time.thread_time()
+        tid = _threading.get_ident()
+        outer = _running.get(tid)
+        slot = [_time.perf_counter(), None, 0.0, None]
+        _running[tid] = slot
+        wall, cpu = slot[0], _time.thread_time()
         try:
             return _original_run(self)
         finally:
+            if outer is None:
+                _running.pop(tid, None)
+            else:
+                _running[tid] = outer
             took = (_time.perf_counter() - wall) * 1000
-            if took >= _STALL_MS:
+            # A full collection scans the whole test process's heap (1,700+ tests' worth), so its pause depends on
+            # where in the run a step lands, not on the code under test; only the step's own time counts.
+            if took - slot[2] >= _STALL_MS:
                 what = repr(self._callback)[:240]
+                if slot[2] >= 1:
+                    what += f" (garbage collection: {slot[2]:.0f} ms)"
+                if slot[1] is not None:
+                    what += "\n    sampled while blocked:\n" + _format_stack(slot[1]).rstrip()
                 with _stalls_lock:
                     _stalls.append((took, (_time.thread_time() - cpu) * 1000, what))
 
     _events.Handle._run = _timed_run
+    import gc as _gc
+
+    _gc.callbacks.append(_gc_timer)
+    _threading.Thread(target=_sample_stacks, name="loop-stall-sampler", daemon=True).start()
 
 
 def pytest_configure(config):

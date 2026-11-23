@@ -6,11 +6,11 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 
 ## Continuation (2026-11-23)
 
-- [PR #106](https://github.com/nottherealsanta/nexus/pull/106) removes reverse DNS from the fake Firecrawl server's bind path and logs binding/listening milestones. Core now reports whether the child exited or the last health probe failed. This is not yet a confirmed root cause on hosted macOS. Local macOS: **16 Firecrawl tests passed**.
+- [PR #106](https://github.com/nottherealsanta/nexus/pull/106) removes reverse DNS from the fake Firecrawl server's bind path and logs binding/listening milestones. Core now reports whether the child exited or the last health probe failed. All 16 Firecrawl tests passed locally; the latest hosted macOS run reports no Firecrawl failures.
 - Hosted logs showed synchronous Git and bulk file setup in search tests and synchronous SQLite initialization in terminal HTTP tests. Those now run in synchronous fixtures. The Core suite can still use test catalog caches but no longer attempts live models.dev downloads. The **100 ms watchdog is unchanged**. Local macOS: **62 focused tests passed**; after switching the workers-route test to a local cache, all **1,785 test assertions passed**, with 2 skips and one watchdog teardown error in input integration (142 ms wall / 23 ms thread CPU).
 - The user requires the NSH web bundle and signed off on first-time Firecrawl 0.1.1 binary redistribution with its licence and source notice. The artifact workflow now enables `nsh-web` using the locally tested NSH revision. NSH type check, **11 host tests**, web build, archive extraction and a real request to the extracted host passed locally. The offline installer test verifies the app and host land in the installed web directory.
-- Candidate `e12f45df`: [Core matrix](https://github.com/nottherealsanta/nexus/actions/runs/45168617662) and [full artifact dry run, including NSH](https://github.com/nottherealsanta/nexus/actions/runs/45168609035) pending. The [earlier dry run without NSH](https://github.com/nottherealsanta/nexus/actions/runs/45167639327) built and ran `--version` on both Linux Firecrawl binaries; it does not verify the final candidate.
-- The latest finished Ubuntu Core job ([prior candidate](https://github.com/nottherealsanta/nexus/actions/runs/45167835891/job/137669627607)) had 1,773 passed, 13 skipped, the since-fixed workers-route failure, and two watchdog errors (event-log lifecycle and interrupt/queue). Follow-up moves event-log seeding, SQLite open/close and HTTP app setup off the loop in those tests; **13 focused tests pass**, including the input test named by the local watchdog. The matching macOS run was superseded, so it did not confirm the Firecrawl fixture fix.
+- [Hosted artifact dry run](https://github.com/nottherealsanta/nexus/actions/runs/45168609035) **passed** on `e12f45df`: Core wheel and source archive, four TUI binaries, four Firecrawl binaries and the required NSH web archive. The eight binaries match their named architectures. The downloaded NSH archive contains `Nexus/index.html` and `serve.mjs`, and the extracted host served that index locally (HTTP 200). These are dry-run artifacts, not assets from the v0.15.0 tag.
+- The latest finished [Core matrix](https://github.com/nottherealsanta/nexus/actions/runs/45169211926) on `c230c75e` has no assertion failures, but both platforms had nine missing `inputs_runtime` fixture errors in `test_interrupt_prompt.py` and `test_prompt_history.py`. In addition, the watchdog reported seven errors on macOS and two on Ubuntu. The release remains blocked on a green hosted Core matrix.
 
 ## Core: blocking issues
 
@@ -18,8 +18,9 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 | --- | --- | --- |
 | [Feature PR run](https://github.com/nottherealsanta/nexus/actions/runs/45162026752) | 1,763 passed, 14 skipped, 9 failures, 21 errors | 1,773 passed, 13 skipped, 13 errors |
 | [Fixture follow-up run](https://github.com/nottherealsanta/nexus/actions/runs/45164380048) | 1,763 passed, 14 skipped, 9 failures, 33 errors | 1,773 passed, 13 skipped, 6 errors |
+| [PR #106, `c230c75e`](https://github.com/nottherealsanta/nexus/actions/runs/45169211926) | 1,764 passed, 14 skipped, 16 errors (9 fixtures, 7 watchdog) | 1,765 passed, 13 skipped, 11 errors (9 fixtures, 2 watchdog) |
 
-### macOS: fake Firecrawl never becomes ready
+### macOS: fake Firecrawl startup (passed on `c230c75e`)
 
 All nine assertion/test failures are in `nexus-core/tests/test_firecrawl.py`. They share a startup problem: the fake `firecrawl-local` never answers `/health` successfully. The refused-target test also fails because the startup error arrives instead of the expected target error. This is evidence about the fixture path, not a verified failure of the real Firecrawl binary.
 

@@ -42,10 +42,11 @@ Playwright, Redis, RabbitMQ, Postgres) is not used. Behaviour is in [tools.md](.
 - [ ] NSH: the test runner (`nsh`) is not installed here, so NSH's settings and timeline edits are checked by reading only.
   Paired TUI/NSH screenshots of the Tools grid and a `firecrawl` row are not captured.
 - [ ] Whether a model picks `firecrawl` over `web_fetch` sensibly; look at real sessions after a week.
-- [ ] **Release path unrun.** `scripts/test-install.sh` covers the installer offline (passes), but the new `firecrawl` job in
-  `build-artifacts.yml` has never run on CI: the Linux (glibc 22.04, x86_64 and arm64) and macOS x86_64 builds of
-  `firecrawl-local` are untried, and no real release has carried it. Run the workflow's `workflow_dispatch` dry run before the
-  next release. Not tried: a downloaded macOS binary being quarantined or needing signing.
+- [x] **Hosted dry run.** The [artifact workflow](https://github.com/nottherealsanta/nexus/actions/runs/45168609035)
+  built and ran `--version` on Firecrawl Local for Linux x86_64 and arm64 and macOS x86_64 and arm64. Downloaded
+  binaries matched their named architectures. `scripts/test-install.sh` covers the installer offline.
+- [ ] Verify binaries from the published release against `SHA256SUMS`. Not tried: a downloaded macOS binary being
+  quarantined or needing signing.
 - [ ] A release with no firecrawl binary (older releases) leaves the tool saying it is not installed; `install.sh` prints the
   `nexus firecrawl init` hint.
 - [x] AGPL-3.0: the user signed off on redistributing the unmodified Firecrawl Local 0.1.1 binaries for v0.15.0

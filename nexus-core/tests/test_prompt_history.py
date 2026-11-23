@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from test_inputs_integration import _session, _wait_until
+from test_inputs_integration import inputs_runtime as _inputs_runtime
 from test_inputs_integration import setup_inputs as _setup_inputs
 
 from nexus.llmhub.types import Message, Text
 from nexus.store import Store
 
+inputs_runtime = _inputs_runtime
 setup_inputs = _setup_inputs
 
 

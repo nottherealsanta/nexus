@@ -6,11 +6,12 @@ from __future__ import annotations
 import asyncio
 
 from test_archive import _create, _idle, env  # noqa: F401  (env is a fixture)
-from test_inputs_integration import (  # noqa: F401  (setup_inputs is a fixture)
+from test_inputs_integration import (  # noqa: F401  (inputs_runtime and setup_inputs are fixtures)
     _inputs,
     _session,
     _user_texts,
     _wait_until,
+    inputs_runtime,
     setup_inputs,
 )
 
