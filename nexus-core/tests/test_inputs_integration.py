@@ -51,7 +51,7 @@ def _user_texts(req: Request) -> list[str]:
 
 
 @pytest.fixture
-async def setup_inputs(tmp_path, monkeypatch):
+def inputs_runtime(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir(mode=0o700)
     monkeypatch.setenv("NEXUS10_HOME", str(home))
@@ -66,10 +66,18 @@ async def setup_inputs(tmp_path, monkeypatch):
         base_url="http://test",
         headers={"authorization": f"Bearer {TOKEN}"},
     )
-    yield runtime, client, provider, workspace
+    try:
+        yield runtime, client, provider, workspace
+    finally:
+        runtime.store.close()
+
+
+@pytest.fixture
+async def setup_inputs(inputs_runtime):
+    runtime, client, _, _ = inputs_runtime
+    yield inputs_runtime
     await client.aclose()
     await runtime.shutdown()
-    runtime.store.close()
 
 
 async def _session(client: httpx.AsyncClient, workspace, *, model="mock/hello") -> str:
