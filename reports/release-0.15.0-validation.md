@@ -11,6 +11,7 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 - The user requires the NSH web bundle and signed off on first-time Firecrawl 0.1.1 binary redistribution with its licence and source notice. The artifact workflow now enables `nsh-web` using the locally tested NSH revision. NSH type check, **11 host tests**, web build, archive extraction and a real request to the extracted host passed locally. The offline installer test verifies the app and host land in the installed web directory.
 - [Hosted artifact dry run](https://github.com/nottherealsanta/nexus/actions/runs/45168609035) **passed** on `e12f45df`: Core wheel and source archive, four TUI binaries, four Firecrawl binaries and the required NSH web archive. The eight binaries match their named architectures. The downloaded NSH archive contains `Nexus/index.html` and `serve.mjs`, and the extracted host served that index locally (HTTP 200). These are dry-run artifacts, not assets from the v0.15.0 tag.
 - The [Core matrix on `61decaa9`](https://github.com/nottherealsanta/nexus/actions/runs/45174708746) passed on Ubuntu and both TUI jobs passed. macOS reported eight watchdog errors and one bash-job test failure: the test awaited the internal reader task even after `kill()` had settled it, which can legitimately cancel the task. The test now verifies the terminal job state and checks cleanup without awaiting that cancelled task. Other fixes move the Git and database test setup seen in hosted stacks off the loop. All **93 affected tests** passed locally; hosted confirmation is pending.
+- The [Core matrix on `0417b026`](https://github.com/nottherealsanta/nexus/actions/runs/45176734604) again passed on Ubuntu, and all macOS test assertions passed. Four macOS watchdog errors remained: the stack samples named the browser's cold schema import and two worker tests' synchronous SQLite initialization; the remote-MCP sample lacked a stack. MCP now loads the validator and builds transports off-loop, and the worker test setup runs off-loop. **165 focused tests passed** locally; hosted confirmation is pending.
 
 ## Core: blocking issues
 
@@ -21,6 +22,7 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 | [PR #106, `c230c75e`](https://github.com/nottherealsanta/nexus/actions/runs/45169211926) | 1,764 passed, 14 skipped, 16 errors (9 fixtures, 7 watchdog) | 1,765 passed, 13 skipped, 11 errors (9 fixtures, 2 watchdog) |
 | [PR #106, `c27096e8`](https://github.com/nottherealsanta/nexus/actions/runs/45173126853) | 1,773 passed, 14 skipped, 12 watchdog errors | 1,774 passed, 13 skipped, 4 watchdog errors |
 | [PR #106, `61decaa9`](https://github.com/nottherealsanta/nexus/actions/runs/45174708746) | 1,772 passed, 14 skipped, 1 failure, 8 watchdog errors | **1,774 passed, 13 skipped** |
+| [PR #106, `0417b026`](https://github.com/nottherealsanta/nexus/actions/runs/45176734604) | 1,773 passed, 14 skipped, 4 watchdog errors | **passed** |
 
 ### macOS: fake Firecrawl startup (passed on `c230c75e`)
 

@@ -236,6 +236,8 @@ Reading a changed file publishes `mcp.changed` with its `file`.
   unless the user restarts it (`POST /api/mcp/{name}/restart` for a global one,
   `POST /api/project/{id}/mcp/{name}/restart` for a project one). A
   new session, including a handoff continuation, retries after that delay.
+- The first connection loads the SDK and its schema validator off the Core event loop.
+  Transport setup also runs off the loop; Core rechecks the configuration before opening the transport.
 - **stderr** of a global stdio server goes to `~/.nexus/logs/mcp/<server>.log`;
   a project server's goes under
   `~/.nexus/logs/mcp/projects/<16-hex-project-id>/<server>.log`. Names keep only

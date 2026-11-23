@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Core loop stalls from MCP setup.** Load the schema validator and construct transports off-loop; recheck the captured configuration before opening the transport. Worker tests also move database setup off-loop. 165 focused tests passed ([plan 50](50-rust-core.md)).
+
 - **v0.15 artifact dry run passed.** Hosted NSH web packaging, Core packages and both architectures of TUI and Firecrawl on Linux and macOS built. The downloaded NSH archive served its index from the bundled host. Publication remains gated by the hosted Core matrix ([handoff](../reports/release-0.15.0-validation.md)).
 
 - **v0.15 NSH release packaging.** Enable the NSH web artifact job, pin the locally validated NSH 0.4.0 revision, and include the loopback host alongside the web assets. The offline installer test covers installing both; hosted build tracked in the [release handoff](../reports/release-0.15.0-validation.md).

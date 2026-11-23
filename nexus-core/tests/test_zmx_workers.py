@@ -625,8 +625,11 @@ async def test_daemon_with_zmx_off_probes_no_cli_reads_no_credentials_and_regist
     opened = []
     real_open = builtins.open
     monkeypatch.setattr(builtins, "open", lambda f, *a, **k: (opened.append(str(f)), real_open(f, *a, **k))[1])
-    runtime = server.make_runtime(Store(tmp_path / "nexus.db"))
-    app = server.build_app(runtime, token="t", url="http://test")
+    def build():
+        runtime = server.make_runtime(Store(tmp_path / "nexus.db"))
+        return server.build_app(runtime, token="t", url="http://test")
+
+    app = await asyncio.to_thread(build)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer t"}) as client:
         providers = (await client.get("/api/provider")).json()
@@ -660,7 +663,10 @@ async def test_config_api_reports_why_zmx_is_unavailable_on_a_non_posix_platform
     monkeypatch.undo()
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(server, "zmx_unavailable", lambda: reason)
-    app = server.build_app(server.make_runtime(Store(tmp_path / "nexus.db")), token="t", url="http://test")
+    def build():
+        return server.build_app(server.make_runtime(Store(tmp_path / "nexus.db")), token="t", url="http://test")
+
+    app = await asyncio.to_thread(build)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer t"}) as client:
         state = (await client.get("/api/config")).json()
