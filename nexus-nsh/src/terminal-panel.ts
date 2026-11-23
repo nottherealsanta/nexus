@@ -291,10 +291,12 @@ export function inputTerminal(value: string, id = terminalSelected()) {
 }
 export function beginRenameTerminal(id = terminalSelected()) { if (!id) return; const c = ctl(id); c.put("name", itemOf(id)?.name ?? ""); c.put("renaming", true); }
 export function currentTerminal() { return terminalSelected() ? itemOf(terminalSelected()!) : undefined; }
-/** Close: a running terminal asks first, then terminates; an exited one just closes. The tab goes with the resource. */
-export function requestTerminalClose(id = terminalSelected()) {
+/** Close: a terminal running a command asks first, then terminates; an idle shell or an exited one just closes. The tab goes with the resource. */
+export async function requestTerminalClose(id = terminalSelected()) {
   const t = terminalItems().find(item => item.id === id); if (!t) return;
-  if (t.status === "running") confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,bracketActions:true,run:() => terminateTerminal(t.id)});
+  let busy = t.status === "running";
+  if (busy) { try { busy = (await terminals.get(t.id)).busy !== false; } catch { /* unknown: ask */ } }
+  if (busy) confirmDialog.set({title:"Close running terminal?",body:"",confirm:"Close terminal",destructive:true,bracketActions:true,run:() => terminateTerminal(t.id)});
   else void terminateTerminal(t.id);
 }
 export function requestTerminalCopy(id = terminalSelected()) { if (id) ctls.get(id)?.copy?.(); }

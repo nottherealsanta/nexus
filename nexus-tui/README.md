@@ -24,8 +24,8 @@ terminal in a split below the focused group when there is none. ``Ctrl+Shift+` `
 terminal is a tab (`●` running, `○` ended) in a group, beside file, diff and session
 tabs; there is no dock and no hiding. The group menu and the palette (**New
 terminal**) open more; splitting a terminal tab creates a new terminal in the new
-group. Closing a terminal tab terminates it (a running one asks `Close running
-terminal?` first). On the focused terminal tab `c` takes control, `r` releases it and
+group. Closing a terminal tab terminates it (one running a command asks `Close running
+terminal?` first; an idle shell closes without asking). On the focused terminal tab `c` takes control, `r` releases it and
 Enter focuses its screen; Ctrl+] hands the keys back to the strip.
 Input is sent only while this attachment has control. Terminal applications receive
 mouse events when they request them; hold Shift to select text instead.
@@ -116,7 +116,7 @@ counting root sessions, with archived sessions left out and subagents counted un
 their root. Counts above nine display `*`, and a project with no counts shows a
 three-cell muted rule. Hovering shows the full project name and `N attention`, `N unread`, `N running` and `N idle` right beside the rail, over the sidebar when it is open. A `+`
 Add project control and Settings are pinned together at the rail's foot, below the projects,
-each three cells high with no gap between them or below Settings. A right-click opens a project's
+each three cells high with no gap between them or below Settings. When there are more projects than fit, the mouse wheel over the rail scrolls them (the rail otherwise keeps the current project in view). A right-click opens a project's
 actions. Activating a project restores
 its open tabs and last selected session or new-session view in this client; pressing
 the project already open toggles its Sessions sidebar. On first
@@ -232,7 +232,11 @@ inactive; Enter opens a session or a project's new-session view). NSH draws the 
 source, then either installs an unambiguous set of new skills or opens a checklist. The checklist
 uses ↑/↓, Space, `a` (all), `n` (none), `i` (invert), Enter (install) and Esc (cancel); ticking
 an installed skill replaces it. Successful installs are available in new sessions. Settings →
-MCP controls whether all tool definitions go into context and the 1–1000 name-listing limit.
+MCP is a page (like Providers): *Add a remote server* (an address; Core names it), *Add to this project*, then
+the servers with their state; Enter opens one in a modal with Sign in (the link opens in the browser; Core waits for the
+redirect), Add a header (`Name: value`, masked), Switch off/on, Restart and Remove (confirmed). Below them, the
+full-definitions switch and the 1–1000 name-listing limit. Code: `src/app/mcp.rs`, `draw_mcp_detail` in `render.rs`;
+tests `shell.rs` `the_mcp_page_…`. NSH: `src/ui/mcp-settings.tsx`.
 
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
 square modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
@@ -496,10 +500,12 @@ messages, copied from the parent, into one group row at the top,
 unknown), folded by default and toggled like a group (Enter/Space, a click,
 Left/Right). Open, the copied messages render as usual, three cells in under
 the chevron; the `[Nexus fork]` task message after them is a normal user band.
-A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
-with its agent name on the parent's child card, with `ZMX · Claude Code` or `ZMX · Antigravity` in the metadata below and in its heading. Its timeline
-opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
-`Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
+An external worker child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
+with its agent name on the parent's child card, with `PTY · Claude Code`, `ACP · Antigravity` or `CLI · Antigravity` for a legacy history in the metadata below and in its heading. Its timeline
+opens with the worker card instead of the starting context: `context incomplete`, then `Needs attention`, then
+`Denied through Nexus` for an ACP denial or `Denied by the CLI` for Claude/legacy, `Run`, `Settings` and `Not applied`
+rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). The `Needs attention` detail wraps
+under its title, so a long error is never clipped to one line. Claude Code's
 own subagents show read-only inside the calling tool's card. As in NSH.
 Group headers, thoughts, tools, child cards and notices share one left icon column and label edge;
 expanded members have no tree prefix. Every icon occupies one cell, like the group fold.
@@ -526,7 +532,7 @@ The right sidebar's Session
 info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
 its action menu; the Projects view (`alt+3`) ends with `+ Add project` (an inline path
-field) and removal asks first. Settings shows provider connections and
+field; the added project opens on its new-session screen) and removal asks first. Settings shows provider connections and
 per-subagent model lists in the right pane. Every row it shows can change.
 
 Still Step 12.4: the vendored code editor in the file panel, worktree management
@@ -670,7 +676,7 @@ key stops the capture and the key still applies. The final transcript replaces
 the preview at the position where recording began, ahead of anything typed
 since. Capture is capped at 120 seconds.
 
-Settings → **Tools** shows the **Web search service** (the local SearXNG behind
+Settings → **Tools** lists `firecrawl` in the grid of tools (the local Firecrawl; install with `nexus firecrawl init`, no start button, it starts with the first call). It shows as `Firecrawl` in the timeline with its action and URL. It also shows the **Web search service** (the local SearXNG behind
 `web_search`: running, stopped, not set up or unavailable, with its address and
 runtime) and a **Start web search** row, also in the palette as `search.start`.
 Starting calls `POST /api/search/service/start` (Apple `container`, else Docker)
@@ -765,7 +771,7 @@ shapes from the docs.
 
 ## The shell
 
-**Starting a turn (plan 37):** `/continue` and sends add a pending working row (`⠋ Waiting for Core · 2s`, then `Waiting for the model · 3s` once `session.status busy` arrives, or `Waiting for network · retrying in 8.0s` from plan 34) in the same frame, and the composer behaves as busy. It is driven by real events and goes away on the first output, a refusal or the turn ending. While Core is not connected the `/continue` call is queued and sent once with its one idempotency key; Esc cancels it before it is sent. A refusal (running turn, unfinished durable turn, ZMX, archived, empty) removes the row and the strip reads `× Continue refused · <reason>`; with no answer after 10 s the strip says `! No answer from Core yet` with `Retry` (same key). `NEXUS_TUI_TIMING=<file>` appends one line per turn start (`command=0ms sent=1ms 202=14ms busy=16ms first_delta=1840ms`). Tests: `tests/pending_turn.rs`.
+**Starting a turn (plan 37):** `/continue` and sends add a pending working row (`⠋ Waiting for Core · 2s`, then `Waiting for the model · 3s` once `session.status busy` arrives, or `Waiting for network · retrying in 8.0s` from plan 34) in the same frame, and the composer behaves as busy. It is driven by real events and goes away on the first output, a refusal or the turn ending. While Core is not connected the `/continue` call is queued and sent once with its one idempotency key; Esc cancels it before it is sent. A refusal (running turn, unfinished durable turn, external worker, archived, empty) removes the row and the strip reads `× Continue refused · <reason>`; with no answer after 10 s the strip says `! No answer from Core yet` with `Retry` (same key). `NEXUS_TUI_TIMING=<file>` appends one line per turn start (`command=0ms sent=1ms 202=14ms busy=16ms first_delta=1840ms`). Tests: `tests/pending_turn.rs`.
 
 Anchors (INTERFACE_PLAN.md): left sidebar toggle at the header's leading edge,
 title and breadcrumbs centred, notification count and right toggle trailing;
@@ -774,8 +780,9 @@ with Settings fixed at the bottom; right sidebar SESSION and CONTEXT
 (Git lives in the left sidebar's Git tab only). Below 100 columns the sidebars become drawers
 opened from the same toggles. The waiting card sits directly above the composer
 (DESIGN_PLAN D14): a heavy accent rail, `Allow bash?`, `waiting on you · 0:42`, the
-parameters (and, for edit, write and patch, the diff capped at 12 rows), and a choice
-list with key chips (`y` allow once, `n` deny; Up/Down and Enter also choose; choices
+parameters (each value wraps to at most three rows, then ends in `…`; for edit,
+write and patch, the diff capped at 12 rows), and a choice list with key chips
+(`y` allow once, `n` deny; Up/Down and Enter also choose; choices
 Core does not offer show their reason). Toasts (D15) are top-right under the header, three
 at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
 the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
@@ -810,6 +817,8 @@ modal using old Nexus's panel geometry and a searchable root/drill list. Press
 `/` to filter settings; Enter opens a section, and Esc returns to the root
 before closing the panel. Existing Core-backed controls retain their own focus
 and keyboard handling.
+
+**Onboarding.** While Core's `ui.onboarded` is false the TUI opens a full-window tour (`View::Onboarding`, `onboarding.rs`, `render/onboarding_ui.rs`): welcome, connect a provider, choose models for agents (scout and quick are advised small, fast models), then lessons on the timeline, subagents, permissions and navigation. ↑↓ choose a row, Enter changes it (a provider opens its connection modal, an agent opens the model picker, the default agent cycles), →/← or Next/Back move, `s` or Skip finishes it. Finish and Skip both write `ui.onboarded`. `/onboarding` or Settings > About replays it. Wording is `[onboarding]` in `interface/manifest.toml`. Tests: `tests/onboarding.rs`.
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
 key). `Shift+Tab` cycles the composer's eligible agents (primary agents, or subagents

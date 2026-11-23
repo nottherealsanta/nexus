@@ -1153,6 +1153,7 @@ fn activity_counts_cover_every_tool_family_and_group_unknown_tools() {
     for (tools, want) in [
         (vec![("web_search", ok), ("web_search", ok)], "2 searches"),
         (vec![("web_fetch", ok); 3], "3 pages"),
+        (vec![("web_fetch", ok), ("firecrawl", ok)], "2 pages"),
         (vec![("ask", ok)], "1 question"),
         (vec![("code", ok), ("code", ok)], "2 cells"),
     ] {

@@ -25,7 +25,10 @@ use crate::sync::{Command as SyncCommand, SyncMsg};
 use crate::theme::{Mode, Theme, Tier};
 use crate::ui::*;
 
+pub mod mcp;
 pub mod tabs;
+
+pub use mcp::McpKey;
 
 /// Work the event loop performs on the shell's behalf.
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +124,8 @@ pub const WIRED: &[&str] = &[
     "app.help_keys",
     "app.quit",
     "app.settings",
+    "app.onboarding",
+    "onboarding.back",
     "app.theme",
     "app.reconnect",
     "notifications.open",
@@ -543,7 +548,7 @@ fn row_matches(row: &crate::manifest::Row, query: &str) -> bool {
 }
 
 /// The task tools a new session can be given, in the order the Tools row lists them.
-pub const TOOLS: [&str; 12] = [
+pub const TOOLS: [&str; 13] = [
     "read",
     "grep",
     "glob",
@@ -554,6 +559,7 @@ pub const TOOLS: [&str; 12] = [
     "write",
     "web_search",
     "web_fetch",
+    "firecrawl",
     "ask",
     "code",
 ];
@@ -628,6 +634,14 @@ pub enum PageAction {
     },
     /// Open one subagent's page (its models and fallbacks).
     OpenAgent(String),
+    /// Ask for a remote MCP server's address (globally, or for this project).
+    McpAdd {
+        project: Option<String>,
+    },
+    /// Open one MCP server's detail modal.
+    McpOpen(McpKey),
+    /// One action in an MCP server's detail modal (`sign_in`, `sign_out`, `cancel`, `header`, `toggle`, `restart`, `remove`).
+    McpRun(McpKey, String),
 }
 
 /// The row that starts one provider sign-in method.
@@ -875,6 +889,8 @@ pub struct Ui {
     pub rail_drag: Option<crate::ui::RailDrag>,
     /// The project the keyboard has on the rail (index into `rail_project_ids`).
     pub rail_cursor: usize,
+    /// The first project the wheel scrolled the rail to; `None` follows the current project.
+    pub rail_top: Option<usize>,
     pub right_open: bool,
     /// The user (or a saved preference) chose the right sidebar's state, so a
     /// size change no longer picks it (D17: closed by default at 100-119).
@@ -912,6 +928,9 @@ pub struct Ui {
     /// The local notification cues; `notifications.sound` in `tui.json`.
     pub sound: bool,
     pub view: View,
+    /// The first-run tour's position, and whether Core's `ui.onboarded` has been seen false this run.
+    pub onboarding: crate::onboarding::Onboarding,
+    pub onboarding_offered: bool,
     pub pending_selected: Option<usize>,
     pub settings_row: usize,
     pub settings_search: Composer,
@@ -930,8 +949,18 @@ pub struct Ui {
     /// The provider whose detail modal is open, and its selected row.
     pub provider_detail: Option<String>,
     pub provider_detail_row: usize,
+    /// Settings › MCP: Core's server list (`{servers, project_file}`), why it could not be read, each server's
+    /// sign-in state by `scope:name`, the link already opened for it, and the open detail modal.
+    pub mcp_servers: Option<Value>,
+    pub mcp_error: Option<String>,
+    pub mcp_logins: BTreeMap<String, Value>,
+    pub mcp_opened: BTreeMap<String, String>,
+    pub mcp_detail: Option<McpKey>,
+    pub mcp_detail_row: usize,
     /// The agent list a model chosen in the palette is added to: (agent, fallback).
     pub pool_pick: Option<(String, bool)>,
+    /// The agent whose model the tour's picker is choosing.
+    pub onboarding_pick: Option<String>,
     pub overlay: Option<Overlay>,
     pub btw: Option<crate::btw::Btw>,
     pub dialog: Option<Dialog>,
@@ -1003,8 +1032,6 @@ pub struct Ui {
     pub context_switch: bool,
     /// The directory Nexus was launched from, until it has been opened as a project.
     pub launch_dir: Option<String>,
-    /// The launch directory's project is being opened: then show its new-session screen.
-    pub launch_new: bool,
     /// Cached skill and MCP listings for the new-session preview, keyed by project.
     pub inventories: HashMap<String, ProjectInventory>,
     /// The last draft-context request sent to Core; a changed draft asks again.
@@ -1369,6 +1396,7 @@ impl App {
                 left_drag: false,
                 rail_drag: None,
                 rail_cursor: 0,
+                rail_top: None,
                 right_open: false,
                 right_chosen: false,
                 sized: false,
@@ -1395,6 +1423,8 @@ impl App {
                 notify: Notify::default(),
                 sound: true,
                 view: View::Session,
+                onboarding: crate::onboarding::Onboarding::default(),
+                onboarding_offered: false,
                 pending_selected: None,
                 settings_row: 0,
                 settings_search: Composer::new(),
@@ -1407,7 +1437,14 @@ impl App {
                 provider_logins: BTreeMap::new(),
                 provider_detail: None,
                 provider_detail_row: 0,
+                mcp_servers: None,
+                mcp_error: None,
+                mcp_logins: BTreeMap::new(),
+                mcp_opened: BTreeMap::new(),
+                mcp_detail: None,
+                mcp_detail_row: 0,
                 pool_pick: None,
+                onboarding_pick: None,
                 overlay: None,
                 btw: None,
                 dialog: None,
@@ -1452,7 +1489,6 @@ impl App {
                 context_cursor: 0,
                 context_switch: false,
                 launch_dir: None,
-                launch_new: false,
                 inventories: HashMap::new(),
                 draft_asked: None,
                 model_prompted: false,
@@ -3507,6 +3543,7 @@ impl App {
             "editor.readonly" => self.ui.file_open && self.ui.file_edit.is_none(),
             "editor.markdown" => self.ui.file_open && self.file_is_markdown(),
             "view.settings" => self.ui.view == View::Settings,
+            "view.onboarding" => self.ui.view == View::Onboarding,
             "overlay.open" => self.ui.overlay.is_some(),
             "dialog.open" => self.ui.dialog.is_some() || self.blocking().is_some(),
             "alert.open" => self.ui.focus == Focus::Alert,
@@ -4489,7 +4526,7 @@ impl App {
                     if m["zmx"].as_bool() == Some(true)
                         && !self.viewed().is_some_and(|s| s.parent_id.is_some())
                     {
-                        continue; // ZMX models run subagents only: a root session or draft never lists them
+                        continue; // external-worker models run subagents only: a root session or draft never lists them
                     }
                     let r = m["ref"].as_str().unwrap_or_default();
                     let label = m["name"]
@@ -4535,6 +4572,45 @@ impl App {
                                 "No provider is signed in, or the catalog has not loaded yet"
                                     .into(),
                             ),
+                        },
+                    ));
+                }
+            }
+            PaletteMode::OnboardingModels => {
+                // First while the filter is empty; while typing it ranks like any other row.
+                let none_label = "Use the session's model";
+                if let Some(score) = fuzzy(&q, none_label) {
+                    scored.push((
+                        if q.is_empty() { i32::MAX } else { score },
+                        0,
+                        PaletteItem {
+                            kind: PaletteKind::OnboardingModel(None),
+                            label: none_label.into(),
+                            hint: "no model set for this agent".into(),
+                            category: "model".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+                for (i, m) in self.state.models.iter().enumerate() {
+                    let r = m["ref"].as_str().unwrap_or_default();
+                    if r.is_empty() {
+                        continue;
+                    }
+                    let Some(score) =
+                        fuzzy(&q, r).or_else(|| fuzzy(&q, m["name"].as_str().unwrap_or("")))
+                    else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i + 1,
+                        PaletteItem {
+                            kind: PaletteKind::OnboardingModel(Some(r.to_owned())),
+                            label: r.to_owned(),
+                            hint: m["name"].as_str().unwrap_or_default().to_owned(),
+                            category: "model".into(),
+                            reason: None,
                         },
                     ));
                 }
@@ -4926,6 +5002,7 @@ impl App {
                 }
                 self.select_project(&id)
             }
+            PaletteKind::OnboardingModel(model) => self.onboarding_choose_model(model),
             PaletteKind::PoolModel(model) => {
                 if let Some((agent, fallback)) = self.ui.pool_pick.take() {
                     let mut refs = self.agent_refs(&agent, fallback);
@@ -6190,6 +6267,7 @@ impl App {
 
     fn select_project_announcing(&mut self, id: &str, announce: bool) {
         self.ui.project = Some(id.to_owned());
+        self.ui.rail_top = None;
         // This project's tabs are the layout from here on.
         self.groups_enter_project();
         self.ui.cursor.insert(Tab::Sessions, 0);
@@ -6742,11 +6820,20 @@ impl App {
                 self.api(ApiCall::Usage);
             }
             "app.quit" => self.effects.push(Effect::Quit),
+            "app.onboarding" => self.open_onboarding(),
+            "onboarding.back" => {
+                self.ui.onboarding.step = self.ui.onboarding.step.saturating_sub(1);
+                self.ui.onboarding.row = 0;
+            }
             "app.settings" => {
+                if self.ui.view == View::Onboarding {
+                    return;
+                }
                 if self.ui.view == View::Settings {
                     self.ui.view = View::Session;
                     self.ui.focus = Focus::Composer;
                     self.ui.provider_detail = None;
+                    self.ui.mcp_detail = None;
                 } else {
                     self.effects.push(Effect::Sync(SyncCommand::Config));
                     self.effects
@@ -6754,11 +6841,13 @@ impl App {
                     self.refresh_voice_settings_status();
                     self.refresh_search_service();
                     self.refresh_browser_status();
+                    self.refresh_mcp();
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
                     self.ui.settings_page = None;
                     self.ui.provider_detail = None;
+                    self.ui.mcp_detail = None;
                     self.ui.focus = Focus::Timeline;
                     self.ui.drawer = None;
                 }
@@ -7785,6 +7874,10 @@ impl App {
                         self.toast(Level::Warning, READ_ONLY);
                     }
                 }
+                Confirmed::RemoveMcp(project, name) => self.api(ApiCall::Mcp {
+                    project,
+                    op: crate::actions::McpOp::Remove { name },
+                }),
                 Confirmed::Disconnect(id) => self.api(ApiCall::Provider {
                     id,
                     sign_out: true,
@@ -8314,6 +8407,7 @@ impl App {
         {
             return self.completion_reply(project, session, query, limit, data);
         }
+        let config_arrived = matches!(&msg, SyncMsg::Config(Ok(_)));
         if let SyncMsg::Config(Ok(config)) = &msg {
             if let Some(detail) = config["values"]["ui"]["detail"]
                 .as_str()
@@ -8531,6 +8625,11 @@ impl App {
             self.ui.pending_turns.retain(|_, p| !p.accepted || p.queued);
         }
         self.state.apply(msg);
+        // First run: Core says this home has not seen the tour (`ui.onboarded` false). The config can arrive
+        // before the connection is live, so every message gets another chance until it is offered.
+        if config_arrived || !self.ui.onboarding_offered {
+            self.offer_onboarding();
+        }
         if archive_event && self.state.events_applied > applied_before {
             // The event names every session it archived (root and descendants);
             // unrelated archived tabs the user reopened stay readable.
@@ -8575,7 +8674,6 @@ impl App {
                         self.show_new_session();
                     }
                     None => {
-                        self.ui.launch_new = true;
                         self.api(ApiCall::AddProject { path });
                     }
                 }
@@ -8653,6 +8751,9 @@ impl App {
                             );
                             self.ui.last_mcp_changed_toast = Some(self.clock);
                         }
+                        if self.ui.view == View::Settings {
+                            self.refresh_mcp();
+                        }
                         let project = data["project_id"]
                             .as_str()
                             .map(str::to_owned)
@@ -8689,6 +8790,12 @@ impl App {
                         {
                             self.file_watch_status =
                                 data["status"].as_str().unwrap_or("").to_owned();
+                        }
+                    }
+                    "mcp.login" => self.mcp_login_event(&data),
+                    "mcp.connected" | "mcp.disconnected" => {
+                        if self.ui.view == View::Settings {
+                            self.refresh_mcp();
                         }
                     }
                     "mcp.failed" => self.toast(
@@ -9079,6 +9186,18 @@ impl App {
                 }
                 return;
             }
+            ApiCall::TerminalBusy { id } => {
+                let busy = done
+                    .result
+                    .as_ref()
+                    .map_or(true, |d| d.terminal_busy.unwrap_or(true));
+                if busy {
+                    self.ask_close_running_terminal(id);
+                } else {
+                    self.api(ApiCall::TerminalClose { id });
+                }
+                return;
+            }
             ApiCall::TerminalClose { id } => {
                 match done.result {
                     Ok(_) => {
@@ -9130,6 +9249,10 @@ impl App {
             }
             call @ (ApiCall::SearchServiceStatus | ApiCall::SearchServiceStart) => {
                 self.apply_search_service(call, done.result);
+                return;
+            }
+            call @ (ApiCall::McpList { .. } | ApiCall::Mcp { .. }) => {
+                self.mcp_done(&call, done.result);
                 return;
             }
             ApiCall::BrowserStatus => {
@@ -9547,9 +9670,8 @@ impl App {
                 if let Some(id) = r.project {
                     // The success toast already says "Project added".
                     self.select_project_quietly(&id);
-                    if std::mem::take(&mut self.ui.launch_new) {
-                        self.show_new_session();
-                    }
+                    // A project that was just added opens on its new-session screen.
+                    self.show_new_session();
                 }
             }
             Err(e) => {
@@ -11094,6 +11216,14 @@ impl App {
         {
             return;
         }
+        if self.ui.view == View::Onboarding
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+            && self.ui.edit.is_none()
+            && self.onboarding_key(&name, ev.code)
+        {
+            return;
+        }
         // The popup owns Esc, Tab, Enter and the arrows while it is visible.
         if self.completion_key(&name) {
             return;
@@ -11461,6 +11591,17 @@ impl App {
                 let restore = e.restore;
                 self.ui.edit = None;
                 self.apply_restore(restore);
+                if matches!(
+                    target,
+                    EditTarget::McpAddress { .. } | EditTarget::McpHeader { .. }
+                ) {
+                    if self.writable() {
+                        self.mcp_edit_done(&target, title);
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                    return;
+                }
                 if let EditTarget::ManagerModel { revision } = &target {
                     if !title.is_empty() {
                         self.manager_set_config(revision.clone(), "manager.model", json!(title));
@@ -11540,7 +11681,10 @@ impl App {
                         method: "api_key".into(),
                         key: Some(crate::actions::Secret(title)),
                     }),
-                    EditTarget::TitleModels { .. } | EditTarget::ManagerModel { .. } => {}
+                    EditTarget::TitleModels { .. }
+                    | EditTarget::ManagerModel { .. }
+                    | EditTarget::McpAddress { .. }
+                    | EditTarget::McpHeader { .. } => {}
                     EditTarget::AddProject => {
                         let path = match title.strip_prefix('~') {
                             Some(rest) if rest.is_empty() || rest.starts_with('/') => {
@@ -13234,6 +13378,7 @@ impl App {
     fn rail_key(&mut self, name: &str) {
         let n = self.rail_project_ids().len();
         let c = self.rail_cursor();
+        self.ui.rail_top = None;
         let set = |s: &mut Self, v: usize| s.ui.rail_cursor = v.min(n.saturating_sub(1));
         match name {
             "up" | "k" => set(self, c.saturating_sub(1)),
@@ -13547,6 +13692,9 @@ impl App {
         if self.ui.provider_detail.is_some() {
             return self.provider_detail_key(name, code);
         }
+        if self.ui.mcp_detail.is_some() {
+            return self.mcp_detail_key(name);
+        }
         if name == self.manifest.settings.navigation.section_key
             && (self.ui.settings_nav_focus || self.settings_open_page().is_some())
         {
@@ -13659,8 +13807,10 @@ impl App {
     pub fn settings_wired(id: &str) -> bool {
         matches!(
             id,
-            "providers.page"
+            "about.onboarding"
+                | "providers.page"
                 | "agents.page"
+                | "mcp.page"
                 | "agents.default_effort"
                 | "agents.default_root"
                 | "tools.default_permission"
@@ -13682,8 +13832,8 @@ impl App {
                 | "browser.use_my_chrome"
                 | "mcp.full_definitions"
                 | "mcp.max_listed_tools"
-                | "zmx.claude_backend"
-                | "zmx.antigravity"
+                | "workers.claude_backend"
+                | "workers.antigravity"
                 | "context.handoff_percent"
                 | "context.usage_refresh_minutes"
                 | "context.title_models"
@@ -13796,22 +13946,25 @@ impl App {
                         .unwrap_or(false),
                 ),
             ),
-            "zmx.claude_backend" => pair(
-                &["Agent SDK", "ZMX"],
-                if values.and_then(|v| v["zmx"]["claude_backend"].as_str()) == Some("zmx") {
-                    "ZMX"
+            "workers.claude_backend" => pair(
+                &["Agent SDK", "PTY"],
+                if matches!(
+                    values.and_then(|v| v["workers"]["claude_backend"].as_str()),
+                    Some("cli" | "zmx")
+                ) {
+                    "PTY"
                 } else {
                     "Agent SDK"
                 }
                 .to_owned(),
             ),
-            "zmx.antigravity" => pair(
-                &["off", "ZMX"],
+            "workers.antigravity" => pair(
+                &["off", "ACP"],
                 if values
-                    .and_then(|v| v["zmx"]["antigravity"].as_bool())
+                    .and_then(|v| v["workers"]["antigravity"].as_bool())
                     .unwrap_or(false)
                 {
-                    "ZMX"
+                    "ACP"
                 } else {
                     "off"
                 }
@@ -13937,11 +14090,13 @@ impl App {
             "tools.default_permission" => {
                 self.patch_config_value("defaults.permission", json!(chosen))
             }
-            "zmx.claude_backend" => self.patch_config_value(
-                "zmx.claude_backend",
-                json!(if chosen == "ZMX" { "zmx" } else { "sdk" }),
+            "workers.claude_backend" => self.patch_config_value(
+                "workers.claude_backend",
+                json!(if chosen == "PTY" { "cli" } else { "sdk" }),
             ),
-            "zmx.antigravity" => self.patch_config_value("zmx.antigravity", json!(chosen == "ZMX")),
+            "workers.antigravity" => {
+                self.patch_config_value("workers.antigravity", json!(chosen == "ACP"))
+            }
             "manager.enabled" => self.patch_manager_value("manager.enabled", json!(chosen == "on")),
             "manager.mode" => self.patch_manager_value("manager.mode", json!(chosen)),
             "manager.proactive" => self.patch_manager_value("manager.proactive", json!(chosen)),
@@ -13950,7 +14105,7 @@ impl App {
     }
 
     /// Patch one Core config value, when the configuration is loaded.
-    fn patch_config_value(&mut self, path: &str, value: Value) {
+    pub(crate) fn patch_config_value(&mut self, path: &str, value: Value) {
         let Some(config) = &self.state.config else {
             self.toast(Level::Warning, "Configuration is not loaded");
             return;
@@ -13986,14 +14141,13 @@ impl App {
         if let Some(reason) = row.unavailable_reason.as_deref().or(section_reason) {
             return Some(reason.to_owned());
         }
-        // ZMX needs POSIX PTYs; Core says why when it cannot run here (NSH shows the same reason).
-        if row.id.starts_with("zmx.") {
-            if let Some(reason) = self
-                .state
-                .config
-                .as_ref()
-                .and_then(|c| c["zmx_unavailable"].as_str())
-            {
+        // External workers need POSIX PTYs; Core says why when they cannot run here (NSH shows the same reason).
+        if row.id.starts_with("workers.") {
+            if let Some(reason) = self.state.config.as_ref().and_then(|c| {
+                c["workers_unavailable"]
+                    .as_str()
+                    .or_else(|| c["zmx_unavailable"].as_str())
+            }) {
                 return Some(reason.to_owned());
             }
         }
@@ -14341,7 +14495,7 @@ impl App {
 
     fn settings_activate_row(&mut self, row: crate::manifest::Row) {
         match row.id.as_str() {
-            "providers.page" | "agents.page" => {
+            "providers.page" | "agents.page" | "mcp.page" => {
                 self.ui.settings_section = row.id.trim_end_matches(".page").to_owned();
                 self.ui.settings_page = None;
                 self.ui.settings_page_row = 0;
@@ -14361,8 +14515,8 @@ impl App {
             "agents.default_effort"
             | "agents.default_root"
             | "tools.default_permission"
-            | "zmx.claude_backend"
-            | "zmx.antigravity"
+            | "workers.claude_backend"
+            | "workers.antigravity"
             | "appearance.sidebar"
             | "notifications.sound"
             | "notifications.terminal"
@@ -14392,6 +14546,7 @@ impl App {
             "keybindings.list" => self.execute("app.help_keys"),
             "dictation.push_to_talk" => self.run_command("voice.dictate"),
             "about.inspector" => self.open_inspector(),
+            "about.onboarding" => self.run_command("app.onboarding"),
             _ => {}
         }
     }
@@ -14408,6 +14563,20 @@ impl App {
                     .flatten()
                     .map(str::to_owned)
             })),
+            "mcp" => {
+                terms.extend(["servers", "remote", "sign in", "oauth", "header"].map(String::from));
+                for row in self
+                    .ui
+                    .mcp_servers
+                    .iter()
+                    .flat_map(|l| l["servers"].as_array())
+                    .flatten()
+                {
+                    if let Some(name) = row["server"].as_str() {
+                        terms.push(name.to_owned());
+                    }
+                }
+            }
             "agents" => {
                 terms.extend(["models", "fallbacks", "subagents"].map(String::from));
                 for agent in self.subagents() {
@@ -14514,6 +14683,11 @@ impl App {
             .any(|p| p["id"].as_str() == Some(provider) && p["connected"].as_bool() == Some(true))
     }
 
+    /// One provider's status line, shared with the first-run tour.
+    pub fn provider_status_text(&self, p: &Value) -> String {
+        self.provider_status(p)
+    }
+
     fn provider_status(&self, p: &Value) -> String {
         let id = p["id"].as_str().unwrap_or_default();
         let connected = p["connected"].as_bool().unwrap_or(false);
@@ -14606,6 +14780,14 @@ impl App {
             PageAction::OpenProvider(_) => {
                 Some("Enter opens this provider's connection and sign-in details.".into())
             }
+            PageAction::McpAdd { project } => Some(if project.is_some() {
+                "Enter asks for the address and adds it to this project's .mcp.json.".into()
+            } else {
+                "Enter asks for the address of a remote MCP server (https://\u{2026}).".into()
+            }),
+            PageAction::McpOpen(_) => {
+                Some("Enter opens this server: sign in, headers, switch off, restart, remove.".into())
+            }
             PageAction::OpenUrl(_) => Some("Enter opens the link in your browser.".into()),
             PageAction::CopyCode(_) => Some("Enter copies the code to the clipboard.".into()),
             PageAction::Connect { method, .. } => Some(
@@ -14644,6 +14826,7 @@ impl App {
                     .count();
                 format!("{on} of {} connected", shown.len())
             }
+            "mcp" => self.page_summary_mcp(),
             "agents" => {
                 let subs = self.subagents();
                 let own = subs
@@ -14688,6 +14871,13 @@ impl App {
             }
         }
         match page {
+            "mcp" => {
+                out.extend(self.mcp_page_lines());
+                out.push(PageLine::Heading("New sessions".into()));
+                for row in &rows {
+                    out.push(setting(row));
+                }
+            }
             "providers" => {
                 out.push(PageLine::Item {
                     label: "Refresh models".into(),
@@ -15021,7 +15211,7 @@ impl App {
         }
     }
 
-    fn provider_detail_key(&mut self, name: &str, _code: KeyCode) -> bool {
+    pub(crate) fn provider_detail_key(&mut self, name: &str, _code: KeyCode) -> bool {
         let Some(id) = self.ui.provider_detail.clone() else {
             return false;
         };
@@ -15272,6 +15462,12 @@ impl App {
                 self.ui.settings_page = Some(format!("agents/{name}"));
                 self.ui.settings_page_row = 0;
             }
+            PageAction::McpAdd { project } => self.mcp_add(project),
+            PageAction::McpOpen(key) => {
+                self.ui.mcp_detail = Some(key);
+                self.ui.mcp_detail_row = 0;
+            }
+            PageAction::McpRun(key, what) => self.mcp_run(key, &what),
         }
     }
 
@@ -15902,8 +16098,15 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.terminal_panel.selecting {
                     self.terminal_panel.selecting = false;
+                    let mut copied = None;
                     if let Some(selection) = &mut self.terminal_panel.selection {
                         selection.set_end(ev.column, ev.row);
+                        if selection.dragged() {
+                            copied = Some(selection.text()).filter(|text| !text.is_empty());
+                        }
+                    }
+                    if let Some(text) = copied {
+                        self.copy_selection(text);
                     }
                     return;
                 }
@@ -16023,6 +16226,15 @@ impl App {
         if self.ui.dialog.is_some() || self.blocking().is_some() {
             return;
         }
+        if let Some(rail) = self.regions.rail.filter(|r| contains(*r, x, y)) {
+            // The rail shows a window of the projects: the wheel moves it.
+            let total = self.rail_project_ids().len();
+            let shown = crate::render::rail_capacity(rail);
+            let top = crate::render::rail_top(self, shown);
+            let max = total.saturating_sub(shown);
+            self.ui.rail_top = Some(top.saturating_add_signed(delta.signum()).min(max));
+            return;
+        }
         let left = self.regions.left.or(self
             .regions
             .drawer
@@ -16073,6 +16285,7 @@ impl App {
                 self.completion_accept();
             }
             Target::Swallow => {}
+            Target::Onboarding(t) => self.onboarding_click(t),
             // The Manager's own targets are taken by `manager_mouse` before a click gets here.
             Target::ManagerInput
             | Target::ManagerVoice
@@ -16096,6 +16309,8 @@ impl App {
             Target::Scrim => {
                 if self.ui.provider_detail.is_some() {
                     self.ui.provider_detail = None;
+                } else if self.ui.mcp_detail.is_some() {
+                    self.ui.mcp_detail = None;
                 } else if self.annotation_mut().is_some() {
                     // A stray click must not throw the drawing away.
                 } else if self.ui.manager.context.is_some() {
@@ -16476,6 +16691,14 @@ impl App {
                     self.page_activate(action);
                 }
             }
+            Target::McpDetailRow(i) => {
+                self.ui.mcp_detail_row = i;
+                if let Some(key) = self.ui.mcp_detail.clone() {
+                    if let Some(action) = self.mcp_detail_action(&key) {
+                        self.page_activate(action);
+                    }
+                }
+            }
             Target::ProviderDetailRow(i) => {
                 self.ui.provider_detail_row = i;
                 if let Some(id) = self.ui.provider_detail.clone() {
@@ -16571,7 +16794,10 @@ impl App {
             edit.buf.insert_str(text);
             return;
         }
-        if self.ui.dialog.is_some() || self.ui.view == View::Settings {
+        if self.ui.dialog.is_some()
+            || self.ui.view == View::Settings
+            || self.ui.view == View::Onboarding
+        {
             return;
         }
         if self.question_pending() {
@@ -16606,6 +16832,7 @@ impl App {
             || self.ui.dialog.is_some()
             || self.ui.edit.is_some()
             || self.ui.view == View::Settings
+            || self.ui.view == View::Onboarding
             || self.blocking().is_some()
             || self.ask_current().is_some()
         {
@@ -16847,6 +17074,7 @@ impl ActionDone {
             | ApiCall::TerminalCreate { .. }
             | ApiCall::TerminalRename { .. }
             | ApiCall::TerminalClose { .. }
+            | ApiCall::TerminalBusy { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "Terminal failed",
@@ -16864,6 +17092,8 @@ impl ActionDone {
             ApiCall::VoiceSettingsStatus { .. } => "Voice status failed",
             ApiCall::SearchServiceStatus => "Search status failed",
             ApiCall::BrowserStatus => "Browser status failed",
+            ApiCall::McpList { .. } => "MCP servers could not be read",
+            ApiCall::Mcp { .. } => "MCP server change failed",
             ApiCall::SearchServiceStart => "Web search did not start",
             ApiCall::VoiceDownload { .. } => "Voice model download failed",
             ApiCall::VoiceModel { operation, .. } => match operation {

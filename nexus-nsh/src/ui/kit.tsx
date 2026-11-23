@@ -97,13 +97,13 @@ export function IconButton(p: Parameters<typeof IconButtonBase>[0]) {
 }
 
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
-export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string }) {
+export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string; ref?: (node: any) => void }) {
   const k = p.kind ?? "default";
   // Secondary buttons carry a hairline so they read as buttons on every surface, light or dark.
   const skin = k === "primary" ? "bg-primary border border-transparent" : k === "ghost" ? "hover:bg-accent border border-transparent" : "bg-secondary hover:bg-accent border border-border";
   const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
-    <View role="button" focusable
+    <View role="button" focusable ref={p.ref}
       onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
       class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-xl" : "rounded-(--radius)"} px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? "active:bg-primary" : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >

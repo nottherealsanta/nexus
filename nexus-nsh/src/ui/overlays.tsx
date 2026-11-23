@@ -4,8 +4,8 @@ import { Button, Input } from "nsh/base";
 import { Heading, Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, Empty, IconButton, T, TS, FOCUS } from "./kit";
-import { availability, closeLearnChecklist, commands, copyText, escape, installLearnChecklist, keyLabel, renameSession, run, Cmd } from "../commands";
-import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, selectProject, toast, unread, renaming, viewed, worktreeInfoOpen, phone, phonePage } from "../store";
+import { availability, closeLearnChecklist, commands, copyText, escape, installLearnChecklist, keyLabel, newSession, renameSession, run, Cmd } from "../commands";
+import { fileOperation, loadFiles, filesExpanded, selectedFileEntry, gitInput, patchConfig, config, addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, learnChecklist, m, notifications, currentWorktree, worktreeListingForSession, paletteOpen, picker, toast, unread, renaming, viewed, worktreeInfoOpen, phone, phonePage } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar, NewSessionButton, ProjectSelector, SessionsTab } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -327,7 +327,7 @@ function AddProjectBody() {
       const p = await request<any>("POST", "/api/project", { body: { path: path().trim() }, key: newKey() });
       addProjectOpen.set(false);
       toast("success", `Project ${p.name} added`);
-      setTimeout(() => selectProject(p.id), 50);
+      setTimeout(() => { currentProject.set(p.id); newSession(); }, 50);
     } catch (e) { err.set(e instanceof ApiError ? e.message : String(e)); }
     busy.set(false);
   };

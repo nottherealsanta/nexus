@@ -236,3 +236,35 @@ fn the_project_picker_restores_an_inactive_project() {
         "{calls:?}\n{text}"
     );
 }
+
+#[test]
+fn the_wheel_scrolls_projects_the_rail_has_no_room_for() {
+    let mut app = three_projects();
+    let base = app.state.model.projects["bravo"].clone();
+    for n in 0..9 {
+        let mut p = base.clone();
+        p.id = format!("extra{n}");
+        p.name = format!("Extra {n}");
+        p.created += 10.0 + n as f64;
+        p.position = Some(10 + n);
+        app.state.model.projects.insert(p.id.clone(), p);
+    }
+    draw(&mut app, 120, 36);
+    let shown = |app: &App| -> Vec<usize> {
+        (0..12)
+            .filter(|i| app.hits.rect_of(&Target::RailProject(*i)).is_some())
+            .collect()
+    };
+    let before = shown(&app);
+    assert!(before.len() < 12 && before[0] == 0, "{before:?}");
+    let band = app.hits.rect_of(&Target::RailProject(0)).unwrap();
+    mouse(&mut app, MouseEventKind::ScrollDown, band.x + 1, band.y + 1);
+    draw(&mut app, 120, 36);
+    assert_eq!(shown(&app)[0], 1);
+    for _ in 0..40 {
+        mouse(&mut app, MouseEventKind::ScrollDown, band.x + 1, band.y + 1);
+    }
+    draw(&mut app, 120, 36);
+    let last = shown(&app);
+    assert_eq!(*last.last().unwrap(), 11, "the last project can be reached");
+}

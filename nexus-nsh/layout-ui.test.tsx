@@ -51,7 +51,8 @@ const inputs = { "GET */api/session/*/input": { body: { inputs: [], held: false 
 const terminal = { id: "term_1", name: "Shell", project_id: "prj_1", workspace: "/work/demo", session_id: "ses_1", creator: "user", status: "running", created: 1, ended: null, rows: 24, cols: 80, exit_code: null, signal: null, controller: null };
 const withTerminal = {
   ...inputs, ...network,
-  "GET */api/terminal*": { body: [terminal] },
+  "GET */api/terminal/term_1": { body: { ...terminal, busy: true } },
+  "GET */api/terminal?*": { body: [terminal] },
   "POST */api/terminal": { body: terminal },
   "POST */api/terminal/term_1/attach": { body: { attachment_id: "att_1" } },
   "POST */api/terminal/term_1/control": { body: { ...terminal, controller: "me" } },

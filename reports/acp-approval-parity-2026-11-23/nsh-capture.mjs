@@ -1,0 +1,22 @@
+import { chromium } from "playwright";
+const [url, out, width, height, scheme] = process.argv.slice(2);
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: Number(width), height: Number(height) }, colorScheme: scheme, deviceScaleFactor: 1 });
+const p = await ctx.newPage();
+p.on("pageerror", (e) => console.log("pageerror", e.message.slice(0, 300)));
+await p.goto(url);
+await p.waitForSelector('[data-testid="header"]', { timeout: 20000 });
+await p.waitForTimeout(1500);
+const skip = p.getByText("Skip", { exact: true });
+if (await skip.count()) { await skip.first().click(); await p.waitForTimeout(800); }
+await p.getByText(/other session.*waiting for input/).waitFor({ timeout: 20000 });
+await p.getByRole("button", { name: "go", exact: true }).click();
+const card = p.locator('[data-testid="waiting-card"]');
+await card.waitFor({ state: "visible", timeout: 20000 });
+await p.waitForTimeout(1200);
+await p.screenshot({ path: out });
+console.log("SHOT", out);
+console.log("CARD", JSON.stringify(await card.innerText()));
+console.log("HEADING", await p.locator('[data-testid="session-heading-title"]').count() ? await p.locator('[data-testid="session-heading-title"]').innerText() : "(none)");
+console.log("ONBOARDING", await p.getByText("Welcome to Nexus", { exact: false }).count());
+await browser.close();

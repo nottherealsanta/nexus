@@ -136,14 +136,20 @@ fn zmx_models_never_reach_the_root_model_picker() {
         .contains("agy/gemini-3.8-flash-high"));
 }
 
-/// A shared ZMX child scenario: the session's `worker`, the frozen starting context, what shows and what must not.
-fn zmx_scenario(data: &str) {
+/// A shared ZMX child scenario loaded into the selected session, before any drawing.
+fn zmx_loaded(data: &str) -> (Value, App) {
     let (scenario, mut app) = open(data);
     let session = app.state.model.sessions.get_mut(SESSION).unwrap();
     for (key, value) in scenario["session"].as_object().unwrap() {
         session.extra.insert(key.clone(), value.clone());
     }
     app.state.model.selected.as_mut().unwrap().starting = Some(scenario["starting"].clone());
+    (scenario, app)
+}
+
+/// A shared ZMX child scenario: the session's `worker`, the frozen starting context, what shows and what must not.
+fn zmx_scenario(data: &str) {
+    let (scenario, mut app) = zmx_loaded(data);
     let shown = draw(&mut app, 160, 50).1.join("\n");
     for fact in strings(&scenario["expect"]) {
         assert!(shown.contains(fact), "missing {fact:?} in:\n{shown}");
@@ -175,6 +181,13 @@ fn zmx_parallel_tools_and_claudes_own_subagent_nested_in_its_call() {
 #[test]
 fn zmx_denied_action_shows_what_the_cli_refused() {
     zmx_scenario(include_str!("../../interface/scenarios/zmx-denial.json"));
+}
+
+#[test]
+fn zmx_acp_denial_says_nexus_denied_it() {
+    zmx_scenario(include_str!(
+        "../../interface/scenarios/zmx-acp-denial.json"
+    ));
 }
 
 #[test]

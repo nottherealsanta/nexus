@@ -568,7 +568,7 @@ class Recovery:
                     + " have no finished record and their process is no longer running. Their retained output is lost.")
         if self._external(turn["session_id"]):
             lines.append(
-                "This turn ran on a vendor CLI (ZMX). The CLI's own process may have outlived the daemon; Nexus never "
+                "This turn ran on an external worker CLI. The CLI's own process may have outlived the daemon; Nexus never "
                 "kills a process by a stored PID. The CLI session id is kept, so the next prompt resumes it.")
             recovered = self._transcript_tail(turn)
             if recovered:
@@ -611,7 +611,7 @@ class Recovery:
 EXTERNAL_TOOL_TEXT = ("interrupted by a daemon restart; the CLI ran this tool itself, so it may have finished or may still be "
                       "running. Nexus did not retry it and its result is unknown")
 OUTCOMES = {
-    "external": "the CLI ran it itself (ZMX); it may have finished or may still be running. It was not retried, "
+    "external": "the CLI ran it itself (external worker); it may have finished or may still be running. It was not retried, "
                 "and its result is unknown.",
     "restored": "its completed result was preserved exactly and inserted as a tool result (known outcome).",
     "inserted": "its result was already inserted; nothing changed.",

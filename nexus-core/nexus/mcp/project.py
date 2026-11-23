@@ -35,7 +35,7 @@ from typing import Any
 
 from . import bridge
 from .config import ServerConfig, parse_all
-from .manager import McpManager, McpUnavailable
+from .manager import McpManager, McpUnavailable, auth_label
 from .search import Result
 
 FILE_NAME = ".mcp.json"
@@ -373,6 +373,8 @@ class ProjectMcp:
             else:
                 row = {"server": name, "state": "idle" if config.enabled else "disabled",
                        "error": None, "tools": 0, **config.describe()}
+                if config.oauth is not None and config.transport != "stdio":
+                    row["auth"] = auth_label(self.manager.connections_scope, config, False)
             duplicate = definition.duplicate_for(name)
             row |= {"source": "project", "project_id": self.project_id,
                     "file": definition.file_for(name), "warnings": definition.warnings_for(name)}

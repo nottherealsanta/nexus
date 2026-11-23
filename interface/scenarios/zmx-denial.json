@@ -1,11 +1,11 @@
 {
   "session": {
-    "title": "ZMX denied action",
+    "title": "External worker denied action",
     "agent": "scout",
     "model": "agy/gemini-3.8-flash-low",
     "permission": "ask",
     "worker": {
-      "label": "ZMX · Antigravity",
+      "label": "CLI · Antigravity",
       "provider": "agy",
       "model": "agy/gemini-3.8-flash-low",
       "permission_mode": "accept-edits",
@@ -83,14 +83,15 @@
     }
   ],
   "expect": [
-    "ZMX · Antigravity",
+    "CLI · Antigravity",
     "Needs attention",
     "Denied by the CLI",
     "1 action",
     "Clean the build folder"
   ],
   "absent": [
-    "NEXUS SYSTEM PROMPT MUST NOT APPEAR"
+    "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "ACP · Antigravity"
   ],
   "expect_open": [
     "run_command",

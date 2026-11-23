@@ -92,6 +92,8 @@ impl Detail {
 pub enum View {
     Session,
     Settings,
+    /// The first-run tour (`onboarding.rs`); it covers the window.
+    Onboarding,
 }
 
 /// Timeline scroll: following the latest item, or pinned `top` lines from the
@@ -135,6 +137,8 @@ pub enum PaletteMode {
     Models,
     /// A model for an agent's list in Settings (`AppUi::pool_pick` says which).
     PoolModels,
+    /// A model for one agent in the first-run tour (`AppUi::onboarding_pick` says which).
+    OnboardingModels,
     Agents,
     Efforts,
     Export,
@@ -157,6 +161,8 @@ pub enum PaletteKind {
     Project(String),
     Model(String),
     PoolModel(String),
+    /// A model chosen in the tour; `None` is "use the session's model".
+    OnboardingModel(Option<String>),
     Agent(String),
     Effort(String),
     /// (format, scope): `markdown|json`, `session|tree`.
@@ -386,6 +392,8 @@ pub enum Confirmed {
         path: String,
     },
     CloseTerminal(String),
+    /// Remove an MCP server: (project, name).
+    RemoveMcp(Option<String>, String),
     /// Closing a file tab with unsaved text: Save, Discard or Cancel.
     CloseDirty {
         group: crate::groups::GroupId,
@@ -474,6 +482,15 @@ pub enum EditTarget {
     /// A provider's API key (masked while typed).
     ProviderKey {
         id: String,
+    },
+    /// The address of a remote MCP server to add (Settings › MCP).
+    McpAddress {
+        project: Option<String>,
+    },
+    /// One header's value for an MCP server, typed as `Name: value` (masked while typed).
+    McpHeader {
+        project: Option<String>,
+        name: String,
     },
     /// `[context] title_models`, comma separated; empty clears the list.
     TitleModels {
@@ -670,6 +687,15 @@ pub enum WorktreeCopy {
     Main,
 }
 
+/// What a click in the tour can mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingTarget {
+    Skip,
+    Back,
+    Next,
+    Row(usize),
+}
+
 /// Everything the mouse can hit. Registered by the renderer as it draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -812,6 +838,8 @@ pub enum Target {
     LearnSkill(usize),
     NoticeItem(usize),
     DialogButton(usize),
+    /// A control of the first-run tour.
+    Onboarding(OnboardingTarget),
     /// A surface that swallows clicks (dialogs, palette body, drawers).
     Swallow,
     /// Outside an overlay: clicking closes it.
@@ -831,6 +859,8 @@ pub enum Target {
     SettingsPageRow(usize),
     /// A row of a provider's detail modal.
     ProviderDetailRow(usize),
+    /// A row of an MCP server's detail modal.
+    McpDetailRow(usize),
     /// The Manager's indicator: a click talks, or stops the live voice.
     ManagerIndicator,
     ManagerVoice,

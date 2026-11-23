@@ -6,14 +6,16 @@ works as it is (`nexus config import-mcp` copies a whole file). A bad entry is
 an error for that server only.
 
 Adapted from old Nexus `nexus/mcp/client.py` `normalize_server_entry`, cut down
-to the keys that act: no `envFile`, no OAuth, no `${input:…}`. Keys that other
+to the keys that act: no `envFile`, no `${input:…}`; OAuth is `oauth.py`. Keys that other
 clients write for approval or UI (`autoApprove`, `trust`, `description`…) are
 accepted and reported, never acted on; a tool call stays with the permission rules.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,11 +30,26 @@ _TRANSPORT_NAMES = {"stdio": "stdio", "local": "stdio", "http": "http", "streama
                     "streamablehttp": "http", "remote": "http", "sse": "sse"}
 _KEYS = {"command", "args", "env", "environment", "cwd", "url", "serverUrl", "httpUrl", "headers", "transport", "type",
          "transportType", "enabled", "disabled", "includeTools", "excludeTools",
-         "disabledTools", "timeout", "call_timeout_s", "connect_timeout_s"}
-_SHOWN_ONLY = {"autoApprove", "alwaysAllow", "trust", "oauth", "auth", "headersHelper", "description", "gallery",
+         "disabledTools", "timeout", "call_timeout_s", "connect_timeout_s", "oauth"}
+_SHOWN_ONLY = {"autoApprove", "alwaysAllow", "trust", "auth", "headersHelper", "description", "gallery",
                "version", "dev", "icon", "source", "networkTimeout", "settings", "sandboxEnabled", "watchPaths",
                "$schema", "tool_loading", "alwaysLoad"}  # the last two: loading is a global setting now ([mcp] full_definitions)
 _VAR = re.compile(r"\$\{([^}]+)\}|\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+_ALLOW_MISSING_ENV: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_allow_missing_env", default=False)
+
+
+def validate(name: str, entry: Any, *, workspace: str = "") -> ServerConfig:
+    """`parse` for a write: a `${env:NAME}` that is not set here yet is accepted (the row then says which one is missing).
+
+    Everything else is checked as it is when a server starts, so a typo is refused when it is saved.
+    """
+    token = _ALLOW_MISSING_ENV.set(True)
+    try:
+        return parse(name, entry, workspace=workspace)
+    finally:
+        _ALLOW_MISSING_ENV.reset(token)
 
 
 class McpConfigError(ValueError):
@@ -55,6 +72,7 @@ class ServerConfig:
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
     call_timeout: float = DEFAULT_CALL_TIMEOUT
     ignored: tuple[str, ...] = ()  # accepted keys that Nexus does not act on
+    oauth: dict[str, Any] | None = None  # remote only: None is off; a table (maybe empty) signs in through OAuth
 
     def describe(self) -> dict[str, Any]:
         """Facts for status and `/api/mcp/{name}`: no argument values, env values, header values or URL credentials."""
@@ -75,7 +93,7 @@ class ServerConfig:
             if ":" in host and not host.startswith("["):  # a bracketed IPv6 literal stays a valid URL
                 host = f"[{host}]"
             info |= {"url": f"{parts.scheme}://{host}{f':{port}' if port else ''}{parts.path}",
-                     "header_names": sorted(self.headers)}
+                     "header_names": sorted(self.headers), "oauth": self.oauth is not None}
         return info
 
 
@@ -102,6 +120,8 @@ def interpolate(text: str, *, workspace: str = "") -> str:
         if value is None:
             if sep:
                 return default
+            if _ALLOW_MISSING_ENV.get():
+                return ""
             raise McpConfigError(f"environment variable {name} is not set")
         return value
     return _VAR.sub(one, text)
@@ -141,6 +161,31 @@ def _seconds(entry: dict[str, Any], default: float, *keys: str) -> float:
                 value /= 1000
             return min(float(value), MAX_TIMEOUT)
     return default
+
+
+_OAUTH_KEYS = {"scope", "client_id", "client_secret", "redirect_port"}
+
+
+def _oauth(entry: dict[str, Any], headers: dict[str, str]) -> dict[str, Any] | None:
+    """`oauth = true`, `false` or a table (`scope`, `client_id`, `client_secret`). Unset: on unless the entry sends its own `Authorization`."""
+    if "oauth" not in entry:
+        return None if any(k.lower() == "authorization" for k in headers) else {}
+    value = entry["oauth"]
+    if isinstance(value, bool):
+        return {} if value else None
+    if not isinstance(value, dict):
+        raise McpConfigError("oauth must be true, false or a table")
+    unknown = sorted(set(value) - _OAUTH_KEYS)
+    if unknown:
+        raise McpConfigError(f"unknown oauth keys: {', '.join(unknown)}")
+    port = value.get("redirect_port")
+    if "redirect_port" in value and (isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535):
+        raise McpConfigError("oauth.redirect_port must be a port from 1024 to 65535")
+    if not all(isinstance(v, str) and v for k, v in value.items() if k != "redirect_port"):
+        raise McpConfigError("oauth.scope, oauth.client_id and oauth.client_secret must be non-empty strings")
+    if "client_secret" in value and "client_id" not in value:
+        raise McpConfigError("oauth.client_secret needs oauth.client_id")
+    return {k: v if k == "redirect_port" else interpolate(v, workspace="") for k, v in value.items()}
 
 
 def parse(name: str, entry: Any, *, workspace: str = "") -> ServerConfig:
@@ -204,8 +249,28 @@ def parse(name: str, entry: Any, *, workspace: str = "") -> ServerConfig:
                             args=tuple(interpolate(a, workspace=workspace) for a in args), env=env, cwd=cwd, **base)
     if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         raise McpConfigError("url must start with http:// or https://")
-    return ServerConfig(url=interpolate(url, workspace=workspace),
-                        headers=_mapping(entry.get("headers", {}), "headers", workspace), **base)
+    headers = _mapping(entry.get("headers", {}), "headers", workspace)
+    return ServerConfig(url=interpolate(url, workspace=workspace), headers=headers, oauth=_oauth(entry, headers), **base)
+
+
+_GENERIC_LABELS = {"www", "mcp", "api", "app", "server", "sse", "com", "net", "org", "io", "dev", "ai", "co"}
+
+
+def name_from_url(url: str, taken: Iterable[str] = ()) -> str:
+    """A server name from its address: `https://mcp.linear.app/sse` is `linear`; a number is added when it is taken."""
+    parts = urlsplit(url if "//" in url else f"https://{url}")
+    labels = [label for label in (parts.hostname or "").split(".") if label]
+    useful = [label for label in labels if label.lower() not in _GENERIC_LABELS]
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "-", (useful or labels or ["mcp"])[0]).strip("-._") or "mcp"
+    base = base[:28]
+    if not base[0].isalnum():
+        base = f"mcp-{base}"[:28]
+    taken = set(taken)
+    name, number = base, 2
+    while name in taken:
+        name = f"{base}-{number}"
+        number += 1
+    return name
 
 
 def parse_all(entries: Any, *, workspace: str = "") -> tuple[dict[str, ServerConfig], dict[str, str]]:

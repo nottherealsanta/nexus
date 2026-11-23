@@ -183,7 +183,10 @@ def routes(service: TerminalService, runtime: Runtime, wrap: Callable[..., Any],
             return JSONResponse(service.rename(terminal_id, data["name"]), headers={"cache-control": "no-store"})
         if request.method == "DELETE":
             return JSONResponse(await service.dismiss(terminal_id), headers={"cache-control": "no-store"})
-        return JSONResponse(service.metadata(terminal_id), headers={"cache-control": "no-store"})
+        metadata = dict(service.metadata(terminal_id))
+        term = service.terminals.get(terminal_id)
+        metadata["busy"] = term.busy() if term else False
+        return JSONResponse(metadata, headers={"cache-control": "no-store"})
 
     async def attach(request: Request) -> Response:
         term = service.get(request.path_params["id"])

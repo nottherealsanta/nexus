@@ -71,6 +71,7 @@ export const manifest = {
    "has_notifications",
    "text_edit.active",
    "view.settings",
+   "view.onboarding",
    "waiting.question_field",
    "manager.in_call",
    "manager.focused",
@@ -188,6 +189,14 @@ export const manifest = {
     ],
     "action": "text_edit.cancel",
     "note": "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+   },
+   {
+    "id": "onboarding",
+    "when": [
+     "view.onboarding"
+    ],
+    "action": "onboarding.back",
+    "note": "Onboarding goes back one step; on the first step it does nothing (Skip is explicit). Provider details and pickers close first."
    },
    {
     "id": "question_field",
@@ -324,7 +333,7 @@ export const manifest = {
    ],
    "default": "session",
    "empty_project_view": "new_session",
-   "first_run_view": "welcome_sign_in",
+   "first_run_view": "onboarding",
    "view_note": {
     "session": "Timeline plus composer; a child session uses the same view with breadcrumbs and back.",
     "new_session": "Starting context (agent, model, effort, directory, system prompt, AGENTS.md, tools, skills, MCP, token count) with the composer below.",
@@ -576,7 +585,7 @@ export const manifest = {
        "allow",
        "ask"
       ],
-      "note": "For new sessions. Applies to bash, web_search and web_fetch; read-only and file tools never ask."
+      "note": "For new sessions. Applies to bash, web_search, web_fetch and firecrawl; read-only and file tools never ask."
      },
      {
       "id": "tools.defaults",
@@ -605,33 +614,33 @@ export const manifest = {
     ]
    },
    {
-    "id": "zmx",
-    "label": "ZMX",
-    "note": "ZMX runs a vendor CLI as a subagent with its own loop, tools, permissions and sign-in. Off by default; it never runs root sessions or the Manager. Not verified: whether the vendors permit this use of a subscription.",
+    "id": "workers",
+    "label": "External workers",
+    "note": "External workers run a vendor CLI as a subagent with its own loop, tools, permissions and sign-in. Off by default; they never run root sessions or the Manager. Not verified: whether the vendors permit this use of a subscription.",
     "row": [
      {
-      "id": "zmx.claude_backend",
+      "id": "workers.claude_backend",
       "label": "Claude Code subagents",
       "kind": "choice",
       "scope": "core",
       "clients": "both",
       "options": [
        "Agent SDK",
-       "ZMX"
+       "PTY"
       ],
-      "note": "Use Agent SDK for an enterprise or full-price API account. Otherwise ZMX is usually better, but it does not use Nexus agents or tools. Core key [zmx] claude_backend."
+      "note": "Use Agent SDK for an enterprise or full-price API account. Otherwise the CLI's PTY worker is usually better, but it does not use Nexus agents or tools. Core key [workers] claude_backend = \"cli\"."
      },
      {
-      "id": "zmx.antigravity",
+      "id": "workers.antigravity",
       "label": "Antigravity subagents",
       "kind": "choice",
       "scope": "core",
       "clients": "both",
       "options": [
        "off",
-       "ZMX"
+       "ACP"
       ],
-      "note": "Antigravity has only ZMX: it does not use Nexus agents or tools, and its permissions are the CLI's own. Core key [zmx] antigravity."
+      "note": "Antigravity runs over ACP v1: it does not use Nexus agents or tools, and its permissions are the CLI's own. Core key [workers] antigravity."
      }
     ]
    },
@@ -661,6 +670,8 @@ export const manifest = {
    {
     "id": "mcp",
     "label": "MCP",
+    "page": true,
+    "note": "Remote and local MCP servers: add, sign in, switch off, remove.",
     "row": [
      {
       "id": "mcp.full_definitions",
@@ -903,8 +914,145 @@ export const manifest = {
       "scope": "client",
       "clients": "both",
       "command": "app.open_inspector"
+     },
+     {
+      "id": "about.onboarding",
+      "label": "Replay onboarding",
+      "kind": "action",
+      "scope": "client",
+      "clients": "both",
+      "command": "app.onboarding"
      }
     ]
+   }
+  ]
+ },
+ "onboarding": {
+  "finish_no_project": "You have no project yet, so Finish opens Add project.",
+  "no_provider": "No provider is connected yet. Connect one first, then choose models.",
+  "quest_provider": "Connect a provider",
+  "hints_info": "enter next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "hints_rows": "\u2191\u2193 choose \u00b7 enter change \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "step": [
+   {
+    "id": "welcome",
+    "kind": "info",
+    "title": "Welcome to Nexus",
+    "lines": [
+     "Nexus is a workspace where AI agents work on your code, and you can see everything they do.",
+     "This short tour connects a provider, sets up your agents and teaches the basics. It takes about two minutes.",
+     "Every choice can be changed later in Settings. Replay the tour from the command palette ({key:palette.open}) or with /onboarding."
+    ],
+    "tip": "Skip the tour at any time; Nexus will not ask again."
+   },
+   {
+    "id": "provider",
+    "kind": "provider",
+    "title": "Connect a provider",
+    "lines": [
+     "A provider is where the models come from: a ChatGPT, Copilot or Claude subscription, or an API key. Connect at least one to start.",
+     "You can connect more, or change and disconnect them later in Settings > Providers."
+    ],
+    "tip": "Sign-in happens in your browser or with an API key. Nexus Core stores the credentials."
+   },
+   {
+    "id": "agents",
+    "kind": "agents",
+    "title": "Choose models for your agents",
+    "lines": [
+     "Nexus works as a team. You talk to one agent, and it can hand jobs to others. Each agent can use its own model, so quick cheap models do the reading and your best model does the thinking.",
+     "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models, fallbacks, effort."
+    ],
+    "tip": "Type part of a name in the picker to filter it."
+   },
+   {
+    "id": "timeline",
+    "kind": "info",
+    "title": "One timeline",
+    "lines": [
+     "A session is a single timeline. Everything the model receives is shown in it, in order: your messages, its replies, every tool it runs and every notice.",
+     "Nothing is hidden, and nothing is shown that the model does not have. Long output is clipped and says so; old history is folded and announced.",
+     "Tool calls gather into activity rows. Open one for details. The level of detail is in Settings, or press {key:timeline.detail_cycle}."
+    ],
+    "tip": "If you wonder what the model knows, the timeline is the answer."
+   },
+   {
+    "id": "team",
+    "kind": "info",
+    "title": "Agents and subagents",
+    "lines": [
+     "For small jobs one agent does everything. For big ones it hands work to specialists: scout reads and reports, plan designs, build edits and quick runs small errands.",
+     "Each subagent appears as a card in your timeline. Open it to watch it work, then press Esc to return to the parent.",
+     "Need a side answer without disturbing the session? /btw asks a quick read-only question."
+    ],
+    "tip": "The models you chose a moment ago decide who does what."
+   },
+   {
+    "id": "control",
+    "kind": "info",
+    "title": "You stay in control",
+    "lines": [
+     "With Default permission set to ask (Settings > Tools), shell and web tools wait for you. Allow once ({key:waiting.allow_once}), allow for the session ({key:waiting.allow_session}) or deny ({key:waiting.deny}).",
+     "An agent can also ask you a question. Its card sits above the composer.",
+     "While an agent works: {key:composer.steer} steers it with a new message, {key:composer.queue} queues one for the next turn, {key:composer.interrupt_send} interrupts and sends, and {key:session.interrupt} interrupts."
+    ],
+    "tip": "Nothing the agent does is out of your sight or your reach."
+   },
+   {
+    "id": "moving",
+    "kind": "info",
+    "title": "Find your way",
+    "lines": [
+     "{key:palette.open} opens the command palette: every action lives there. In the composer, / runs a command and @ mentions a file.",
+     "{key:session.new} starts a new session and {key:session.switch} jumps between them. A project is a folder; its sessions, files and Git changes live together.",
+     "{key:app.settings} opens Settings and {key:app.help_keys} lists every shortcut."
+    ],
+    "tip": "The sidebar lists your sessions, files and Git changes."
+   },
+   {
+    "id": "done",
+    "kind": "done",
+    "title": "You're ready",
+    "lines": [
+     "That is the tour. Describe what you want in the composer and press Enter to start your first session.",
+     "Settings holds everything you chose here, and /onboarding plays the tour again."
+    ]
+   }
+  ],
+  "agent": [
+   {
+    "name": "default",
+    "kind": "root",
+    "role": "Starts every new session",
+    "hint": "build does the work itself. orchestrate coordinates scouts, planners and builders, which suits big tasks.",
+    "options": [
+     "build",
+     "orchestrate"
+    ]
+   },
+   {
+    "name": "scout",
+    "kind": "model",
+    "role": "Reads code and gathers facts; never edits",
+    "hint": "A small, fast model: luna, haiku or hydrogen class. It reads a lot, so cheap and quick wins."
+   },
+   {
+    "name": "quick",
+    "kind": "model",
+    "role": "Small, self-contained errands",
+    "hint": "Also a small, fast model, like scout: luna, haiku or hydrogen class."
+   },
+   {
+    "name": "plan",
+    "kind": "model",
+    "role": "Turns findings into a work plan",
+    "hint": "A strong reasoning model. It thinks more than it reads."
+   },
+   {
+    "name": "build",
+    "kind": "model",
+    "role": "Writes and edits the code",
+    "hint": "Your best coding model."
    }
   ]
  },
@@ -1118,6 +1266,38 @@ export const manifest = {
    ]
   },
   {
+   "id": "app.onboarding",
+   "title": "Open onboarding",
+   "category": "app",
+   "slash": "onboarding",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette",
+    "settings"
+   ],
+   "note": "The first-run tour: connect a provider, choose models for agents, learn the basics. Opens by itself once per Nexus home (ui.onboarded); this replays it. Desktop and web only: the phone connects to a Core that is already set up."
+  },
+  {
+   "id": "onboarding.back",
+   "title": "Back one onboarding step",
+   "category": "navigation",
+   "keys": {
+    "tui": "esc",
+    "nsh": "esc"
+   },
+   "key_context": "escape_chain",
+   "when": [
+    "view.onboarding"
+   ],
+   "unavailable_reason": "Onboarding is not open.",
+   "placement": [
+    "palette"
+   ],
+   "note": "Does nothing on the first step."
+  },
+  {
    "id": "notifications.open",
    "title": "Notifications",
    "category": "notifications",
@@ -1265,7 +1445,7 @@ export const manifest = {
    "placement": [
     "panel"
    ],
-   "note": "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first while it runs (plan 45)."
+   "note": "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first only while a command runs in it (plan 45)."
   },
   {
    "id": "terminal.acquire",
@@ -1546,7 +1726,7 @@ export const manifest = {
     "menu",
     "panel"
    ],
-   "note": "Closes the focused group's active tab of any kind. A file with unsaved changes asks layout.unsaved.title (Save, Discard, Cancel); a running terminal asks before it is terminated; a session tab only closes the tab. Closing the last tab of a group removes the group. session.tab_close (alt+x, /close) and session.tab_next / session.tab_prev (alt+], alt+[) keep their ids and act on the focused group's tabs."
+   "note": "Closes the focused group's active tab of any kind. A file with unsaved changes asks layout.unsaved.title (Save, Discard, Cancel); a terminal with a command running asks before it is terminated; a session tab only closes the tab. Closing the last tab of a group removes the group. session.tab_close (alt+x, /close) and session.tab_next / session.tab_prev (alt+], alt+[) keep their ids and act on the focused group's tabs."
   },
   {
    "id": "layout.group_close",
@@ -1563,7 +1743,7 @@ export const manifest = {
     "palette",
     "menu"
    ],
-   "note": "Closes every tab of the focused group and gives its space to the sibling. A group holding unsaved files asks once for all of them (Save, Discard, Cancel); a running terminal asks before it is terminated. Absent from the group menu when there is only one group."
+   "note": "Closes every tab of the focused group and gives its space to the sibling. A group holding unsaved files asks once for all of them (Save, Discard, Cancel); a terminal with a command running asks before it is terminated. Absent from the group menu when there is only one group."
   },
   {
    "id": "layout.open_to_side",

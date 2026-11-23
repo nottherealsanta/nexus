@@ -6,6 +6,7 @@ import collapsedPaste from "../interface/scenarios/collapsed-paste.json";
 import mermaid from "../interface/scenarios/mermaid.json";
 import subagentDoneScenario from "../interface/scenarios/subagent-done.json";
 import zmxDenial from "../interface/scenarios/zmx-denial.json";
+import zmxAcpDenial from "../interface/scenarios/zmx-acp-denial.json";
 import zmxInterrupt from "../interface/scenarios/zmx-interrupt.json";
 import zmxNeedsAttention from "../interface/scenarios/zmx-needs-attention.json";
 import zmxParallel from "../interface/scenarios/zmx-parallel-tools.json";
@@ -126,6 +127,7 @@ describe("shared scenarios", () => {
   });
   zmx("zmx parallel tools and Claude's own subagent nested in its call", zmxParallel);
   zmx("zmx denied action shows what the CLI refused", zmxDenial);
+  zmx("zmx ACP denial says Nexus denied it", zmxAcpDenial);
   zmx("zmx needs attention names the manual step", zmxNeedsAttention);
   zmx("zmx interrupted turn keeps the unknown tool outcome", zmxInterrupt);
   zmx("zmx recovered turn says the CLI ran the tool", zmxRecovered);

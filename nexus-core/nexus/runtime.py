@@ -51,6 +51,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import secrets
 import sqlite3
 import time
@@ -64,6 +65,7 @@ from . import agents as agent_files
 from . import artifacts, cargo_env, oneshot, permissions, worktrees
 from . import browser as browser_control
 from . import extensions as extension_files
+from . import firecrawl as firecrawl_service
 from . import mcp as mcp_files
 from . import questions as question_contract
 from . import skills as skill_files
@@ -126,6 +128,8 @@ from .storeio import READER
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError, ToolOutput
 from .tools import bash as bash_tool
 from .tools.base import clip
+from .worker_labels import display_worker
+from .workers.base import diagnostic_text
 
 AUTO_APPROVED = {"read", "grep", "glob", "ls", "patch", skill_files.SKILL_TOOL, mcp_files.MCP_SEARCH, "bash_output", "bash_kill", "session", agent_files.FORK_TOOL, agent_files.MESSAGE_TOOL,
                  agent_files.ESCALATE_TOOL, "code", "ask", "edit", "write",
@@ -135,6 +139,18 @@ MAX_ESCALATIONS = 5  # blocks one child can report before its parent reads them
 MAX_ESCALATION_FIELD = 600
 TITLE_CHARS = 60
 WORKTREE_NOTICE = "[Nexus notice: start in a worktree]"
+
+
+def _worker_attention_why(worker: dict[str, Any]) -> str:
+    """Why an external worker child needs attention, without claiming Nexus cannot answer ACP prompts."""
+    from .workers.antigravity import ACP_TRANSPORT
+
+    if worker.get("transport") == ACP_TRANSPORT:
+        if worker.get("denied_actions"):
+            return ("Nexus denied the ACP permission request; no approval was given, and the CLI may have continued "
+                    "without the tool.")
+        return "The Antigravity ACP session needs attention; no ACP permission was bypassed."
+    return "The CLI prompt cannot be answered by Nexus; Nexus approved nothing"
 
 
 def worktree_notice(offer: dict[str, Any]) -> str:
@@ -357,6 +373,8 @@ class Runtime:
         self.mcp = mcp_files.McpManager(lambda kind, data: self.bus.publish(kind, data),
                                         lambda: ConfigFile().mcp_servers(), _config_stamp)
         self.project_mcps: dict[str, ProjectMcp] = {}
+        from .mcp.oauth import Logins
+        self.mcp_logins = Logins(lambda kind, data: self.bus.publish(kind, data))
         self.browser = browser_control.BrowserService(
             lambda kind, data, session_id: self.bus.publish(kind, data, session_id=session_id),
             lambda: bool(ConfigFile().read()["values"]["browser"]["use_my_chrome"]))
@@ -626,13 +644,14 @@ class Runtime:
         if ref.partition("/")[0] not in ("claude-code", "agy"):
             return
         if not child:
-            raise ValueError("ZMX models are subagent-only; root sessions and the Manager keep the normal provider backend")
+            raise ValueError("External-worker models are subagent-only; root sessions and the Manager keep the normal provider backend")
         from .workers.registry import require
         require(ref.partition("/")[0])
 
     def _save_worker(self, session_id: str, worker: dict[str, Any]) -> None:
         session = self.session(session_id)
         snapshot = self.snapshot_for(session)
+        worker = display_worker(worker) or worker
         snapshot["worker"] = worker
         self.store.set_snapshot(session_id, snapshot)
         self.bus.publish("session.worker", worker, session_id=session_id)
@@ -665,7 +684,7 @@ class Runtime:
             model, model_source = s.model, "session" if s.model else "none"
             effort, effort_source = s.effort, "session" if s.effort else "provider"
         pending = self.pending_directories.get(s.id)
-        worker = (snapshot.get("worker") if snapshot_info and "snapshot" in locals() else None)
+        worker = display_worker(snapshot.get("worker")) if snapshot_info and "snapshot" in locals() else None
         if worker:
             tools, skills, servers = [], [], []
         return {
@@ -1496,9 +1515,9 @@ class Runtime:
             locked = {"model": worker_ref, "agent": current.agent, "directory": current.directory,
                       "permission": current.permission, "effort": current.effort, "disabled_tools": sorted(current.disabled())}
             if any(k in fields and fields[k] != value for k, value in locked.items()):
-                raise Conflict("ZMX keeps its backend, model, agent, cwd and permission policy for resume; start a new child to change them")
+                raise Conflict("An external worker keeps its backend, model, agent, cwd and permission policy for resume; start a new child to change them")
         elif (fields.get("model") or "").partition("/")[0] in ("claude-code", "agy"):
-            raise Conflict("Cannot switch between Nexus and ZMX context; start a new ZMX child instead")
+            raise Conflict("Cannot switch between Nexus and external-worker context; start a new child instead")
         expected_revision = fields.pop("expected_revision", None)
         if fields.get("permission") not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
@@ -1522,7 +1541,7 @@ class Runtime:
             candidate = found.get(fields["agent"], child=current.parent_id is not None)
             self._guard_worker_model(fields.get("model") or current.model or candidate.model or "", child=current.parent_id is not None)
             if candidate.model and candidate.model.partition("/")[0] in ("claude-code", "agy") and not current.model:
-                raise Conflict("Cannot switch a Nexus session to a ZMX agent model; start a new child")
+                raise Conflict("Cannot switch a Nexus session to an external-worker agent model; start a new child")
             if candidate.name != current.agent:
                 new_agent = candidate
         if fields.get("model") == "":
@@ -1754,7 +1773,7 @@ class Runtime:
             raise ValueError("source must be 'tool' or 'api'")
         session = self.session(session_id)
         if self._worker_ref(session):
-            raise Conflict("ZMX cannot change directory; start a new child in the target directory")
+            raise Conflict("External workers cannot change directory; start a new child in the target directory")
         change = await self._describe_directory_change(session, directory, source)
         if change is None:
             return {"status": "unchanged", "directory": session.directory,
@@ -2377,7 +2396,7 @@ class Runtime:
     def _oneshot_request(self, session: Session, instruction: str, *, messages: list[Message] | None = None,
                          system: str | None = None) -> tuple[Any, Any]:
         if self._worker_ref(session):
-            raise Conflict("ZMX does not support one-shots; send a follow-up to the child")
+            raise Conflict("External workers do not support one-shots; send a follow-up to the child")
         agent = self._agent(session, refresh=False)
         base = agent.request()
         history = oneshot.settled(messages if messages is not None else base.messages)
@@ -2396,7 +2415,7 @@ class Runtime:
         """A hidden read-only fork; only its own context changes, never the parent's."""
         session = self.session(session_id)
         if self._worker_ref(session):
-            raise Conflict("/btw is unavailable on ZMX: the CLI's full context cannot be forked")
+            raise Conflict("/btw is unavailable on external workers: the CLI's full context cannot be forked")
         question = question.strip()
         if not question:
             raise ValueError("question must not be empty")
@@ -2474,7 +2493,7 @@ class Runtime:
         """Write the summary, then start a new root session of the same agent that begins with it."""
         session = self.session(session_id)
         if self._worker_ref(session):
-            raise Conflict("ZMX cannot hand off CLI-owned context; start a new child instead")
+            raise Conflict("External workers cannot hand off CLI-owned context; start a new child instead")
         if session.parent_id is not None:
             raise ValueError("only a root session can be handed off")
         self._check_turn_start(session)
@@ -2617,11 +2636,12 @@ class Runtime:
         if ref.partition("/")[0] in ("claude-code", "agy"):
             from .workers.agent import ExternalAgent
             if session.parent_id is None or session.fork:
-                raise ValueError("ZMX is only available to ordinary child sessions, never roots or read-only forks")
+                raise ValueError("External workers are only available to ordinary child sessions, never roots or read-only forks")
             return ExternalAgent(ref=ref, workspace=Path(session.directory), messages=[m.message for m in self.store.messages(session.id)],
                                  instructions=spec["prompt"], permission=session.permission,
                                  effort=self.resolve_effort(session, snapshot, ref)[0], worker=snapshot.get("worker"),
-                                 project=Path(self.project(session.project_id).path))
+                                 project=Path(self.project(session.project_id).path),
+                                 approve=lambda call, args: self._approve_external(session.id, call, args))
         provider, model = provider_for(ref)
         fallback_config = snapshot.get("model_fallbacks") or {}
         sequence = [fallback_config.get("primary"), *(fallback_config.get("models") or [])]
@@ -3034,7 +3054,7 @@ class Runtime:
         """
         parent = self.session(parent.id)
         if self._worker_ref(parent):
-            raise Conflict("ZMX cannot be forked: CLI context and tools cannot be made into a Nexus read-only fork")
+            raise Conflict("External workers cannot be forked: CLI context and tools cannot be made into a Nexus read-only fork")
         if parent.id in self.closing_sessions:
             raise Conflict("session is being deleted")
         if parent.archived:
@@ -3118,7 +3138,7 @@ class Runtime:
             self.notify[child_id] = parent_id
             if self._worker_ref(child):
                 self.prompt(child_id, message, mode="queue")
-                return f"Message queued for ZMX sub agent {child_id}; it will run in a follow-up turn, not steer the CLI mid-turn."
+                return f"Message queued for external-worker subagent {child_id}; it will run in a follow-up turn, not steer the CLI mid-turn."
             self.inboxes.setdefault(child_id, []).append(message)
             return (f"Message queued for sub agent {child_id} ({self._child_label(child)}), which is working; it sees it "
                     "before its next model call. Its answer will arrive as a message when it finishes.")
@@ -3222,7 +3242,7 @@ class Runtime:
         effort: str | None = child.effort
         try:
             snapshot = self.snapshot_for(child)
-            worker = snapshot.get("worker") or {}
+            worker = display_worker(snapshot.get("worker")) or {}
             if label := worker.get("label"):
                 agent = label
             model, _ = self.resolve_model(child, snapshot["agent"])
@@ -3302,7 +3322,7 @@ class Runtime:
         if ref := self._worker_ref(session):
             self._guard_worker_model(ref, child=session.parent_id is not None)
             if images:
-                raise ValueError("ZMX accepts text-only assignments; images cannot be sent to this CLI transport")
+                raise ValueError("External workers accept text-only assignments; images cannot be sent to this CLI transport")
             if mode == "steer":
                 mode = "queue"
         if mode == "send" or not busy:
@@ -3360,7 +3380,7 @@ class Runtime:
         if not text.strip() and not images:
             raise ValueError("text or images must not be empty")
         if self._worker_ref(session):
-            raise Conflict("ZMX turns cannot be interrupted and replaced; queue the message instead")
+            raise Conflict("External-worker turns cannot be interrupted and replaced; queue the message instead")
         # Hold first: if the turn ends by itself while we cancel, the queue must not start before this message.
         self.inputs.hold(session_id, True)
         await self.interrupt(session_id)
@@ -3404,7 +3424,7 @@ class Runtime:
         """
         session = self.session(session_id)
         if self._worker_ref(session):
-            raise Conflict("ZMX cannot continue without a user message; send a follow-up instead")
+            raise Conflict("External workers cannot continue without a user message; send a follow-up instead")
         self._check_turn_start(session)
         unfinished = next((turn for turn in self.store.turns_for_session(session_id)
                            if turn["status"] == "running" or turn["recovery"] == "pending"), None)
@@ -3496,6 +3516,8 @@ class Runtime:
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
         active_attempt: str | None = None
+        last_request: str | None = None
+        last_attempt: str | None = None
         request_parts: list[dict[str, Any]] = []
         clock = ReasoningClock()
         partial: LivePartial | None = None
@@ -3546,7 +3568,7 @@ class Runtime:
                         self._save_worker(session_id, event.worker)
                         if event.worker.get("status") == "needs_attention":
                             self._escalate(self.session(session_id), {"needed": event.worker.get("error") or "CLI attention required",
-                                                                    "why": "ZMX cannot answer CLI prompts; Nexus approved nothing"})
+                                                                    "why": _worker_attention_why(event.worker)})
                         continue
                     if isinstance(event, StepStart):
                         step = event.step
@@ -3571,10 +3593,15 @@ class Runtime:
                             clock.close()
                         request_parts.append(to_json(event.part))
                     elif isinstance(event, Usage):
-                        if active_request is not None:
-                            self.store.record_usage(active_request, active_attempt, event)
+                        # A CLI may report the turn's usage after its final Done (ACP does). Keep the
+                        # last completed request so that usage still lands in the ledger.
+                        request_id = active_request or last_request
+                        attempt_id = active_attempt if active_request is not None else last_attempt
+                        if request_id is not None:
+                            self.store.record_usage(request_id, attempt_id, event)
                     elif isinstance(event, Done):
                         if active_request is not None:
+                            last_request, last_attempt = active_request, active_attempt
                             if partial is not None:
                                 self.store.save_partial(active_request, partial.json())
                             self.store.finish_request(
@@ -3941,7 +3968,7 @@ class Runtime:
             if info["calls"] == BTW_MAX_CALLS:
                 self.inboxes.setdefault(session_id, []).append(
                     "[Nexus notice: side-question tool budget] All 10 tool calls have been used. Answer now without tools.")
-            allowed = {"read", "grep", "glob", "ls", "code", "web_search", "web_fetch", "skill",
+            allowed = {"read", "grep", "glob", "ls", "code", "web_search", "web_fetch", "firecrawl", "skill",
                        "bash", mcp_files.MCP_SEARCH, mcp_files.MCP_CALL}
             if call.name not in allowed:
                 raise ToolError(f"refused: `{call.name}` is not a read-only side-question tool. Answer with read tools.")
@@ -3996,6 +4023,87 @@ class Runtime:
             if not allowed and request.get("note"):
                 raise ToolError(f"the user declined this tool call: {request['note']}")
             return allowed
+        finally:
+            removed = self.approvals.pop(approval_id, None)
+            answered = future.done() and not future.cancelled()
+            if not future.done():
+                future.cancel()
+            if removed is not None and not answered:
+                self.bus.publish("permission.replied", {
+                    "id": approval_id, "session_id": session_id, "allow": False,
+                    "outcome": "cancelled", "reason": "the turn ended before this approval was answered",
+                }, session_id=session_id)
+
+    @staticmethod
+    def _external_display(value: Any, depth: int = 0) -> Any:
+        """A bounded, sanitized copy of an ACP payload for the approval card, never the execution argument."""
+        if isinstance(value, str):
+            return clip(diagnostic_text(value.encode("utf-8", "replace")), 1000)
+        if value is None or isinstance(value, (bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else str(value)
+        if depth >= 2:
+            return "…"
+        if isinstance(value, list):
+            return [Runtime._external_display(item, depth + 1) for item in value[:20]]
+        if isinstance(value, dict):
+            displayed = {}
+            for key, item in list(value.items())[:20]:
+                label = clip(diagnostic_text(str(key).encode("utf-8", "replace")), 80) or "key"
+                displayed[label] = Runtime._external_display(item, depth + 1)
+            return displayed
+        return clip(diagnostic_text(str(value).encode("utf-8", "replace")), 200)
+
+    async def _approve_external(self, session_id: str, call: ToolCall, args: dict[str, Any]) -> bool:
+        """An ACP permission request: prompt unless the user already granted this exact payload.
+
+        The ACP payload is untrusted. Nexus permission rules, AUTO_APPROVED and the session's allow policy
+        are deliberately not consulted: they would let the CLI's claimed tool name or arguments skip the
+        user's approval card. A session grant is keyed by the full tool name and argument payload, so an
+        "Allow for session" answer cannot cover a different command. Only allow_once/reject_once are sent
+        back to ACP by the worker; persistent ACP options are never selected, and a request with no per-call
+        allow option gets no unusable card.
+        """
+        try:
+            self.session(session_id)
+        except NotFound:
+            return False
+        raw = call.raw if isinstance(call.raw, dict) else {}
+        permission = raw.get("permission") if isinstance(raw.get("permission"), dict) else {}
+        options = permission.get("options")
+        if not isinstance(options, list) or not any(
+                isinstance(option, dict) and option.get("kind") == "allow_once"
+                and isinstance(option.get("optionId"), str) and option["optionId"] for option in options):
+            # There is no per-call allow option. Do not show a card whose allow answer cannot be honored;
+            # the worker safely selects a per-call reject or cancels the request.
+            return False
+        try:
+            canonical = json.dumps({"tool": call.name, "args": args}, sort_keys=True, ensure_ascii=True,
+                                   separators=(",", ":"), default=str)
+        except (TypeError, ValueError):
+            canonical = repr((call.name, args))
+        grant = "acp:" + hashlib.sha256(canonical.encode()).hexdigest()
+        if grant in self.grants.get(session_id, ()):
+            return True  # the user explicitly chose "Allow for session" for this exact payload
+        tool_call = permission.get("toolCall") if isinstance(permission.get("toolCall"), dict) else {}
+        title = tool_call.get("title") if isinstance(tool_call.get("title"), str) else None
+        name = clip(diagnostic_text((call.name or "tool").encode("utf-8", "replace")), 80) or "tool"
+        safe_title = clip(diagnostic_text(title.encode("utf-8", "replace")), 120) if title else ""
+        label = f"{name} — {safe_title}" if safe_title and safe_title != name else name
+        call_id = clip(diagnostic_text(str(call.id).encode("utf-8", "replace")), 200) or new_id("acp")
+        display = self._external_display(args) if isinstance(args, dict) else {"args": self._external_display(args)}
+        rendered = json.dumps(display, ensure_ascii=False, default=str)
+        if len(rendered) > 8000:
+            display = {"clipped": clip(rendered, 8000)}
+        approval_id = new_id("per")
+        request = {"id": approval_id, "session_id": session_id, "tool": f"Antigravity · {label}",
+                   "call_id": call_id, "args": display, "grant": grant, "external": "agy"}
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self.approvals[approval_id] = (session_id, future, request)
+        self.bus.publish("permission.asked", request, session_id=session_id)
+        try:
+            return await future
         finally:
             removed = self.approvals.pop(approval_id, None)
             answered = future.done() and not future.cancelled()
@@ -4165,7 +4273,7 @@ class Runtime:
         await self.retention.stop()
         await self.jobs.shutdown()
         await self.kernels.shutdown()
-        await asyncio.gather(self.mcp.close(), self.browser.close(),
+        await asyncio.gather(self.mcp.close(), self.browser.close(), firecrawl_service.close(),
                              *(manager.close() for manager in self.project_mcps.values()),
                              return_exceptions=True)
         skill_files.install.release_all()

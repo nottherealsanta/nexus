@@ -16,6 +16,7 @@ pub struct Manifest {
     pub keymap: Keymap,
     pub navigation: Navigation,
     pub settings: Settings,
+    pub onboarding: crate::onboarding::Tour,
     #[serde(default)]
     pub strings: BTreeMap<String, String>,
     #[serde(default)]
@@ -363,6 +364,7 @@ mod tests {
                 "overlay",
                 "dialog",
                 "text_edit",
+                "onboarding",
                 "question_field",
                 "sidebar_back",
                 "drawer",
@@ -387,7 +389,7 @@ mod tests {
                 "providers",
                 "agents",
                 "tools",
-                "zmx",
+                "workers",
                 "browser",
                 "mcp",
                 "context",

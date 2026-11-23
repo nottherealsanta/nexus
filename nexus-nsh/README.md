@@ -260,10 +260,12 @@ row like an activity group; open, the copied messages follow as ordinary timelin
 rows, indented under the chevron as a group's members are. The `[Nexus fork]` task message after it is an ordinary user message. A phone
 keeps the folded row with the same wording.
 
-A ZMX child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
-with its agent name on the parent's child card, with `ZMX · Claude Code` or `ZMX · Antigravity` in the metadata below and in its heading. Its timeline
-opens with the ZMX card instead of the starting context: `context incomplete`, then `Needs attention`, `Denied by the CLI`,
-`Run`, `Settings` and `Not applied` rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). Claude Code's
+An external worker child (session JSON `worker`, [docs/external-workers.md](../docs/external-workers.md)) is labelled
+with its agent name on the parent's child card, with `PTY · Claude Code`, `ACP · Antigravity` or `CLI · Antigravity` for a legacy history in the metadata below and in its heading. Its timeline
+opens with the worker card instead of the starting context: `context incomplete`, then `Needs attention`, then
+`Denied through Nexus` for an ACP denial or `Denied by the CLI` for Claude/legacy, `Run`, `Settings` and `Not applied`
+rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). The `Needs attention` detail wraps
+under its title, so a long error is never clipped to one line. Claude Code's
 own subagents show read-only inside the calling tool's card. As in the TUI.
 
 Selecting a session loads, after the bounded snapshot view, one bundle
@@ -302,9 +304,10 @@ coalesce into one more read.
 
 The waiting card (D14) is docked above the composer in the timeline's reading column: a 2 px accent
 edge whose border stops before the card's corners curve (purple for a multi-select question), `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
-when the client first saw the request, the parameter table (at most six rows), for edit,
-write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
-choice list: allow once, allow for session (`scope: "session"`), deny, and deny with a note
+when the client first saw the request, the parameter table (at most six rows; each value wraps
+to at most three rows, then ends in `…`), for edit, write and patch the unified diff
+capped at 12 rows with `N more rows`, and a key-chip choice list: allow once, allow
+for session (`scope: "session"`), deny, and deny with a note
 (the note is the composer's text; empty, it says so). Questions show radios or checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
 the composer's input are one dock under one rail, and the input is the answer's `Add context…` line (`Type your
 answer…` for a question without options). Options have the keys first: Up/Down move, Space selects (a multi-select
@@ -439,7 +442,7 @@ newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
 are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
 manifest-driven session/project row menu, including confirmed project removal,
-and Projects, opened by its command, has a trailing `+ Add project` row. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
+and Projects, opened by its command, has a trailing `+ Add project` row; an added project is selected and opens on its new-session screen. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
 closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in Core's saved order (drag a tile to reorder, or Alt+Up / Alt+Down and the row menu's Move project up/down; Esc or dropping outside the rail cancels; a press without travel still selects), without inactive projects, with stable uppercase initials in creation order (moving a project never changes a label)
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
 within the last hour are lighter gray; passive projects are dimmed further and idle ones are darker. The row menu sets a project's status (current, passive, inactive; the names are the user's, 2026-11-06). An inactive project leaves the rail and is restored by pressing it in the Projects tab. Remove project asks first, only unregisters the project (its sessions are kept and return if the folder is added again; files are never touched) and is refused while a session runs. The selected project, and the selected session row in the sidebar, share one active
@@ -471,14 +474,16 @@ at 70% of window height; scrollable bodies reserve space for their title, contro
 footer, including in short windows. Titles have no duplicate Esc chip; dismissal hints
 live in `ModalFooter`. See `interface/design-language.md` for the shared rules.
 Settings is the same square modal as the TUI's, with a compact section rail on the left
-and the selected section on the right. The same search field filters both. Providers and Agents are
+and the selected section on the right. The same search field filters both. MCP is a page too (`src/ui/mcp-settings.tsx`, the TUI's `app/mcp.rs`):
+*Add a remote server* takes an address only, each server opens a detail modal with Sign in (the link Core sends is opened in the browser),
+Add a header (`Name: value`, masked), Switch off/on, Restart and Remove (confirmed); it is desktop and web only. Providers and Agents are
 rendered in the right pane: each provider row opens a detail modal with one
 button per sign-in method (browser or device), a clickable link, a copyable
 code, key entry, connect/disconnect and catalog refresh; the default agent and effort
 with a line per subagent that opens its model and fallback lists (Esc returns
 from that detail); each model row has an effort stepper (`‹ effort low ›`, or Right after pressing it) writing
 `agents.efforts`. Tools keeps one permission choice, labelled with the tools it
-governs, and one clickable tool grid. Desktop session rows place the status mark before the title with a gap. Hovering a row shows an archive box at the upper right and an actions menu below it; archived sessions show only the menu. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
+governs, and one clickable tool grid (including `firecrawl`, the local Firecrawl; a call shows as `Firecrawl <action> <url>`, as in the TUI). Desktop session rows place the status mark before the title with a gap. Hovering a row shows an archive box at the upper right and an actions menu below it; archived sessions show only the menu. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
 session-info item not reported by Core.
@@ -895,6 +900,10 @@ estimate.
   Scroll the table for further providers; Esc closes the modal without waiting.
 - **Tool images (K8).** A tool row whose result has `media` stays folded and notes the image count; opening it shows the images
   (`/api/artifact/{id}`, same origin) under the output.
+
+## Onboarding
+
+While Core's `ui.onboarded` is false, desktop and web NSH open a full-window tour once the splash is gone (`src/onboarding.ts`, `src/ui/onboarding.tsx`, mounted in `App.tsx`; the phone never shows it). It matches the TUI step for step: welcome, connect a provider (the same connection modal as Settings), choose models for agents (a picker of connected providers' models writes `agents.models`; the default agent button cycles `defaults.agent`), then lessons. Enter, ←/→, ↑↓, `s` and the buttons work; Finish and Skip write `ui.onboarded`. `/onboarding`, the palette and Settings > About replay it. Wording is `[onboarding]` in `interface/manifest.toml`. Test: `onboarding.test.tsx`.
 
 ## The Manager
 

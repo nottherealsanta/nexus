@@ -32,6 +32,7 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/agent*": { body: { agents: [], problems: [] } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },
   "GET */api/mcp*": { body: { servers: [] } },
+  "GET */api/project/prj_1/mcp*": { body: { servers: [], error: null } },
   "GET */api/session/*": { body: snapshot.sessions[0] },
 });
 const mod = "mod";
@@ -300,21 +301,24 @@ describe("shell", () => {
     expect(expected[expected.length - 1]).toBe("About");
   });
 
-  test("ZMX settings show Core's unavailable reason and change nothing (Windows)", async () => {
-    const reason = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform";
-    const config = (extra: object) => ({ body: { revision: "rev1", values: { zmx: { claude_backend: "sdk", antigravity: false }, defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [], ...extra } });
+  test("External worker settings show Core's unavailable reason and change nothing (Windows)", async () => {
+    const reason = "External workers require POSIX PTYs/process groups; they are unavailable on this platform";
+    const config = (extra: object) => ({ body: { revision: "rev1", values: { workers: { claude_backend: "sdk", antigravity: false }, defaults: { model: "", effort: "", agent: "", permission: "allow" }, tools: { disabled: [] }, ui: { detail: "medium", reduced_motion: false } }, defaults: {}, schema: {}, errors: [], ...extra } });
     const patched: string[] = [];
     const app = await open("./App.tsx", {
-      network: { ...core(), "GET */api/config": config({ zmx_unavailable: reason }), "PATCH */api/config": () => { patched.push("patch"); return config({}); } } as any,
+      network: { ...core(), "GET */api/config": config({ workers_unavailable: reason }), "PATCH */api/config": () => { patched.push("patch"); return config({}); } } as any,
       width: 1024, height: 768, platform: "web",
     });
     await app.waitFor("id:rail-project-prj_1");
     await app.press("id:rail-settings");
-    await app.press("id:section-zmx");
-    await app.waitFor("id:setting-zmx.claude_backend");
+    await app.press("id:section-workers");
+    await app.waitFor("id:setting-workers.claude_backend");
     const shown = app.texts().join("\n");
-    // Both ZMX rows say why, with the exact reason Core reported.
+    // Both rows say why, with the exact reason Core reported.
     expect(shown.split(reason).length - 1).toBeGreaterThanOrEqual(2);
+    expect(shown).toContain("External workers");
+    expect(shown).toContain("PTY");
+    expect(shown).toContain("ACP");
     expect(patched).toEqual([]);
   });
 
@@ -362,7 +366,7 @@ describe("shell", () => {
     await app.keyboard.press(`${mod}+,`);         // settings opens
     await app.waitFor("id:settings");
     await app.keyboard.press("escape");           // rule 9: settings returns to the previous view
-    expect(app.shows("id:settings")).toBe(false);
+    await app.waitUntil(() => !app.shows("id:settings"));
   });
 
   test("model and agent pickers are fed by Core, not hard-coded lists", async () => {

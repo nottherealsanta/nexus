@@ -391,7 +391,7 @@ in-process (that test skips where aiortc/PyAV lacks Opus); never with a real cal
 The native client has tested PCM framing (`native/src/live_pcm.rs`) and a bounded WebSocket transport
 (`native/src/live_socket.rs`). Neither is wired to the microphone, Manager or playback; they do not enable iOS GPT-Live yet.
 
-Live calls never use the Dictation setup path, including after a voice connection failure. The call keeps its Live error and accepts typed input; end it and start again to retry audio. `nexus voice init` installs the pipeline STT/TTS runtime only.
+Live calls never use the Dictation setup path, including after a voice connection failure. The call keeps its Live error and accepts typed input; end it and start again to retry audio. `nexus voice init` installs the pipeline STT/TTS runtime and downloads its models; it does not set up Live calls.
 
 The Manager dropdown leaves the app visible behind a 40% scrim. The header indicator is text in both clients (braille cells; the TUI's ASCII mode falls back to one state glyph), so there is no image protocol or cached sprite path.
 

@@ -21,6 +21,7 @@ use crate::theme::Theme;
 use crate::ui::*;
 
 mod groups_ui;
+mod onboarding_ui;
 
 const CANVAS: &str = "surface.canvas";
 const PANEL: &str = "surface.panel";
@@ -145,6 +146,42 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         let buf = frame.buffer_mut();
         clear(buf, area, clear_style);
         app.ui.splash.render(buf, area, splash_frame, &palette);
+        return;
+    }
+    if app.ui.view == View::Onboarding {
+        // The first-run tour covers the window: no chrome around it.
+        app.hits = HitMap::default();
+        app.timeline_screen = None;
+        app.timeline_drag = None;
+        let mut hits = HitMap::default();
+        {
+            let a: &App = app;
+            let cx = Cx {
+                app: a,
+                t: &a.theme,
+            };
+            onboarding_ui::draw_onboarding(&cx, frame.buffer_mut(), area, &mut hits);
+            if let Some(o) = &a.ui.overlay {
+                draw_overlay(&cx, frame.buffer_mut(), area, o, &mut hits);
+            }
+            // Toasts ("Connect a provider first") use the whole window as their centre.
+            let mut regions =
+                Regions::compute(area, Flags::default(), |_| crate::layout::Heights {
+                    heading: 0,
+                    banner: 0,
+                    waiting: 0,
+                    composer: 3,
+                });
+            regions.centre = area;
+            regions.timeline = Rect::new(
+                area.x,
+                area.y + 3,
+                area.width,
+                area.height.saturating_sub(6),
+            );
+            draw_toasts(&cx, frame.buffer_mut(), &regions, &mut hits);
+        }
+        app.hits = hits;
         return;
     }
     // The tree of groups follows the project, the sessions and the focused tab.
@@ -416,7 +453,11 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
                 buf,
                 m.x,
                 m.body.y,
-                if matches!(e.target, crate::ui::EditTarget::ProviderKey { .. }) {
+                if matches!(
+                    e.target,
+                    crate::ui::EditTarget::ProviderKey { .. }
+                        | crate::ui::EditTarget::McpHeader { .. }
+                ) {
                     &masked
                 } else {
                     rows.first().map(String::as_str).unwrap_or("")
@@ -781,6 +822,9 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
     // The file modal hides the page underneath, including the composer's
     // caret, unless the editor above is the one taking input.
     if app.ui.file_open || app.ui.diff_open.is_some() {
+        return None;
+    }
+    if app.ui.view == View::Onboarding {
         return None;
     }
     if app.ui.view == View::Settings {
@@ -1769,11 +1813,20 @@ pub(crate) enum RailItem {
 /// The corner counters and the label between them, and a separating row.
 const RAIL_ITEM: u16 = 4;
 
-pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
+/// How many project tiles the rail has room for.
+pub(crate) fn rail_capacity(r: Rect) -> usize {
+    // One row above the first tile, then the add control and Settings (3 rows each) at the foot.
+    (r.height.saturating_sub(7) / RAIL_ITEM) as usize
+}
+
+/// The first project drawn: the wheel's position, else the one that keeps the
+/// current project (or the keyboard cursor) in view.
+pub(crate) fn rail_top(a: &App, shown: usize) -> usize {
     let entries = a.rail_project_ids();
-    let room = r.height.saturating_sub(12);
-    let shown = (room / RAIL_ITEM) as usize;
-    // The current project stays in view when the rail overflows.
+    let last = entries.len().saturating_sub(shown);
+    if let Some(top) = a.ui.rail_top {
+        return top.min(last);
+    }
     let current = if a.ui.focus == Focus::Rail {
         a.rail_cursor()
     } else {
@@ -1781,7 +1834,13 @@ pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
             .and_then(|id| entries.iter().position(|e| *e == id))
             .unwrap_or(0)
     };
-    let top = (current + 1).saturating_sub(shown);
+    (current + 1).saturating_sub(shown)
+}
+
+pub(crate) fn rail_layout(a: &App, r: Rect) -> Vec<(RailItem, Rect)> {
+    let entries = a.rail_project_ids();
+    let shown = rail_capacity(r);
+    let top = rail_top(a, shown);
     let mut out = Vec::new();
     let mut y = r.y.saturating_add(1);
     for i in (top..entries.len()).take(shown) {
@@ -4958,15 +5017,24 @@ fn draw_sticky(
 const WAIT_DIFF_ROWS: usize = 12;
 /// Parameter-table rows the card shows at most.
 const WAIT_TABLE_ROWS: usize = 6;
+/// Rows a parameter value wraps to at most; a longer value ends in `…` (NSH:
+/// `WAIT_VALUE_ROWS` in `composer.tsx`).
+const WAIT_VALUE_ROWS: usize = 3;
 
 /// One row of the waiting card, in order. Rows are listed whole, then dropped
-/// by priority (diff, blanks, pads, table, options) until the card fits.
+/// by priority (diff, blanks, pads, table entries and their value rows,
+/// options) until the card fits.
 enum WRow {
     Pad,
     Blank,
     Head,
     Sub,
-    Table(String, String),
+    /// A parameter's label and its first value row; `true` when the value
+    /// continues but its continuation rows were shed, so it ends in `…`.
+    Table(String, String, bool),
+    /// A parameter value's continuation row; `true` when the value continues
+    /// past this row.
+    TableValue(String, bool),
     Diff(Vec<ratatui::text::Span<'static>>),
     DiffNote(String),
     Ask(String),
@@ -4986,7 +5054,32 @@ fn ask_lines(text: &str, w: usize, _ell: &str) -> Vec<String> {
     text::wrap(&text.replace('\n', " "), w.max(1))
 }
 
+/// Wrap a parameter value to `room` cells, at most `WAIT_VALUE_ROWS` rows; a
+/// value with more ends its last row with `ell`.
+fn wrap_value(value: &str, room: usize, ell: &str) -> Vec<String> {
+    let room = room.max(1);
+    let mut lines = text::wrap_line(value, room);
+    if lines.len() > WAIT_VALUE_ROWS {
+        lines.truncate(WAIT_VALUE_ROWS);
+        let last = lines.last_mut().expect("a capped wrap has rows");
+        let keep = room.saturating_sub(width(ell));
+        *last = format!("{}{ell}", truncate(last, keep, ""));
+    }
+    lines
+}
+
+/// One parameter-value row, ending in `ell` when the rows that follow it were
+/// shed and the value does not fit.
+fn value_row(text: &str, clipped: bool, room: usize, ell: &str) -> String {
+    if !clipped || text.ends_with(ell) {
+        return truncate(text, room, ell);
+    }
+    let keep = room.saturating_sub(width(ell));
+    format!("{}{ell}", truncate(text, keep, ""))
+}
+
 /// The approval's tool, its parameters and, for edit, write and patch, the diff.
+/// A value stays whole here; `wait_rows` wraps it to `WAIT_VALUE_ROWS` rows.
 fn approval_parts(app: &App, id: &str) -> ApprovalParts {
     use crate::diff::Diff;
     let Some(p) = app.state.model.approvals.get(id) else {
@@ -5053,8 +5146,20 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
     match item.kind {
         WaitKind::Approval => {
             let (_, table, diff) = approval_parts(app, &item.id);
+            // The value's column: `draw_waiting` puts it after the label column
+            // and a two-cell gap, and caps the label column at 14 cells.
+            let table_w = table
+                .iter()
+                .map(|(k, _)| width(k))
+                .max()
+                .unwrap_or(0)
+                .min(14);
+            let room = inner.saturating_sub(table_w + 2);
             for (k, v) in table.into_iter().take(WAIT_TABLE_ROWS) {
-                rows.push(WRow::Table(k, v));
+                let mut lines = wrap_value(&v, room, ell).into_iter();
+                let first = lines.next().unwrap_or_default();
+                rows.push(WRow::Table(k, first, false));
+                rows.extend(lines.map(|line| WRow::TableValue(line, false)));
             }
             if let Some(diff) = diff {
                 let look = crate::diff::Look::from_theme(&app.theme);
@@ -5157,8 +5262,9 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
         visible.extend((0..hint_rows).map(WRow::Hint));
         return visible;
     }
-    // Fit: diff first, then blanks, pads, extra answer rows, table rows, option
-    // rows, then review answers one at a time. Question headings stay.
+    // Fit: diff first, then blanks, pads, extra answer rows, whole table
+    // entries, a table value's continuation rows, option rows, then review
+    // answers one at a time. Question headings stay.
     fn drop_last(rows: &mut Vec<WRow>, pick: fn(&WRow) -> bool, keep: usize) -> bool {
         if rows.iter().filter(|r| pick(r)).count() > keep {
             if let Some(i) = rows.iter().rposition(pick) {
@@ -5168,6 +5274,48 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
         }
         false
     }
+    /// Drop the last parameter entry (its label and continuation rows), keeping
+    /// at least `keep` entries.
+    fn drop_last_table(rows: &mut Vec<WRow>, keep: usize) -> bool {
+        let starts: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| matches!(r, WRow::Table(..)).then_some(i))
+            .collect();
+        if starts.len() <= keep {
+            return false;
+        }
+        let at = *starts.last().expect("more than keep entries");
+        let mut end = at + 1;
+        while end < rows.len() && matches!(rows[end], WRow::TableValue(..)) {
+            end += 1;
+        }
+        rows.drain(at..end);
+        true
+    }
+    /// Drop the last continuation row of the last parameter, marking the row
+    /// before it as clipped; false when every parameter is down to its first row.
+    fn drop_table_tail(rows: &mut Vec<WRow>) -> bool {
+        let Some(at) = rows.iter().rposition(|r| matches!(r, WRow::Table(..))) else {
+            return false;
+        };
+        let mut end = at + 1;
+        while end < rows.len() && matches!(rows[end], WRow::TableValue(..)) {
+            end += 1;
+        }
+        if end == at + 1 {
+            return false;
+        }
+        rows.remove(end - 1);
+        if end - 2 == at {
+            if let WRow::Table(_, _, clipped) = &mut rows[at] {
+                *clipped = true;
+            }
+        } else if let WRow::TableValue(_, clipped) = &mut rows[end - 2] {
+            *clipped = true;
+        }
+        true
+    }
     while rows.len() > limit {
         let done = drop_last(
             &mut rows,
@@ -5176,7 +5324,8 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
         ) || drop_last(&mut rows, |r| matches!(r, WRow::Blank), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Pad), 0)
             || drop_last(&mut rows, |r| matches!(r, WRow::Input(..)), 1)
-            || drop_last(&mut rows, |r| matches!(r, WRow::Table(..)), 1)
+            || drop_last_table(&mut rows, 1)
+            || drop_table_tail(&mut rows)
             || drop_last(&mut rows, |r| matches!(r, WRow::Opt(..)), 1)
             || {
                 let n = rows
@@ -5284,7 +5433,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let table_w = rows
         .iter()
         .filter_map(|row| match row {
-            WRow::Table(k, _) => Some(width(k)),
+            WRow::Table(k, ..) => Some(width(k)),
             _ => None,
         })
         .max()
@@ -5374,7 +5523,7 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     inner_w,
                 );
             }
-            WRow::Table(k, v) => {
+            WRow::Table(k, v, clipped) => {
                 put(
                     buf,
                     x,
@@ -5389,7 +5538,19 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     buf,
                     vx,
                     y,
-                    &truncate(v, room, cx.ell()),
+                    &value_row(v, *clipped, room, cx.ell()),
+                    cx.st(PRIMARY, PANEL),
+                    room as u16,
+                );
+            }
+            WRow::TableValue(v, clipped) => {
+                let vx = x + table_w as u16 + 2;
+                let room = end.saturating_sub(vx) as usize;
+                put(
+                    buf,
+                    vx,
+                    y,
+                    &value_row(v, *clipped, room, cx.ell()),
                     cx.st(PRIMARY, PANEL),
                     room as u16,
                 );
@@ -7291,7 +7452,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         }
         "manager.privacy" => Some("enter".into()),
         "dictation.push_to_talk" => Some("enter".into()),
-        "about.inspector" => Some("enter".into()),
+        "about.inspector" | "about.onboarding" => Some("enter".into()),
         "appearance.theme" if a.theme_system => Some("system".into()),
         "appearance.theme" => Some(match a.theme.opts.mode {
             crate::theme::Mode::Dark => "dark".into(),
@@ -7333,16 +7494,19 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             .as_ref()
             .and_then(|c| c["values"]["browser"]["use_my_chrome"].as_bool())
             .map(on_off),
-        "zmx.claude_backend" => a.state.config.as_ref().map(|c| {
-            if c["values"]["zmx"]["claude_backend"].as_str() == Some("zmx") {
-                "ZMX".to_owned()
+        "workers.claude_backend" => a.state.config.as_ref().map(|c| {
+            if matches!(
+                c["values"]["workers"]["claude_backend"].as_str(),
+                Some("cli" | "zmx")
+            ) {
+                "PTY".to_owned()
             } else {
                 "Agent SDK".to_owned()
             }
         }),
-        "zmx.antigravity" => a.state.config.as_ref().map(|c| {
-            if c["values"]["zmx"]["antigravity"].as_bool() == Some(true) {
-                "ZMX".to_owned()
+        "workers.antigravity" => a.state.config.as_ref().map(|c| {
+            if c["values"]["workers"]["antigravity"].as_bool() == Some(true) {
+                "ACP".to_owned()
             } else {
                 "off".to_owned()
             }
@@ -7399,6 +7563,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         "keybindings.list" => Some("enter".into()),
         "providers.page" => Some(a.page_summary("providers")),
         "agents.page" => Some(a.page_summary("agents")),
+        "mcp.page" => Some(a.page_summary("mcp")),
         "agents.default_effort" | "agents.default_root" | "tools.default_permission" => {
             let key = match row.id.as_str() {
                 "agents.default_root" => "agent",
@@ -7934,7 +8099,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                 (left, "sections"),
                 ("esc", "back"),
             ]
-        } else if page == "agents" || page == "providers" {
+        } else if page == "agents" || page == "providers" || page == "mcp" {
             vec![("enter", "open"), ("esc", "back")]
         } else {
             vec![("enter", "select"), ("esc", "back")]
@@ -7954,6 +8119,9 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     );
     if let Some(id) = a.ui.provider_detail.as_deref() {
         draw_provider_detail(cx, buf, area, hits, id);
+    }
+    if let Some(key) = a.ui.mcp_detail.as_ref() {
+        draw_mcp_detail(cx, buf, area, hits, key);
     }
 }
 
@@ -8095,6 +8263,146 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
                     Rect::new(m.x, y, m.w, 1),
                     Target::ProviderDetailRow(position),
                 );
+            }
+        }
+    }
+    hint_row(cx, buf, &m, &[("enter", "select"), ("esc", "close")]);
+}
+
+/// One MCP server's actions, over Settings. Each server on the MCP page opens this modal (NSH: `McpDetailModal`).
+fn draw_mcp_detail(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    hits: &mut HitMap,
+    key: &crate::app::McpKey,
+) {
+    use crate::app::{PageLine, Tone};
+    let a = cx.app;
+    let label = key.name.as_str();
+    let lines = a.mcp_detail_lines(key);
+    let items = a.mcp_detail_items(key);
+    let height = (lines.len() as u16 + 6).clamp(10, 22);
+    let r = modal_box(area, MODAL_MEDIUM, height);
+    if r.width < 20 || r.height < 8 {
+        return;
+    }
+    hits.add(area, Target::Scrim);
+    let m = modal(cx, buf, area, r, label, hits);
+    let sel = items
+        .get(a.ui.mcp_detail_row.min(items.len().saturating_sub(1)))
+        .copied();
+    let mut display: Vec<Option<usize>> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if matches!(line, PageLine::Heading(_) | PageLine::Title(..)) && i > 0 {
+            display.push(None);
+        }
+        display.push(Some(i));
+    }
+    let list_h = m.hint_y.saturating_sub(m.body.y).saturating_sub(1) as usize;
+    let sel_row = sel
+        .and_then(|i| display.iter().position(|l| *l == Some(i)))
+        .unwrap_or(0);
+    let top = (sel_row + 1).saturating_sub(list_h.max(1));
+    let tone = |t: Tone| match t {
+        Tone::Muted => MUTED,
+        Tone::Secondary => SECONDARY,
+        Tone::Warning => "status.warning",
+        Tone::Error => "status.error",
+    };
+    for (li, row) in display.iter().enumerate().skip(top).take(list_h) {
+        let y = m.body.y + (li - top) as u16;
+        let Some(i) = row else { continue };
+        match &lines[*i] {
+            PageLine::Heading(text) => {
+                put(
+                    buf,
+                    m.x,
+                    y,
+                    &truncate(&text.to_uppercase(), m.w as usize, cx.ell()),
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                    m.w,
+                );
+            }
+            PageLine::Title(text, detail) => {
+                put(
+                    buf,
+                    m.x,
+                    y,
+                    &truncate(&text.to_uppercase(), m.w as usize, cx.ell()),
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+                    m.w,
+                );
+                let dw = (width(detail) as u16).min(m.w / 2);
+                put(
+                    buf,
+                    m.x + m.w - dw,
+                    y,
+                    &truncate(detail, dw as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    dw,
+                );
+            }
+            PageLine::Text(text, t) => {
+                put(
+                    buf,
+                    m.x,
+                    y,
+                    &truncate(text, m.w as usize, cx.ell()),
+                    cx.st(tone(*t), RAISED),
+                    m.w,
+                );
+            }
+            PageLine::Item {
+                label,
+                value,
+                tone: t,
+                action,
+            } => {
+                let selected = Some(*i) == sel;
+                let position = items.iter().position(|p| p == i).unwrap_or(0);
+                let is_link = matches!(action, crate::app::PageAction::OpenUrl(_));
+                let mut style = if selected {
+                    row_band(cx, buf, Rect::new(m.x, y, m.w, 1), PRIMARY, true)
+                } else {
+                    cx.st(PRIMARY, RAISED)
+                };
+                if is_link {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
+                let mut vstyle = cx.st(
+                    tone(*t),
+                    if selected {
+                        "interactive.settings_selection"
+                    } else {
+                        RAISED
+                    },
+                );
+                if is_link {
+                    vstyle = vstyle.add_modifier(Modifier::UNDERLINED);
+                }
+                if selected {
+                    vstyle = vstyle.add_modifier(Modifier::BOLD);
+                }
+                let lw = m.w.saturating_sub(2);
+                let vw = (width(value) as u16).min(lw.saturating_sub(12));
+                put(
+                    buf,
+                    m.x + 2,
+                    y,
+                    &truncate(label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
+                    style,
+                    (lw - vw).saturating_sub(2),
+                );
+                put(
+                    buf,
+                    m.x + m.w - vw,
+                    y,
+                    &truncate(value, vw as usize, cx.ell()),
+                    vstyle,
+                    vw,
+                );
+                hits.add(Rect::new(m.x, y, m.w, 1), Target::McpDetailRow(position));
             }
         }
     }
@@ -9001,6 +9309,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Projects => "Switch project",
         PaletteMode::Models => "Change model",
         PaletteMode::PoolModels => "Add a model",
+        PaletteMode::OnboardingModels => "Choose a model",
         PaletteMode::Agents => "Change agent",
         PaletteMode::Efforts => "Reasoning effort",
         PaletteMode::Export => "Export session",
@@ -9022,7 +9331,9 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::ProviderLogin | PaletteMode::ProviderLogout => "choose a provider",
             PaletteMode::Sessions => "type to find a session",
             PaletteMode::Projects => "type to find a project",
-            PaletteMode::Models | PaletteMode::PoolModels => "type to filter models",
+            PaletteMode::Models | PaletteMode::PoolModels | PaletteMode::OnboardingModels => {
+                "type to filter models"
+            }
             PaletteMode::Agents => "type to filter agents",
             PaletteMode::Efforts => "type to filter efforts",
             PaletteMode::Export => "choose a format and scope",

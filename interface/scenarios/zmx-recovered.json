@@ -1,11 +1,11 @@
 {
   "session": {
-    "title": "ZMX recovered",
+    "title": "External worker recovered",
     "agent": "scout",
     "model": "claude-code/claude-haiku-5-5",
     "permission": "allow",
     "worker": {
-      "label": "ZMX · Claude Code",
+      "label": "PTY · Claude Code",
       "provider": "claude-code",
       "model": "claude-code/claude-haiku-5-5",
       "permission_mode": "auto",
@@ -92,7 +92,7 @@
     }
   ],
   "expect": [
-    "ZMX · Claude Code",
+    "PTY · Claude Code",
     "Refactor the parser",
     "Nexus recovery"
   ],

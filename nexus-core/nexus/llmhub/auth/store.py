@@ -60,6 +60,9 @@ class CredentialStore:
         entry = self._read_all().get(provider)
         return entry if isinstance(entry, dict) else None
 
+    def names(self) -> list[str]:
+        return list(self._read_all())
+
     def write(self, provider: str, entry: dict[str, Any] | None) -> None:
         data = self._read_all()
         if entry is None:

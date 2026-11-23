@@ -1,0 +1,108 @@
+{
+  "session": {
+    "title": "ACP permission denied",
+    "agent": "scout",
+    "model": "agy/gemini-3.8-flash-low",
+    "permission": "allow",
+    "worker": {
+      "label": "ACP · Antigravity",
+      "provider": "agy",
+      "model": "agy/gemini-3.8-flash-low",
+      "transport": "acp-v1",
+      "permission_mode": "default",
+      "context_complete": false,
+      "status": "needs_attention",
+      "usage": {
+        "input_tokens": 10404,
+        "output_tokens": 74,
+        "cache_read_input_tokens": 0,
+        "reasoning_tokens": 0
+      },
+      "disclosure": "ACP · Antigravity ran its own tools in /work/demo (ACP mode default); the CLI's settings, MCP servers and plugins are inherited. Nexus tools and step limits do not apply; the CLI's permission requests go to Nexus for approval. The CLI adds context Nexus cannot see; this is not its full model context.",
+      "not_applied": [
+        "Nexus tools",
+        "step limits"
+      ],
+      "directory": "/work/demo",
+      "session_id": "live-session",
+      "error": "Antigravity's permission request was declined; the CLI may have continued without the tool. Nexus approved nothing.",
+      "denied_actions": [
+        "write_file (File probe-write.txt)"
+      ]
+    }
+  },
+  "starting": {
+    "system_prompt": "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "tools": [
+      "read"
+    ],
+    "tool_definitions": {
+      "read": {
+        "description": "TOOL MUST NOT APPEAR",
+        "parameters": {}
+      }
+    },
+    "instruction_file": {
+      "status": "missing"
+    }
+  },
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "created": 1,
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Create probe-write.txt"
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "seq": 2,
+      "created": 2,
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool_call",
+          "id": "agy-acp-write",
+          "name": "write_file",
+          "arguments": "{\"Content\": \"ok\", \"Path\": \"/work/demo/probe-write.txt\"}"
+        }
+      ]
+    },
+    {
+      "id": "m3",
+      "seq": 3,
+      "created": 3,
+      "role": "tool",
+      "parts": [
+        {
+          "type": "tool_result",
+          "call_id": "agy-acp-write",
+          "output": "permission denied by Nexus",
+          "is_error": true
+        }
+      ]
+    }
+  ],
+  "expect": [
+    "ACP · Antigravity",
+    "Needs attention",
+    "permission request was declined",
+    "Nexus approved nothing",
+    "Denied through Nexus",
+    "1 action",
+    "Create probe-write.txt"
+  ],
+  "absent": [
+    "NEXUS SYSTEM PROMPT MUST NOT APPEAR",
+    "Denied by the CLI"
+  ],
+  "expect_open": [
+    "write_file",
+    "permission denied by Nexus"
+  ]
+}

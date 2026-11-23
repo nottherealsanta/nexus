@@ -52,9 +52,9 @@ Tab swaps panes. NSH uses the same rail and content pane with the pointer and
 keyboard focus.
 
 Rows that cannot be changed are not shipped in the manifest. There is no Skills
-section, no custom-provider action, no dictation engine/language choice and no
-MCP server editor yet. The Providers and Agents sections render their content
-in the right pane (`page = true`) rather than opening a separate screen.
+section, no custom-provider action and no dictation engine/language choice yet. The
+Providers, Agents and MCP sections render their content in the right pane (`page = true`)
+rather than opening a separate screen.
 
 - **Providers** lists every provider from `GET /api/provider` with its state
   (connected, `using $KEY` when the key comes from the environment, the model
@@ -73,8 +73,14 @@ in the right pane (`page = true`) rather than opening a separate screen.
   2 fallbacks · 1 skipped`). Selecting one opens its detail pane (Settings ›
   Agents › name): its Models, each with its real odds over connected providers,
   and its ordered Fallbacks.
+- **MCP** lists the servers (every project's, then this project's) with their state, and opens
+  one in a detail modal. *Add a remote server* asks for an address only (*Add to this project* writes
+  `.mcp.json`); a server that uses OAuth has **Sign in** (Core hands the link to the client, which opens it).
+  The detail also has *Add a header* (`Name: value`, masked while typed), *Switch off/on*, *Restart* and *Remove*
+  (confirmed). Below the list sit the two `[mcp]` rows. See [mcp.md](mcp.md#managing-servers). Desktop and
+  web only: the phone's Settings tab does not show it.
 - **Tools** keeps one "Default permission" choice for new sessions, labelled
-  with the tools it actually governs (`bash`, `web_search`, `web_fetch`;
+  with the tools it actually governs (`bash`, `web_search`, `web_fetch`, `firecrawl`;
   read-only and file tools never ask), and one grid of the tools available to a
   new session. The TUI highlights one chip and ←/→ choose, Enter toggles; NSH
   toggles each chip directly. Both write `tools.disabled`.
@@ -86,7 +92,7 @@ serialized, preserve comments, and replace the file atomically using a private
 temporary file. `config.changed` announces writes and outside edits detected
 by the daemon's two-second poll. Both clients reload Settings on that event.
 Shared `ui.detail` (`low`, `medium`, `high`) and `ui.reduced_motion` are
-read and written by both clients. `ui.favorite_models` (list of `provider/model`) holds the
+read and written by both clients. `ui.onboarded` (boolean, default `false`) says the first-run tour ([plan 52](../plans/52-onboarding.md)) was finished or skipped: both desktop clients open it while it is `false` and write `true`, so it runs once per Nexus home. `ui.favorite_models` (list of `provider/model`) holds the
 model picker's favorites, which both pickers list first, even while filtering. Client layout preferences remain local.
 
 `[tools.permission]` holds permission rules, `"bash(git push*)" = "deny"`; see
@@ -99,6 +105,7 @@ SearXNG `/search` endpoint works) and `fetch_timeout_s` (default 15, 1 to 60;
 a call may ask for less, never more than 20). The web tools read these on each
 call. Neither client has a Settings row for them yet.
 
+`nexus mcp add|list|remove|login|logout|restart` manages servers through the running daemon ([mcp.md](mcp.md#managing-servers)).
 `nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
 `context_servers` maps into `[mcp.servers.<name>]`, refusing duplicate names.
 Entries retain their source dialect and are read by the MCP manager ([mcp.md](mcp.md)); no server is offered by default (browser-use runs the `browser_exec` and `browser_screenshot` tools, not an MCP entry). The config API
@@ -156,17 +163,20 @@ The Manager ([manager.md](manager.md)) is off until its soak passes.
 
 There is no `stage` setting. The Manager's prompt and tool catalog are code and cannot be extended from a file.
 
-## `[zmx]` settings
+## `[workers]` settings
 
-ZMX mode ([external-workers.md](external-workers.md)): child sessions on the real Claude Code or Antigravity CLI. User
-config only; a project file cannot set these. Both are off by default, and while off no CLI is probed.
+External workers ([external-workers.md](external-workers.md)): child sessions on the real Claude Code (PTY) or
+Antigravity (ACP) CLI. User config only; a project file cannot set these. Both are off by default, and while off no CLI
+is probed.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `claude_backend` | `"sdk"` | `sdk`: `claude/…` is the Agent SDK provider. `zmx`: `claude/…` *child* sessions run the `claude` CLI as `claude-code/…`, and `claude-code` models are listed for subagent pools. Roots keep the SDK |
+| `claude_backend` | `"sdk"` | `sdk`: `claude/…` is the Agent SDK provider. `cli`: `claude/…` *child* sessions run the `claude` CLI as `claude-code/…`, and `claude-code` models are listed for subagent pools. Roots keep the SDK |
 | `antigravity` | `false` | list `agy/…` models for subagent pools and run them on the `agy` CLI |
 
-The vendors' terms for this use are not verified; Settings › ZMX says so.
+The old `[zmx]` table and `claude_backend = "zmx"` remain valid aliases for existing files and older clients; a write
+to either spelling lands in `[workers]`, and the canonical value wins when both tables exist. The vendors' terms for
+this use are not verified; Settings › External workers says so.
 
 ## `[web]`
 

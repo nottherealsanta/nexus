@@ -15,6 +15,7 @@ import { voiceStatus } from "../voice-state";
 import { searchStartReason, searchStatusLines } from "../search-service";
 import { browserStatusLines, refreshBrowserStatus } from "../browser-status";
 import { MANAGER_ROWS, managerControl } from "./manager/settings";
+import { McpPage, loadMcp, mcpDetail, mcpServers } from "./mcp-settings";
 import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
@@ -33,6 +34,7 @@ export function loadSettingsData() {
   data.update((d) => ({ ...d, agents: null }));
   request<any>("GET", "/api/agent", { query: { project: p ?? undefined } }).then((r) => { if (currentProject() === p) data.update((d) => ({ ...d, agents: r })); }).catch(() => {});
   void loadProviders().then((providers) => data.update((d) => ({ ...d, providers }))).catch(() => {});
+  void loadMcp();
   if (loaded) return; loaded = true;
   request<any>("GET", "/api/model").then((r) => data.update((d) => ({ ...d, models: r }))).catch(() => {});
 }
@@ -66,7 +68,7 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "appearance.scrollbar", "notifications.sound", "about.inspector", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "tools.search_status", "tools.search_start", "mcp.full_definitions", "browser.use_my_chrome", "browser.status", "mcp.max_listed_tools", "zmx.claude_backend", "zmx.antigravity", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
+const WIRED = new Set(["appearance.sidebar", "appearance.details", "appearance.session_scope", "appearance.show_archived", "dictation.push_to_talk", "appearance.theme", "appearance.animations", "appearance.timeline_detail", "appearance.scrollbar", "notifications.sound", "about.inspector", "about.onboarding", "agents.default_root", "tools.default_permission", "agents.default_effort", "tools.defaults", "tools.search_status", "tools.search_start", "mcp.full_definitions", "browser.use_my_chrome", "browser.status", "mcp.max_listed_tools", "workers.claude_backend", "workers.antigravity", "context.handoff_percent", "context.title_models", "keybindings.list", "about.versions", "about.daemon", "dictation.stt_model", "dictation.stt_download", "dictation.stt_remove", "dictation.tts_model", "dictation.tts_download", "dictation.tts_remove", ...MANAGER_ROWS]);
 
 function voiceTarget(id: string): VoiceTarget | null {
   if (id.startsWith("dictation.stt_")) return "stt";
@@ -519,8 +521,8 @@ function control(r: Row): JSX.Element {
   if (r.id === "notifications.sound") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={notificationSoundsOn() ? "on" : "off"} onPick={(v) => setNotificationSounds(v === "on")} />;
   if (r.id === "browser.use_my_chrome") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.browser?.use_my_chrome ? "on" : "off"} onPick={(v) => void patchConfig("browser.use_my_chrome", v === "on").then(refreshBrowserStatus)} />;
   if (r.id === "mcp.full_definitions") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "on"]} value={config()?.values?.mcp?.full_definitions ? "on" : "off"} onPick={(v) => void patchConfig("mcp.full_definitions", v === "on")} />;
-  if (r.id === "zmx.claude_backend") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["Agent SDK", "ZMX"]} value={config()?.values?.zmx?.claude_backend === "zmx" ? "ZMX" : "Agent SDK"} onPick={(v) => void patchConfig("zmx.claude_backend", v === "ZMX" ? "zmx" : "sdk")} />;
-  if (r.id === "zmx.antigravity") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "ZMX"]} value={config()?.values?.zmx?.antigravity ? "ZMX" : "off"} onPick={(v) => void patchConfig("zmx.antigravity", v === "ZMX")} />;
+  if (r.id === "workers.claude_backend") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["Agent SDK", "PTY"]} value={["cli", "zmx"].includes(config()?.values?.workers?.claude_backend) ? "PTY" : "Agent SDK"} onPick={(v) => void patchConfig("workers.claude_backend", v === "PTY" ? "cli" : "sdk")} />;
+  if (r.id === "workers.antigravity") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["off", "ACP"]} value={config()?.values?.workers?.antigravity ? "ACP" : "off"} onPick={(v) => void patchConfig("workers.antigravity", v === "ACP")} />;
   if (r.id === "mcp.max_listed_tools") return <McpToolsLimit />;
   if (r.id === "context.handoff_percent") return <HandoffPercent />;
   if (r.id === "context.usage_refresh_minutes") return <UsageRefreshMinutes />;
@@ -530,11 +532,12 @@ function control(r: Row): JSX.Element {
       onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
 
+  if (r.id === "about.onboarding") return <Btn onFocus={() => focusSetting(r.id)} label="Replay onboarding" onPress={() => { void run("app.onboarding"); }} testID="setting-about-onboarding" />;
   if (r.id === "about.inspector") return <Btn onFocus={() => focusSetting(r.id)} label="Open inspector" onPress={() => { void run("app.open_inspector"); }} />;
   if (r.id === "tools.default_permission") return <Seg onFocus={() => focusSetting(r.id)} label={r.label} options={["allow", "ask"]} value={config()?.values?.defaults?.permission ?? "allow"} onPick={(v) => void patchConfig("defaults.permission", v)} />;
   if (r.id === "tools.defaults") {
     const disabled: string[] = config()?.values?.tools?.disabled ?? [];
-    return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code"].map((name) => {
+    return <View class="w-full flex-row flex-wrap justify-end gap-1">{["read", "grep", "glob", "ls", "bash", "edit", "patch", "write", "web_search", "web_fetch", "firecrawl", "ask", "code"].map((name) => {
       const off = disabled.includes(name);
       return <View focusable onFocus={() => focusSetting(r.id)} role="switch" accessibilityState={{ selected: !off }} testID={`default-tool-${name}`} accessibilityLabel={`${name} ${off ? "off" : "on"}`} onPress={() => void patchConfig("tools.disabled", off ? disabled.filter((x) => x !== name) : [...disabled, name])} class={`rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-7"} justify-center hover:bg-accent ${FOCUS}`}>
         <Text class={`${TS.base} ${off ? "text-muted-foreground line-through opacity-60" : "text-foreground-secondary"}`}>{name}</Text>
@@ -560,8 +563,8 @@ function control(r: Row): JSX.Element {
 
 function SettingRow(p: { r: Row; sec: Section }) {
   const r = p.r;
-  // ZMX needs POSIX PTYs; on another platform Core says why and both ZMX rows read as unavailable with that reason.
-  const reason = r.unavailable_reason ?? p.sec.unavailable_reason ?? (r.id.startsWith("zmx.") ? (config() as any)?.zmx_unavailable ?? undefined : undefined);
+  // External workers need POSIX PTYs; on another platform Core says why and both rows read as unavailable with it.
+  const reason = r.unavailable_reason ?? p.sec.unavailable_reason ?? (r.id.startsWith("workers.") ? (config() as any)?.workers_unavailable ?? (config() as any)?.zmx_unavailable ?? undefined : undefined);
   const wired = WIRED.has(r.id);
   const modelReason = voiceSettingReason(r.id);
   const disabled = !!reason || !wired || !!modelReason;
@@ -599,6 +602,7 @@ export function SettingsView(p: { inline?: boolean }) {
   const query = () => settingsQuery().trim().toLowerCase();
   const pageTerms = (s: Section): string[] => {
     if (s.id === "providers") return (data().providers ?? []).flatMap((p: any) => [p.id ?? "", p.label ?? ""]);
+    if (s.id === "mcp") return ["servers", "remote", "sign in", "oauth", "header", ...(mcpServers()?.servers ?? []).map((row) => row.server)];
     if (s.id === "agents") {
       const names = (data().agents?.agents ?? []).filter((a: any) => a.mode !== "primary").map((a: any) => a.name);
       const pools = Object.values(config()?.values?.agents?.models ?? {}).flat();
@@ -618,7 +622,7 @@ export function SettingsView(p: { inline?: boolean }) {
   const cur = () => shown().find((s) => s.id === settingsSection()) ?? shown()[0] ?? sections[0];
   const sectionRefs = new Map<string, { focus: () => void }>();
   const focusSection = () => {
-    if (providerDetail() || picker()) return;
+    if (providerDetail() || mcpDetail() || picker()) return;
     settingsNavFocused.set(true);
     settingsPageOpen.set(false);
     effortTarget.set(null);
@@ -626,7 +630,7 @@ export function SettingsView(p: { inline?: boolean }) {
   };
   keymap.bind(manifest.settings.navigation.section_key, focusSection, { when: "notEditing" });
   effect(() => {
-    if (!settingsNavFocused() || providerDetail() || picker()) return;
+    if (!settingsNavFocused() || providerDetail() || mcpDetail() || picker()) return;
     const offs = ([ ["up", -1], ["down", 1] ] as const).map(([key, by]) => keymap.bind(key, () => {
       const index = shown().findIndex((s) => s.id === cur().id);
       const next = shown()[Math.max(0, Math.min(shown().length - 1, index + by))];
@@ -643,7 +647,7 @@ export function SettingsView(p: { inline?: boolean }) {
   const footerHints = (): string[] => {
     if (settingsNavFocused()) return ["↑↓ section", "enter open", "esc close"];
     if (agent()) return ["enter select", "→ effort", "d remove", "K/J reorder", "← sections", "esc back"];
-    if (page() === "providers" || page() === "agents") return ["enter open", "esc back"];
+    if (page() === "providers" || page() === "agents" || page() === "mcp") return ["enter open", "esc back"];
     if (page()) return ["enter select", "esc back"];
     return ["→ change", "enter select", "← sections", "esc back"];
   };
@@ -681,6 +685,7 @@ export function SettingsView(p: { inline?: boolean }) {
                 <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={`px-3 ${T.meta}`}>{e()}</Text>}</Each>
                 <If when={!shown().length}><Text class={`px-3 ${T.meta}`} testID="settings-no-matches">No settings match.</Text></If>
                 <If when={page() === "providers"}>{() => <ProvidersPage sec={cur()} />}</If>
+                <If when={page() === "mcp"}>{() => <McpPage><Each of={cur().row ?? []} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></McpPage>}</If>
                 <If when={page() === "agents" && !agent()}>{() => <AgentsPage sec={cur()} />}</If>
                 <If when={page() === "agents" && agent()}>{() => <View class="gap-2 pb-2">
                   <View class="flex-row items-center gap-2 px-3">
@@ -742,6 +747,11 @@ export function SettingsView(p: { inline?: boolean }) {
   </View>;
   return p.inline && phone ? phoneContent() : p.inline ? content() : <Modal size="large" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>{content()}</Modal>;
 }
+
+/** Onboarding (ui/onboarding.tsx) lists providers the way Settings does and opens the same detail modal. */
+export const settingsData = data;
+export { providerStatus };
+export function openProviderDetail(id: string) { keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }
 
 // The phone's Settings tab (ui/mobile/settings.tsx) renders these same rows and pages as drill-in screens.
 export { SettingRow as PhoneSettingRow, ProvidersPage as PhoneProvidersPage, sections as settingsSections };

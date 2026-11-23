@@ -1055,17 +1055,7 @@ impl App {
                 self.ui.groups.close_group_asked.insert(tab.id.clone());
                 self.ui.groups.close_group_resume = Some(group);
                 if running {
-                    let restore = self.restore_point();
-                    self.ui.dialog = Some(Dialog {
-                        title: "Close running terminal?".into(),
-                        body: vec![],
-                        cancel: "Cancel".into(),
-                        confirm: "Close terminal".into(),
-                        danger: true,
-                        action: Confirmed::CloseTerminal(tab.id.clone()),
-                        button: 0,
-                        restore,
-                    });
+                    self.api(ApiCall::TerminalBusy { id: tab.id.clone() });
                 } else {
                     self.api(ApiCall::TerminalClose { id: tab.id.clone() });
                 }
@@ -1114,17 +1104,7 @@ impl App {
                     .find(|t| t.id == tab.id)
                     .is_some_and(|t| t.status == "running");
                 if running {
-                    let restore = self.restore_point();
-                    self.ui.dialog = Some(Dialog {
-                        title: "Close running terminal?".into(),
-                        body: vec![],
-                        cancel: "Cancel".into(),
-                        confirm: "Close terminal".into(),
-                        danger: true,
-                        action: Confirmed::CloseTerminal(tab.id.clone()),
-                        button: 0,
-                        restore,
-                    });
+                    self.api(ApiCall::TerminalBusy { id: tab.id.clone() });
                 } else {
                     self.api(ApiCall::TerminalClose { id: tab.id.clone() });
                 }
@@ -1133,6 +1113,21 @@ impl App {
             _ => {}
         }
         self.finish_close(group, &tab);
+    }
+
+    /// The terminal runs a command: ask before it is terminated.
+    pub fn ask_close_running_terminal(&mut self, id: String) {
+        let restore = self.restore_point();
+        self.ui.dialog = Some(Dialog {
+            title: "Close running terminal?".into(),
+            body: vec![],
+            cancel: "Cancel".into(),
+            confirm: "Close terminal".into(),
+            danger: true,
+            action: Confirmed::CloseTerminal(id),
+            button: 0,
+            restore,
+        });
     }
 
     /// Remove one tab; the resource goes with its last tab.

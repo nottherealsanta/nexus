@@ -1,11 +1,11 @@
 {
   "session": {
-    "title": "ZMX needs attention",
+    "title": "External worker needs attention",
     "agent": "scout",
     "model": "claude-code/claude-haiku-5-5",
     "permission": "allow",
     "worker": {
-      "label": "ZMX · Claude Code",
+      "label": "PTY · Claude Code",
       "provider": "claude-code",
       "model": "claude-code/claude-haiku-5-5",
       "permission_mode": "auto",
@@ -52,7 +52,7 @@
     }
   ],
   "expect": [
-    "ZMX · Claude Code",
+    "PTY · Claude Code",
     "Needs attention",
     "Workspace trust required",
     "Run `claude` interactively",

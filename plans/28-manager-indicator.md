@@ -9,6 +9,7 @@ User request (2026-11-11), four parts:
 
 ## Today
 
+- Voice init quietly installs the runtime and downloads both configured models, reports errors per model, and explains how to restart Core.
 - TUI `nexus-tui/src/indicator.rs`: states Idle, Thinking, Listening, Speaking… with different speeds and
   brightness; listening uses `manager.listening`, speaking `manager.speaking`, the rest gray; idle is drawn with
   `Modifier::DIM` (~364–369). Waves follow the measured voice level. NSH: `nexus-nsh/src/ui/manager/braille.ts`.

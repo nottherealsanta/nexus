@@ -84,7 +84,7 @@ class ClaudePolicy:
 
     def __post_init__(self):
         if self.permission_mode not in ("auto", "dontAsk"):
-            raise ValueError("Claude ZMX permits auto or dontAsk only; never bypassPermissions")
+            raise ValueError("The Claude Code external worker permits auto or dontAsk only; never bypassPermissions")
         if self.effort is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,19}", self.effort):
             raise ValueError("invalid Claude reasoning effort")
 
@@ -94,7 +94,7 @@ class ClaudePolicy:
                                           "settings": "inherited"}, sort_keys=True).encode()).hexdigest()
 
     def authority(self, workspace: Path) -> str:
-        return (f"ZMX · Claude Code ran its own tools in {workspace} (--permission-mode {self.permission_mode}); "
+        return (f"PTY · Claude Code ran its own tools in {workspace} (--permission-mode {self.permission_mode}); "
                 "CLI settings, memory, MCP servers and plugins are inherited. Nexus permission rules, tool restrictions "
                 "and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.")
 
@@ -103,10 +103,10 @@ def private_directory(path: Path) -> Path:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
-        raise WorkerError(f"ZMX state directory must be owned, non-symlink and mode 0700: {path}")
+        raise WorkerError(f"External-worker state directory must be owned, non-symlink and mode 0700: {path}")
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or parent.st_mode & 0o022:
-        raise WorkerError("ZMX state parent must be owned and not writable by other users")
+        raise WorkerError("External-worker state parent must be owned and not writable by other users")
     return path
 
 
@@ -227,7 +227,7 @@ class ClaudeCodeWorker:
 
     async def preflight(self) -> str:
         if os.name != "posix":
-            raise WorkerError("Claude ZMX requires a POSIX PTY")
+            raise WorkerError("The Claude Code external worker requires a POSIX PTY")
         cwd = Path(tempfile.gettempdir())
         version = await probe(self.executable, "--version", env=self.env, cwd=cwd)
         match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", version)
@@ -256,12 +256,12 @@ class ClaudeCodeWorker:
         policy = policy or ClaudePolicy()
         workspace = workspace.resolve(strict=True)
         if not workspace.is_dir() or not _ID.fullmatch(model):
-            raise ValueError("Claude ZMX needs a workspace directory and exact model ID")
+            raise ValueError("The Claude Code external worker needs a workspace directory and exact model ID")
         if "\0" in prompt + instructions or len((prompt + instructions).encode()) + 100 > MAX_PROMPT_BYTES:
-            raise ValueError("Claude ZMX assignment exceeds 64 KiB or contains NUL; refusing to truncate")
+            raise ValueError("The Claude Code assignment exceeds 64 KiB or contains NUL; refusing to truncate")
         fingerprint = policy.fingerprint(model, workspace)
         if resume and (str(UUID(resume)) != resume or previous_fingerprint != fingerprint):
-            raise ValueError("Claude ZMX resume requires the recorded session and unchanged model/directory/permission/effort policy")
+            raise ValueError("A Claude Code resume requires the recorded session and unchanged model/directory/permission/effort policy")
         await self.preflight()
         state = private_directory(self.state_dir)
         session = resume or str(uuid4())

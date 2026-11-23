@@ -1,0 +1,50 @@
+  ◧  [Sessions] [Files] [Git]                                                                                                       ◆ waiting for you                   □
+     │                                      ◆ ACP Approval Root ×                                                                                                    +  ⋯
+▏1   │ + New session                        ACPPermissionLong                                                             ZMX · Antigravity · gemini-test · agy · default
+▏ A  │ ⌕ Search sessions       ctrl+k
+▏    │ ▣ Show archived
+     │────────────────────────────────        ZMX · Antigravity  context incomplete
+     │ ◆ ACP Approval Root        20m
+     │                            4 ↳         Run  model agy/gemini-test · permission default · cwd /private/tmp/acp-parity.EAdnzc/ws
+     │
+     │                                        Settings  CLI inherited
+     │
+     │                                        Not applied  Nexus permission rules, disabled tools, step limits
+     │
+     │                                        total  ~0 tok
+     │
+     │
+     │                                      │
+     │                                      │  do it                                                                                                      #1 · 10:02 AM
+     │                                      │
+     │
+     │
+     │
+     │
+     │
+     │
+     │                                  ←
+     │
+     │
+     │
+     │                                       ┃
+     │                                       ┃  ◆ Allow Antigravity · execute — Run the release build and verify the artifact checksums?
+     │                                       ┃  waiting on you · 0:00
+     │                                       ┃
+     │                                       ┃  command  cd /private/tmp/acp-parity.EAdnzc/ws && npm run build -- --mode production && ./scripts/verify-artifacts --f…
+     │                                       ┃
+     │                                       ┃▸  y  Allow once
+     │                                       ┃   a  Allow for session
+     │                                       ┃   n  Deny
+     │                                       ┃   d  Deny with a note
+     │                                       ┃
+     │                                       ┃  alt+w answer
+     │                                       ┃
+     │
+     │
+     │                                         Type a message… Enter steer · Tab queue · Alt+Enter interrupt
+  +  │
+     │                                         Build · gemini-test agy · default                                                                                     0
+     │                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                                        /private/tmp/acp-parity.EAdnzc/ws                                                                         Working · 7.8s
+     │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

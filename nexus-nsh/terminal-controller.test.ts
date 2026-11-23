@@ -55,13 +55,30 @@ describe("terminal controller", () => {
       expect(messages.filter(message => message.type === "writable").every(message => !message.value)).toBe(true);
     } finally { closeTerminalPanel(); setTerminalSender(null); globalThis.fetch = original; }
   });
-  test("closing a running resource requires the shared confirmation", () => {
-    terminalItems.set([resource]); terminalSelected.set("t"); confirmDialog.set(null);
-    requestTerminalClose();
-    expect(confirmDialog()?.title).toBe("Close running terminal?");
-    expect(confirmDialog()?.confirm).toBe("Close terminal");
-    expect(confirmDialog()?.destructive).toBe(true);
-    confirmDialog.set(null); terminalSelected.set(null);
+  test("closing a resource with a running command requires the shared confirmation", async () => {
+    setApiBase("http://nexus.test"); currentProject.set("p");
+    const original = globalThis.fetch; globalThis.fetch = async () => reply({...resource, busy:true});
+    try {
+      terminalItems.set([resource]); terminalSelected.set("t"); confirmDialog.set(null);
+      await requestTerminalClose();
+      expect(confirmDialog()?.title).toBe("Close running terminal?");
+      expect(confirmDialog()?.confirm).toBe("Close terminal");
+      expect(confirmDialog()?.destructive).toBe(true);
+    } finally { confirmDialog.set(null); terminalSelected.set(null); globalThis.fetch = original; }
+  });
+  test("closing an idle shell terminates it without asking", async () => {
+    setApiBase("http://nexus.test"); currentProject.set("p");
+    const original = globalThis.fetch, calls: {url:string; method:string | undefined}[] = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({url:String(url), method:init?.method});
+      return init?.method === "DELETE" ? reply({...resource, status:"closed"}) : String(url).includes("?project_id=") ? reply([]) : reply({...resource, busy:false});
+    };
+    try {
+      terminalItems.set([resource]); terminalSelected.set("t"); confirmDialog.set(null);
+      await requestTerminalClose(); await tick();
+      expect(confirmDialog()).toBe(null);
+      expect(calls.some(c => c.method === "DELETE" && c.url.endsWith("/t"))).toBe(true);
+    } finally { confirmDialog.set(null); terminalSelected.set(null); globalThis.fetch = original; }
   });
   test("confirmation terminates the originally selected resource", async () => {
     setApiBase("http://nexus.test"); currentProject.set("p");
@@ -72,7 +89,8 @@ describe("terminal controller", () => {
       return init?.method === "DELETE" ? reply({...resource, status:"closed"}) : reply([]);
     };
     try {
-      requestTerminalClose(); const confirm = confirmDialog();
+      globalThis.fetch = async (url, init) => { calls.push({url:String(url), method:init?.method}); return init?.method === "DELETE" ? reply({...resource, status:"closed"}) : String(url).includes("?project_id=") ? reply([]) : reply({...resource, busy:true}); };
+      await requestTerminalClose(); const confirm = confirmDialog();
       terminalSelected.set("other"); await confirm?.run();
       expect(calls.some(c => c.method === "DELETE" && c.url.endsWith("/t"))).toBe(true);
       expect(terminalSelected()).toBe("other");

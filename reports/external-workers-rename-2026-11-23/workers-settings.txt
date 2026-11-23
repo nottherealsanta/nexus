@@ -1,0 +1,40 @@
+  ◧  [Sessions] [Files] [Git]     Settings                                                                            □
+     │                                                                                                             +  ⋯
+▏    │ + New session             ▌
+▏ N  │ ⌕ Search sessions ctrl+k
+▏  4 │ ▣ Show archived              System prompt ~2.1K
+     │──────────────────────────
+     │   Refacto
+  S  │   ⌥ maste  Settings
+   1 │
+     │   Review   ⌕ Filter settings…
+     │   ⌥ maste  ────────────────────────────────────────────────────────────────────────────────────
+     │              Appearance          │   Claude Code subagents                      Agent SDK  PTY
+     │   Release    Providers           │   Antigravity subagents                            off  ACP
+     │   ⌥ maste    Agents              │
+     │              Tools               │
+     │   Fix fla  ▌ External workers    │
+     │   ⌥ maste    Browser             │
+     │              MCP                 │
+     │              Context             │
+     │              Voice and speech    │
+     │              Manager             │
+     │              Keybindings         │
+     │              Notifications       │
+     │              About               │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │
+     │                                  │ Use Agent SDK for an enterprise or full-price API account.
+     │                                  │ Otherwise the CLI's PTY worker is usually better, but it
+     │                                  │ does not use Nexus agents or tools. Core key [workers]
+     │                                    claude_backend = "cli".
+     │            ↑↓ section · enter open · esc close                                      13 sections
+     │
+     │                               Message to start a new session
+  +  │
+     │                               Build · … · default                                                           0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                              /private/tmp/tui-workers.ixnaCS/ws/nexus-demo  ⌥ master
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -161,6 +161,14 @@ impl TerminalApi {
         )
     }
 
+    /// Whether a command other than the idle shell is running in the terminal.
+    pub async fn busy(&self, id: &str) -> Result<bool, Error> {
+        let value = self
+            .call(Method::GET, &format!("/api/terminal/{id}"), None)
+            .await?;
+        Ok(value.get("busy").and_then(Value::as_bool).unwrap_or(true))
+    }
+
     pub async fn close(&self, id: &str) -> Result<TerminalResource, Error> {
         Self::decode(
             self.call(Method::DELETE, &format!("/api/terminal/{id}"), None)

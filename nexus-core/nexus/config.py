@@ -25,12 +25,14 @@ from .paths import home
 DEFAULTS: dict[str, dict[str, Any]] = {
     "defaults": {"effort": "", "agent": "", "permission": "allow"},
     "agents": {"models": {}, "fallbacks": {}, "efforts": {}},
+    "workers": {"claude_backend": "sdk", "antigravity": False},
+    # `[zmx]` is the pre-rename spelling. It stays readable and writable as an alias for older clients and files.
     "zmx": {"claude_backend": "sdk", "antigravity": False},
     "tools": {"disabled": [], "permission": {}, "shared_rust_builds": True},
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
     "usage": {"refresh_minutes": 10},
-    "ui": {"detail": "medium", "reduced_motion": False, "favorite_models": []},
+    "ui": {"detail": "medium", "reduced_motion": False, "favorite_models": [], "onboarded": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "browser": {"use_my_chrome": False},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
@@ -42,11 +44,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 
 
 SCHEMA: dict[str, dict[str, Any]] = {
+    "workers.claude_backend": {"type": "string", "enum": ["sdk", "cli"],
+                               "description": "Claude Code subagents: Agent SDK (default) or the CLI's own loop in a PTY"},
+    "workers.antigravity": {"type": "boolean", "description": "Run Antigravity subagents on the CLI over ACP; CLI permissions apply, not Nexus rules"},
     "zmx.claude_backend": {"type": "string", "enum": ["sdk", "zmx"],
-                           "description": "Claude subagents: Agent SDK (default) or the CLI's own ZMX loop and tools"},
-    "zmx.antigravity": {"type": "boolean", "description": "Enable Antigravity ZMX subagents; CLI permissions apply, not Nexus rules"},
+                           "description": "Alias for workers.claude_backend; `zmx` still selects the CLI"},
+    "zmx.antigravity": {"type": "boolean", "description": "Alias for workers.antigravity"},
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
     "ui.reduced_motion": {"type": "boolean"},
+    "ui.onboarded": {"type": "boolean", "description": "the first-run onboarding was finished or skipped; both clients open it until this is true"},
     "ui.favorite_models": {"type": "array", "items": {"type": "string"},
                            "description": "provider/model refs the model picker lists first, even while filtering"},
     "usage.refresh_minutes": {"type": "integer", "minimum": 1, "maximum": 1440,
@@ -95,8 +101,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
 
 
 def _valid(section: str, key: str, value: Any) -> bool:
-    if section == "zmx":
-        return isinstance(value, bool) if key == "antigravity" else value in ("sdk", "zmx")
+    if section in ("workers", "zmx"):
+        return isinstance(value, bool) if key == "antigravity" else value in ("sdk", "cli", "zmx")
     if section == "usage":
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 1440
     if section == "agents" and key == "efforts":
@@ -134,7 +140,7 @@ def _valid(section: str, key: str, value: Any) -> bool:
         return (isinstance(value, list) and len(value) <= 200 and len(set(value)) == len(value)
                 and all(isinstance(v, str) and "/" in v and v == v.strip() and len(v) <= 200 for v in value))
     if section == "ui":
-        return (isinstance(value, bool) if key == "reduced_motion"
+        return (isinstance(value, bool) if key in ("reduced_motion", "onboarded")
                 else isinstance(value, str) and value in ("low", "medium", "high"))
     if section == "context" and key == "title_models":
         from .llmhub.hub import split_ref
@@ -285,6 +291,23 @@ class ConfigFile:
                         values[section][key] = value.unwrap() if hasattr(value, "unwrap") else value
                     else:
                         errors.append(f"{section}.{key}: invalid value")
+        # `[workers]` is canonical; `[zmx]` is its alias. A key written in the canonical table wins, and the
+        # alias projection keeps older clients seeing the value they understand.
+        doc_workers = doc.get("workers") if isinstance(doc.get("workers"), dict) else {}
+        doc_zmx = doc.get("zmx") if isinstance(doc.get("zmx"), dict) else {}
+        for key in DEFAULTS["workers"]:
+            if key in doc_workers:
+                value = values["workers"][key]
+            elif key in doc_zmx:
+                value = values["zmx"][key]
+            else:
+                value = DEFAULTS["workers"][key]
+            if key == "claude_backend":
+                value = "cli" if value == "zmx" else value
+                values["zmx"][key] = "zmx" if value == "cli" else value
+            values["workers"][key] = value
+            if key != "claude_backend":
+                values["zmx"][key] = value
         mcp = doc.get("mcp", {})
         if isinstance(mcp, dict) and isinstance(mcp.get("servers", {}), dict):
             values["mcp"]["servers"] = _mask(_plain(mcp.get("servers", {})))
@@ -314,13 +337,59 @@ class ConfigFile:
         plain = _plain(servers)
         return plain if isinstance(plain, dict) else {}
 
+    def _write_doc(self, doc: Any) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temp = self.path.parent / f".config-{secrets.token_hex(6)}.tmp"
+        fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(tomlkit.dumps(doc))
+            os.replace(temp, self.path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def edit_mcp_server(self, name: str, entry: dict[str, Any] | None, *, create: bool = False) -> None:
+        """Add (`create`), replace or (entry None) remove one `[mcp.servers.<name>]` table.
+
+        A `********` in a replacement keeps the stored secret, as in a PATCH. Raises KeyError when the
+        server is missing and ValueError when an add names an existing one. The caller holds the config lock.
+        """
+        _, doc, errors = self._read()
+        if errors:
+            raise ValueError("cannot edit invalid TOML")
+        mcp = doc.get("mcp")
+        if mcp is None:
+            mcp = doc["mcp"] = tomlkit.table()
+        if not isinstance(mcp, dict):
+            raise TypeError("mcp must be a table")
+        servers = mcp.get("servers")
+        if servers is None:
+            servers = mcp["servers"] = tomlkit.table()
+        if not isinstance(servers, dict):
+            raise TypeError("mcp.servers must be a table")
+        if create and name in servers:
+            raise ValueError(f"an MCP server named {name} already exists")
+        if not create and name not in servers:
+            raise KeyError(name)
+        if entry is None:
+            del servers[name]
+        else:
+            entry = _restore(entry, _plain(servers[name]) if name in servers else {})
+            try:
+                servers[name] = entry
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"MCP server {name} cannot be represented in TOML") from exc
+        self._write_doc(doc)
+
     def patch(self, revision: str, set_values: dict[str, Any], unset: list[str]) -> dict[str, Any]:
         raw, doc, errors = self._read()
         if hashlib.sha256(raw).hexdigest() != revision:
             raise ConfigConflict("config revision changed")
         if errors:
             raise ValueError("cannot edit invalid TOML")
-        set_values = dict(set_values)
+        # The `[zmx]` spelling is an alias: both clients' paths write the canonical `[workers]` table.
+        set_values = {self._canonical(path): value for path, value in set_values.items()}
+        unset = [self._canonical(path) for path in unset]
         mcp_value = set_values.pop("mcp.servers", None)
         if mcp_value is not None:
             if not isinstance(mcp_value, dict) or not all(isinstance(v, dict) for v in mcp_value.values()):
@@ -334,6 +403,8 @@ class ConfigFile:
             parts = path.split(".")
             if len(parts) != 2 or parts[0] not in DEFAULTS or parts[1] not in DEFAULTS[parts[0]]:
                 raise ValueError(f"invalid setting: {path}")
+        if set_values.get("workers.claude_backend") == "zmx":
+            set_values["workers.claude_backend"] = "cli"  # store the canonical value, not the alias
         for path, value in set_values.items():
             section, key = path.split(".")
             if section not in doc:
@@ -345,6 +416,8 @@ class ConfigFile:
             section, key = path.split(".")
             if isinstance(doc.get(section), dict):
                 doc[section].pop(key, None)
+            if section == "workers" and isinstance(doc.get("zmx"), dict):
+                doc["zmx"].pop(key, None)
         if mcp_value is not None:
             if "mcp" not in doc:
                 doc["mcp"] = tomlkit.table()
@@ -359,6 +432,11 @@ class ConfigFile:
         finally:
             temp.unlink(missing_ok=True)
         return self.read()
+
+    @staticmethod
+    def _canonical(path: str) -> str:
+        section, _, key = path.partition(".")
+        return f"workers.{key}" if section == "zmx" else path
 
 
 def import_mcp(path: Path, config: ConfigFile | None = None) -> list[str]:

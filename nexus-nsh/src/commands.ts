@@ -28,6 +28,7 @@ import { dictationPhase } from "./voice-state";
 import { toggleManagerDropdown, toggleManagerAudio, toggleManagerMute, cancelListening, cancelTurn, closeField, dismissCard, managerEscapeRule, managerSlash, managerTerm, minimise, openField, openManagerContext, openManagerSession, sendListening, scrollDetails, startQuietly, stopCall, stopSpeech, submitField, talk } from "./core/manager";
 import { refreshSearchService, searchStartReason, startSearchService } from "./search-service";
 import { refreshBrowserStatus } from "./browser-status";
+import { onboardingOpen, onboardingStep, openOnboarding, previousStep } from "./onboarding";
 import { closeInspector, inspectSession, inspector, inspectorCommand } from "./inspector";
 import { focusSessionSearch, rowSessions } from "./ui/sidebar";
 import { PROJECT_STATUS, dropMove, orderedProjects, projectStatus, railProjects } from "./project-rail";
@@ -131,6 +132,7 @@ function evalTerm(t: string): boolean {
     case "timeline.scrolled_up": return scrolledUp();
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
+    case "view.onboarding": return onboardingOpen();
     case "terminal.open": return terminalOpen();
     case "layout.tab_active": return layoutEnabled && hasActiveTab();
     case "layout.split_multiple": return layoutEnabled && multipleGroups();
@@ -222,6 +224,7 @@ export function toggleRight(w: number) {
   else { rightOpen.set(!rightIsOpen(w)); savePrefs(); }
 }
 export function openSettings() {
+  if (onboardingOpen()) return;
   if (centre() === "settings") { centre.set(previousCentre()); return; }
   previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); settingsNavFocused.set(true); settingsPageOpen.set(false); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
@@ -676,6 +679,8 @@ export const rightWidthHint = { w: 1280 };
 
 on("palette.open", () => paletteOpen.set(true));
 on("app.settings", openSettings);
+on("app.onboarding", () => { if (phone) return; if (centre() === "settings") openSettings(); openOnboarding(); });
+on("onboarding.back", () => { if (onboardingStep() > 0) previousStep(); });
 on("app.help_keys", () => contextDetail.set({ title: "Keyboard shortcuts", detail: shortcutText() }));
 on("app.open_inspector", () => inspectSession());
 // The inspector's own keys (key_context "inspector") act on the open modal only.
@@ -989,7 +994,7 @@ function applyModel(model: string) {
 on("model.change", () => void pickOne("Change model", async () => {
   const cat = await request<any>("GET", "/api/model");
   const s = viewed();
-  // ZMX models run subagents only: a root session or a draft never lists them.
+  // External-worker models run subagents only: a root session or a draft never lists them.
   const models = ((cat.models ?? []) as any[]).filter((m) => !m.zmx || !!s?.parent_id);
   const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
   const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
@@ -1205,7 +1210,7 @@ export function escape() {
   if (fileFindOpen()) { fileFindOpen.set(false); return "file_find"; }
   // Settings steps back one level at a time, as the TUI does: a provider/agent
   // detail, then a page's content, then the section rail, then the view.
-  if (centre() === "settings" && providerDetail()) { providerDetail.set(null); return "provider_detail"; }
+  if ((centre() === "settings" || onboardingOpen()) && providerDetail()) { providerDetail.set(null); return "provider_detail"; }
   if (centre() === "settings" && settingsQuery()) { settingsQuery.set(""); return "settings_search"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(null); return "settings_page"; }
   if (centre() === "settings" && !settingsNavFocused()) {

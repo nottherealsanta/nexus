@@ -1,14 +1,14 @@
 # Tools
 
-`nexus/tools/` holds the twelve task tools (read, grep, glob, ls, bash, edit,
-patch, write, web_search, web_fetch, ask, code) and the two companion tools for background bash. They act on the workspace, except `ask`, which asks the user a
+`nexus/tools/` holds the thirteen task tools (read, grep, glob, ls, bash, edit,
+patch, write, web_search, web_fetch, firecrawl, ask, code) and the two companion tools for background bash. They act on the workspace, except `ask`, which asks the user a
 question and returns the answer as data. Changing Nexus itself (session,
 workspace, worktree, model) is never a task tool; it is the control plane
 (PLAN.md, "Task tools vs. control"). The workspace controls in this document are
 control tools: they are defined in `nexus/workspace.py`, executed by the daemon,
 and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
-`DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code)`.
+`DEFAULT_TOOLS = (read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, firecrawl, ask, code)`.
 The [terminal dock authority boundary](terminals.md#agent-control-boundary)
 keeps the dock user-only: `bash`, foreground or background, never creates a terminal
 resource and the agent has no raw keystroke access.
@@ -28,6 +28,7 @@ guard and whether the result is model-visible.
 | `tools/base.py` | `Tool`, `ToolContext`, `ToolError`, `resolve()`, `clip()` |
 | `tools/read.py`, `bash.py`, `edit.py`, `patch.py`, `write.py` | Workspace tools |
 | `tools/web_search.py`, `web_fetch.py`, `_html_markdown.py`, `net.py` | Web tools, the HTML-to-Markdown converter and the public-only HTTP client |
+| `tools/firecrawl.py`, `firecrawl.py` | The `firecrawl` tool, and the install, process and HTTP client of the local Firecrawl |
 | `tools/grep.py`, `glob.py`, `ls.py`, `walk.py`, `_grep_scan.py` | Search and listing tools, the shared walk and the fallback scan worker |
 | `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
@@ -53,7 +54,7 @@ web_fetch = "ask"
 ```
 
 The session's `permission` (`allow` or `ask`, set per new session in Settings)
-only decides calls for tools that can ask: `bash`, `web_search` and `web_fetch`.
+only decides calls for tools that can ask: `bash`, `web_search`, `web_fetch` and `firecrawl`.
 `read`, `grep`, `glob`, `ls`, `edit`, `patch`, `write`, `code` and `ask` are
 auto-approved, so Settings groups the permission choice with those three tools
 rather than presenting one switch per tool. A `[tools.permission]` rule can
@@ -63,7 +64,7 @@ still make any tool ask or deny it.
   `read`, `grep`, `glob`, `ls`, `edit`, `patch`, `write`, the path (relative
   to the session directory with `..` and symlinks resolved, or absolute when
   outside it; a missing `grep`/`glob`/`ls` path is the workspace, `.`); an
-  `patch` has one key per file it touches (an `edit(...)` rule governs `patch` too); `web_fetch`, the URL without
+  `patch` has one key per file it touches (an `edit(...)` rule governs `patch` too); `web_fetch` and `firecrawl`, the URL without
   credentials, query or fragment and with a lowercased host; `web_search`, the
   query with spaces collapsed. Every other tool has no key, so only a bare
   `tool` rule matches it. `tool` may be a glob (`mcp__github__*`). In a pattern
@@ -477,10 +478,57 @@ at 2,000,000 bytes says so. A status of 400 or more is an error.
   may fetch that URL itself;
 * no proxy or environment settings are read.
 
-Both web tools reach the network, so they are **not** auto-approved: a session
+The web tools (`web_search`, `web_fetch`, `firecrawl`) reach the network, so they are **not** auto-approved: a session
 with permission `ask` prompts for each call, unless a [permission rule](#permission-rules) says otherwise.
 The default agents without a `tools` list (`build`, `orchestrate`, `quick`, `plan`) and `scout`
 have them.
+
+## firecrawl
+
+`firecrawl {action, url, …}` reads the web through [Firecrawl Local](https://github.com/firecrawl/firecrawl/tree/main/apps/local)
+(`firecrawl-local`, one Rust binary, AGPL-3.0; [notice](../THIRD-PARTY/firecrawl-local.md)). Nexus uses its **scrape, map and crawl** and the PDF and Office
+parsing inside scrape; Firecrawl's search, data providers, extraction and cloud are not used and not reachable (below).
+It is for what `web_fetch` refuses or does badly: PDFs and Office documents, pages that need JavaScript (rendered in the
+Chrome or Chromium already on the machine; without one, static pages and PDFs still work and the result says
+`Warning:` when a page needed a browser), a site's URL list and several pages of one site in a call.
+
+| `action` | Arguments | Result |
+| --- | --- | --- |
+| `scrape` | `url`, `offset?`, `limit?` (Markdown lines, as `web_fetch`), `full_page?` | One page as Markdown after a header (`Source`, `Final URL`, `HTTP status`, `Content-Type`, `Title`, `Engine`, `Warning`) |
+| `map` | `url`, `search?`, `limit?` (default 200, at most 2000) | The site's URLs from its sitemaps and start page, one per line, `http(s)` only, duplicates dropped |
+| `crawl` | `url`, `limit?` (default 10, at most 50), `max_depth?` (at most 10), `include_paths?`, `exclude_paths?` (regexes on the URL path, at most 20 each), `entire_domain?` | Pages of one site with a title and URL each; robots.txt is respected |
+
+`crawl` is one blocking call: Core starts the job, polls it once a second and returns when it finishes, so the model never
+polls. After 150 s it cancels the job and returns the pages read so far, saying so. The 30,000-character output is shared
+between pages (at least about 800 characters each); a page that does not fit says `[page cut at …]` and the model reads it
+whole with `scrape`, and pages that do not fit at all are listed by URL. Content sits between the same
+`<<< BEGIN/END UNTRUSTED WEB CONTENT >>>` markers as `web_fetch`, with the same defusing of forged markers, and links are
+never followed by the tool. A page that answers 4xx or 5xx is an error.
+
+**Install and process** (`nexus/firecrawl.py`). **A Nexus release ships the binary**: the release workflow builds the
+version pinned as `VERSION` in `nexus/firecrawl.py` from crates.io on each platform (`firecrawl-local-<os>-<arch>`, next to
+the TUI binaries, covered by `SHA256SUMS`, with `THIRD-PARTY/firecrawl-local.md` attached), and `install.sh` puts it in
+`$PREFIX/bin` (default `~/.local/bin`). Users build nothing. A checkout install (`./install.sh`) builds it with cargo at the
+pinned version, which that path already needs cargo for, and skips the build when that version is installed. Core looks for
+`$NEXUS10_HOME/firecrawl/bin/`, then `$PREFIX/bin`, then `PATH`. `nexus firecrawl init` is only the fallback for a platform
+or release with no binary: it runs `cargo install firecrawl-local --version <VERSION> --locked` into
+`$NEXUS10_HOME/firecrawl/` (needs Rust and a C compiler). `nexus firecrawl status` and `nexus doctor` report it, and warn
+when the installed version is not the pinned one (it is still used). Core never installs it, and when it is missing the
+error tells the model not to install it or retry and to use `web_fetch` or tell the user (as `web_search` does). The first `firecrawl` call starts `firecrawl-local serve` on a free `127.0.0.1` port with a random
+bearer token and keeps it for the daemon's life; a call after it died starts it again; daemon shutdown stops it. Its log is
+`~/.nexus/logs/firecrawl.log`. Nothing runs until a call.
+
+**What it can reach.** Nexus starts the server with `FIRECRAWL_CLOUD=off`, a scrubbed environment (`PATH`, `HOME`, `LANG`,
+`TMPDIR`, `USER` and its own `FIRECRAWL_*` values, so no API keys) and never `--allow-private`. A page this machine cannot
+load therefore fails; it is never sent to Firecrawl's cloud (the binary's default is to do that, without an account). The
+server refuses localhost, private, link-local and cloud-metadata addresses itself, after DNS and at every redirect, and the
+browser it runs goes through the same check for subresources and WebSockets; the tool also checks the URL's shape first
+(`http(s)`, no credentials, no spaces). This is the server's check, not `net.py`'s pinned connection, and it was verified
+on 2026-11-23 against `127.0.0.1`, `localhost` and `169.254.169.254`.
+
+**Permission.** Not auto-approved, like the other web tools: a session with permission `ask` prompts per call, unless a rule
+says otherwise. The key is the URL as for `web_fetch` (`"firecrawl(https://docs.python.org/*)" = "allow"`), whatever the
+action. Forks and side questions may call it (it changes nothing in the workspace).
 
 ## bash
 

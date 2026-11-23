@@ -18,6 +18,7 @@ import { inspectorHooks } from "./core/inspector-hooks";
 import { playNotificationCue } from "./cues";
 import { listenNotificationPresses, notifySession } from "./os-notify";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
+import { mcpEvent } from "./ui/mcp-settings";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
@@ -758,6 +759,7 @@ const host: SyncHost = {
   configChanged() { void loadConfig().catch(() => {}); },
   resourcesChanged() { void loadResources(); },
   settingsEvent(e) {
+    if (e.type.startsWith("mcp.")) { mcpEvent(e.type, (e.data ?? {}) as Record<string, unknown>); return; }
     if (e.type === "provider.login") {
       const d = e.data as { provider: string; status: string };
       providerLogins.update((all) => ({ ...all, [d.provider]: d }));

@@ -55,7 +55,7 @@ is already running, Core immediately returns 409 `{error, code: "voice_busy"}`
 instead of queuing the preview. Invalid WAVs return a 4xx JSON `{error, code}`.
 
 `POST /api/voice/stt/download` explicitly starts the pinned Hugging Face
-download and returns 202. This is the only STT download path: a status check or
+download and returns 202. `nexus voice init` can also download the model; a status check or
 transcription never downloads missing weights. Progress is published as the
 global `voice.progress` event with `model: "stt"`, `state`, `bytes_done`,
 `bytes_total` and `error`. Core verifies every manifest size and hash before
@@ -193,12 +193,15 @@ runtime provides audio input.
 
 The heavy packages (Moondream Photon, PyTorch, numpy, Hugging Face Hub and ptts) are
 the optional `voice` extra and are never installed with Nexus. `nexus voice init`
-installs them into the environment Nexus runs from (`uv pip install --python <that
-python>`, or `pip` without uv), prints the model status and asks you to restart the
-daemon (`nexus daemon stop`). `nexus voice status` shows the status without installing.
+installs them quietly into the environment Nexus runs from (`uv pip install --python <that
+python>`, or `pip` without uv), preserving errors. It prints model status and asks you to
+restart Core (`nexus daemon stop` then `nexus daemon start`). It downloads both configured
+models into the Hugging Face cache, verifying the pinned STT snapshot. Failures are reported
+per model and return a nonzero exit code; rerun the command to retry. `nexus voice status`
+shows the status without installing.
 The extra pins `moondream==2.6.1` and `kestrel==0.9.1`; the worker refuses any other
 installed version rather than applying the reviewed private shims to it.
-Models are still downloaded only on request. In a development checkout `uv sync`
+Models are downloaded only on request (through init or Settings). In a development checkout `uv sync`
 removes these packages again; use `uv sync --extra voice` there instead.
 
 ## Settings: Voice and speech

@@ -368,11 +368,56 @@ fn terminal_rename_edits_the_selected_tab() {
 }
 
 #[test]
+fn closing_an_idle_terminal_tab_does_not_ask() {
+    use nexus_tui::actions::{ActionDone, Done};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    open_terminal(&mut app, "t1", "Terminal", "running");
+    app.execute("layout.tab_close");
+    let busy = app
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Api(call @ ApiCall::TerminalBusy { .. }) => Some(call.clone()),
+            _ => None,
+        })
+        .expect("Core is asked whether the terminal is busy");
+    app.apply_done(ActionDone {
+        call: busy,
+        result: Ok(Done {
+            terminal_busy: Some(false),
+            ..Done::default()
+        }),
+    });
+    assert!(app.ui.dialog.is_none());
+    assert!(app
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::TerminalClose { id }) if id == "t1")));
+}
+
+#[test]
 fn closing_a_running_terminal_tab_asks_and_then_terminates() {
     use nexus_tui::actions::{ActionDone, Done};
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     open_terminal(&mut app, "t1", "Terminal", "running");
     app.execute("layout.tab_close");
+    // Core says whether a command runs before anything is asked.
+    assert!(app.ui.dialog.is_none());
+    let busy = app
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Api(call @ ApiCall::TerminalBusy { id }) if id == "t1" => Some(call.clone()),
+            _ => None,
+        })
+        .expect("Core is asked whether the terminal is busy");
+    app.apply_done(ActionDone {
+        call: busy,
+        result: Ok(Done {
+            terminal_busy: Some(true),
+            ..Done::default()
+        }),
+    });
     let dialog = app.ui.dialog.as_ref().unwrap();
     assert_eq!(dialog.title, "Close running terminal?");
     assert_eq!(dialog.confirm, "Close terminal");
@@ -410,7 +455,7 @@ fn closing_a_running_terminal_tab_asks_and_then_terminates() {
 }
 
 #[test]
-fn terminal_copy_requires_selection_and_explicit_action() {
+fn terminal_copy_requires_a_user_selection() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use nexus_tui::terminal_panel::TerminalEvent;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
@@ -426,10 +471,22 @@ fn terminal_copy_requires_selection_and_explicit_action() {
         row: screen.y,
         modifiers: KeyModifiers::NONE,
     };
+    assert!(!app.effects.iter().any(|e| matches!(e, Effect::Copy(_))));
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), dock.x));
     app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), dock.x + 4));
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), dock.x + 4));
     assert!(!app.effects.iter().any(|e| matches!(e, Effect::Copy(_))));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), dock.x + 4));
+    assert_eq!(
+        app.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Copy(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        ["Hello"]
+    );
+    app.effects.clear();
     app.execute("terminal.copy");
     assert!(app
         .effects
@@ -3343,6 +3400,203 @@ fn codex_offers_browser_and_device_sign_in() {
     press(&mut app, &["enter"]);
     assert!(app.effects.iter().any(|e| matches!(e,
         Effect::Api(ApiCall::Provider { id, sign_out: false, method, .. }) if id == "codex" && method == "device")), "{:?}", app.effects);
+}
+
+fn mcp_list(servers: serde_json::Value) -> nexus_tui::actions::ActionDone {
+    nexus_tui::actions::ActionDone {
+        call: ApiCall::McpList { project: None },
+        result: Ok(nexus_tui::actions::Done {
+            mcp: Some(serde_json::json!({ "servers": servers, "project_file": null })),
+            ..Default::default()
+        }),
+    }
+}
+
+fn open_mcp_page(app: &mut nexus_tui::app::App) {
+    app.execute("app.settings");
+    app.ui.settings_section = "mcp".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
+    app.effects.clear();
+}
+
+/// Move the page selection to the item with this label.
+fn select_page_item(app: &mut nexus_tui::app::App, label: &str) {
+    let lines = app.settings_page_lines();
+    let at = lines
+        .iter()
+        .position(|l| matches!(l, nexus_tui::app::PageLine::Item { label: l, .. } if l == label))
+        .unwrap_or_else(|| panic!("no page item {label:?}"));
+    let items = app.settings_page_items();
+    app.ui.settings_page_row = items.iter().position(|i| *i == at).unwrap();
+}
+
+#[test]
+fn the_mcp_page_lists_servers_and_adds_a_remote_one_from_its_address() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    open_mcp_page(&mut app);
+    assert!(
+        app.effects
+            .iter()
+            .all(|e| !matches!(e, Effect::Api(ApiCall::McpList { .. }))),
+        "the list is asked for when Settings opens"
+    );
+    app.apply_done(mcp_list(serde_json::json!([
+        {"server": "linear", "scope": "global", "state": "failed", "auth": "required", "transport": "http",
+         "url": "https://mcp.linear.app/mcp", "oauth": true, "enabled": true, "tools": 0,
+         "error": "sign-in required", "header_names": []},
+        {"server": "docs", "scope": "global", "state": "connected", "auth": "signed_in", "transport": "http",
+         "url": "https://docs.example.com/mcp", "oauth": true, "enabled": true, "tools": 3, "header_names": []},
+    ])));
+    let all = joined(&draw(&mut app, 120, 50).1);
+    for needle in [
+        "Settings \u{203a} MCP",
+        "Add a remote server",
+        "linear",
+        "sign-in required",
+        "docs",
+        "connected \u{b7} 3 tools",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    // Add: Enter on the first row asks for the address, and only an https address is sent.
+    press(&mut app, &["enter"]);
+    assert!(app.ui.edit.is_some());
+    typing(&mut app, "mcp.example.com");
+    press(&mut app, &["enter"]);
+    assert!(app
+        .effects
+        .iter()
+        .all(|e| !matches!(e, Effect::Api(ApiCall::Mcp { .. }))));
+    press(&mut app, &["enter"]);
+    typing(&mut app, "https://mcp.example.com/mcp");
+    press(&mut app, &["enter"]);
+    assert!(
+        app.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::Mcp {
+            project: None, op: nexus_tui::actions::McpOp::Add { entry } })
+            if entry["url"] == "https://mcp.example.com/mcp" && entry.get("name").is_none())),
+        "{:?}",
+        app.effects
+    );
+}
+
+#[test]
+fn an_mcp_server_that_needs_a_sign_in_opens_its_link_and_offers_the_next_actions() {
+    use nexus_tui::api::Frame;
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    open_mcp_page(&mut app);
+    app.apply_done(mcp_list(serde_json::json!([
+        {"server": "linear", "scope": "global", "state": "failed", "auth": "required", "transport": "http",
+         "url": "https://mcp.linear.app/mcp", "oauth": true, "enabled": true, "tools": 0,
+         "error": "sign-in required", "header_names": ["X-Team"]},
+    ])));
+    select_page_item(&mut app, "linear");
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        app.ui.mcp_detail.as_ref().map(|k| k.name.as_str()),
+        Some("linear")
+    );
+    let all = joined(&draw(&mut app, 120, 50).1);
+    for needle in [
+        "Sign in",
+        "Add a header",
+        "Switch off",
+        "Restart",
+        "Remove",
+        "headers X-Team (values never shown)",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(
+        app.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::Mcp {
+        project: None, op: nexus_tui::actions::McpOp::SignIn { name } }) if name == "linear")),
+        "{:?}",
+        app.effects
+    );
+    // Core hands over the link; the client opens it once, shows it, and offers Cancel.
+    let event = serde_json::json!({"id": 400, "type": "mcp.login", "cursor": "log_c915bfc9b6d826c4:400", "data": {
+        "server": "linear", "status": "pending", "verification_uri": "https://auth.linear.app/authorize?x=1"}});
+    app.effects.clear();
+    for _ in 0..2 {
+        if let Ok(Frame::Event(event)) = Frame::from_value("mcp.login", None, &event) {
+            app.apply_sync(SyncMsg::Event(event));
+        }
+    }
+    let opened = app
+        .effects
+        .iter()
+        .filter(|e| matches!(e, Effect::OpenUrl(u) if u.starts_with("https://auth.linear.app/")))
+        .count();
+    assert_eq!(opened, 1, "{:?}", app.effects);
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(
+        all.contains("https://auth.linear.app/authorize") && all.contains("Cancel sign-in"),
+        "{all}"
+    );
+}
+
+#[test]
+fn removing_an_mcp_server_asks_first_and_a_header_is_typed_as_name_and_value() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    open_mcp_page(&mut app);
+    app.apply_done(mcp_list(serde_json::json!([
+        {"server": "docs", "scope": "global", "state": "connected", "auth": "signed_in", "transport": "http",
+         "url": "https://docs.example.com/mcp", "oauth": true, "enabled": true, "tools": 3, "header_names": []},
+    ])));
+    select_page_item(&mut app, "docs");
+    press(&mut app, &["enter"]);
+    // A header: not a bare value.
+    let rows = app.mcp_detail_lines(app.ui.mcp_detail.as_ref().unwrap());
+    let header = rows.iter().position(|l| matches!(l, nexus_tui::app::PageLine::Item { label, .. } if label == "Add a header")).unwrap();
+    let items = app.mcp_detail_items(app.ui.mcp_detail.as_ref().unwrap());
+    app.ui.mcp_detail_row = items.iter().position(|i| *i == header).unwrap();
+    press(&mut app, &["enter"]);
+    typing(&mut app, "just-a-token");
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(app
+        .effects
+        .iter()
+        .all(|e| !matches!(e, Effect::Api(ApiCall::Mcp { .. }))));
+    press(&mut app, &["enter"]);
+    typing(&mut app, "Authorization: Bearer abc");
+    press(&mut app, &["enter"]);
+    assert!(
+        app.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::Mcp {
+        project: None, op: nexus_tui::actions::McpOp::Patch { name, entry } })
+        if name == "docs" && entry["headers"]["Authorization"] == "Bearer abc")),
+        "{:?}",
+        app.effects
+    );
+    // Remove: a dialog whose first choice is Cancel; nothing is sent until it is confirmed.
+    let remove = rows
+        .iter()
+        .position(
+            |l| matches!(l, nexus_tui::app::PageLine::Item { label, .. } if label == "Remove"),
+        )
+        .unwrap();
+    app.ui.mcp_detail_row = items.iter().position(|i| *i == remove).unwrap();
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(app.ui.dialog.is_some() && app.effects.is_empty());
+    press(&mut app, &["right", "enter"]);
+    assert!(
+        app.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::Mcp {
+        project: None, op: nexus_tui::actions::McpOp::Remove { name } }) if name == "docs")),
+        "{:?}",
+        app.effects
+    );
 }
 
 #[test]

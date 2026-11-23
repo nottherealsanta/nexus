@@ -64,6 +64,55 @@ fn approval_card_height_is_header_table_choices_and_hint() {
 }
 
 #[test]
+fn a_long_parameter_value_wraps_instead_of_clipping_to_one_row() {
+    // The ACP `execute` shape: one long single-line command.
+    let command = "cd /private/tmp/acp-parity/ws && npm run build -- --mode production && ./scripts/verify-artifacts --fail-on-warning --output dist/report.json";
+    let mut app = approving("bash", serde_json::json!({ "command": command }), (160, 48));
+    let (_, rows) = draw(&mut app, 160, 48);
+    let at = rows
+        .iter()
+        .position(|r| r.contains("command"))
+        .expect("the parameter row");
+    let value = rows[at..at + 3].join("\n");
+    assert!(value.contains("cd /private/tmp/acp-parity/ws"), "{value}");
+    assert!(value.contains("--fail-on-warning"), "{value}");
+    assert!(value.contains("dist/report.json"), "{value}");
+    assert!(
+        !rows[at].contains("dist/report.json"),
+        "the tail is on the next row, not clipped away: {}",
+        rows[at]
+    );
+    assert!(!rows[at + 2].contains('\u{2026}'), "{value}");
+}
+
+#[test]
+fn a_parameter_value_wraps_to_three_rows_then_ends_in_an_ellipsis() {
+    let command = (0..200)
+        .map(|n| format!("w{n:03}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut app = approving("bash", serde_json::json!({ "command": command }), (160, 48));
+    let (_, rows) = draw(&mut app, 160, 48);
+    // pad, head, sub, blank, 3 value rows, blank, 4 choices, blank, hint, pad
+    assert_eq!(app.regions.waiting.height, 15);
+    let at = rows
+        .iter()
+        .position(|r| r.contains("command"))
+        .expect("the parameter row");
+    assert!(rows[at].contains("w000"), "{}", rows[at]);
+    assert!(rows[at + 1].contains("w0"), "{}", rows[at + 1]);
+    assert!(
+        rows[at + 2].trim_end().ends_with('\u{2026}'),
+        "{}",
+        rows[at + 2]
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("w199")),
+        "the rest is clipped"
+    );
+}
+
+#[test]
 fn a_diff_is_capped_at_twelve_rows_and_gives_way_when_the_card_is_short() {
     let mut app = approving("edit", long_patch(), (160, 48));
     let (_, rows) = draw(&mut app, 160, 48);

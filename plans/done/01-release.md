@@ -24,6 +24,7 @@ Rechecked 2026-11-09 against freshly fetched refs and GitHub. Release PR #100 me
 
 ### 1.1 Release and installation
 
+- [x] Installer suppresses uv's package list and suggests optional voice runtime and model setup; offline installer tests cover the hint and error propagation.
 - [x] **0.12.0 published (11-09):** four TUI binaries, Core wheel/sdist, `install.sh` and `SHA256SUMS`; all payload checksums independently verified. Release workflow [42564022608](https://github.com/nottherealsanta/nexus/actions/runs/42564022608) passed. Published installer succeeded in an isolated macOS arm64 home, including SDK source build, daemon start/stop and plain `nexus` PTY launch/quit. No real home was migrated or updated. Details: [validation report](../../reports/release-0.12.0-validation.md).
 - [ ] Execute the published installer on Linux; complete the wider platform runtime matrix below. No NSH web bundle is published by the existing workflow.
 - [x] Correct the daemon info/version label (11-10, working tree): use installed `nexus10` distribution metadata instead of `0.10.0.dev0`, also for SSE `connected` and the CLI update fallback. Server/doctor/event-log suites: 93 passed; focused Ruff passed. No running daemon was restarted or deployed.

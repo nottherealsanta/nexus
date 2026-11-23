@@ -612,7 +612,7 @@ struct Done {
     is_error: bool,
     /// Images the tool returned (K8), one label each; a terminal cannot show them inline.
     media: Vec<String>,
-    /// Claude's own subagent for this call (ZMX), as read-only nested rows; empty for every other tool.
+    /// Claude's own subagent for this call (external worker), as read-only nested rows; empty for every other tool.
     side: Vec<String>,
 }
 
@@ -2091,7 +2091,7 @@ impl Builder<'_> {
         use crate::paint::{CtxBody, CtxSection};
         let Some(s) = &view.starting else { return };
         let key = format!("context:{}", view.session_id);
-        // A ZMX child's starting context is what Nexus knows about the CLI run, never a complete prompt
+        // An external worker child's starting context is what Nexus knows about the CLI run, never a complete prompt
         // (same sections and wording as NSH `zmxSections`).
         let worker = self
             .app
@@ -2187,12 +2187,12 @@ impl Builder<'_> {
         self.paint_context(key, sections, total, window, reconstructed, true, worktree);
     }
 
-    /// The ZMX child's context header: Nexus never claims a complete context for a CLI-owned loop.
+    /// The external worker child's context header: Nexus never claims a complete context for a CLI-owned loop.
     fn zmx_context_section(&mut self, key: String, worker: &serde_json::Value) {
         use crate::paint::{CtxBody, CtxSection};
         let text = |name: &str| worker[name].as_str().unwrap_or("");
         let label = if text("label").is_empty() {
-            "ZMX"
+            "External worker"
         } else {
             text("label")
         };
@@ -2223,22 +2223,32 @@ impl Builder<'_> {
             body: CtxBody::None,
         };
         let denied = worker["denied_actions"].as_array().map_or(0, Vec::len);
+        let denied_title = if worker["transport"].as_str() == Some("acp-v1") {
+            "Denied through Nexus"
+        } else {
+            "Denied by the CLI"
+        };
         let mut attention = Vec::new();
-        // The CLI stopped for a prompt it cannot answer here; Nexus approved nothing and says what to do by hand.
+        // ACP attention can follow a Nexus denial. Claude and legacy CLI prompts are never answered by Nexus.
         if text("status") == "needs_attention" {
             let error = text("error");
-            attention.push(section(
-                "Needs attention",
-                if error.is_empty() {
-                    "Run the CLI interactively to continue.".into()
-                } else {
-                    error.into()
-                },
-            ));
+            let detail = if error.is_empty() {
+                "Run the CLI interactively to continue."
+            } else {
+                error
+            };
+            // The detail is the section's full text, wrapped under its title; a
+            // one-line meta clipped it on the standard timeline width.
+            attention.push(CtxSection {
+                title: "Needs attention".into(),
+                tokens: None,
+                meta: String::new(),
+                body: CtxBody::Note(detail.into()),
+            });
         }
         if denied > 0 {
             attention.push(section(
-                "Denied by the CLI",
+                denied_title,
                 format!("{denied} action{}", if denied == 1 { "" } else { "s" }),
             ));
         }
@@ -2888,7 +2898,7 @@ impl Builder<'_> {
         } else if let Some(m) = session.and_then(|s| s.model.clone()) {
             if m != "default" && !m.is_empty() {
                 // The same catalog name, else the bare model id, as the footer shows for a recorded model (NSH's
-                // `modelName`; plan 06: a ZMX child showed `provider/model` here).
+                // `modelName`; plan 06: an external worker child showed `provider/model` here).
                 let short = crate::stats::catalog_entry(&self.app.state.models, &m)
                     .and_then(|e| e["name"].as_str())
                     .filter(|n| !n.is_empty())
@@ -3366,7 +3376,7 @@ impl Builder<'_> {
                         "code" => "cell",
                         "ask" => "question",
                         "web_search" => "search",
-                        "web_fetch" => "page",
+                        "web_fetch" | "firecrawl" => "page",
                         "session" => "session",
                         "fork" => "fork",
                         _ => "tool",
@@ -3745,6 +3755,7 @@ impl Builder<'_> {
                 "ask" => "Ask",
                 "web_search" => "Search",
                 "web_fetch" => "Fetch",
+                "firecrawl" => "Firecrawl",
                 "fork" => "Fork",
                 "browser_exec" => "Browser",
                 "browser_screenshot" => "Screenshot",
@@ -4951,6 +4962,11 @@ fn tool_summary(
             .map(|c| c.lines().next().unwrap_or("").to_owned())
             .unwrap_or_default(),
         "code" => String::new(),
+        "firecrawl" => [a["action"].as_str(), a["url"].as_str()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" "),
         "fork" => a["title"]
             .as_str()
             .filter(|t| !t.trim().is_empty())

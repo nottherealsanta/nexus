@@ -1,0 +1,13 @@
+[
+    {
+        "id": "per_1a206ab252b7ab67aab",
+        "session_id": "ses_1a206ab24dc9000af4c",
+        "tool": "Antigravity \u00b7 read_file \u2014 Read a.txt",
+        "call_id": "agy:t1",
+        "args": {
+            "path": "a.txt"
+        },
+        "grant": "acp:57b58b583e421ae6198240d57ebcbb8be2152ef6fdd18bfd9ed4a68fb74d6a08",
+        "external": "agy"
+    }
+]

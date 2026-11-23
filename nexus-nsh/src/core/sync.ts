@@ -33,7 +33,7 @@ export interface SyncHost {
   /** Called once a fresh snapshot is applied, so views can reload selection. */
   snapshotApplied?(): void;
   configChanged?(): void;
-  /** `provider.login` (sign-in progress, device code) and `agents.changed`, for the Settings pages. */
+  /** `provider.login` (sign-in progress, device code), `agents.changed` and the `mcp.*` events, for the Settings pages. */
   settingsEvent?(event: CoreEvent): void;
   contextChanged?(id: string): void;
   /** The full session row that came with a history load (`GET …/open`). */
@@ -223,7 +223,7 @@ export class Sync {
         const wasBusy = !!rootId && treeBusy(rootId);
         if (ev.type.startsWith("input.") && ev.session_id) h.inputsChanged?.(ev.session_id);
         if (ev.type === "config.changed") h.configChanged?.();
-        if (ev.type === "provider.login" || ev.type === "agents.changed") h.settingsEvent?.(ev);
+        if (ev.type === "provider.login" || ev.type === "agents.changed" || ev.type === "mcp.login" || ev.type === "mcp.connected" || ev.type === "mcp.disconnected" || ev.type === "mcp.changed") h.settingsEvent?.(ev);
         h.eventSeen?.(ev);
         const r = m.applyEvent(ev);
         if (typeof r === "object") { resync = r.resync; break; }
