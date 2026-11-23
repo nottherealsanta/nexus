@@ -9,8 +9,9 @@ below. The child's heading retains the worker's label. A legacy Antigravity stre
 
 It is **off by default** and **subagents only** (never a root session or the Manager). Claude Code keeps the original
 contract: Nexus answers no CLI prompt, and trust, sign-in and permission prompts end the turn as `needs_attention`.
-Antigravity is the one exception: its ACP permission requests go to the **existing Nexus approval cards**, and Nexus
-returns the user's allow-once or deny for that request (see [Approvals](#approvals-antigravity-acp)). Nexus still does
+Antigravity uses **Auto** for new children by default: agy handles edits and commands it considers safe, and Nexus
+declines any remaining ACP permission requests without showing a card. Use the Nexus `ask` policy for a new child to
+review those requests on the **existing Nexus approval cards** (see [Approvals](#approvals-antigravity-acp)). Nexus still does
 not answer sign-in or trust. An authentication failure ends the turn as `needs_attention` with the instruction the user
 must run; other unsupported ACP client requests are refused. Design, milestones and open questions:
 [plans/zmx-design.md](../plans/zmx-design.md), status in
@@ -85,8 +86,8 @@ work unchanged. One CLI process per Nexus turn; the next turn resumes the CLI's 
 | Completion | The `Stop` hook (an isolated `python -I` script) after the transcript is read to the end | `session/prompt` returns `stopReason == "end_turn"` and a non-empty answer |
 | Events from | The CLI's own transcript (`~/.claude/projects/…/<session>.jsonl`), which must resolve under the CLI's config directory | `session/update` notifications and the prompt result |
 | Text | Arrives per block (the transcript is written per block), not per token | `agent_message_chunk` text deltas stream live |
-| Permission requests | None are answered; a prompt ends the turn as `needs_attention` | `session/request_permission` goes to the existing Nexus approval card; only per-call allow/deny is returned |
-| Nexus `ask` / `allow` session permission | `ask` → `dontAsk`; `allow` → `auto` (the CLI's classifier) | Not mapped. Every new child starts in ACP mode `default`; `accept-edits` and `auto` are not selected |
+| Permission requests | None are answered; a prompt ends the turn as `needs_attention` | In `auto`, Nexus rejects or cancels without a card. In ACP `default`, requests go to the existing approval card; only per-call allow/deny is returned |
+| Nexus `ask` / `allow` session permission | `ask` → `dontAsk`; `allow` → `auto` (the CLI's classifier) | For new children: `ask` → ACP `default` (prompting); `allow` → ACP `auto` (the default). Existing children keep their saved mode |
 | Bypass | Never | Never: `always-proceed` is refused and Nexus never passes `agy acp --dangerously-skip-permissions` |
 
 ### Antigravity ACP setup
@@ -107,10 +108,9 @@ sees the assignment.
    `model` config option but exact per-effort ids in `models.availableModels`, and `session/set_model` accepted
    `gemini-3.8-flash-low`. The live Nexus run used that exact id through this path; it is also covered by the sanitized
    fixture.
-4. **Mode.** The agent must advertise session modes that include `default`, and `session/set_mode` must not report a
-   different current mode. `default` is chosen for every new child because it is expected to prompt; `accept-edits` and
-   `auto` could approve workspace edits without the user seeing them. The 1.5.14 probe advertised `default`,
-   `accept-edits`, `auto` and `plan`, with `default` described as "Ask before edits and commands".
+4. **Mode.** The agent must advertise the selected mode, and `session/set_mode` must not report a different current
+   mode. The 1.5.14 probe advertised `default`, `accept-edits`, `auto` and `plan`. It described `auto` as "Approve edits
+   and safe commands; ask before irreversible actions." Nexus does not auto-approve those remaining requests.
 5. **Effort.** When Nexus resolved an effort (and the model id is not already suffixed `-low`, `-medium` or `-high`), the
    agent must advertise exactly one `thought_level` option that allows it; it is set with
    `session/set_config_option`, and a different reported value fails.
@@ -132,7 +132,7 @@ Claude Code is unchanged in this migration: it still uses the interactive PTY, h
 
 ### Approvals (Antigravity ACP)
 
-An ACP `session/request_permission` request becomes an ordinary Nexus approval. It uses the same card, keyboard
+In ACP `default` mode, a `session/request_permission` request becomes an ordinary Nexus approval. It uses the same card, keyboard
 shortcuts, mobile card and `via Manager` path as a Nexus tool call; there is no separate external-worker approval UI. The card's
 tool line is `Antigravity · <tool name> — <CLI title>` (for example `Antigravity · read_file — Read a.txt`), and its
 `call_id` is the ACP tool-call id (`agy:…`) so the card joins the tool row in the timeline. The signed-in 1.5.14 probe
@@ -148,9 +148,10 @@ approval API (denied, file absent); TUI/NSH card visuals were verified separatel
 - **The externally visible answer is only that option id.** Nexus does not send rewritten tool arguments back to the
   CLI. What the card displays is a bounded, sanitized copy of the CLI's claimed payload for the user to judge, not the
   payload Nexus executes or approves.
-- **Nexus rules deliberately do not apply.** `AUTO_APPROVED` (`read`, `grep`, …), `tools.permission` rules, an agent's
-  permission rules and the session's `allow` policy cannot decide an ACP request. A child on an `allow` session still
-  shows the card, so the CLI's claimed tool name cannot borrow a Nexus tool's pre-approval.
+- **Nexus tool rules do not apply.** `AUTO_APPROVED` (`read`, `grep`, …), `tools.permission` rules and an agent's
+  permission rules cannot decide an ACP request. The CLI's claimed tool name cannot borrow a Nexus tool's pre-approval.
+- **Auto never shows a card.** If the CLI still asks, Nexus selects `reject_once` or cancels if the option is missing.
+  The worker reports `needs_attention`. Start a new child with `ask` to review requests instead.
 - **Allow once** selects the per-call allow option for this request only.
 - **Allow for session** selects the per-call allow option now and stores a runtime grant for the exact tool name and JSON argument
   payload (same keys and values; the key is a hash of the canonical pair). A later request with the same name and payload is allowed without another card; any
@@ -219,7 +220,7 @@ on `session.updated`, and as its own `session.worker` event (see [api.md](api.md
 
 | Field | Meaning |
 | --- | --- |
-| `provider`, `label`, `model`, `directory`, `permission_mode`, `effort` | What the CLI was started with. Antigravity ACP children use `permission_mode: "default"`; legacy stream-json rows keep the mode they were started with |
+| `provider`, `label`, `model`, `directory`, `permission_mode`, `effort` | What the CLI was started with. Antigravity ACP children use `permission_mode: "auto"` or `"default"`; legacy stream-json rows keep the mode they were started with |
 | `status` | `not_started`, `running`, then the CLI's outcome: `completed`, `needs_attention` or `failed` (an interrupted turn stays `running` in the record; the turn row says `interrupted`) |
 | `error` | The instruction or failure text (for `needs_attention`: the exact command to run) |
 | `transport` | `acp-v1` for new Antigravity children, `stream-json-v1` for legacy rows; Claude rows may omit it. A missing marker with existing Antigravity history is treated as legacy |

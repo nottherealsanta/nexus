@@ -118,9 +118,11 @@ class ExternalAgent:
                            "Its history remains readable; start a new child session.")
             if refusal is None:
                 effort = None if re.search(r"-(low|medium|high)$", self.model) else self.reasoning_effort
-                # Prompt, never bypass: ACP `default` is the prompting mode; `accept-edits` auto-approves
-                # workspace edits and is not used. This is independent of the session's Nexus allow policy.
-                acp_policy = AcpPolicy("default", effort)
+                # A resumed child keeps its verified mode, including children created before Auto became the default.
+                mode = "default" if self.permission == "ask" else "auto"
+                if resume is not None and self.worker.get("permission_mode") == "default":
+                    mode = "default"
+                acp_policy = AcpPolicy(mode, effort)
                 acp_fingerprint = acp_policy.fingerprint(self.model, self.workspace.resolve(strict=True))
                 if resume is not None and not acp_resumable(self.worker):
                     refusal = ("This Antigravity ACP session's transport or policy could not be verified, so it "

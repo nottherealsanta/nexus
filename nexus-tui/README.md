@@ -507,6 +507,8 @@ opens with the worker card instead of the starting context: `context incomplete`
 rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). The `Needs attention` detail wraps
 under its title, so a long error is never clipped to one line. Claude Code's
 own subagents show read-only inside the calling tool's card. As in NSH.
+New Antigravity children use Auto by default and decline any remaining permission requests without a card. Use the
+Ask permission policy for a new child to review requests.
 Group headers, thoughts, tools, child cards and notices share one left icon column and label edge;
 expanded members have no tree prefix. Every icon occupies one cell, like the group fold.
 Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,

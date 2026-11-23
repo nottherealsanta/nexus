@@ -295,13 +295,13 @@ decision.
 
 | Nexus session permission | Claude Code | agy (ACP) |
 | --- | --- | --- |
-| `ask` | `dontAsk`: what would prompt is denied | Not mapped; ACP mode `default` |
-| `allow` (the default for new sessions) | `auto`, the CLI's classifier, disclosed | Not mapped; ACP mode `default` |
+| `ask` | `dontAsk`: what would prompt is denied | ACP `default`: show approvals for requests the CLI sends |
+| `allow` (the default for new sessions) | `auto`, the CLI's classifier, disclosed | ACP `auto`: CLI classifier; Nexus declines remaining requests without a card |
 | Bypass | Never | Never: `--dangerously-skip-permissions` exists in `agy acp --help` but Nexus does not pass it |
 
 - **Claude Code:** **never** `bypassPermissions`, and never a keystroke that answers a prompt. Trust, sign-in and
   permission prompts end the child as `needs_attention` with the exact command.
-- **Antigravity ACP approvals:** the CLI asks, and the request becomes an ordinary Nexus approval with the same card,
+- **Antigravity ACP approvals:** in `default` mode the CLI asks, and the request becomes an ordinary Nexus approval with the same card,
   shortcuts, mobile card and `via Manager` path. Only per-call `allow_once`/`reject_once` options are selected; Nexus
   never selects `allow_always`, `reject_always` or another persistent option and never edits the CLI's settings. If no
   per-call allow option exists, no card is shown: the worker selects the per-call reject if present, otherwise cancels.
@@ -685,5 +685,5 @@ recorded. No personal-home migration was run.
 | --- | --- | --- |
 | D3 | Claude Code by PTY only, or also evaluate `claude -p` stream-json? | PTY as in nexus01; measure in M0 and revisit only with evidence |
 | D5 | Confirm dropping the `opencode-antigravity-auth` route from PLAN.md section 10 | **Confirmed 2026-11-16:** dropped. Read of the README ([NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth), 708 commits, v2.1.2): it signs in with "Google OAuth (Antigravity)" (`opencode auth login google`), keeps the user's Google accounts and quota state, and calls Antigravity's models itself; the README says "Unofficial plugin. Google may restrict accounts using third-party clients." That is credential reuse by a third-party client, which section 1 rules out and which the Antigravity terms (section 6, `plans/06-zmx.md`) name as a breach. ZMX runs the unmodified `agy` under the user's own sign-in and reads no credentials. |
-| D7 | Default permission for `allow` sessions: `auto`, or something stricter? | Claude Code: `auto`, disclosed. Antigravity ACP: mode `default` (prompting) regardless of the Nexus policy; never bypass (2026-11-23) |
+| D7 | Default permission for `allow` sessions: `auto`, or something stricter? | Claude Code: `auto`, disclosed. New Antigravity ACP children: `auto` on `allow`, `default` on `ask`; no cards in `auto`, and no bypass. Resumed children keep their saved mode (2026-11-23) |
 | D9 | Antigravity transport and approval flow? | **ACP v1; Antigravity only; existing approval cards; per-call allow/deny; exact tool+argument session grants; old stream-json histories readable but not continuable (user, 2026-11-23).** Nexus E2E passed through the approval API (deny, file absent, fresh-process resume, usage recorded); visual clients and a daemon restart remain unverified |

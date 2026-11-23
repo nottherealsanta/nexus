@@ -270,6 +270,8 @@ opens with the worker card instead of the starting context: `context incomplete`
 rows as the worker reports them (shared `interface/scenarios/zmx-*.json`). The `Needs attention` detail wraps
 under its title, so a long error is never clipped to one line. Claude Code's
 own subagents show read-only inside the calling tool's card. As in the TUI.
+New Antigravity children use Auto by default and decline any remaining permission requests without a card. Use the
+Ask permission policy for a new child to review requests.
 
 Selecting a session loads, after the bounded snapshot view, one bundle
 (`GET /api/session/{id}/open`): the session row, the frozen starting context, the

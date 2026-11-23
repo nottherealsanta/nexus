@@ -16,6 +16,7 @@ from nexus.runtime import Conflict, _worker_attention_why
 from nexus.server import make_runtime
 from nexus.store import Store
 from nexus.workers import records
+from nexus.workers.antigravity import AcpPolicy
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="ZMX requires POSIX")
 MODEL = "agy/gemini-3.8-flash-high"
@@ -113,12 +114,13 @@ async def test_a_new_agy_child_stays_acp_when_its_first_turn_fails_before_the_ma
     assert worker["label"] == "ACP · Antigravity" and worker["transport"] == "acp-v1"
 
 
-async def test_child_runs_stores_standard_records_and_resumes(env):
+@pytest.mark.parametrize(("permission", "mode"), [(None, "auto"), ("ask", "default")])
+async def test_child_runs_stores_standard_records_and_resumes(env, permission, mode):
     rt, workspace, _ = env
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission=permission, parent=root)
     rt.prompt(child.id, "first request")
     await idle(rt)
     messages = [m.message for m in rt.store.messages(child.id)]
@@ -127,7 +129,7 @@ async def test_child_runs_stores_standard_records_and_resumes(env):
     assert messages[3].parts[0].text == "done"
     data = rt.session_json(rt.session(child.id))
     assert data["worker"]["session_id"] == "acp-1" and data["worker"]["context_complete"] is False
-    assert data["worker"]["transport"] == "acp-v1" and data["worker"]["permission_mode"] == "default"
+    assert data["worker"]["transport"] == "acp-v1" and data["worker"]["permission_mode"] == mode
     assert data["worker"]["policy_fingerprint"] and data["worker"]["label"] == "ACP · Antigravity"
     assert "Nexus permission rules" in data["worker"]["not_applied"]
     assert data["tools"] == [] and data["tokens"] is None
@@ -147,6 +149,7 @@ async def test_child_runs_stores_standard_records_and_resumes(env):
     assert methods.count("session/new") == 1 and methods.count("session/resume") == 1
     resume = next(entry["params"] for entry in log if entry.get("method") == "session/resume")
     assert resume == {"sessionId": "acp-1", "cwd": str(workspace.resolve()), "mcpServers": []}
+    assert [entry["params"]["modeId"] for entry in log if entry.get("method") == "session/set_mode"] == [mode, mode]
     second_prompt = [entry["params"]["prompt"][0]["text"] for entry in log if entry.get("method") == "session/prompt"][-1]
     assert second_prompt == "second request"
 
@@ -258,12 +261,12 @@ def test_claude_pool_child_maps_to_claude_code_and_keeps_its_configured_effort(e
     assert (data["effort"], data["effort_source"]) == ("medium", "config")
 
 
-async def test_acp_permission_prompts_under_allow_policy_and_honors_allow(tmp_path, monkeypatch):
+async def test_acp_ask_policy_prompts_and_honors_allow(tmp_path, monkeypatch):
     rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission")
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "do it")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     assert pending["tool"] == "Antigravity · read_file — Read a.txt"
@@ -271,7 +274,7 @@ async def test_acp_permission_prompts_under_allow_policy_and_honors_allow(tmp_pa
     assert pending["call_id"] == "agy:t1" and pending["external"] == "agy"
     assert pending["grant"].startswith("acp:")
     mode = next(entry["params"] for entry in acp_log(workspace) if entry.get("method") == "session/set_mode")
-    assert mode["modeId"] == "default"  # prompt; accept-edits/auto can bypass edits
+    assert mode["modeId"] == "default"
     rt.reply(child.id, pending["id"], True)
     await idle(rt)
     assert [event["data"]["outcome"] for event in rt.store.events(child.id, types=["permission.replied"])] == ["allowed"]
@@ -283,12 +286,50 @@ async def test_acp_permission_prompts_under_allow_policy_and_honors_allow(tmp_pa
     assert rt.session_json(rt.session(child.id))["worker"]["status"] == "completed"
 
 
+async def test_acp_auto_declines_permission_without_a_card(tmp_path, monkeypatch):
+    rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission")
+    enable()
+    project = rt.open_project(str(workspace))
+    root = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=MODEL, permission=None, parent=root)
+    rt.prompt(child.id, "do it")
+    await idle(rt)
+    log = acp_log(workspace)
+    assert [entry["params"]["modeId"] for entry in log if entry.get("method") == "session/set_mode"] == ["auto"]
+    assert [entry["permission"] for entry in log if "permission" in entry] == [
+        {"outcome": "selected", "optionId": "reject-once"}
+    ]
+    assert rt.store.events(child.id, types=["permission.asked"]) == []
+    [turn] = rt.store.turn_summaries(child.id)["turns"]
+    assert turn["status"] == "failed" and "without prompting in Auto mode" in turn["error"]["message"]
+    assert rt.session_json(rt.session(child.id))["worker"]["status"] == "needs_attention"
+
+
+async def test_existing_allow_child_resumes_in_its_original_prompting_mode(env):
+    rt, workspace, _ = env
+    enable()
+    project = rt.open_project(str(workspace))
+    root = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    snapshot = rt.snapshot_for(child)
+    snapshot["worker"].update(session_id="acp-1", status="completed", permission_mode="default",
+                              policy_fingerprint=AcpPolicy("default").fingerprint(MODEL.split("/", 1)[1],
+                                                                                  workspace.resolve()))
+    rt.store.set_snapshot(child.id, snapshot)
+    rt.prompt(child.id, "follow-up")
+    await idle(rt)
+    log = acp_log(workspace)
+    assert any(entry.get("method") == "session/resume" for entry in log)
+    assert [entry["params"]["modeId"] for entry in log if entry.get("method") == "session/set_mode"] == ["default"]
+    assert rt.session_json(rt.session(child.id))["worker"]["status"] == "completed"
+
+
 async def test_acp_permission_denied_is_honored_and_never_allowed(tmp_path, monkeypatch):
     rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission")
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "do it")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     rt.reply(child.id, pending["id"], False)
@@ -306,7 +347,7 @@ async def test_acp_permission_interrupt_cancels_the_wait_and_the_turn(tmp_path, 
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "do it")
     [_pending] = await until(lambda: rt.pending_approvals(child.id))
     assert await rt.interrupt(child.id) is True
@@ -322,7 +363,7 @@ async def test_acp_reject_only_permission_does_not_show_an_unusable_card(tmp_pat
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "do it")
     await idle(rt)
     assert rt.store.events(child.id, types=["permission.asked"]) == []
@@ -337,7 +378,7 @@ def acp_permission_session(request, tmp_path, monkeypatch):
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     return rt, workspace, child
 
 
@@ -388,7 +429,7 @@ async def test_acp_process_record_has_transport_and_session_for_recovery(tmp_pat
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "do it")
     await until(lambda: (workspace / "acp-marker.txt").exists())
     [turn] = [item for item in rt.store.running_turns() if item["session_id"] == child.id]
@@ -435,7 +476,7 @@ def acp_rule_session(tmp_path, monkeypatch):
     config.patch(config.read()["revision"], {"tools.permission": {"read_file": "allow"}}, [])
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission="allow")
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     return rt, child
 
 
@@ -507,7 +548,7 @@ async def test_live_acp_permission_deny_usage_and_timeline(tmp_path, monkeypatch
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "read and write")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     assert pending["tool"] == "Antigravity · write_file — File probe-write.txt"
@@ -540,7 +581,7 @@ async def test_live_acp_resume_does_not_replay_load_and_adds_turn_usage(tmp_path
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    child = rt.create_session(project, title=None, model=MODEL, permission="ask", parent=root)
     rt.prompt(child.id, "first")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     rt.reply(child.id, pending["id"], False)

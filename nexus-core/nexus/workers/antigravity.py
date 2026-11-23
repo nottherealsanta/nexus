@@ -76,7 +76,7 @@ def acp_resumable(worker: Mapping[str, Any] | None) -> bool:
 
 @dataclass(frozen=True)
 class AcpPolicy:
-    """ACP session policy. `default` is the prompting mode; accept-edits is never chosen for new children."""
+    """ACP session policy. `default` prompts; `auto` declines requests left over by the CLI's classifier."""
 
     permission_mode: Literal["default", "accept-edits", "auto", "plan"] = "default"
     effort: str | None = None
@@ -98,9 +98,11 @@ class AcpPolicy:
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
     def authority(self, workspace: Path) -> str:
+        permissions = ("Nexus declines any CLI permission requests without prompting" if self.permission_mode == "auto"
+                       else "the CLI's permission requests go to Nexus for approval")
         return (f"ACP · Antigravity ran its own tools in {workspace} (ACP mode {self.permission_mode}); "
                 "the CLI's settings, MCP servers and plugins are inherited. Nexus tools and step limits do not "
-                "apply; the CLI's permission requests go to Nexus for approval. The CLI adds context Nexus cannot see; "
+                f"apply; {permissions}. The CLI adds context Nexus cannot see; "
                 "this is not its full model context.")
 
 
@@ -886,6 +888,13 @@ class AntigravityAcpWorker:
                 await note("Antigravity offered only persistent permission options; Nexus refused them and "
                            "cancelled the request")
                 return None
+            if policy.permission_mode == "auto":
+                denied.append(_safe_acp(title, 200))
+                option_id = _permission_option(options, False)
+                if option_id is not None:
+                    return permission_outcome(option_id)
+                await note("Antigravity offered no per-call reject option; Nexus cancelled the request in Auto mode")
+                return None
             if approve is None:
                 approval_unavailable = True
                 denied.append(_safe_acp(title, 200))
@@ -1141,8 +1150,12 @@ class AntigravityAcpWorker:
                      "cancelled. Nexus approved nothing.")
         elif denied:
             status = "needs_attention"
-            error = ("Antigravity's permission request was declined; the CLI may have continued without the tool. "
-                     "Nexus approved nothing.")
+            if policy.permission_mode == "auto":
+                error = ("Nexus declined Antigravity's permission request without prompting in Auto mode. "
+                         "To review requests, start a new child with the Ask permission policy.")
+            else:
+                error = ("Antigravity's permission request was declined; the CLI may have continued without the tool. "
+                         "Nexus approved nothing.")
         elif stop_reason == "end_turn":
             if text.strip():
                 status, error = "completed", None

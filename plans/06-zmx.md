@@ -28,6 +28,10 @@ shown as legacy CLI), and label normalization works when an old row has no `prov
 
 ## 2026-11-23: Antigravity ACP migration (implemented; live protocol probe and Nexus E2E passed)
 
+- [x] **Follow-up: no permission prompts by default.** New `allow` children run in ACP `auto`; Nexus rejects or cancels
+  any remaining permission request without a card. `ask` still prompts and existing children retain their saved mode.
+  Verified offline with fake ACP workers; live Auto behavior was not tested.
+
 **Decision (user):** move Antigravity only from the headless stream-json transport to ACP v1 (`agy acp`); leave Claude
 Code's PTY transport unchanged. ACP permission requests use the existing approval cards. A session "allow for session"
 grant is limited to the exact tool name and argument payload. Old stream-json Antigravity histories stay readable but
