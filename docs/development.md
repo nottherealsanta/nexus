@@ -61,7 +61,9 @@ An exact shared 0.2.0 pin prevents the NSH native host from resolving dependenci
 Core tests run a loop-stall watchdog (plan 50, rule R1, `tests/conftest.py`): any asyncio callback or task step
 that runs 100 ms or more without yielding fails its test. `NEXUS_TEST_STALL_MS=250` raises the limit (0 turns it off),
 `NEXUS_TEST_STALL_REPORT=1` never fails and prints every stall at the end, and `@pytest.mark.blocks_loop("reason")`
-marks a test that blocks on purpose. Wait for conditions with `tests/waiting.py` `until(...)` (a generous ceiling,
+marks a test that blocks on purpose. Garbage-collection time inside a step is reported but not counted: a full
+collection scans the whole test process's heap, so its pause depends on where in the run a step lands. A stall
+report includes the stack sampled while the step was blocked. Wait for conditions with `tests/waiting.py` `until(...)` (a generous ceiling,
 returns at once), never a fixed short poll.
 
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):

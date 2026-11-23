@@ -52,6 +52,8 @@ Why Python is enough for most of it, and where it is not:
 - [x] For the v0.15 Core gate, move blocking Git, file seeding and terminal store initialization out of async tests,
   and block live models.dev downloads in the offline suite. The 100 ms watchdog is unchanged; hosted results and
   remaining stall evidence are tracked in the [release handoff](../reports/release-0.15.0-validation.md).
+- [x] The watchdog samples the blocked stack and excludes garbage-collection time. A local survey showed full
+  collections of up to 50 ms landing in random steps late in the run; hosted errors moved between tests each run.
 - [ ] Restart the daemon on the instrumented build and collect a week of `nexus perf` (user; not from an agent session).
 - [ ] When a stall appears, `py-spy dump`/`record` it and name the code. Record the causes here.
 - [x] Fixture generator: a large synthetic `nexus.db` with the real schema (thousands of sessions, one with 5,000
