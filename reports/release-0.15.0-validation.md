@@ -2,7 +2,9 @@
 
 **Status (2026-11-23): not published.** v0.14.0 is still the latest release. The feature changes are on `main` via [#104](https://github.com/nottherealsanta/nexus/pull/104). The Firecrawl fixture follow-up [#105](https://github.com/nottherealsanta/nexus/pull/105) also shows as merged, but its hosted Core checks failed. [Release PR #103](https://github.com/nottherealsanta/nexus/pull/103) is the version bump; its checks can pass without running Core. Do not interpret that result as validation of the candidate.
 
-The user approved publishing with the known **NSH** failures disclosed. The later **Core** CI failures were not part of that approval and are the current release blocker.
+The user approved publishing with the known **NSH** failures disclosed. On 2026-11-23 the user also approved publishing once Core had no assertion failures, with any remaining hosted loop-stall watchdog errors disclosed.
+
+**Core gate result (`4ac1e847`, [run](https://github.com/nottherealsanta/nexus/actions/runs/45182635498)):** Ubuntu **passed** (no failures or errors). macOS: **1,773 passed, 14 skipped, 0 failures, 9 watchdog errors**. The watchdog errors move between tests from run to run. The watchdog now samples the blocked stack and excludes garbage-collection time. Sampled stacks show the runtime's remaining synchronous SQLite calls (plan 50, store threading) or steps with almost no CPU, which point to runner scheduling. A missing `inputs_runtime` fixture import, the usage HTTP client's SSL setup on the loop and the context-session store fixture were fixed.
 
 ## Continuation (2026-11-23)
 
@@ -66,5 +68,7 @@ uv run --locked pytest -q --durations=25
 3. Check the release for Core wheel and sdist, TUI binaries, NSH web bundle, installer, four Firecrawl binaries, third-party notice, and `SHA256SUMS`. Verify the assets against the checksums and disclose the known NSH issues in the release notes.
 
 ### Disclosure to add to the GitHub release notes
+
+Core passes its full suite on Ubuntu. On hosted macOS every test assertion passes, but the event-loop stall watchdog (a 100 ms limit per loop step) still reports a handful of errors. Which tests are affected changes from run to run. The remaining known source is the runtime's synchronous SQLite calls, tracked in plan 50.
 
 The NSH web bundle is included. Its type check, host tests and packaging passed, but the full browser suite is not green. In the Chromium headless shell run, 548 passed and 41 failed; 23 of those failures passed on their supported headless target. Remaining observations include queued multiline editing with Enter, timeline scroll restoration, history reload after a simulated Core restart, linked worktree display, and pasted-image annotation. These are test results, not all independently reproduced in the app. See the [validation handoff](https://github.com/nottherealsanta/nexus/blob/main/reports/release-0.15.0-validation.md#nsh-known-failures-approved-for-disclosure).
