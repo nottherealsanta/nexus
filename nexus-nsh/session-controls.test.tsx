@@ -84,6 +84,7 @@ function network(flags: Flags = {}) {
     "GET */api/agent*": { body: { agents: [], problems: [] } },
     "GET */api/skill*": { body: { skills: [], problems: [] } },
     "GET */api/mcp*": { body: { servers: [] } },
+    "GET */api/project/*/mcp": { body: { servers: [], error: null } },
     "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
