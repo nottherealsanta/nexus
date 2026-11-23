@@ -47,7 +47,8 @@ class Fake:
 
 
 @pytest.fixture
-async def env(tmp_path, monkeypatch):
+def context_runtime(tmp_path, monkeypatch):
+    # Synchronous, so opening, migrating and closing SQLite and building the app run outside the event loop.
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     workspace = tmp_path / "proj"
     workspace.mkdir()
@@ -57,10 +58,18 @@ async def env(tmp_path, monkeypatch):
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
-    yield rt, client, provider, workspace
+    try:
+        yield rt, client, provider, workspace
+    finally:
+        rt.store.close()
+
+
+@pytest.fixture
+async def env(context_runtime):
+    rt, client, _, _ = context_runtime
+    yield context_runtime
     await client.aclose()
     await rt.shutdown()
-    rt.store.close()
 
 
 async def _session(client, workspace):

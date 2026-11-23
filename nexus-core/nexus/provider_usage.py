@@ -681,7 +681,8 @@ async def providers_usage(client: httpx.AsyncClient | None = None) -> dict[str, 
     """One row per connected provider; limit windows where the provider reports them."""
     wanted = await asyncio.to_thread(connected_providers)
     own = client is None
-    client = client or httpx.AsyncClient(timeout=15.0)
+    # Building the client loads the CA bundle into a new SSL context: ~150 ms of CPU on a slow machine, off the loop.
+    client = client or await asyncio.to_thread(httpx.AsyncClient, timeout=15.0)
     try:
         rows = await asyncio.gather(*(_row(p, client) for p in wanted))
     finally:
