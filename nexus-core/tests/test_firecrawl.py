@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -27,13 +28,18 @@ async def fake(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("NEXUS10_HOME", str(home))
     script = tmp_path / "firecrawl-local"
-    script.write_text(f"#!/bin/sh\nexec {sys.executable} {FIXTURE} \"$@\"\n")
+    script.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(FIXTURE))} \"$@\"\n")
     script.chmod(0o755)
     record = home / "firecrawl" / "state" / "record.jsonl"
     monkeypatch.setattr(firecrawl, "binary", lambda: str(script))
     monkeypatch.setattr("nexus.tools.firecrawl.POLL_S", 0.01)
-    yield lambda: [json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
-    await firecrawl.close()
+    try:
+        yield lambda: [json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
+    finally:
+        await firecrawl.close()
+        log = home / "logs" / "firecrawl.log"
+        if log.exists():
+            print(f"Fake Firecrawl subprocess log:\n{log.read_text(errors='replace')}")
 
 
 async def test_scrape_is_fenced_and_header_has_no_query(fake, ctx):
