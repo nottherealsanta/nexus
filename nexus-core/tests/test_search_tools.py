@@ -111,11 +111,17 @@ async def test_grep_does_not_follow_symlinks_out(ctx, tmp_path_factory, engine):
     assert "outside" not in await grep({"pattern": "needle", "case_insensitive": True}, ctx)
 
 
-async def test_grep_and_glob_respect_gitignore_and_see_new_files(ctx, engine):
+@pytest.fixture
+def git_workspace(ctx):
     git(ctx.workspace, "init", "-q")
     (ctx.workspace / ".gitignore").write_text("ignored/\n")
     (ctx.workspace / "ignored").mkdir()
     (ctx.workspace / "ignored" / "x.py").write_text("needle ignored\n")
+    return ctx
+
+
+async def test_grep_and_glob_respect_gitignore_and_see_new_files(git_workspace, engine):
+    ctx = git_workspace
     out = await grep({"pattern": "needle"}, ctx)
     assert "ignored" not in out and "src/a.py" in out
     assert "ignored" not in await glob({"pattern": "**/*.py"}, ctx)
@@ -132,9 +138,15 @@ async def test_glob_matches_files_and_directories(ctx):
     assert ".hidden" not in await glob({"pattern": "*"}, ctx)
 
 
-async def test_glob_announces_clipping_and_refuses_bad_patterns(ctx):
+@pytest.fixture
+def glob_clipping_workspace(ctx):
     for i in range(250):
         (ctx.workspace / f"f{i:03}.txt").write_text("x")
+    return ctx
+
+
+async def test_glob_announces_clipping_and_refuses_bad_patterns(glob_clipping_workspace):
+    ctx = glob_clipping_workspace
     out = await glob({"pattern": "*.txt"}, ctx)
     assert "showing 200 of 250 matches" in out
     with pytest.raises(ToolError, match="relative"):
@@ -159,7 +171,12 @@ async def test_ls_lists_one_directory(ctx, tmp_path_factory):
         await ls({"path": "notes.md"}, ctx)
 
 
-async def test_ls_announces_clipping(ctx):
+@pytest.fixture
+def ls_clipping_workspace(ctx):
     for i in range(1005):
         (ctx.workspace / "src" / "deep" / f"{i}.t").write_text("")
-    assert "showing 1000 of 1006 entries" in await ls({"path": "src/deep"}, ctx)
+    return ctx
+
+
+async def test_ls_announces_clipping(ls_clipping_workspace):
+    assert "showing 1000 of 1006 entries" in await ls({"path": "src/deep"}, ls_clipping_workspace)

@@ -15,6 +15,17 @@ def _no_background_requests(monkeypatch):
     monkeypatch.setattr(Runtime, "background_requests", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_catalog_download(monkeypatch):
+    """Catalog lookups can use a test's cache, but the offline suite never reaches models.dev."""
+    from nexus.llmhub import catalog
+
+    async def offline():
+        raise OSError("catalog downloads are disabled in offline tests")
+
+    monkeypatch.setattr(catalog, "_download", offline)
+
+
 def remembering(store, model):
     """A store whose last selected model is `model`, so a new root session starts with it."""
     store.set_preference("model.last", model)

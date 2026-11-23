@@ -11,14 +11,27 @@ from nexus.server import build_app, make_runtime
 from nexus.store import Store
 
 
-def _terminal_app(tmp_path, monkeypatch, *, token="", url="http://127.0.0.1:4747"):
+@pytest.fixture
+def terminal_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SHELL", "/bin/sh")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     runtime = make_runtime(Store(tmp_path / "db.sqlite"))
     project = runtime.open_project(str(workspace))
-    return build_app(runtime, token=token, url=url), runtime, project, workspace
+    return runtime, project, workspace
+
+
+@pytest.fixture
+def terminal_app(terminal_runtime):
+    runtime, project, workspace = terminal_runtime
+    return build_app(runtime, token="", url="http://127.0.0.1:4747"), project, workspace
+
+
+@pytest.fixture
+def authenticated_terminal_app(terminal_runtime):
+    runtime, project, workspace = terminal_runtime
+    return build_app(runtime, token="secret", url="http://127.0.0.1:4747"), project, workspace
 
 
 def _terminal_client(app, *, peer=("127.0.0.1", 40000), base_url="http://127.0.0.1:4747", headers=None):
@@ -28,13 +41,8 @@ def _terminal_client(app, *, peer=("127.0.0.1", 40000), base_url="http://127.0.0
 
 
 @pytest.fixture
-async def terminal_server(tmp_path, monkeypatch):
-    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SHELL", "/bin/sh")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    runtime = make_runtime(Store(tmp_path / "db.sqlite"))
-    project = runtime.open_project(str(workspace))
+async def terminal_server(terminal_runtime):
+    runtime, project, workspace = terminal_runtime
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     sock.listen(128)
@@ -47,7 +55,8 @@ async def terminal_server(tmp_path, monkeypatch):
         while not server.started:
             await asyncio.sleep(0.01)
     try:
-        async with httpx.AsyncClient(base_url=url, headers={"Authorization": "Bearer secret"}, timeout=5) as client:
+        async with httpx.AsyncClient(base_url=url, headers={"Authorization": "Bearer secret"}, timeout=5,
+                                     trust_env=False, verify=False) as client:
             yield client, project, workspace
     finally:
         server.should_exit = True
@@ -56,14 +65,9 @@ async def terminal_server(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-async def tokenless_terminal_server(tmp_path, monkeypatch):
+async def tokenless_terminal_server(terminal_runtime):
     """The default wildcard listener, reached over real loopback."""
-    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SHELL", "/bin/sh")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    runtime = make_runtime(Store(tmp_path / "db.sqlite"))
-    project = runtime.open_project(str(workspace))
+    runtime, project, workspace = terminal_runtime
     sock = socket.socket()
     sock.bind(("0.0.0.0", 0))
     sock.listen(128)
@@ -76,7 +80,7 @@ async def tokenless_terminal_server(tmp_path, monkeypatch):
         while not server.started:
             await asyncio.sleep(0.01)
     try:
-        async with httpx.AsyncClient(base_url=url, timeout=5) as client:
+        async with httpx.AsyncClient(base_url=url, timeout=5, trust_env=False, verify=False) as client:
             yield client, project, workspace
     finally:
         server.should_exit = True
@@ -213,8 +217,8 @@ async def test_tokenless_loopback_terminal_round_trip(tokenless_terminal_server)
     (("::1", 40000), "http://[::1]:4747"),
     (("::ffff:127.0.0.1", 40000), "http://127.0.0.1:4747"),
 ])
-async def test_tokenless_ipv6_and_mapped_loopback_peers_are_allowed(tmp_path, monkeypatch, peer, base_url):
-    app, _, project, workspace = _terminal_app(tmp_path, monkeypatch)
+async def test_tokenless_ipv6_and_mapped_loopback_peers_are_allowed(terminal_app, peer, base_url):
+    app, project, workspace = terminal_app
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "local"}
     async with app.router.lifespan_context(app), _terminal_client(app, peer=peer, base_url=base_url) as client:
         created = await client.post("/api/terminal", json=body)
@@ -231,8 +235,8 @@ async def test_tokenless_ipv6_and_mapped_loopback_peers_are_allowed(tmp_path, mo
     (("127.0.0.1", 40000), {"Forwarded": "for=127.0.0.1"}),
     (("127.0.0.1", 40000), {"X-Real-IP": "127.0.0.1"}),
 ])
-async def test_tokenless_terminal_refuses_remote_missing_and_forwarded_peers(tmp_path, monkeypatch, peer, extra):
-    app, _, project, workspace = _terminal_app(tmp_path, monkeypatch)
+async def test_tokenless_terminal_refuses_remote_missing_and_forwarded_peers(terminal_app, peer, extra):
+    app, project, workspace = terminal_app
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "remote"}
     async with _terminal_client(app, peer=peer, headers=extra) as client:
         assert (await client.get("/api/terminal")).status_code == 403
@@ -244,8 +248,8 @@ async def test_tokenless_terminal_refuses_remote_missing_and_forwarded_peers(tmp
         assert (await local.get("/api/terminal", params={"project_id": project.id})).json() == []
 
 
-async def test_tokenless_terminal_requires_loopback_host_and_origin(tmp_path, monkeypatch):
-    app, _, project, workspace = _terminal_app(tmp_path, monkeypatch)
+async def test_tokenless_terminal_requires_loopback_host_and_origin(terminal_app):
+    app, project, workspace = terminal_app
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "local"}
     async with app.router.lifespan_context(app):
         async with _terminal_client(app, base_url="http://evil.example:4747") as forged_host:
@@ -262,8 +266,8 @@ async def test_tokenless_terminal_requires_loopback_host_and_origin(tmp_path, mo
             assert (await localhost.delete("/api/terminal/" + created.json()["id"])).status_code == 200
 
 
-async def test_remote_cannot_replay_a_tokenless_local_terminal_mutation(tmp_path, monkeypatch):
-    app, _, project, workspace = _terminal_app(tmp_path, monkeypatch)
+async def test_remote_cannot_replay_a_tokenless_local_terminal_mutation(terminal_app):
+    app, project, workspace = terminal_app
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "local"}
     keyed = {"Idempotency-Key": "local-terminal-replay"}
     async with app.router.lifespan_context(app):
@@ -284,9 +288,8 @@ async def test_remote_cannot_replay_a_tokenless_local_terminal_mutation(tmp_path
             assert (await local.delete("/api/terminal/" + terminal_id)).status_code == 200
 
 
-@pytest.mark.blocks_loop("synchronous SQLite seeding and store reads on the loop; workstream B (store threading) owns the fix")
-async def test_token_mode_requires_bearer_and_keeps_the_origin_check(tmp_path, monkeypatch):
-    app, _, project, workspace = _terminal_app(tmp_path, monkeypatch, token="secret")
+async def test_token_mode_requires_bearer_and_keeps_the_origin_check(authenticated_terminal_app):
+    app, project, workspace = authenticated_terminal_app
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "remote"}
     remote = ("192.0.2.10", 40000)
     async with app.router.lifespan_context(app):

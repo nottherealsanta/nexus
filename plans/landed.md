@@ -2,6 +2,8 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Core release validation.** Search and terminal HTTP fixtures run blocking setup before the loop starts; the offline suite blocks live models.dev downloads without changing the 100 ms watchdog ([plan 50](50-rust-core.md)).
+
 - **Firecrawl startup diagnostics.** Core reports the child PID and either its exit code or the last health probe result; the stand-in server no longer depends on reverse DNS to listen. All 16 focused tests pass locally; hosted checks pending ([plan 51](51-firecrawl.md)).
 
 - **External workers rename (11-23).** ZMX is now **External workers** in Core, both clients, Settings and docs: `PTY · Claude Code`, `ACP · Antigravity`, and `CLI · Antigravity` for a legacy stream-json history. Settings options are `Agent SDK`/`PTY` and `off`/`ACP`. `[workers] claude_backend = "cli"` is canonical; `[zmx]`/`"zmx"` and the old API keys remain aliases, and an old-client write stores `cli`. `GET` and `PATCH /api/config` both carry the unavailable reason. A new Antigravity child carries the ACP marker from creation, so a failure before its first prompt is not labelled legacy CLI. Old worker labels are normalized for display (including rows without a provider) without rewriting model context. Tests: Core config/workers/scenarios; TUI and NSH scenario/settings checks; paired Settings captures in `reports/external-workers-rename-2026-11-23/`.

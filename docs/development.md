@@ -384,8 +384,10 @@ posting, renders the turn (including questions and approvals), and accepts
 
 ## Tests
 
-`tests/` needs no network or credentials. `pytest-asyncio` runs in `auto` mode
-(`asyncio_mode = "auto"`), so async tests need no marker.
+`tests/` needs no external network or credentials. Catalog lookups can read test caches, but the default
+fixture disables downloads from models.dev. `pytest-asyncio` runs in `auto` mode (`asyncio_mode = "auto"`),
+so async tests need no marker. Use synchronous fixtures for blocking setup such as Git commands and SQLite
+initialization so the loop watchdog measures the async code under test.
 
 | File | Covers |
 | --- | --- |

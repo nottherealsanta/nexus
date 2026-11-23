@@ -1,0 +1,56 @@
+# Nexus v0.15.0 release handoff
+
+**Status (2026-11-23): not published.** v0.14.0 is still the latest release. The feature changes are on `main` via [#104](https://github.com/nottherealsanta/nexus/pull/104). The Firecrawl fixture follow-up [#105](https://github.com/nottherealsanta/nexus/pull/105) also shows as merged, but its hosted Core checks failed. [Release PR #103](https://github.com/nottherealsanta/nexus/pull/103) is the version bump; its checks can pass without running Core. Do not interpret that result as validation of the candidate.
+
+The user approved publishing with the known **NSH** failures disclosed. The later **Core** CI failures were not part of that approval and are the current release blocker.
+
+## Continuation (2026-11-23)
+
+- [PR #106](https://github.com/nottherealsanta/nexus/pull/106) removes reverse DNS from the fake Firecrawl server's bind path and logs binding/listening milestones. Core now reports whether the child exited or the last health probe failed. This is not yet a confirmed root cause on hosted macOS. Local macOS: **16 Firecrawl tests passed**.
+- Hosted logs showed synchronous Git and bulk file setup in search tests and synchronous SQLite initialization in terminal HTTP tests. Those now run in synchronous fixtures. The Core suite can still use test catalog caches but no longer attempts live models.dev downloads. The **100 ms watchdog is unchanged**. Local macOS: **62 focused tests passed**; full Core run started.
+- The [artifact dry run](https://github.com/nottherealsanta/nexus/actions/runs/45167639327) uses the full commit SHA. The previous attempt used a short SHA that checkout treated as a ref name and never reached the builds.
+- The release workflow currently disables `nsh-web` (v0.14.0 also shipped without it). The handoff lists the bundle, so either validate a hosted NSH build and include it, or get explicit agreement to omit it and say so in the notes. Firecrawl first-time binary redistribution also needs the sign-off recorded in [plan 51](../plans/51-firecrawl.md#not-verified).
+
+## Core: blocking issues
+
+| Hosted run | macOS | Ubuntu |
+| --- | --- | --- |
+| [Feature PR run](https://github.com/nottherealsanta/nexus/actions/runs/45162026752) | 1,763 passed, 14 skipped, 9 failures, 21 errors | 1,773 passed, 13 skipped, 13 errors |
+| [Fixture follow-up run](https://github.com/nottherealsanta/nexus/actions/runs/45164380048) | 1,763 passed, 14 skipped, 9 failures, 33 errors | 1,773 passed, 13 skipped, 6 errors |
+
+### macOS: fake Firecrawl never becomes ready
+
+All nine assertion/test failures are in `nexus-core/tests/test_firecrawl.py`. They share a startup problem: the fake `firecrawl-local` never answers `/health` successfully. The refused-target test also fails because the startup error arrives instead of the expected target error. This is evidence about the fixture path, not a verified failure of the real Firecrawl binary.
+
+- Launcher: `nexus-core/tests/test_firecrawl.py`, fixture `fake`. It wraps Python in a shell script and overrides `firecrawl.binary()` to point at that script.
+- Child: `nexus-core/tests/fixtures/fake_firecrawl.py`. It binds a Python HTTP server to loopback and serves canned responses.
+- Startup and health polling: `nexus-core/nexus/firecrawl.py`, `ensure()` and `_wait_ready()`.
+- #105 quotes launch paths and prints the captured child log on failure. The hosted failure persisted and the child log was empty. All **15 Firecrawl tests** passed locally after the change.
+- Next diagnostic: run only `tests/test_firecrawl.py` on hosted macOS. Log the child PID and return code, print and flush a marker before and after binding, and record the last health probe result or exception. Distinguish an exited child, a child that never binds, and a bound server that the parent cannot reach. The current logs do not establish which happened.
+
+### Both platforms: event-loop timing errors
+
+`nexus-core/tests/conftest.py` fails a test at teardown if an event-loop callback takes at least 100 ms. Linux had no test assertion failures, but the guard failed on both hosted runs and the number of affected tests changed. Logs report wall time and thread CPU time; for example, the first Linux run included **2,296 ms wall / 25 ms CPU** and **213 ms wall / 209 ms CPU**. Low CPU time does not by itself distinguish runner scheduling from blocking I/O; high CPU time makes CPU work on the loop worth investigating.
+
+Start from the callback timings and test names in the hosted logs. Re-run affected tests in isolation, then rerun the full Core matrix. Move confirmed blocking work off the loop rather than raising the threshold across the suite. See [plan 50](../plans/50-rust-core.md). A previous local Core run passed **1,784 tests, 2 skipped**; that does not clear the hosted errors.
+
+```sh
+cd nexus-core
+export NEXUS10_HOME=$(mktemp -d)
+uv run --locked pytest -q tests/test_firecrawl.py
+uv run --locked pytest -q --durations=25
+```
+
+## NSH: known failures approved for disclosure
+
+- Full Chrome disconnected repeatedly: **405 passed, 184 failed**. Use Playwright's Chromium headless shell for browser reproduction; see [development docs](../docs/development.md).
+- Chromium headless shell: **548 passed, 41 failed** on the earlier candidate. Of those, **23** were tests run on an unsupported target (19 mobile, 4 pointer/keyboard input); all 23 passed on NSH's headless target. Do not run all desktop web tests on that target: many fail with `Invalid URL: /api/info` rather than exercise the browser behavior.
+- Some other failures cleared in focused reruns after adding project MCP mocks and waiting for session history. The last full session-controls run was **21 passed, 5 failed**, before the final wait-helper adjustment; `/search` and archive refusal then passed in focused reruns. The multiline queued-edit test still failed: the row shows **Enter edit**, but Enter does not restore the draft.
+- Other unresolved browser failures include timeline scroll restoration (**Jump to latest** disappears after returning to a scrolled session), history reload after a simulated Core restart, linked worktree display, and opening annotation from a pasted image. These are test observations; not all have been independently verified in the live app. The full timeline file was **13 passed, 1 failed** after the scrollbar fixture fix.
+- NSH type check, host tests, web build, and terminal browser test passed locally. TUI and Mermaid passed on hosted CI. Installer checks and Core packaging passed locally.
+
+## Publication checklist
+
+1. Verify Core is green on macOS and Ubuntu for the current `main` candidate. Confirm the release PR includes any required fixes. Check the artifact dry run and record the Firecrawl redistribution sign-off and NSH packaging decision.
+2. Merge [#103](https://github.com/nottherealsanta/nexus/pull/103) to let release-please create `v0.15.0`. Watch the release workflow through the artifact upload step; a tag alone does not mean the assets are ready.
+3. Check the release for Core wheel and sdist, TUI binaries, NSH web bundle if in scope, installer, four Firecrawl binaries, third-party notice, and `SHA256SUMS`. Verify the assets against the checksums and disclose the known NSH issues in the release notes.
