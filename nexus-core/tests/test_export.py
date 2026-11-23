@@ -677,13 +677,25 @@ async def test_cli_nonforced_publish_never_overwrites_a_racing_destination(tmp_p
     assert not _part_files(tmp_path)
 
 
-async def test_export_view_closes_even_if_response_headers_cannot_be_sent(tmp_path):
+@pytest.fixture
+def disconnect_export_view(tmp_path):
+    store = Store(tmp_path / "nexus.db")
+    try:
+        project, _ = store.project_for_path(str(tmp_path))
+        session = store.create_session(project, title="close", agent="build")
+        view = ExportView(store.path, session.id, "session")
+        try:
+            yield view
+        finally:
+            view.close()
+    finally:
+        store.close()
+
+
+async def test_export_view_closes_even_if_response_headers_cannot_be_sent(disconnect_export_view):
     from nexus.server import ExportResponse, _stream_export
 
-    store = Store(tmp_path / "nexus.db")
-    project, _ = store.project_for_path(str(tmp_path))
-    session = store.create_session(project, title="close", agent="build")
-    view = ExportView(store.path, session.id, "session")
+    view = disconnect_export_view
     response = ExportResponse(_stream_export(stream(view, "json")), view=view)
 
     async def send(message):
@@ -692,13 +704,9 @@ async def test_export_view_closes_even_if_response_headers_cannot_be_sent(tmp_pa
     async def receive():
         return {"type": "http.disconnect"}
 
-    try:
-        with pytest.raises(ClientDisconnect):
-            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
-        assert view.closed
-    finally:
-        view.close()
-        store.close()
+    with pytest.raises(ClientDisconnect):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    assert view.closed
 
 
 async def test_export_cancellation_waits_for_worker_before_closing_iterator():

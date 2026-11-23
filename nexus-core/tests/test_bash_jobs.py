@@ -101,7 +101,8 @@ async def test_killed_and_timed_out_jobs_do_not_leave_a_status_file_or_a_hidden_
         killed = await jobs.start(session_id="s", root="r", command="sleep 30 | cat", directory=tmp_path,
                                   timeout=None, on_finish=lambda _: None)
         await jobs.kill(killed.id, root="r")
-        await asyncio.wait_for(asyncio.shield(killed.task), 5)
+        # kill() settles the reader task, cancelling it if the pipe does not close promptly.
+        assert killed.task.done() and killed.status == "killed" and killed.finished is not None
         assert slow.hidden == "" and killed.hidden == ""
     finally:
         await jobs.shutdown()

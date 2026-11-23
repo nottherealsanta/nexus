@@ -337,16 +337,9 @@ async def test_http_announces_discard_on_reconnect(terminal_server, monkeypatch)
     await client.delete(path)
 
 
-async def test_http_created_terminal_is_closed_on_shutdown(tmp_path, monkeypatch):
-    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SHELL", "/bin/sh")
-    runtime = make_runtime(Store(tmp_path / "db.sqlite"))
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    project = runtime.open_project(str(workspace))
-    app = build_app(runtime, token="secret", url="http://test")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
-                                 headers={"Authorization": "Bearer secret"}) as client:
+async def test_http_created_terminal_is_closed_on_shutdown(authenticated_terminal_app):
+    app, project, workspace = authenticated_terminal_app
+    async with _terminal_client(app, headers={"Authorization": "Bearer secret"}) as client:
         async with app.router.lifespan_context(app):
             response = await client.post("/api/terminal", json={"project_id": project.id,
                                                                  "workspace": str(workspace), "client_id": "one"})

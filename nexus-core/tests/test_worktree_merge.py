@@ -94,17 +94,23 @@ async def test_fast_forward_refuses_a_moved_base_but_merge_commit_works(repo, fe
     assert result["previous_base_head"] == before and (repo / "other.txt").exists() and (repo / "new.txt").exists()
 
 
-async def test_a_conflicting_merge_changes_nothing(repo, feature):
+@pytest.fixture
+def divergent_feature(repo, feature):
     commit(feature, "tracked", "feature side\n", "feature edits tracked")
     commit(repo, "tracked", "main side\n", "main edits tracked")
-    review = await worktree_merge.review(repo, feature)
+    return feature
+
+
+async def test_a_conflicting_merge_changes_nothing(repo, divergent_feature):
+    review = await worktree_merge.review(repo, divergent_feature)
     if review["conflicts"] is None:
         pytest.skip("this Git cannot predict merges (merge-tree --write-tree)")
     assert review["conflicts"] == ["tracked"] and review["blockers"]
-    before = git(repo, "rev-parse", "HEAD").strip()
+    before = await asyncio.to_thread(git, repo, "rev-parse", "HEAD")
     with pytest.raises(WorktreeError, match="conflict"):
-        await worktree_merge.integrate(repo, feature, expected_head=review["head"], mode="merge")
-    assert git(repo, "rev-parse", "HEAD").strip() == before and git(repo, "status", "--porcelain").strip() == ""
+        await worktree_merge.integrate(repo, divergent_feature, expected_head=review["head"], mode="merge")
+    assert await asyncio.to_thread(git, repo, "rev-parse", "HEAD") == before
+    assert not (await asyncio.to_thread(git, repo, "status", "--porcelain")).strip()
 
 
 async def test_in_progress_operation_on_the_base_blocks(repo, feature):
