@@ -25,6 +25,7 @@ are in docs/api.md.
 | GET | /api/mcp | MCP servers: state, tool count, error and (no secret) settings |
 | GET | /api/mcp/{name} | one server: the same, plus its tool names once connected; never connects |
 | POST | /api/mcp/{name}/restart | close and reconnect one server |
+| POST | /api/mcp | add a global MCP server `{entry, name?}` (the name is made from the address when omitted); also PUT/PATCH/DELETE /api/mcp/{name} and POST/GET/DELETE /api/mcp/{name}/login (OAuth), and the same under /api/project/{id}/mcp |
 | GET | /api/mcp/{name}/resources, /resource?uri=, /prompts, /prompt?name=&arguments= | read-only MCP resources and prompts (connects the server; fenced untrusted text; also under `/api/project/{id}/mcp/{name}/`) |
 | GET | /api/extension | user tools for `?project=` or `?directory=` (global and project) and file problems |
 | GET | /api/voice | offline voice model status |
@@ -100,7 +101,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from importlib.metadata import version
@@ -445,9 +446,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def config_api(request: Request) -> Response:
         nonlocal config_revision
         async with config_lock:
+            # Both GET and PATCH carry the platform reason: clients replace their config object on either response.
+            reason = zmx_unavailable()
             if request.method == "GET":
-                # `zmx_unavailable` is the registry's reason when ZMX cannot run here (Windows); clients show it on the ZMX rows.
-                return JSONResponse({**config.read(), "zmx_unavailable": zmx_unavailable()})
+                # The registry's reason when external workers cannot run here (Windows). `zmx_unavailable` is
+                # the older key; clients that know the rename read `workers_unavailable`.
+                return JSONResponse({**config.read(), "workers_unavailable": reason, "zmx_unavailable": reason})
             body = await _body(request)
             revision = body.get("expected_revision")
             set_values = body.get("set", {})
@@ -462,7 +466,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 return JSONResponse({"error": str(exc), "code": "revision_conflict"}, status_code=409)
             config_revision = result["revision"]
             runtime.bus.publish("config.changed", {"revision": config_revision})
-            return JSONResponse(result)
+            return JSONResponse({**result, "workers_unavailable": reason, "zmx_unavailable": reason})
 
     def project_paths() -> list[str]:
         return [x.path for x in runtime.store.projects()]
@@ -767,7 +771,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def models(request: Request) -> Response:
         data, source = await catalog.load()
         wanted = request.query_params.get("provider")
-        # ZMX models carry `zmx: true`; clients list them in subagent pools only, never in a root picker.
+        # External-worker models keep `zmx: true` as the API flag; clients list them in subagent pools only,
+        # never in a root picker.
         out = [to_json(m) | {"ref": m.ref} | ({"zmx": True} if pid in ("claude-code", "agy") else {})
                for pid in await asyncio.to_thread(connected) if not wanted or pid == wanted
                for m in await catalog.list_models(data, pid)]
@@ -1106,6 +1111,187 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             return JSONResponse(await runtime.restart_project_mcp(project, name))
         except mcp_module.McpUnavailable as exc:
             raise NotFound(str(exc)) from exc
+
+    # -- adding, editing, removing and signing in to MCP servers (docs/mcp.md#managing-servers) ----------------
+
+    async def mcp_changed(project: Any) -> None:
+        """After a write: apply the new file now (a removed or changed server closes) and tell the clients."""
+        if project is None:
+            runtime.mcp._ready()
+            await runtime.mcp.settle()
+            runtime.bus.publish("mcp.changed", {})
+        else:
+            scope = runtime.project_mcp(project)
+            await scope.sync()
+            scope.emit("mcp.changed", {"file": scope.definition().file})
+
+    def mcp_forget_unused(scope_name: str, name: str, config: Any) -> None:
+        """Drop stored OAuth entries for this name except the one for its current address."""
+        from .mcp import oauth_store
+        keep = oauth_store.key(scope_name, config) if config is not None and config.oauth is not None else None
+        store = oauth_store.CredentialStore()
+        with store.locked():
+            for stored in [k for k in store.names() if k.startswith(oauth_store.prefix(scope_name, name)) and k != keep]:
+                store.write(stored, None)
+
+    async def mcp_try_connect(owner: Any, name: str) -> None:
+        """A newly added remote server connects now, so its row says `connected` or `sign-in required`, not `idle`."""
+        try:
+            config_now = owner.config_for(name) if hasattr(owner, "config_for") else owner.manager.config_for(name)
+        except mcp_module.McpUnavailable:
+            return
+        if config_now.enabled and config_now.transport != "stdio":
+            with suppress(mcp_module.McpUnavailable, TimeoutError):
+                await asyncio.wait_for(owner.restart(name), config_now.connect_timeout + 10)
+
+    async def mcp_write(request: Request, project: Any, name: str, *, create: bool) -> Response:
+        """Add (`create`), replace (PUT) or remove (DELETE) one server in the global table or a project file."""
+        nonlocal config_revision
+        entry: dict[str, Any] | None = None
+        merge = request.method == "PATCH"
+        if request.method != "DELETE":
+            entry = (await _body(request)).get("entry")
+            if not isinstance(entry, dict):
+                raise TypeError("entry must be an object")
+        if project is None:
+            if merge:
+                stored = config.mcp_servers().get(name)
+                if stored is None:
+                    raise NotFound(f"no MCP server {name}")
+                entry = merged_entry(stored, entry)
+            if entry is not None:
+                from .mcp.config import McpConfigError, validate
+                try:
+                    validate(name, entry)
+                except McpConfigError as exc:
+                    raise ValueError(str(exc)) from exc
+            async with config_lock:
+                try:
+                    config.edit_mcp_server(name, entry, create=create)
+                except KeyError:
+                    raise NotFound(f"no MCP server {name}") from None
+                except ValueError as exc:
+                    if "already exists" in str(exc):
+                        raise Conflict(str(exc)) from None
+                    raise
+                config_revision = config.read()["revision"]
+            runtime.bus.publish("config.changed", {"revision": config_revision})
+            await mcp_changed(None)
+            if create:
+                await mcp_try_connect(runtime.mcp, name)
+            live = runtime.mcp.connections.get(name)
+            mcp_forget_unused("global", name, live.config if live else None)
+            row = next((r for r in runtime.mcp.status() if r["server"] == name), None)
+        else:
+            from .mcp import project_edit
+            scope = runtime.project_mcp(project)
+            scope.refresh()
+            try:
+                if merge:
+                    found = project_edit.locate(scope, name)
+                    if found is None:
+                        raise KeyError(name)
+                    entry = merged_entry(found[1][found[2]][name], entry)
+                project_edit.edit(scope, name, entry, create=create, keep_secrets=merge)
+            except KeyError:
+                raise NotFound(f"no MCP server {name!r} in this project") from None
+            except project_edit.ProjectEditError as exc:
+                if "already exists" in str(exc):
+                    raise Conflict(str(exc)) from None
+                raise ValueError(str(exc)) from None
+            await mcp_changed(project)
+            scope.refresh()
+            if create:
+                await mcp_try_connect(scope, name)
+            live = scope.manager.connections.get(name)
+            mcp_forget_unused(scope.manager.connections_scope, name, live.config if live else None)
+            row = scope.row(name)
+        return JSONResponse(row or {"server": name, "removed": True}, status_code=201 if create else 200)
+
+    def mcp_new_name(body: dict[str, Any], taken: Iterable[str]) -> str:
+        """The body's `name`, else one made from the entry's address."""
+        name = body.get("name")
+        if name is None:
+            entry = body.get("entry")
+            address = next((entry[k] for k in ("url", "serverUrl", "httpUrl") if isinstance(entry, dict) and isinstance(entry.get(k), str)), None)
+            if address is None:
+                raise TypeError("name must be a string")
+            from .mcp.config import name_from_url
+            return name_from_url(address, taken)
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        return name
+
+    def mcp_global_names() -> set[str]:
+        return {r["server"] for r in runtime.mcp.status()} | set(config.mcp_servers())
+
+    async def mcp_add(request: Request) -> Response:
+        return await mcp_write(request, None, mcp_new_name(await _body(request), mcp_global_names()), create=True)
+
+    def merged_entry(stored: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        """`stored` with `patch` applied: a null deletes a key, a table merges one level deep (so a header can be set alone)."""
+        out = dict(stored)
+        for key, value in patch.items():
+            if value is None:
+                out.pop(key, None)
+            elif isinstance(value, dict) and isinstance(out.get(key), dict):
+                inner = {**out[key], **{k: v for k, v in value.items() if v is not None}}
+                out[key] = {k: v for k, v in inner.items() if not (k in value and value[k] is None)}
+                if not out[key]:
+                    del out[key]
+            else:
+                out[key] = value
+        return out
+
+    async def mcp_replace(request: Request) -> Response:
+        return await mcp_write(request, None, p(request, "name"), create=False)
+
+    async def project_mcp_add(request: Request) -> Response:
+        project = runtime.project(p(request, "id"))
+        scope = runtime.project_mcp(project)
+        taken = {r["server"] for r in scope.status()} | mcp_global_names()
+        return await mcp_write(request, project, mcp_new_name(await _body(request), taken), create=True)
+
+    async def project_mcp_replace(request: Request) -> Response:
+        return await mcp_write(request, runtime.project(p(request, "id")), p(request, "name"), create=False)
+
+    def mcp_target(request: Request) -> tuple[Any, str, Any, Any]:
+        """`(project or None, scope name, config, owner)` for a sign-in route."""
+        name = p(request, "name")
+        project = runtime.project(p(request, "id")) if "id" in request.path_params else None
+        try:
+            if project is None:
+                return None, "global", runtime.mcp.config_for(name), runtime.mcp
+            scope = runtime.project_mcp(project)
+            scope.refresh()
+            return project, scope.manager.connections_scope, scope.manager.config_for(name), scope
+        except mcp_module.McpUnavailable as exc:
+            raise NotFound(str(exc)) from exc
+
+    async def mcp_login(request: Request) -> Response:
+        project, scope_name, cfg, owner = mcp_target(request)
+        name = cfg.name
+        if request.method == "GET":
+            return JSONResponse(runtime.mcp_logins.state(scope_name, name))
+        if request.method == "DELETE":
+            from .mcp import oauth_store
+            await runtime.mcp_logins.cancel(scope_name, name)
+            await asyncio.to_thread(oauth_store.clear, oauth_store.key(scope_name, cfg))
+            if cfg.enabled:
+                await owner.restart(name)
+            runtime.mcp_logins.states[f"{scope_name}:{name}"] = {"server": name, "status": "signed_out"}
+            runtime.bus.publish("mcp.login", {"server": name, "status": "signed_out"})
+            return Response(status_code=204)
+        if cfg.transport == "stdio" or cfg.oauth is None:
+            raise ValueError(f"{name} does not use OAuth (a remote server without its own Authorization header does)")
+        if runtime.mcp_logins.running(scope_name, name):
+            raise Busy(f"sign-in to {name} is already running")
+
+        async def finished() -> None:
+            await owner.restart(name)
+
+        extra = {"project_id": project.id, "scope": "project"} if project is not None else {}
+        return JSONResponse(runtime.mcp_logins.start(scope_name, cfg, extra, finished), status_code=202)
 
     async def agent_one(request: Request) -> Response:
         return JSONResponse(agent_json(runtime.agents(agent_project_path(request)).get(p(request, "name")), prompt=True))
@@ -2050,11 +2236,16 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/browser", route(browser_status)),
         Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
+        Route("/api/mcp", route(mcp_add), methods=["POST"]),
+        Route("/api/mcp/{name}/login", route(mcp_login), methods=["GET", "POST", "DELETE"]),
+        Route("/api/project/{id}/mcp/{name}/login", route(mcp_login), methods=["GET", "POST", "DELETE"]),
+        Route("/api/project/{id}/mcp", route(project_mcp_add), methods=["POST"]),
         *(Route(f"/api/mcp/{{name}}/{what}", route(mcp_extra_route(what)))
           for what in ("resources", "resource", "prompts", "prompt")),
         *(Route(f"/api/project/{{id}}/mcp/{{name}}/{what}", route(project_mcp_extra_route(what)))
           for what in ("resources", "resource", "prompts", "prompt")),
-        Route("/api/mcp/{name}", route(mcp_one)),
+        Route("/api/mcp/{name}", route(mcp_one), methods=["GET"]),
+        Route("/api/mcp/{name}", route(mcp_replace), methods=["PUT", "PATCH", "DELETE"]),
         Route("/api/mcp/{name}/restart", route(mcp_restart), methods=["POST"]),
         Route("/api/skill", route(skill_list)),
         Route("/api/skill/preview", route(skill_preview), methods=["POST"]),
@@ -2073,7 +2264,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/project/{id}/git/action", route(project_git_action), methods=["POST"]),
         Route("/api/project/{id}/mcp", route(project_mcp_list)),
         Route("/api/project/{id}/mcp/{name}/restart", route(project_mcp_restart), methods=["POST"]),
-        Route("/api/project/{id}/mcp/{name}", route(project_mcp_one)),
+        Route("/api/project/{id}/mcp/{name}", route(project_mcp_one), methods=["GET"]),
+        Route("/api/project/{id}/mcp/{name}", route(project_mcp_replace), methods=["PUT", "PATCH", "DELETE"]),
         Route("/api/project/{id}/files", route(project_files), methods=["GET", "POST"]),
         Route("/api/project/{id}/watch", route(project_watch), methods=["POST"]),
         Route("/api/project/{id}/file", route(project_file), methods=["GET", "PUT"]),

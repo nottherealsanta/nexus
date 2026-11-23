@@ -40,6 +40,8 @@ window.addEventListener('message', e => {
     case 'fit': fitScreen(); break;
   }
 });
+// Releasing the mouse after selecting copies the selection, like the TUI. Terminal output never triggers this.
+document.addEventListener('mouseup', () => setTimeout(() => { if (term.hasSelection()) send('selection', {data: term.getSelection(), auto: true}); }, 0));
 new ResizeObserver(() => fitScreen()).observe(document.getElementById('terminal'));
 setTimeout(() => { fitScreen(); send('ready'); }, 0);
 </script></body></html>

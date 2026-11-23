@@ -3,6 +3,7 @@ import { SessionBackRail, SessionHeading, sessionBackRailPx } from "./header";
 import { Banners, Toasts } from "./alerts";
 import { Composer, WaitingCard } from "./composer";
 import { NewSessionView } from "./newsession";
+import { McpModals } from "./mcp-settings";
 import { ProviderDetailModal, SettingsView } from "./settings";
 import { Timeline } from "./timeline";
 import { SessionStatus } from "./session-status";
@@ -45,7 +46,7 @@ function PhoneCentre() {
       <View class="flex-1 min-w-0 min-h-0 flex-col" testID="centre-content">
         <Banners />
         <If when={centre() === "settings"}><SettingsView /></If>
-        <If when={centre() === "settings"}><ProviderDetailModal /></If>
+        <If when={centre() === "settings"}><ProviderDetailModal /><McpModals /></If>
         <If when={base() === "session" && !!viewed() && !pendingFirstPrompt()}><Timeline /></If>
         <If when={base() === "new_session" || (base() === "session" && (!viewed() || !!pendingFirstPrompt()))}><NewSessionView /></If>
         <WaitingCard />
@@ -67,7 +68,7 @@ export function Centre() {
         <Groups />
         {/* Settings is a modal (D13): the groups stay mounted underneath, terminals included. */}
         <If when={centre() === "settings"}><SettingsView /></If>
-        <If when={centre() === "settings"}><ProviderDetailModal /></If>
+        <If when={centre() === "settings"}><ProviderDetailModal /><McpModals /></If>
       </View>
       <Toasts />
       <BtwModal />

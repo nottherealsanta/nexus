@@ -40,9 +40,10 @@ for deliberate changes from old Nexus.
   Manager touches: whatever it sends or answers
   shows there, labelled `via Manager`, and what a card shows is what the Manager
   asked to show. Do not add a separate Manager chat implementation; the explicit read-only backend session is for debugging.
-  **Exception: ZMX children** ([docs/external-workers.md](docs/external-workers.md), decision D2). A Claude Code or
-  Antigravity CLI adds context Nexus cannot see, so a ZMX child's timeline opens with a ZMX card saying the context is
-  incomplete and what was not applied, then shows everything Nexus does observe, in order. Nothing else may use this.
+  **Exception: external worker children** ([docs/external-workers.md](docs/external-workers.md), decision D2). A
+  Claude Code or Antigravity CLI adds context Nexus cannot see, so an external worker's timeline opens with a worker
+  card saying the context is incomplete and what was not applied, then shows everything Nexus does observe, in order.
+  Nothing else may use this.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a task
   tool; the model reaches control only through exposed control tools.
@@ -92,4 +93,4 @@ change as the code.
 | Daemon, projects, sessions, turns, approvals | [docs/daemon.md](docs/daemon.md) |
 | The Manager (voice agent above all sessions): hidden sessions, tools, authority, cards, navigation | [docs/manager.md](docs/manager.md) |
 | Tabs, groups and splits (files, terminals, sessions as tabs; plan 45) | [docs/layout.md](docs/layout.md) |
-| ZMX: Claude Code / Antigravity CLIs as child sessions | [docs/external-workers.md](docs/external-workers.md) |
+| External workers: Claude Code (PTY) / Antigravity (ACP) CLIs as child sessions | [docs/external-workers.md](docs/external-workers.md) |

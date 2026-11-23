@@ -59,25 +59,27 @@ def _load_mcp() -> None:
         importlib.import_module(name)
 
 
-def _transport(config: ServerConfig, errlog: Any) -> Any:
+def _transport(config: ServerConfig, errlog: Any, auth: Any = None) -> Any:
     from mcp.client.stdio import StdioServerParameters, stdio_client
     if config.transport == "stdio":
         return stdio_client(StdioServerParameters(command=config.command, args=list(config.args),
                                                   env=config.env or None, cwd=config.cwd), errlog=errlog)
     if config.transport == "sse":
         from mcp.client.sse import sse_client
-        return sse_client(config.url, headers=config.headers or None, timeout=config.connect_timeout)
+        return sse_client(config.url, headers=config.headers or None, timeout=config.connect_timeout, auth=auth)
     import httpx2
     from mcp.client.streamable_http import streamable_http_client
     return streamable_http_client(config.url, http_client=httpx2.AsyncClient(
-        headers=config.headers or None, timeout=httpx2.Timeout(config.call_timeout, connect=config.connect_timeout,
-                                                                read=max(config.call_timeout, 300.0))))
+        headers=config.headers or None, auth=auth,
+        timeout=httpx2.Timeout(config.call_timeout, connect=config.connect_timeout, read=max(config.call_timeout, 300.0))))
 
 
 class Connection:
     def __init__(self, config: ServerConfig, publish: Publish, *, log_file: Path | None = None,
-                 guard: Guard | None = None):
+                 guard: Guard | None = None, scope: str = "global"):
         self.config = config
+        self.scope = scope  # where its OAuth sign-in is kept (`oauth_store`)
+        self.auth_required = False
         self.publish = publish
         self.log_file = log_file or log_path(config.name)
         self.guard = guard
@@ -190,12 +192,22 @@ class Connection:
                 if isinstance(message, Exception) and not self._stop.is_set():
                     self._fail(_describe(message))
 
-            async with Client(_transport(config, errlog), read_timeout_seconds=config.call_timeout,
+            auth = None
+            if config.oauth is not None and config.transport != "stdio":
+                from . import oauth, oauth_store
+                # Only a stored sign-in uses the SDK's provider (it refreshes). Without one the connection only
+                # notes a 401, so a background connect never registers a client at the server.
+                required = lambda: setattr(self, "auth_required", True)
+                if await asyncio.to_thread(oauth_store.signed_in, self.scope, config):
+                    auth = oauth.connection_auth(self.scope, config, required)
+                else:
+                    auth = oauth.unauthorized_probe(required)
+            async with Client(_transport(config, errlog, auth), read_timeout_seconds=config.call_timeout,
                               message_handler=on_message) as client:
                 self.client = client
                 self.tools = await self._list()
                 self.instructions = bridge.sanitize(getattr(client, "instructions", None) or "")[:600].strip()
-                self.state, self.error, self.failures = "connected", None, 0
+                self.state, self.error, self.failures, self.auth_required = "connected", None, 0, False
                 self.publish("mcp.connected", {"server": config.name, "tools": len(self.tools)})
                 self._ready.set()
                 while not self._stop.is_set():
@@ -207,7 +219,11 @@ class Connection:
             raise
         except BaseException as exc:  # noqa: BLE001 - includes ExceptionGroup from the transport's task group
             if not self._stop.is_set():
-                self._fail(_describe(exc))
+                if self.auth_required or _auth_required(exc):
+                    self.auth_required = True
+                    self._fail("sign-in required: sign in to this server in Settings, or run `nexus mcp login`")
+                else:
+                    self._fail(_describe(exc))
         finally:
             was = self.state
             self.client = None
@@ -340,8 +356,26 @@ class Connection:
             self.state = "idle"
 
     def status(self) -> dict[str, Any]:
-        return {"server": self.config.name, "state": self.state, "error": self.error, "tools": len(self.tools),
-                **self.config.describe()}
+        row = {"server": self.config.name, "state": self.state, "error": self.error, "tools": len(self.tools),
+               **self.config.describe()}
+        if self.config.oauth is not None and self.config.transport != "stdio":
+            row["auth"] = auth_label(self.scope, self.config, self.auth_required)
+        return row
+
+
+def auth_label(scope: str, config: ServerConfig, required: bool) -> str:
+    """`signed_in`, `required` (the server answered 401) or `none` (not signed in yet)."""
+    from . import oauth_store
+    if oauth_store.signed_in(scope, config) and not required:
+        return "signed_in"
+    return "required" if required else "none"
+
+
+def _auth_required(exc: BaseException) -> bool:
+    """The OAuth provider needed a new sign-in (a plain 401 is noted by `oauth.unauthorized_probe`)."""
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_auth_required(e) for e in exc.exceptions)
+    return type(exc).__name__ == "AuthRequired"
 
 
 def _describe(exc: BaseException) -> str:
@@ -386,7 +420,7 @@ class McpManager:
         for name, config in servers.items():
             if name not in self.connections:
                 self.connections[name] = Connection(config, self.publish, log_file=self._log_file(name),
-                                                    guard=self._validate)
+                                                    guard=self._validate, scope=self.connections_scope)
 
     def _validate(self, config: ServerConfig) -> None:
         """Refuse a connection whose captured entry is no longer the current one."""
@@ -399,6 +433,10 @@ class McpManager:
         if current is None or current.config != config:
             raise McpUnavailable(
                 f"server {config.name} changed since this connection was read; use the current definition")
+
+    @property
+    def connections_scope(self) -> str:
+        return self.log_dir or "global"
 
     @property
     def closing(self) -> bool:
@@ -444,6 +482,16 @@ class McpManager:
         rows += [{"server": n, "state": "invalid", "error": e, "tools": 0, "enabled": False}
                  for n, e in sorted(self.invalid.items())]
         return rows
+
+    def config_for(self, name: str) -> ServerConfig:
+        """One valid entry, enabled or not (sign-in works on a switched-off server)."""
+        self._ready()
+        if name in self.invalid:
+            raise McpUnavailable(f"server {name} has an invalid entry: {self.invalid[name]}")
+        conn = self.connections.get(name)
+        if conn is None:
+            raise McpUnavailable(f"no MCP server named {name!r}")
+        return conn.config
 
     def connection(self, name: str) -> Connection:
         self._ready()

@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 SECTION_ORDER = [
-    "appearance", "providers", "agents", "tools", "zmx", "browser", "mcp",
+    "appearance", "providers", "agents", "tools", "workers", "browser", "mcp",
     "context", "dictation", "manager", "keybindings", "notifications", "about",
 ]
 TABS = ["sessions", "files", "git"]
@@ -56,6 +56,58 @@ def check_strings(m: dict, path: Path, err) -> None:
             err(f"strings: key {key!r} is used by a client but not defined")
     for key in sorted(set(strings) - literals):
         err(f"strings.{key}: defined but no client uses it")
+
+
+STEP_KINDS = {"info", "provider", "agents", "done"}
+KEY_REF_RE = re.compile(r"\{key:([a-z][a-z0-9_.]*)\}")
+
+
+def check_onboarding(m: dict, ids: dict, err) -> None:
+    """[onboarding]: ordered steps with a known kind, `{key:id}` naming real commands, agent rows for the agents step."""
+    ob = m.get("onboarding", {})
+    steps = ob.get("step", [])
+    if not steps:
+        err("onboarding: no steps")
+        return
+    seen: set[str] = set()
+    for step in steps:
+        sid = step.get("id", "<missing>")
+        if sid in seen:
+            err(f"onboarding.step {sid}: duplicate id")
+        seen.add(sid)
+        if step.get("kind") not in STEP_KINDS:
+            err(f"onboarding.step {sid}: bad kind {step.get('kind')!r}")
+        if not step.get("title"):
+            err(f"onboarding.step {sid}: missing title")
+        for line in step.get("lines", []) + [step.get("tip", "")]:
+            for ref in KEY_REF_RE.findall(line):
+                if ref not in ids:
+                    err(f"onboarding.step {sid}: {{key:{ref}}} is not a command")
+    kinds = [s.get("kind") for s in steps]
+    if kinds[0] != "info" or kinds[-1] != "done" or kinds.count("done") != 1:
+        err("onboarding: steps must start with an info step and end with exactly one done step")
+    for kind in ("provider", "agents"):
+        if kinds.count(kind) != 1:
+            err(f"onboarding: exactly one {kind} step is required")
+    agents = ob.get("agent", [])
+    if not agents:
+        err("onboarding: no [[onboarding.agent]] rows")
+    names: set[str] = set()
+    for a in agents:
+        name = a.get("name", "<missing>")
+        if name in names:
+            err(f"onboarding.agent {name}: duplicate")
+        names.add(name)
+        if a.get("kind") not in ("model", "root"):
+            err(f"onboarding.agent {name}: kind must be model or root")
+        for req in ("role", "hint"):
+            if not a.get(req):
+                err(f"onboarding.agent {name}: missing {req}")
+        if a.get("kind") == "root" and len(a.get("options", [])) < 2:
+            err(f"onboarding.agent {name}: a root row needs at least two options")
+    for req in ("finish_no_project", "no_provider", "quest_provider", "hints_info", "hints_rows"):
+        if not ob.get(req):
+            err(f"onboarding: missing {req}")
 
 
 def main() -> int:
@@ -264,6 +316,7 @@ def main() -> int:
     if nav.get("waiting_card", {}).get("position") != "above_composer":
         err("navigation.waiting_card.position must be above_composer")
 
+    check_onboarding(m, ids, err)
     check_strings(m, path, err)
 
     if errs:

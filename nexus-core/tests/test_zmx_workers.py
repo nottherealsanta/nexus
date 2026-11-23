@@ -87,8 +87,34 @@ def test_policy_cannot_bypass(mode):
 
 def test_authority_is_explicit(tmp_path):
     authority = WorkerPolicy().authority(tmp_path, vendor="Antigravity")
-    assert "ZMX" in authority and "own tools" in authority
+    assert "CLI · Antigravity" in authority and "own tools" in authority
     assert "do not apply" in authority and "context Nexus cannot see" in authority
+
+
+def test_display_labels_follow_the_worker_transport_and_normalize_old_rows():
+    from nexus.worker_labels import display_worker
+    from nexus.workers.registry import facts
+
+    assert display_worker({"provider": "claude-code", "label": "ZMX · Claude Code"})["label"] == "PTY · Claude Code"
+    acp = display_worker({"provider": "agy", "transport": "acp-v1", "label": "ZMX · Antigravity",
+                          "disclosure": "ZMX · Antigravity ran its own tools"})
+    assert acp["label"] == "ACP · Antigravity"
+    assert acp["disclosure"] == "ACP · Antigravity ran its own tools"
+    legacy = display_worker({"provider": "agy", "transport": "stream-json-v1", "label": "ZMX · Antigravity",
+                             "disclosure": "ZMX · Antigravity ran its own tools"})
+    assert legacy["label"] == "CLI · Antigravity"
+    assert legacy["disclosure"] == "CLI · Antigravity ran its own tools"
+    # Existing history with no marker is legacy; a new child that has not run yet is ACP.
+    assert display_worker({"provider": "agy", "status": "completed"})["label"] == "CLI · Antigravity"
+    assert display_worker({"provider": "agy", "status": "not_started"})["label"] == "ACP · Antigravity"
+    # A new worker that failed before its first turn still carries the ACP marker in its facts.
+    assert display_worker({**facts("agy"), "status": "failed"})["label"] == "ACP · Antigravity"
+    # Old rows without a provider are identified by their label, and missing-transport Antigravity stays neutral.
+    no_provider = display_worker({"label": "ZMX · Claude Code", "disclosure": "ZMX · Claude Code ran its own tools"})
+    assert no_provider["label"] == "PTY · Claude Code"
+    assert no_provider["disclosure"] == "PTY · Claude Code ran its own tools"
+    assert display_worker({"label": "ZMX · Antigravity", "transport": "acp-v1"})["label"] == "ACP · Antigravity"
+    assert display_worker({"label": "ZMX · Antigravity"})["label"] == "CLI · Antigravity"
 
 
 def test_raw_before_interpretation_and_unknown_lines(tmp_path):
@@ -192,6 +218,7 @@ assert sys.stdin.read() == ''
     result = await run(worker, tmp_path, emit=emit)
     assert result.status == "completed" and result.text == "ok" and result.usage is None
     assert [e.kind for e in events] == ["launch", "wire", "init", "wire", "result"]
+    assert events[0].data["transport"] == antigravity.LEGACY_TRANSPORT
 
 
 @pytest.mark.parametrize("body,status,match", [
@@ -614,7 +641,7 @@ async def test_daemon_with_zmx_off_probes_no_cli_reads_no_credentials_and_regist
 
 
 async def test_config_api_reports_why_zmx_is_unavailable_on_a_non_posix_platform(tmp_path, monkeypatch):
-    """The registry's reason reaches both clients' Settings through GET /api/config (`zmx_unavailable`)."""
+    """The registry's reason reaches both clients' Settings through GET /api/config (`workers_unavailable`)."""
     import types
 
     import httpx
@@ -636,4 +663,10 @@ async def test_config_api_reports_why_zmx_is_unavailable_on_a_non_posix_platform
     app = server.build_app(server.make_runtime(Store(tmp_path / "nexus.db")), token="t", url="http://test")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                  headers={"authorization": "Bearer t"}) as client:
-        assert (await client.get("/api/config")).json()["zmx_unavailable"] == reason
+        state = (await client.get("/api/config")).json()
+        assert state["workers_unavailable"] == reason and state["zmx_unavailable"] == reason
+        patched = (await client.patch("/api/config", json={
+            "expected_revision": state["revision"], "set": {"ui.reduced_motion": True}, "unset": [],
+        })).json()
+        # Both clients replace their config object from either response, so PATCH must carry the reason too.
+        assert patched["workers_unavailable"] == reason and patched["zmx_unavailable"] == reason

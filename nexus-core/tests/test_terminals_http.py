@@ -127,6 +127,27 @@ async def test_http_two_viewers_control_reconnect_and_close(terminal_server):
     assert closed.status_code == 200 and closed.json()["status"] == "closed"
 
 
+async def test_terminal_reports_busy_only_while_a_command_runs(terminal_server):
+    client, project, workspace = terminal_server
+    created = await client.post("/api/terminal", json={"project_id": project.id, "workspace": str(workspace),
+                                                        "client_id": "one", "rows": 24, "cols": 80})
+    path = f"/api/terminal/{created.json()['id']}"
+    assert (await client.get(path)).json()["busy"] is False
+    attachment = (await client.post(path + "/attach", json={"client_id": "one"})).json()["attachment_id"]
+    async with client.stream("GET", path + "/stream", params={"attachment_id": attachment}):
+        await client.post(path + "/control", json={"attachment_id": attachment, "action": "acquire"})
+        data = base64.b64encode(b"sleep 30\n").decode()
+        assert (await client.post(path + "/input", json={"attachment_id": attachment, "input_seq": 1, "data": data})).status_code == 200
+        async with asyncio.timeout(5):
+            while not (await client.get(path)).json()["busy"]:
+                await asyncio.sleep(.02)
+        assert (await client.post(path + "/signal", json={"attachment_id": attachment, "signal": "INT"})).status_code == 200
+        async with asyncio.timeout(5):
+            while (await client.get(path)).json()["busy"]:
+                await asyncio.sleep(.02)
+    assert (await client.delete(path)).json()["status"] == "closed"
+
+
 async def test_terminal_requires_auth_and_correct_origin(terminal_server):
     client, project, workspace = terminal_server
     body = {"project_id": project.id, "workspace": str(workspace), "client_id": "one"}

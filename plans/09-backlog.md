@@ -302,7 +302,7 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
   and provider sign-in/detail and tool-grid verification.
 - [x] State the required Claude Code version (2.1.248 or newer) and show "Claude Code is not installed" on the
   Providers page when `cli_path()` is empty. Core adds `note` to the `claude` provider row; both provider-detail views show it (2026-11-11: `test_config.py` 15 passed, TUI `shell` test, NSH `App.test.tsx` Providers test).
-- [ ] Real Settings panes for MCP servers, skills and hooks when those controls exist; they are deliberately absent.
+- [~] (11-23: MCP has its Settings page in both clients) Real Settings panes for MCP servers, skills and hooks when those controls exist; skills and hooks are still absent.
 
 ## 9.10 NSH Void design leftovers (old 8.4)
 
@@ -370,7 +370,7 @@ The feature landed on 2026-11-06 (Core order, move API, drag and menu in both cl
   session and run the reload stress test.
 - [ ] Default-on settings for skills; exercise skills with a real model; decide whether and how `allowed-tools` is
   enforced without changing a cached prompt or granting permissions.
-- [~] (Core 11-11: read-only `GET /api/mcp/{name}/resources|resource|prompts|prompt` and the project-scoped twins, fenced, bounded, tested against the stdio fixture; no model tool and no client UI yet, those need a decision on how a model should reach them) MCP resources and prompts; Settings screens for adding/editing servers. Output stays bounded, fenced as
+- [~] (Core 11-11: read-only `GET /api/mcp/{name}/resources|resource|prompts|prompt` and the project-scoped twins, fenced, bounded, tested against the stdio fixture; no model tool and no client UI yet, those need a decision on how a model should reach them) MCP resources and prompts; (11-23: Settings › MCP adds, signs in to, switches and removes servers in both clients, and `nexus mcp` does the same; editing an existing entry's address or tool filters is still by remove and add, or `PUT`). Output stays bounded, fenced as
   untrusted and visible as received.
 - [~] (11-13: browser-use runs `browser_exec` and `browser_screenshot`, ordinary task tools, no longer an MCP
   default; its own Chromium profile unless Settings > Browser allows the user's Chrome; a real model session ran

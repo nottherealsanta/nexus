@@ -23,6 +23,7 @@ from .llmhub.providers import PROVIDERS
 
 Row = dict[str, str]
 CATALOG_STALE_S = 7 * 24 * 3600
+AGY_ACP_MIN_VERSION = (1, 5, 0)  # `agy acp` (ACP v1 over stdio) first appeared in 1.5.0
 
 
 def source_fingerprint() -> str:
@@ -92,6 +93,15 @@ def check_search() -> Row:
     return _row("search", "ok" if response.status_code == 200 else "warn", f"{url} HTTP {response.status_code}")
 
 
+def check_firecrawl() -> Row:
+    from . import firecrawl
+    found = firecrawl.status()
+    if found["state"] == "ready":
+        return _row("firecrawl", "ok" if found["detail"] is None else "warn",
+                    f"{found['version']} ({found['path']})" + (f"; {found['detail']}" if found["detail"] else ""))
+    return _row("firecrawl", "warn", f"{found['detail']} (the firecrawl tool is off)")
+
+
 def check_browser() -> Row:
     """What browser_exec and browser_screenshot need: uvx and a browser (and Google Chrome with use_my_chrome)."""
     from . import browser
@@ -137,37 +147,46 @@ def check_rg() -> Row:
 
 
 def check_zmx() -> list[Row]:
-    """ZMX vendor CLIs: version and required flags, only for a vendor the user switched on (never probed while off)."""
+    """External worker CLIs: version and required transport, only for a vendor switched on (never probed while off)."""
     import asyncio
     import os
 
     from .workers import records, registry
-    from .workers.antigravity import AntigravityWorker
-    from .workers.base import WorkerError, WorkerPolicy
+    from .workers.antigravity import AntigravityAcpWorker
+    from .workers.base import WorkerError
     from .workers.claude_code import ClaudeCodeWorker
 
     if os.name != "posix":
-        return [_row("zmx", "warn", "unavailable on this platform: ZMX needs POSIX PTYs and process groups")]
+        return [_row("workers", "warn", "unavailable on this platform: external workers need POSIX PTYs and process groups")]
     rows = []
     for pid in registry.IDS:
         label = registry.LABELS[pid]
         if not registry.enabled(pid):
-            rows.append(_row(f"zmx {pid}", "ok", f"{label}: off (no CLI probed)"))
+            rows.append(_row(f"workers {pid}", "ok", f"{label}: off (no CLI probed)"))
             continue
         path = registry.cli_path(pid)
         if not path:
-            rows.append(_row(f"zmx {pid}", "fail", f"{label}: switched on but the CLI is not installed"))
+            rows.append(_row(f"workers {pid}", "fail", f"{label}: switched on but the CLI is not installed"
+                             + (" (`agy` or `$NEXUS10_AGY_CLI`)" if pid == "agy" else " (`claude`)")))
             continue
         try:
-            worker = ClaudeCodeWorker(path, state_dir=Path("/nonexistent")) if pid == "claude-code" else AntigravityWorker(path)
-            version = asyncio.run(worker.preflight() if pid == "claude-code" else worker.preflight(WorkerPolicy()))
-            rows.append(_row(f"zmx {pid}", "ok", f"{label}: {path} version {version}, required flags present"
-                             + ("; sign-in not verified" if pid == "agy" else "")))
+            if pid == "claude-code":
+                version = asyncio.run(ClaudeCodeWorker(path, state_dir=Path("/nonexistent")).preflight())
+                detail = f"{label}: {path} version {version}, required flags present"
+            else:
+                version = asyncio.run(AntigravityAcpWorker(path).preflight())
+                if tuple(int(part) for part in version.split(".")) < AGY_ACP_MIN_VERSION:
+                    minimum = ".".join(str(part) for part in AGY_ACP_MIN_VERSION)
+                    raise WorkerError(f"version {version} predates ACP (`agy acp`); agy {minimum} or newer is required "
+                                      "(upgrade with `agy update`)")
+                detail = (f"{label}: {path} version {version}, ACP v1 stdio (`agy acp`); "
+                          "sign-in not verified (run `agy acp --login`)")
+            rows.append(_row(f"workers {pid}", "ok", detail))
         except (WorkerError, OSError) as exc:
-            rows.append(_row(f"zmx {pid}", "fail", f"{label}: {path}: {exc}"))
+            rows.append(_row(f"workers {pid}", "fail", f"{label}: {path}: {exc}"))
     live = records.orphans()
     if live:
-        rows.append(_row("zmx workers", "warn", "; ".join(f"{r['provider']} pid {r['pid']} ({r.get('directory', '?')})" for r in live)
+        rows.append(_row("workers processes", "warn", "; ".join(f"{r['provider']} pid {r['pid']} ({r.get('directory', '?')})" for r in live)
                          + " still running after Nexus; stop on request with `nexus workers clean`"))
     return rows
 
@@ -192,7 +211,7 @@ def check_rust_builds() -> list[Row]:
 def run() -> list[Row]:
     found = daemon.discover()
     return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_search(),
-            check_browser(), check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
+            check_firecrawl(), check_browser(), check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
 
 
 RELEASES_URL = "https://api.github.com/repos/nottherealsanta/nexus/releases/latest"

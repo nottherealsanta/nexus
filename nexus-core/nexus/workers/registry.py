@@ -1,4 +1,4 @@
-"""ZMX selection and discovery. No CLI is probed until its user-only switch is on."""
+"""External worker selection and discovery. No CLI is probed until its user-only switch is on."""
 from __future__ import annotations
 
 import asyncio
@@ -11,10 +11,10 @@ from pathlib import Path
 
 from ..config import ConfigFile
 from ..llmhub.providers import ProviderInfo
+from ..worker_labels import LABELS
 from .base import WorkerError, child_env, probe
 
 IDS = ("claude-code", "agy")
-LABELS = {"claude-code": "ZMX · Claude Code", "agy": "ZMX · Antigravity"}
 DISCLOSURE = ("The CLI runs its own tools, permissions, settings, MCP servers and plugins. Nexus tool restrictions, "
               "permission rules and step limits do not apply. The CLI adds context Nexus cannot see; this is not its full model context.")
 INFO = {pid: ProviderInfo(pid, LABELS[pid], "external-cli", f"{pid}://", "anthropic" if pid == "claude-code" else "", None, False)
@@ -28,24 +28,25 @@ def external(ref: str) -> bool:
     return ref.partition("/")[0] in IDS
 
 
-UNAVAILABLE_PLATFORM = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform"
+UNAVAILABLE_PLATFORM = "External workers require POSIX PTYs/process groups; they are unavailable on this platform"
 
 
 def unavailable() -> str | None:
-    """Why ZMX cannot run on this machine at all, for the Settings rows; None where it can."""
+    """Why external workers cannot run on this machine at all, for the Settings rows; None where it can."""
     return None if os.name == "posix" else UNAVAILABLE_PLATFORM
 
 
 def enabled(pid: str) -> bool:
-    values = ConfigFile().read()["values"]["zmx"]
-    return os.name == "posix" and (values["claude_backend"] == "zmx" if pid == "claude-code" else bool(values["antigravity"]))
+    values = ConfigFile().read()["values"]["workers"]
+    return os.name == "posix" and (values["claude_backend"] in ("cli", "zmx") if pid == "claude-code"
+                                   else bool(values["antigravity"]))
 
 
 def require(pid: str) -> None:
     if os.name != "posix":
         raise ValueError(UNAVAILABLE_PLATFORM)
     if not enabled(pid):
-        key = "zmx.claude_backend = 'zmx'" if pid == "claude-code" else "zmx.antigravity = true"
+        key = "workers.claude_backend = 'cli'" if pid == "claude-code" else "workers.antigravity = true"
         raise ValueError(f"{LABELS[pid]} is disabled; enable {key} in user Settings first")
 
 
@@ -75,9 +76,16 @@ def visible() -> dict[str, ProviderInfo]:
 
 
 def facts(pid: str) -> dict:
-    return {"provider": pid, "label": LABELS[pid], "context_complete": False, "disclosure": DISCLOSURE,
-            "status": "not_started", "usage": None, "not_applied": ["Nexus permission rules", "disabled tools", "step limits"],
-            "settings": "CLI inherited", "mcp": "CLI inherited"}
+    worker = {"provider": pid, "label": LABELS[pid], "context_complete": False, "disclosure": DISCLOSURE,
+              "status": "not_started", "usage": None, "not_applied": ["Nexus permission rules", "disabled tools", "step limits"],
+              "settings": "CLI inherited", "mcp": "CLI inherited"}
+    if pid == "agy":
+        # Every new Antigravity child uses ACP, including one that fails before its first prompt; a legacy row
+        # created before ACP has no marker (or the legacy one) and keeps the neutral CLI label.
+        from .antigravity import ACP_TRANSPORT
+
+        worker["transport"] = ACP_TRANSPORT
+    return worker
 
 
 @dataclass
@@ -89,7 +97,7 @@ class ExternalProvider:
                 "instructions_appended": req.instructions, "messages_observed": len(req.messages), "tools": "CLI owned"}
 
     async def stream(self, req):
-        raise ValueError("ZMX can only run as a guarded child session, never as a provider stream or one-shot")
+        raise ValueError("External workers can only run as a guarded child session, never as a provider stream or one-shot")
         yield  # pragma: no cover
 
 
@@ -135,6 +143,6 @@ async def agy_models() -> list[str]:
 
 
 def warm_agy_models() -> None:
-    """Start the first `agy models` probe now, when ZMX Antigravity is on, so the model picker never waits for it."""
+    """Start the first `agy models` probe now, when Antigravity external workers are on, so the picker never waits."""
     if enabled("agy") and (cli := cli_path("agy")):
         _refresh_agy_models(cli)

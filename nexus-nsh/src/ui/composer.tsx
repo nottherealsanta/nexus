@@ -1202,9 +1202,11 @@ export const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.max
 
 const WAIT_DIFF_ROWS = 12;
 const WAIT_TABLE_ROWS = 6;
+/** Rows a parameter value wraps to at most; a longer value ends in `…` (TUI: `WAIT_VALUE_ROWS` in `render.rs`). */
+export const WAIT_VALUE_ROWS = 3;
 const DIFF_ARGS = { edit: ["patch", "old_string", "new_string", "old", "new"], patch: ["patch", "old_string", "new_string", "old", "new"], write: ["content"] } as Record<string, string[]>;
 
-/** The parameter table (at most six rows; the diff's own arguments are left out) and, for edit, write and patch, the diff lines capped at 12 rows. */
+/** The parameter table (at most six rows; each value stays whole for the card to wrap to `WAIT_VALUE_ROWS`; the diff's own arguments are left out) and, for edit, write and patch, the diff lines capped at 12 rows. */
 export function approvalParts(a: Approval): { table: [string, string][]; diff: ToolDetailLine[]; more: number } {
   const diffAll = DIFF_ARGS[a.tool] ? diffItems(detailOf(a.tool, JSON.stringify(a.args ?? {}), undefined, false)) : [];
   const skip = diffAll.length ? DIFF_ARGS[a.tool] : [];
@@ -1367,7 +1369,7 @@ function ApprovalBody(p: { a: Approval }) {
             {(r) => (
               <View class="flex-row gap-3 min-h-5">
                 <Text class={`shrink-0 ${T.meta}`} style={{ minWidth: labelRoom() }}>{r()[0]}</Text>
-                <Text style={{ numberOfLines: 3, userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{r()[1]}</Text>
+                <Text style={{ numberOfLines: WAIT_VALUE_ROWS, userSelect: "text" }} class={`flex-1 min-w-0 ${T.mono} text-foreground`}>{r()[1]}</Text>
               </View>
             )}
           </Each>

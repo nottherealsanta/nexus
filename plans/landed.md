@@ -2,6 +2,26 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **External workers rename (11-23).** ZMX is now **External workers** in Core, both clients, Settings and docs: `PTY · Claude Code`, `ACP · Antigravity`, and `CLI · Antigravity` for a legacy stream-json history. Settings options are `Agent SDK`/`PTY` and `off`/`ACP`. `[workers] claude_backend = "cli"` is canonical; `[zmx]`/`"zmx"` and the old API keys remain aliases, and an old-client write stores `cli`. `GET` and `PATCH /api/config` both carry the unavailable reason. A new Antigravity child carries the ACP marker from creation, so a failure before its first prompt is not labelled legacy CLI. Old worker labels are normalized for display (including rows without a provider) without rewriting model context. Tests: Core config/workers/scenarios; TUI and NSH scenario/settings checks; paired Settings captures in `reports/external-workers-rename-2026-11-23/`.
+
+- **First-run onboarding (11-23).** Both clients open a full-window tour once per Nexus home (`ui.onboarded` in Core's config): connect a provider, choose models per agent (scout and quick get a small-model hint), then lessons on the timeline, subagents, approvals and navigation. Replay with `/onboarding`. Steps and wording live in `interface/manifest.toml`; desktop and web only. Core `test_config.py`, TUI `onboarding.rs`, NSH `onboarding.test.tsx`. **Not verified:** a real provider sign-in from the tour, light theme, narrow NSH. See [plan 52](52-onboarding.md).
+- **Remote MCP servers: add, sign in, edit, remove (11-23).** `POST/PUT/PATCH/DELETE /api/mcp[/{name}]` and the project twins write
+  `[mcp.servers]` (comments kept, secrets masked) or one entry of `.mcp.json` (a file the strict reader refuses is never rewritten; a
+  literal credential is refused). A remote entry signs in through OAuth (authorization code + PKCE, the SDK's client; tokens in
+  `auth.json`, keyed by scope, name and address; `POST/GET/DELETE …/login`, `mcp.login` event; connections never open a browser). Settings › MCP in
+  the TUI and NSH (address only, Core names it; Sign in, header, switch, restart, remove) and `nexus mcp add|list|remove|login|logout|restart`.
+  Core tests drive a real streamable-HTTP server behind the SDK's OAuth authorization server (`tests/test_mcp_remote.py`);
+  TUI `shell.rs` and NSH `mcp-settings.test.tsx` cover the pages. **Not verified:** a real third-party server (Linear, GitHub…), a
+  browser sign-in by hand, paired screenshots, a refresh token that the provider revokes mid-session. See [mcp.md](../docs/mcp.md#managing-servers).
+
+- **Antigravity ACP live E2E and approval-card parity (11-23).** A scratch Core ran an `agy/gemini-3.8-flash-low` child on agy 1.5.14: the real ACP `write_file` request surfaced on the approval API and was denied (file absent), a follow-up resumed the same ACP session in a fresh process and returned `resumed`, and token usage was recorded; TUI/NSH short and long approval/prompt cards matched after the shared three-row value wrap, and the denial card now wraps the full `Needs attention` text in both with `Denied through Nexus` and corrected parent-escalation wording (legacy/Claude keep `Denied by the CLI`). Tests: 194 ZMX Core, TUI 11 scenario tests, targeted NSH ACP denial; the full NSH scenario file still has the known connection-reset flake. Not verified: mobile and a daemon restart. Evidence `/tmp/nexus-zmx-live.anqGQS/results.json`, `reports/acp-approval-parity-2026-11-23/` and `reports/zmx-attention-parity-2026-11-23/`.
+
+- **`firecrawl` tool (11-23).** `firecrawl {action: scrape|map|crawl}` over Firecrawl Local 0.1.1 ([tools.md](../docs/tools.md#firecrawl)): scraping with PDF and Office parsing, site maps and one-call crawls, public addresses only, cloud hand-off off. Shipped with releases: the build workflow builds `firecrawl-local-<os>-<arch>` from the pinned crate, `install.sh` installs it (checked against `SHA256SUMS`; a checkout install builds it), uninstall removes it. `nexus firecrawl init|status` is the fallback; a `nexus doctor` row, both clients' Tools grid and timeline labels. 14 stand-in tests plus a live run of the crates.io build against example.com, arXiv PDF, docs.firecrawl.dev and refused local addresses; not verified: a JavaScript-only page (no Chrome run), Linux, and the paired TUI/NSH screenshots. See [plans/51](51-firecrawl.md).
+
+- **Voice init (11-23).** Quiet dependency installation, download both configured models, report failures and give daemon-restart steps.
+
+- **Installer output (11-23).** Quiet uv's package listing and point users to optional `nexus voice init`; offline installer checks cover the hint and failure handling.
+
 - **Claude Agent SDK images (11-18).** The `claude` provider sends user images and tool-result images as real SDK image
   content blocks (streaming input, one user message), after the JSON history message that names them; the JSON history
   keeps tool calls and results. Verified live with `claude-haiku-5-5`: it named a solid green user image and a solid blue

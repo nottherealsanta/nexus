@@ -101,35 +101,40 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
             markdown = source
     else:
         markdown = source
-    lines = markdown.splitlines()
-    if not markdown.strip():
-        raise ToolError("web_fetch: the page contained no readable content")
-    if offset > len(lines):
-        raise ToolError(f"web_fetch: offset {offset} is past the end of the page ({len(lines)} lines)")
-    selected = lines[offset - 1: offset - 1 + limit if limit else None]
     header = [f"Source: {_display_url(url)}", f"Final URL: {_display_url(response.url)}",
               f"HTTP status: {response.status}", f"Content-Type: {single_line(declared or 'unspecified')}"]
     if title:
         header.append(f"Title: {single_line(title)}")
+    notes = [f"[the download stopped at {net.MAX_BODY_BYTES} bytes; the page is longer]"] if response.truncated else []
+    return fenced_page("web_fetch", header, markdown, offset, limit, notes)
+
+
+def fenced_page(tool: str, header: list[str], markdown: str, offset: int, limit: int | None, notes: list[str]) -> str:
+    """The header, then Markdown lines `offset`.. between the untrusted-content markers, cut to the output limit.
+    `notes` follow the content inside the fence (the download was cut, a warning); paging notes come first."""
+    lines = markdown.splitlines()
+    if not markdown.strip():
+        raise ToolError(f"{tool}: the page contained no readable content")
+    if offset > len(lines):
+        raise ToolError(f"{tool}: offset {offset} is past the end of the page ({len(lines)} lines)")
+    selected = lines[offset - 1: offset - 1 + limit if limit else None]
     head = "\n".join(header)
-    budget = MAX_OUTPUT_CHARS - len(head) - len(BEGIN) - len(END) - 400
-    kept, size, notes = [], 0, []
+    budget = MAX_OUTPUT_CHARS - len(head) - len(BEGIN) - len(END) - 400 - sum(len(n) + 1 for n in notes)
+    kept, size, paging = [], 0, []
     for line in selected:
         line = line.replace(BEGIN, "‹‹‹ BEGIN UNTRUSTED WEB CONTENT ›››").replace(
             END, "‹‹‹ END UNTRUSTED WEB CONTENT ›››")
         if size + len(line) + 1 > budget:
             if not kept:  # one line longer than the whole output
                 kept.append(line[:budget])
-                notes.append(f"[line {offset} was cut at {budget} characters]")
+                paging.append(f"[line {offset} was cut at {budget} characters]")
             break
         kept.append(line)
         size += len(line) + 1
     last = offset - 1 + len(kept)
     if len(kept) < len(selected) or last < len(lines):  # a cut line still counts as shown
-        notes.append(f"[showing lines {offset}–{last} of {len(lines)}; use offset={last + 1} to read on]")
-    if response.truncated:
-        notes.append(f"[the download stopped at {net.MAX_BODY_BYTES} bytes; the page is longer]")
-    return "\n".join([head, "", BEGIN, *kept, *notes, END])
+        paging.append(f"[showing lines {offset}–{last} of {len(lines)}; use offset={last + 1} to read on]")
+    return "\n".join([head, "", BEGIN, *kept, *paging, *notes, END])
 
 
 TOOL = Tool(

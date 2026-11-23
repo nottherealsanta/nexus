@@ -15,7 +15,7 @@ The key is `bash`: the command; `read`, `grep`, `glob`, `ls`, `edit`, `patch`,
 `write`: the path (relative to the session directory with symlinks resolved,
 or absolute when outside it; a `patch` has one key per file it touches, and an
 `edit(...)` rule also governs `patch`);
-`web_fetch`: the URL without credentials, query or fragment; `web_search`: the
+`web_fetch` and `firecrawl`: the URL without credentials, query or fragment; `web_search`: the
 query. Other tools have no key, so only a bare `tool` rule can match them. In a
 pattern `*` matches any characters (including `/`), `?` one character, and `\\`
 escapes.
@@ -159,7 +159,7 @@ def call_keys(tool: str, args: dict[str, Any], workspace: str | Path) -> list[st
             return [path_key(workspace, p) for p in paths] or None
         raw = args.get("path", ".") if tool in ("grep", "glob", "ls") else args.get("path")
         return [path_key(workspace, raw or ".")] if isinstance(raw, str) else None
-    if tool == "web_fetch":
+    if tool in ("web_fetch", "firecrawl"):
         url = args.get("url")
         if not isinstance(url, str):
             return None

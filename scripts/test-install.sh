@@ -22,11 +22,16 @@ sums() {
 
 printf 'wheel\n' > "$REL/$WHEEL"
 printf 'binary\n' > "$REL/$TUI"
-(cd "$REL" && sums "$WHEEL" "$TUI" > SHA256SUMS)
+FC="firecrawl-local-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+printf 'scraper\n' > "$REL/$FC"
+(cd "$REL" && sums "$WHEEL" "$TUI" "$FC" > SHA256SUMS)
 
 cat > "$TMP/bin/uv" <<'EOF'
 #!/bin/sh
 printf 'uv %s\n' "$*" >> "$UV_LOG"
+case "$*" in
+  'tool install '*) if [ "${UV_FAIL:-0}" = 1 ]; then echo 'uv: simulated error' >&2; exit 1; fi ;;
+esac
 if [ "$*" = 'tool dir --bin' ]; then printf '%s\n' "$FAKE_NEXUS_BIN"; fi
 EOF
 chmod +x "$TMP/bin/uv"
@@ -72,10 +77,24 @@ curl_stub 2
 : > "$TMP/uv.log"
 run "$TMP/one" > "$TMP/out" 2> "$TMP/err" || { cat "$TMP/err"; fail "a transient 504 sank the install"; }
 [ "$(cat "$TMP/one/bin/nexus-tui")" = binary ] || fail "the TUI was not installed"
+[ "$(cat "$TMP/one/bin/firecrawl-local")" = scraper ] || fail "firecrawl-local was not installed"
+[ -x "$TMP/one/bin/firecrawl-local" ] || fail "firecrawl-local is not executable"
 [ "$(cat "$TMP/attempts")" = 3 ] || fail "the TUI was downloaded $(cat "$TMP/attempts") times, not 3"
 grep -q 'retrying (2/3)' "$TMP/err" || { cat "$TMP/err"; fail "a retry was not announced"; }
 grep -q 'uv tool install .*--no-binary-package claude-agent-sdk .*'"$WHEEL" "$TMP/uv.log" || fail "the Core wheel must build Claude's SDK from source"
+grep -q 'uv tool install --quiet ' "$TMP/uv.log" || fail "the Core install must use quiet output"
+grep -q 'nexus voice init' "$TMP/out" || fail "voice setup hint missing"
+grep -q 'download both models' "$TMP/out" || fail "voice model download hint missing"
 [ "$(cat "$TMP/daemon.log")" = 'daemon status' ] || fail "install started a stopped daemon"
+
+# Quiet installs must still expose errors and stop before installing the TUI.
+curl_stub 1
+UV_FAIL=1
+export UV_FAIL
+if run "$TMP/uv-failure" > "$TMP/out" 2> "$TMP/err"; then fail "a failed Core install succeeded"; fi
+unset UV_FAIL
+grep -q 'uv: simulated error' "$TMP/err" || fail "Core install error was hidden"
+[ ! -e "$TMP/uv-failure/bin/nexus-tui" ] || fail "a failed Core install left a TUI behind"
 
 # A running daemon must use the newly installed code, in stop/start order.
 curl_stub 1
@@ -89,6 +108,7 @@ curl_stub 0
 if run "$TMP/two" > "$TMP/out" 2> "$TMP/err"; then fail "the install succeeded without the TUI"; fi
 grep -q 'after 3 attempts' "$TMP/err" || { cat "$TMP/err"; fail "the failure did not say how many attempts were made"; }
 [ ! -e "$TMP/two/bin/nexus-tui" ] || fail "a failed download left a TUI behind"
+[ ! -e "$TMP/two/bin/firecrawl-local" ] || fail "a failed download left firecrawl-local behind"
 [ ! -s "$TMP/uv.log" ] || fail "a failed download still installed the Core wheel"
 
 printf 'install test: ok\n'

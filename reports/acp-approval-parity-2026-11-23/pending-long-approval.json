@@ -1,0 +1,13 @@
+[
+    {
+        "id": "per_1a206ad2748d05891b1",
+        "session_id": "ses_1a206ad26f437b38782",
+        "tool": "Antigravity \u00b7 execute \u2014 Run the release build and verify the artifact checksums",
+        "call_id": "agy:t1",
+        "args": {
+            "command": "cd /private/tmp/acp-parity.EAdnzc/ws && npm run build -- --mode production && ./scripts/verify-artifacts --fail-on-warning --output dist/report.json"
+        },
+        "grant": "acp:546014801de2ca4245a7781459292da6a636739e842d2cb4e8f8a7af632f3810",
+        "external": "agy"
+    }
+]

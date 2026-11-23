@@ -84,6 +84,7 @@ function network(flags: Flags = {}) {
     "GET */api/agent*": { body: { agents: [], problems: [] } },
     "GET */api/skill*": { body: { skills: [], problems: [] } },
     "GET */api/mcp*": { body: { servers: [] } },
+    "GET */api/project/*/mcp": { body: { servers: [], error: null } },
     "GET */api/session/ses_1/message*": { body: [] },
     "GET */api/session/ses_1/snapshot": { body: null },
     "GET */api/session/ses_1/context*": { body: { used: 0, window: null, exact: false } },
@@ -137,7 +138,7 @@ async function openSession(app: any, id = "ses_1", title = "Migration plan") {
   // The viewed tab's accessible name is its Rename action; the others keep Open.
   await app.waitFor(`label:/^Rename ${title},/`);
   // The pane is rebuilt once its history has loaded; keys pressed before that reach the old one.
-  await app.waitUntil(() => !app.shows("text:Loading…"), { timeout: 8000 });
+  await app.waitUntil(() => !app.shows("text:Loading session…"), { timeout: 8000 });
 }
 
 describe("archive closes its tab (plan 29)", () => {

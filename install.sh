@@ -1,5 +1,6 @@
 #!/bin/sh
-# Install Nexus 0.10: the Core `nexus` command (a uv tool), the TUI binary and, when the release has one, the web bundle.
+# Install Nexus 0.10: the Core `nexus` command (a uv tool), the TUI binary, `firecrawl-local` (the scraper behind the
+# `firecrawl` tool) and, when the release has one, the web bundle.
 #
 #   curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh | sh
 #   ./install.sh                  from a checkout: build everything here (needs uv, cargo, npm and nsh)
@@ -9,7 +10,7 @@
 #   ./install.sh --uninstall      remove them; $NEXUS10_HOME is never touched
 #
 # With no checkout beside this file the default is the latest GitHub release: the files are downloaded, checked against the
-# release's SHA256SUMS, and installed. PREFIX (default ~/.local) holds bin/nexus-tui and share/nexus/web.
+# release's SHA256SUMS, and installed. PREFIX (default ~/.local) holds bin/nexus-tui, bin/firecrawl-local and share/nexus/web.
 # NEXUS_RELEASE_BASE overrides https://github.com/nottherealsanta/nexus/releases (a mirror, or file:// for tests).
 set -eu
 
@@ -35,10 +36,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall)
       command -v uv >/dev/null 2>&1 && uv tool uninstall nexus10 >/dev/null 2>&1 || true
-      rm -f "$BIN/nexus-tui"
+      rm -f "$BIN/nexus-tui" "$BIN/firecrawl-local"
       rm -rf "$WEB"
-      printf 'Removed the nexus10 tool, %s/nexus-tui and %s.\nYour data in %s is untouched.\n' \
-        "$BIN" "$WEB" "${NEXUS10_HOME:-$HOME/.nexus}"
+      printf 'Removed the nexus10 tool, %s/nexus-tui, %s/firecrawl-local and %s.\nYour data in %s is untouched.\n' \
+        "$BIN" "$BIN" "$WEB" "${NEXUS10_HOME:-$HOME/.nexus}"
       exit 0 ;;
     --source) MODE=source ;;
     --release) MODE=release
@@ -65,6 +66,7 @@ restart_daemon() {
 done_message() {
   restart_daemon
   printf '\nInstalled. Run `nexus doctor` to check the install.\n'
+  printf 'Optional voice: run `nexus voice init` to install the speech runtime and download both models.\n'
   case ":$PATH:" in *":$BIN:"*) ;; *) printf 'Add %s to PATH.\n' "$BIN" ;; esac
 }
 
@@ -86,12 +88,22 @@ install_source() {
   fi
 
   step "Core (uv tool)"
-  uv tool install --force --reinstall --no-binary-package claude-agent-sdk "$ROOT/nexus-core"
+  uv tool install --quiet --force --reinstall --no-binary-package claude-agent-sdk "$ROOT/nexus-core"
 
   step "TUI"
   (cd "$ROOT/nexus-tui" && cargo build --release)
   mkdir -p "$BIN"
   install -m 755 "$ROOT/nexus-tui/target/release/nexus-tui" "$BIN/nexus-tui"
+
+  # firecrawl-local, at the version Core pins. Built from crates.io (a few minutes) unless that version is already here.
+  fc="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' "$ROOT/nexus-core/nexus/firecrawl.py")"
+  [ -n "$fc" ] || die "no firecrawl-local VERSION in nexus-core/nexus/firecrawl.py"
+  if [ -x "$BIN/firecrawl-local" ] && "$BIN/firecrawl-local" --version 2>/dev/null | grep -qF "$fc"; then
+    step "firecrawl-local $fc (already installed)"
+  else
+    step "firecrawl-local $fc (building from crates.io)"
+    cargo install firecrawl-local --version "$fc" --locked --root "$PREFIX" --force
+  fi
 
   step "NSH web bundle"
   (cd "$ROOT/nexus-nsh" && { [ -d node_modules ] || npm install; } && npm run build)
@@ -142,6 +154,7 @@ install_release() {
     die "musl (Alpine) is not supported; use a glibc distribution"
   fi
   tui="nexus-tui-$os-$(uname -m)"
+  fc="firecrawl-local-$os-$(uname -m)"
 
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -162,14 +175,22 @@ install_release() {
   step "Download and verify"
   fetch "$wheel"; verify "$wheel"
   fetch "$tui"; verify "$tui"
+  firecrawl=""
+  if listed "$fc"; then firecrawl="$fc"; fetch "$fc"; verify "$fc"; fi
   web=""
   if listed nexus-web.tar.gz; then web=nexus-web.tar.gz; fetch "$web"; verify "$web"; fi
 
   step "Core (uv tool)"
-  uv tool install --force --reinstall --no-binary-package claude-agent-sdk "$WORK/$wheel"
+  uv tool install --quiet --force --reinstall --no-binary-package claude-agent-sdk "$WORK/$wheel"
   step "TUI"
   mkdir -p "$BIN"
   install -m 755 "$WORK/$tui" "$BIN/nexus-tui"
+  if [ -n "$firecrawl" ]; then
+    step "firecrawl-local"
+    install -m 755 "$WORK/$firecrawl" "$BIN/firecrawl-local"
+  else
+    printf 'This release has no firecrawl-local for %s; the `firecrawl` tool needs `nexus firecrawl init`.\n' "$os $(uname -m)"
+  fi
   if [ -n "$web" ]; then
     step "Web bundle"
     rm -rf "$WEB"

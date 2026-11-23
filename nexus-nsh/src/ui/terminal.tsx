@@ -1,6 +1,6 @@
 import { Clipboard, Text, View, WebView, colorScheme, effect, keymap, signal, type WebViewRef } from "nsh";
 import theme from "../../gen/theme.json";
-import { commands, draftKey, toKeystroke } from "../commands";
+import { commands, copyText, draftKey, toKeystroke } from "../commands";
 import { PRINTABLE_KEYS } from "../manager";
 import { Button, Input } from "nsh/base";
 import { terminalPage } from "../gen/terminal-page";
@@ -106,7 +106,8 @@ export function TerminalPane(p: { id: string }) {
       const payload = terminalEvidence(captured.id, captured.name, m.data, captured.context);
       previewTerminalEvidence(captured.target, payload);
     }
-    if (m.type === "selection" && copyPending) { copyPending = false; if (typeof m.data === "string" && m.data) void Clipboard.writeText(m.data); }
+    if (m.type === "selection" && m.auto === true && typeof m.data === "string" && m.data) { const n = [...m.data].length; copyText(m.data, `Copied - ${n} ${n === 1 ? "char" : "chars"}`); }
+    if (m.type === "selection" && m.auto !== true && copyPending) { copyPending = false; if (typeof m.data === "string" && m.data) void Clipboard.writeText(m.data); }
   };
   const act = (fn: () => void) => () => { focusTerminal(id); fn(); };
   return <View class="flex-1 min-h-0 bg-background" testID="terminal-panel">

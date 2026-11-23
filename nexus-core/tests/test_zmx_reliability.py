@@ -48,7 +48,7 @@ def test_recovery_text_says_the_cli_ran_the_tool_and_may_still_be_running(home):
         assert result.is_error and "the CLI ran this tool itself" in result.output and "may still be running" in result.output
         assert "may have changed the workspace" not in result.output
         [notice] = texts(rt.store, session.id, "user")
-        assert "ran on a vendor CLI (ZMX)" in notice and "never kills a process by a stored PID" in notice
+        assert "ran on an external worker CLI" in notice and "never kills a process by a stored PID" in notice
         assert "it was not retried".replace("it was", "It was") in notice or "not retried" in notice
         assert rt.recovered[0]["tools"][0]["outcome"] == "external"
     finally:
@@ -62,7 +62,7 @@ def test_non_external_recovery_text_is_unchanged(home):
     try:
         [result] = tool_results(rt.store, session.id)
         assert "may have changed the workspace" in result.output
-        assert "ZMX" not in texts(rt.store, session.id, "user")[0]
+        assert "external worker" not in texts(rt.store, session.id, "user")[0]
     finally:
         rt.store.close()
 
@@ -138,13 +138,13 @@ def test_record_directory_is_private_and_ids_are_validated(home):
 
 def test_doctor_reports_zmx_off_without_probing_and_on_with_a_missing_cli(home, monkeypatch):
     rows = {r["name"]: r for r in doctor.check_zmx()}
-    assert "off (no CLI probed)" in rows["zmx agy"]["detail"] and rows["zmx claude-code"]["status"] == "ok"
+    assert "off (no CLI probed)" in rows["workers agy"]["detail"] and rows["workers claude-code"]["status"] == "ok"
     from nexus.config import ConfigFile
     config = ConfigFile()
     config.patch(config.read()["revision"], {"zmx.antigravity": True}, [])
     monkeypatch.setenv("NEXUS10_AGY_CLI", str(home / "missing-agy"))
     rows = {r["name"]: r for r in doctor.check_zmx()}
-    assert rows["zmx agy"]["status"] == "fail" and "missing-agy" in rows["zmx agy"]["detail"]
+    assert rows["workers agy"]["status"] == "fail" and "missing-agy" in rows["workers agy"]["detail"]
 
 
 def test_doctor_reports_a_cli_version_and_flags(home, monkeypatch):
@@ -157,7 +157,7 @@ def test_doctor_reports_a_cli_version_and_flags(home, monkeypatch):
     config = ConfigFile()
     config.patch(config.read()["revision"], {"zmx.antigravity": True}, [])
     monkeypatch.setenv("NEXUS10_AGY_CLI", str(fake_agy))
-    row = {r["name"]: r for r in doctor.check_zmx()}["zmx agy"]
+    row = {r["name"]: r for r in doctor.check_zmx()}["workers agy"]
     assert row["status"] == "ok" and "version 1.5.0" in row["detail"] and "sign-in not verified" in row["detail"]
 
 
@@ -314,7 +314,7 @@ async def test_interrupted_turn_keeps_the_cli_session_id_so_the_next_prompt_resu
             started.set()
             await asyncio.sleep(60)
 
-    for pid, attr, ref in (("claude-code", "ClaudeCodeWorker", "claude-code/claude-haiku-5-5"), ("agy", "AntigravityWorker", "agy/gemini-3.8-flash-low")):
+    for pid, attr, ref in (("claude-code", "ClaudeCodeWorker", "claude-code/claude-haiku-5-5"), ("agy", "AntigravityAcpWorker", "agy/gemini-3.8-flash-low")):
         monkeypatch.setattr(agent_module, attr, Hang)
         started.clear()
         agent = agent_module.ExternalAgent(ref=ref, workspace=tmp_path, messages=[], instructions="", permission="allow", effort=None)
@@ -335,3 +335,6 @@ async def test_interrupted_turn_keeps_the_cli_session_id_so_the_next_prompt_resu
         assert last["session_id"] in (CLAUDE_SESSION, "conv-9")
         if pid == "claude-code":
             assert last["policy_fingerprint"] == "fp" and last["transcript_path"] == "/t.jsonl"
+        else:
+            assert states[0]["transport"] == "acp-v1" and states[0]["policy_fingerprint"]
+            assert last["transport"] == "acp-v1" and last["policy_fingerprint"]

@@ -15,6 +15,8 @@ export const SPLASH_LOGO = [
 export const SPLASH_SLOW_MS = 5000;
 /** Milliseconds per column step of the light sweep across the logo. */
 const SWEEP_MS = 32;
+/** Fixed width per logo column, so the mark keeps its shape if the mono font is missing and a proportional one is used. */
+const CELL_PX = 9;
 const LOGO_WIDTH = Math.max(...SPLASH_LOGO.map((r) => r.length));
 /** Column of the light sweep `ms` into the wait, as in the TUI: a function of the clock only. */
 export function splashSweep(ms: number) {
@@ -93,7 +95,7 @@ export function Splash() {
               {(row) => (
                 <View class="flex-row">
                   <Each of={[...row().padEnd(LOGO_WIDTH, " ")].map((ch, col) => ({ ch, col }))}>
-                    {(c) => <Text style={{ numberOfLines: 1 }} class={`font-mono text-[15px] leading-[20px] font-semibold ${lit(c().col) ? "text-foreground" : "text-muted-foreground"}`}>{c().ch === " " ? " " : c().ch}</Text>}
+                    {(c) => <Text style={{ numberOfLines: 1, width: CELL_PX, textAlign: "center" }} class={`font-mono text-[15px] leading-[20px] font-semibold ${lit(c().col) ? "text-foreground" : "text-muted-foreground"}`}>{c().ch === " " ? " " : c().ch}</Text>}
                   </Each>
                 </View>
               )}

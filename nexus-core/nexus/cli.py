@@ -789,6 +789,97 @@ async def _project(args: argparse.Namespace) -> None:
         await client.close()
 
 
+def _mcp_headers(items: list[str]) -> dict[str, str]:
+    """`--header "Name: value"` or `Name=value`; a value may be `${env:VAR}` so no secret is written down."""
+    headers: dict[str, str] = {}
+    for item in items:
+        sep = ":" if ":" in item and (item.find(":") < item.find("=") or "=" not in item) else "="
+        name, found, value = item.partition(sep)
+        if not found or not name.strip():
+            raise ValueError(f"header {item!r} must look like 'Name: value'")
+        headers[name.strip()] = value.strip()
+    return headers
+
+
+def _mcp_row_line(row: dict[str, Any]) -> str:
+    where = row.get("url") or (f"{row.get('command', '')} ({row.get('arg_count', 0)} args)" if row.get("transport") == "stdio" else "")
+    auth = f"  auth: {row['auth']}" if row.get("auth") else ""
+    state = row["state"] + (f" ({row['error']})" if row.get("error") and row["state"] in ("failed", "invalid") else "")
+    return f"{row['server']:<24} {state:<12} {row.get('transport', ''):<6} {where}{auth}"
+
+
+async def _mcp(args: argparse.Namespace) -> None:
+    """Manage MCP servers through the daemon, so a running Core sees the change at once and holds the sign-in."""
+    client = Client.connect()
+    try:
+        project = None
+        if args.project:
+            project = (await client.call("POST", "/api/project", {"path": str(Path(args.workspace).resolve())}))["id"]
+        base = f"/api/project/{project}/mcp" if project else "/api/mcp"
+        scope = "project" if project else "global"
+        if args.action == "list":
+            data = await client.call("GET", base)
+            for row in data["servers"]:
+                print(_mcp_row_line(row))
+            if not data["servers"]:
+                print(f"No {scope} MCP servers. Add one with `nexus mcp add <name> <url>`.")
+        elif args.action == "add":
+            if not args.name or not args.url:
+                raise ValueError("usage: nexus mcp add <name> <url> [--header 'Name: value'] [--project]")
+            entry: dict[str, Any] = {"url": args.url}
+            if args.transport:
+                entry["transport"] = args.transport
+            headers = _mcp_headers(args.header)
+            if headers:
+                entry["headers"] = headers
+            if args.no_oauth:
+                entry["oauth"] = False
+            elif args.client_id or args.scope:
+                entry["oauth"] = {k: v for k, v in (("client_id", args.client_id), ("client_secret", args.client_secret),
+                                                    ("scope", args.scope)) if v}
+            if project and any("${" not in v for v in headers.values()):
+                print(f"{YELLOW}Project servers are written to a file that may be committed. "
+                      f"Use ${{env:NAME}} for secrets in --header.{RESET}", file=sys.stderr)
+            row = await client.call("POST", base, {"name": args.name, "entry": entry})
+            print(f"Added {scope} server {args.name} ({row['state']}).")
+            if row.get("oauth") and not headers:
+                print(f"If it asks you to sign in, run `nexus mcp login {args.name}{' --project' if project else ''}`.")
+        elif args.action == "remove":
+            if not args.name:
+                raise ValueError("usage: nexus mcp remove <name> [--project]")
+            await client.call("DELETE", f"{base}/{args.name}")
+            print(f"Removed {scope} server {args.name}.")
+        elif args.action == "restart":
+            if not args.name:
+                raise ValueError("usage: nexus mcp restart <name> [--project]")
+            print(_mcp_row_line(await client.call("POST", f"{base}/{args.name}/restart")))
+        elif args.action == "logout":
+            if not args.name:
+                raise ValueError("usage: nexus mcp logout <name> [--project]")
+            await client.call("DELETE", f"{base}/{args.name}/login")
+            print(f"Signed out of {args.name}.")
+        elif args.action == "login":
+            if not args.name:
+                raise ValueError("usage: nexus mcp login <name> [--project]")
+            state = await client.call("POST", f"{base}/{args.name}/login")
+            opened = False
+            for _ in range(600):
+                if state.get("verification_uri") and not opened:
+                    opened = True
+                    print(f"Open this link to sign in to {args.name}:\n  {state['verification_uri']}")
+                    if not args.no_open:
+                        webbrowser.open(state["verification_uri"])
+                if state["status"] != "pending":
+                    break
+                await asyncio.sleep(0.5)
+                state = await client.call("GET", f"{base}/{args.name}/login")
+            if state["status"] != "signed_in":
+                raise ValueError(state.get("message") or f"sign-in {state['status']}")
+            print(f"Signed in to {args.name}.")
+    finally:
+        await client.close()
+
+
 async def _session(args: argparse.Namespace) -> None:
     client = Client.connect()
     try:
@@ -1153,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--no-maintenance", action="store_true", help="run: leave Core's retention loop off")
     bench.add_argument("--json", action="store_true", help="run: print the report as JSON")
     bench.add_argument("--quiet", action="store_true", help="no progress on stderr")
-    workers = sub.add_parser("workers", help="ZMX vendor-CLI processes that outlived Nexus")
+    workers = sub.add_parser("workers", help="external worker CLI processes that outlived Nexus")
     workers.add_argument("action", choices=["list", "clean"], help="`clean` stops listed processes whose pid and start time still match")
     update = sub.add_parser("update", help="check for a newer release (never installs anything)")
     update.add_argument("--json", action="store_true", help="print the result as JSON")
@@ -1162,6 +1253,8 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", help="address to bind (default 0.0.0.0, or $NEXUS_HOST); serves without a token off loopback: trusted networks only; use 127.0.0.1 for local-only access")
     voice = sub.add_parser("voice", help="speech to text and text to speech")
     voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
+    fire = sub.add_parser("firecrawl", help="the optional local Firecrawl behind the firecrawl tool")
+    fire.add_argument("action", choices=["init", "status"], help="init builds and installs firecrawl-local with cargo; status shows whether it is installed")
     pair = sub.add_parser("pair", help="print the address, token and a QR code a phone uses to connect to this Core")
     pair.add_argument("--no-qr", action="store_true", help="print the link without the QR code")
     pair.add_argument("--json", action="store_true", help="print the addresses and links as JSON")
@@ -1171,6 +1264,20 @@ def main(argv: list[str] | None = None) -> int:
     project = sub.add_parser("project", help="projects (a project is a directory)")
     project.add_argument("action", choices=["list", "open"])
     project.add_argument("path", nargs="?")
+    mcp = sub.add_parser("mcp", help="MCP servers: list, add a remote one, remove, sign in (OAuth), restart")
+    mcp.add_argument("action", choices=["list", "add", "remove", "login", "logout", "restart"])
+    mcp.add_argument("name", nargs="?")
+    mcp.add_argument("url", nargs="?", help="add: the server's https:// address")
+    mcp.add_argument("--header", action="append", default=[], metavar="'NAME: VALUE'",
+                     help="add: a request header; write secrets as ${env:VAR} (repeatable)")
+    mcp.add_argument("--transport", choices=["http", "sse"], help="add: default is inferred from the address")
+    mcp.add_argument("--no-oauth", action="store_true", help="add: never sign in through OAuth (use --header for a token)")
+    mcp.add_argument("--client-id", help="add: a pre-registered OAuth client, for servers without dynamic registration")
+    mcp.add_argument("--client-secret", help="add: with --client-id; write it as ${env:VAR}")
+    mcp.add_argument("--scope", help="add: OAuth scopes to ask for")
+    mcp.add_argument("--project", action="store_true", help="the project's .mcp.json instead of ~/.nexus/config.toml")
+    mcp.add_argument("--workspace", default=".", help="with --project: the project directory")
+    mcp.add_argument("--no-open", action="store_true", help="login: print the link without opening a browser")
     agents_cmd = sub.add_parser("agents", help="manage agent files")
     agents_cmd.add_argument("action", choices=["reinit"], help="reinit copies the built-in agents over the global ones in <home>/agents")
     agent = sub.add_parser("agent", help="agents available in the current project, or one agent's prompt")
@@ -1262,6 +1369,12 @@ def main(argv: list[str] | None = None) -> int:
                 return install.init()
             for name, entry in voice_status.status().items():
                 print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
+        elif args.command == "firecrawl":
+            from . import firecrawl
+            if args.action == "init":
+                return firecrawl.init()
+            found = firecrawl.status()
+            print(f"firecrawl-local: {found['state']}" + (f" ({found['version']} at {found['path']})" if found["state"] == "ready" else f" - {found['detail']}"))
         elif args.command == "doctor":
             return _doctor(args.json)
         elif args.command == "perf":
@@ -1279,7 +1392,7 @@ def main(argv: list[str] | None = None) -> int:
                 if stopped:
                     records.clear(record["session_id"])
             if not found:
-                print("no ZMX worker processes are running outside Nexus")
+                print("no external worker processes are running outside Nexus")
         elif args.command == "update":
             from . import doctor
             from .server import VERSION
@@ -1300,6 +1413,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_agent(args))
         elif args.command == "project":
             asyncio.run(_project(args))
+        elif args.command == "mcp":
+            asyncio.run(_mcp(args))
         elif args.command in ("session", "sessions") and args.action == "inspector":
             found = daemon.ensure()
             url = f"{found['url']}/inspector#token={found['token']}" + (f"&session={args.id}" if args.id else "")

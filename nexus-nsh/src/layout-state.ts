@@ -308,7 +308,7 @@ export function tabTitle(tab: Tab): string {
 }
 export const tabDirty = (tab: Tab) => tab.kind === "file" && bufferDirty(tab.id);
 
-/** Close a tab: unsaved files ask; a terminal asks while it runs, then terminates; a session closes its header tab. */
+/** Close a tab: unsaved files ask; a terminal asks while a command runs in it, then terminates; a session closes its header tab. */
 export function closeTabAt(groupId: string, key: string) {
   const g = findGroup(cur, groupId);
   const tab = g?.tabs.find((t) => tabKey(t) === key);

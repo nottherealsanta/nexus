@@ -358,6 +358,16 @@ class Terminal:
         self._emit("resize", rows=rows, cols=cols)
         self._persist()
 
+    def busy(self) -> bool:
+        """True while a command other than the idle shell holds the terminal's foreground."""
+        if self.status != "running" or self._fd_closed:
+            return False
+        try:
+            foreground = os.tcgetpgrp(self.fd)
+        except OSError:
+            return False
+        return foreground > 0 and foreground != self.pid
+
     async def close(self) -> None:
         async with self._close_lock:
             await self._close()

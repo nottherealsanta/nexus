@@ -164,7 +164,7 @@ pub fn verb_family(tool: &str) -> Option<&'static str> {
         "code" => "code",
         "ask" => "ask",
         "session" | "fork" => "session",
-        "web_search" | "web_fetch" | "browser_exec" | "browser_screenshot" => "web",
+        "web_search" | "web_fetch" | "firecrawl" | "browser_exec" | "browser_screenshot" => "web",
         _ => return None,
     })
 }
@@ -320,6 +320,8 @@ pub enum CtxBody {
     Preview(String),
     /// An inventory whose rows can be switched on or off.
     Inventory(Vec<CtxItem>),
+    /// The section's full text, wrapped under its title (attention details).
+    Note(String),
     None,
 }
 
@@ -493,6 +495,15 @@ pub fn first_prompt_line(prompt: &str) -> String {
         .to_owned()
 }
 
+/// A section's note: its full text, wrapped to the context width under the
+/// title (attention details must not be clipped to one line).
+fn note_lines(text: &str, layout: &CtxLayout) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    crate::text::wrap(text, layout.width.max(1))
+}
+
 /// The rows of the open context: one per section header, preview or inventory
 /// item, and a blank row between sections, then the total row. Widths count
 /// terminal cells; every row fits in `layout.width`, with clipped text ending
@@ -518,7 +529,10 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
                 CtxRole::Tokens,
             ));
         }
-        if section.tokens.is_none() && section.title != "Workspace tools" {
+        if section.tokens.is_none()
+            && section.title != "Workspace tools"
+            && !matches!(&section.body, CtxBody::Note(_))
+        {
             let empty_inventory =
                 matches!(&section.body, CtxBody::Inventory(items) if items.is_empty());
             if empty_inventory || !matches!(&section.body, CtxBody::Inventory(_)) {
@@ -526,6 +540,13 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
             }
         }
         rows.push(clip_row(head, layout));
+        if let CtxBody::Note(text) = &section.body {
+            rows.extend(
+                note_lines(text, layout)
+                    .into_iter()
+                    .map(|line| vec![(line, CtxRole::Meta)]),
+            );
+        }
         if let CtxBody::Inventory(items) = &section.body {
             if section.title == "Skills" && items.len() > 12 {
                 continue;
@@ -861,6 +882,30 @@ mod ctx_tests {
         let t = text(&rows);
         assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
         assert!(t.iter().any(|l| l.contains("\u{25cf} read")), "{t:?}");
+    }
+
+    #[test]
+    fn an_attention_note_wraps_fully_under_its_title() {
+        let error = "Antigravity's permission request was declined; the CLI may have continued without the tool. Nexus approved nothing.";
+        let s = CtxSection {
+            title: "Needs attention".into(),
+            tokens: None,
+            meta: String::new(),
+            body: CtxBody::Note(error.into()),
+        };
+        let rows = text(&context_rows(&[s], 0, &layout(60)));
+        assert_eq!(rows[0], "Needs attention");
+        let note = rows[1..]
+            .iter()
+            .take_while(|row| !row.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(note, error);
+        assert!(!rows.iter().any(|r| r.contains('\u{2026}')), "{rows:?}");
+        for row in &rows {
+            assert!(crate::text::width(row) <= 60, "{row}");
+        }
     }
 
     #[test]

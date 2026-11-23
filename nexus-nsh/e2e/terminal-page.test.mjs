@@ -71,6 +71,11 @@ test('terminal page captures keys, copies only the selection, and blocks OSC 52'
     for (let i = 0; i < 20 && !messages.some(m => m.type === 'selection'); i++) await page.waitForTimeout(25);
     assert(messages.some(m => m.type === 'selection' && m.data.includes('NEW')));
     assert(!messages.some(m => m.type === 'capture'));
+    assert(!messages.some(m => m.type === 'selection' && m.auto));
+    const box = await page.locator('.xterm-screen').boundingBox();
+    await page.mouse.move(box.x + 2, box.y + 4); await page.mouse.down(); await page.mouse.move(box.x + 60, box.y + 4); await page.mouse.up();
+    for (let i = 0; i < 20 && !messages.some(m => m.type === 'selection' && m.auto); i++) await page.waitForTimeout(25);
+    assert(messages.some(m => m.type === 'selection' && m.auto && m.data.length > 0));
     await page.evaluate(() => window.postMessage(JSON.stringify({type:'capture', request:87}), '*'));
     for (let i = 0; i < 20 && !messages.some(m => m.type === 'capture'); i++) await page.waitForTimeout(25);
     assert(messages.some(m => m.type === 'capture' && m.request === 87 && m.data.includes('NEW')));

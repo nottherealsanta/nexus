@@ -49,6 +49,33 @@ jobs:
         working-directory: nexus-core
       - uses: actions/upload-artifact@v4
         with: {name: nexus-core, path: "nexus-core/dist/*", if-no-files-found: error}
+  firecrawl:
+    # The version is pinned in one place, nexus-core/nexus/firecrawl.py, which Core also checks at run time.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.runners) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with: {ref: "${{ inputs.ref }}"}
+      - name: Build the pinned firecrawl-local from crates.io
+        run: |
+          version=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' nexus-core/nexus/firecrawl.py)
+          [ -n "$version" ] || { echo "no VERSION in nexus-core/nexus/firecrawl.py"; exit 1; }
+          cargo install firecrawl-local --version "$version" --locked --root "$RUNNER_TEMP/fc"
+          echo "FC_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Smoke test, the binary starts and is the pinned version
+        run: |
+          "$RUNNER_TEMP/fc/bin/firecrawl-local" --version | grep -F "$FC_VERSION"
+      - name: Name the binary for its platform
+        run: |
+          os=$(uname -s | tr A-Z a-z); arch=$(uname -m)
+          cp "$RUNNER_TEMP/fc/bin/firecrawl-local" "firecrawl-local-$os-$arch"
+          echo "ASSET=firecrawl-local-$os-$arch" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with: {name: "firecrawl-${{ matrix.runner }}", path: "${{ env.ASSET }}", if-no-files-found: error}
   tui:
     strategy:
       fail-fast: false

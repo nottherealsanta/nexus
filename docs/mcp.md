@@ -44,7 +44,8 @@ as written and read in any of these dialects (`mcp/config.py`):
 | Switch | `enabled` or `disabled` |
 | Limits | `connect_timeout_s` (20), `call_timeout_s` or `timeout` (60; milliseconds from 1000 up, capped at 600 s) |
 | Tools | `includeTools`, `excludeTools`/`disabledTools` |
-| Shown, not acted on | `autoApprove`, `alwaysAllow`, `trust`, `oauth`, `auth`, `description`, `version`, `tool_loading`, `alwaysLoad`, … (loading is the global setting below; a tool call still follows the permission rules; OAuth is not implemented) |
+| OAuth | `oauth`: `true`, `false`, or a table `{scope, client_id, client_secret, redirect_port}` (remote only; see [Remote servers and OAuth](#remote-servers-and-oauth)). Unset: on for a remote entry that sends no `Authorization` header |
+| Shown, not acted on | `autoApprove`, `alwaysAllow`, `trust`, `auth`, `description`, `version`, `tool_loading`, `alwaysLoad`, … (loading is the global setting below; a tool call still follows the permission rules) |
 
 `${env:VAR}`, `${VAR}`, `${VAR:-default}`, `{env:VAR}`, `${userHome}`,
 `${pathSeparator}` and `${/}` are replaced in `command`, `args`, `env`, `url`,
@@ -59,6 +60,59 @@ No server is offered by default. browser-use, offered here switched off until 20
 Nexus tool: `browser_exec` and `browser_screenshot` ([tools.md](tools.md#browser-tools)). An existing
 `[mcp.servers.browser-use]` entry that only said `enabled = true` has no command any more and shows
 as invalid. Delete it, or give it a full entry if you still want browser-use as an MCP server too.
+
+## Managing servers
+
+Servers are added, changed and removed through Core, which writes the file for you and applies the change at once
+(the next session uses it; running sessions keep theirs). Every route is checked like a file edit: the entry is parsed
+as it would be at start-up, so a typo is refused when it is saved. A `${env:NAME}` that is not set yet is accepted on
+save, and the row then says which variable is missing.
+
+- **Settings › MCP** (TUI and NSH, desktop and web only): *Add a remote server* asks for the address and nothing else.
+  Core names the server from its address (`https://mcp.linear.app/mcp` is `linear`; a number is added when the name is
+  taken). *Add to this project* writes the project's `.mcp.json`. Each server opens a detail with **Sign in** (when it
+  uses OAuth), **Add a header** (typed once as `Name: value`; only the name is shown afterwards), **Switch off or on**,
+  **Restart** and **Remove**.
+- **`nexus mcp`**: `list`, `add <name> <url> [--header 'Name: value'] [--transport http|sse] [--no-oauth] [--client-id …]
+  [--project]`, `remove`, `restart`, `login`, `logout`. It talks to the running daemon, so a change and a sign-in are
+  seen at once. `nexus config import-mcp` stays the way to bring in a whole file, including local (stdio) servers.
+- **API** (below): `POST /api/mcp`, `PUT`/`PATCH`/`DELETE /api/mcp/{name}`, and the same under
+  `/api/project/{id}/mcp`. A global write goes through the same revision-safe path as `PATCH /api/config`, keeps comments and
+  other settings, and keeps a `********` secret as stored. A **project** write adds, replaces or removes one named
+  server in the file that already defines it (else `mcpServers` in `.mcp.json`) and leaves every other key alone. A file the strict
+  reader refuses (a symlink, comments, a trailing comma, duplicate keys, over 256 KiB) is never rewritten: fix it first.
+
+> A project file is committed to a repository. Core refuses to write a literal credential there (a header, `env` or
+> `oauth.client_secret` whose name looks like a secret): write `${env:NAME}` and set `NAME` in the environment Nexus
+> runs in. The global table lives in `~/.nexus/config.toml`, which is private to you.
+
+## Remote servers and OAuth
+
+A remote entry (`url`) is a streamable-HTTP server, or SSE when the address ends `/sse`. It authenticates in one of two ways:
+
+- **Headers**: `headers = { Authorization = "Bearer ${env:DOCS_TOKEN}" }`. An entry that sends its own `Authorization`
+  header does not use OAuth.
+- **OAuth** (the default for a remote entry without one): authorization code with PKCE, through the SDK's OAuth client
+  (`mcp/oauth.py`). Core discovers the server's authorization server, registers Nexus as a client dynamically, and the user
+  signs in once.
+
+How a sign-in works:
+
+1. A connection never opens a browser. Without a stored sign-in it only notes a `401`: the row shows `state: failed`,
+   `auth: required` (the clients say "sign-in required"). With one, it sends the token and refreshes it when it expires.
+2. The user starts the sign-in (`POST …/login`, Settings › Sign in, or `nexus mcp login`). Core listens on `127.0.0.1` on a
+   free port for the redirect, publishes `mcp.login` with the sign-in link, and the client opens it. The daemon never launches a browser.
+3. When the redirect arrives Core exchanges the code, stores the tokens, restarts the server and publishes `mcp.login`
+   `signed_in`. Waiting ends after 5 minutes; `DELETE …/login` cancels.
+
+Tokens and the registered client are in `<home>/auth.json` (owner-only, 0600), under `mcp-oauth:<scope>:<name>:<address hash>`, never in
+`config.toml` and never in an API response. The address hash means editing a server's URL drops its old tokens instead of
+sending them to the new address; removing a server forgets them. The same name in two projects, or a project and the
+global table, has separate sign-ins.
+
+A server with no dynamic registration needs a client registered by hand: `oauth = { client_id = "…", client_secret =
+"${env:SECRET}", scope = "read", redirect_port = 18791 }`, and `http://127.0.0.1:<redirect_port>/callback` registered with the provider (the
+port defaults to 18791 when `client_id` is set, else any free port).
 
 ## Project servers
 
@@ -263,6 +317,11 @@ images ([llm-providers.md](llm-providers.md#tool-result-media)).
 | `GET /api/mcp` | global scope: `{servers: [{server, state, error, tools, transport, enabled, …}]}`; `state` is `idle`, `connecting`, `connected`, `failed`, `disabled` or `invalid`. Never connects; shows no argument, env or header values |
 | `GET /api/mcp/{name}` | the same plus `tool_names` (known once connected) and `log` |
 | `POST /api/mcp/{name}/restart` | closes and reconnects; returns the row |
+| `POST /api/mcp` | add a global server: `{entry, name?}` → 201 with its row (`name` is made from the address when omitted; 409 if taken, 400 if the entry does not parse). A new remote server connects at once, so the row already says `connected` or `auth: required` |
+| `PUT /api/mcp/{name}` | replace the entry (`{entry}`); a `********` keeps the stored secret |
+| `PATCH /api/mcp/{name}` | merge into the stored entry: `{entry: {headers: {Authorization: "Bearer …"}, enabled: false}}`; a `null` removes a key (one level deep inside a table) |
+| `DELETE /api/mcp/{name}` | remove it and forget its sign-in; `{server, removed: true}` |
+| `POST`/`GET`/`DELETE /api/mcp/{name}/login` | start (202 `{status: "pending", verification_uri?}`), read, or cancel and sign out (204) an OAuth sign-in. 400 for a server that does not use OAuth |
 | `GET /api/project/{id}/mcp` | project scope: `{project_id, file, exists, revision, error, warnings, servers: [rows], files, duplicates}`. Never starts a server; reads the files and may close a changed or removed connection |
 | `GET /api/project/{id}/mcp/{name}` | one project row plus `tool_names` and `log`; never starts a server |
 | `POST /api/project/{id}/mcp/{name}/restart` | close and reconnect a project server |
@@ -270,6 +329,10 @@ images ([llm-providers.md](llm-providers.md#tool-result-media)).
 | `GET /api/mcp/{name}/resource?uri=` | `{server, uri, text}`: the resource text fenced as `<untrusted-mcp-data>` (`kind: resource`), clipped at 24,000 characters; binary contents are named, never shown |
 | `GET /api/mcp/{name}/prompt?name=&arguments=` | `{server, prompt, text}` with `arguments` a JSON object of strings; the prompt's messages fenced (`kind: prompt`). Nothing is sent to a session |
 | `/api/project/{id}/mcp/{name}/resources`, `/resource`, `/prompts`, `/prompt` | the same for a project server |
+| `POST /api/project/{id}/mcp`, `PUT`/`PATCH`/`DELETE …/{name}`, `…/{name}/login` | the same writes and sign-in for a project server; the file edit is described in [Managing servers](#managing-servers) |
+
+A remote row also has `oauth: true|false` and, when OAuth is on, `auth: "signed_in" | "required" | "none"`
+(`required`: the server answered 401; `none`: no sign-in stored yet).
 
 A project row also has `source: "project"`, `project_id`, `file` (the winning
 file), `warnings`, and the non-secret facts from `config.describe()`
@@ -287,11 +350,17 @@ and `scope: "project"`:
   (informational: running sessions do not change).
 - `mcp.changed`: `{}` when the global servers or the two `[mcp]` settings in
   `config.toml` change; `{file}` when a project file changes.
+- `mcp.login`: `{server, status: pending|signed_in|failed|signed_out, message?, verification_uri?}` (project scope adds
+  `project_id` and `scope`): a sign-in's link, then its end. Global, live only; carries no token.
 
 ## Not yet
 
 The resources and prompts routes above are Core-only: there is no model tool for them (the model still
-reaches a server through `mcp_tool_search` and `mcp_call`) and no client UI yet. OAuth, a circuit breaker beyond the retry delays,
-and Settings screens for adding or editing global servers. There is no project
+reaches a server through `mcp_tool_search` and `mcp_call`) and no client UI yet. Also missing: a circuit breaker beyond the
+retry delays; adding a local (stdio) server from Settings (`nexus config import-mcp` or the file does it); editing an
+existing entry's address or tool filters from Settings (remove and add it again, or `PUT`); refreshing an expired OAuth
+token for a server whose provider issues no refresh token (the row asks for a new sign-in); and OAuth
+client credentials other than a pre-registered `client_id`/`client_secret` (no `private_key_jwt`). There is no project
 approval screen or CLI command: an enabled project entry starts with the next
 session. The old TUI/NSH project approval review is gone.
+Mobile has no MCP page: it is a desktop and web surface ([AGENTS.md](../AGENTS.md)).

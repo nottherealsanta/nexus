@@ -20,6 +20,7 @@ const network = (extra: Record<string, unknown> = {}) => ({
   "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }], problems: [] } },
   "GET */api/skill*": { body: { skills: [], problems: [] } },
   "GET */api/mcp*": { body: { servers: [] } },
+  "GET */api/project/prj_1/mcp*": { body: { servers: [], error: null } },
   "GET */api/project/*/worktrees": { body: { worktrees: [] } },
 });
 const mod = "mod";
@@ -59,10 +60,10 @@ describe("modal recipe (I7)", () => {
     await app.press("id:section-providers");
     await app.waitFor("id:providers-page");
     await app.keyboard.press("escape"); // leaves the page first
-    expect(app.shows("id:providers-page")).toBe(false);
+    await app.waitUntil(() => !app.shows("id:providers-page"));
     expect(app.shows("id:settings")).toBe(true);
     await app.keyboard.press("escape");
-    expect(app.shows("id:settings")).toBe(false);
+    await app.waitUntil(() => !app.shows("id:settings"));
     expect(app.shows("id:composer-input")).toBe(true);
   });
 

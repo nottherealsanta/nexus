@@ -11,6 +11,7 @@ development launcher (`scripts/nexus`) reads it and passes `--extra voice` to it
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import shutil
@@ -41,8 +42,8 @@ def requirements() -> list[str]:
 
 def install_command(reqs: list[str]) -> list[str]:
     if shutil.which("uv"):
-        return ["uv", "pip", "install", "--python", sys.executable, *reqs]
-    return [sys.executable, "-m", "pip", "install", *reqs]
+        return ["uv", "pip", "install", "--quiet", "--python", sys.executable, *reqs]
+    return [sys.executable, "-m", "pip", "install", "--quiet", *reqs]
 
 
 def marker() -> Path:
@@ -70,16 +71,39 @@ def init() -> int:
     if not reqs:
         print("This install of Nexus lists no voice packages.", file=sys.stderr)
         return 1
-    print(f"Installing the voice runtime ({len(reqs)} packages, including Photon and torch) into {sys.prefix}")
+    print("› Installing the optional voice runtime (this may take a few minutes)...", flush=True)
     code = subprocess.run(install_command(reqs), check=False).returncode
     if code:
-        print(f"The install failed (exit {code}).", file=sys.stderr)
+        print(f"Voice runtime installation failed (exit {code}); see the error above.", file=sys.stderr)
         return code
     remember()
-    from . import status
-    for name, entry in status.status().items():
-        print(f"{name}: {entry['state']} ({entry['repo']})" + (f" - {entry['error']}" if entry["error"] else ""))
-    print("Voice stays initialised: `nexus build` and `nexus restart` keep the extra installed. "
-          "Restart the daemon (nexus daemon stop) so it sees the new packages. "
-          "Models download only after you ask for it in Settings or with POST /api/voice/stt/download.")
-    return 0
+    importlib.invalidate_caches()
+    from . import download, status
+    from .store import ModelStore
+
+    print("\nVoice runtime installed. Preparing models:")
+    labels = {"stt": "Speech to text", "tts": "Text to speech"}
+    entries = status.status()
+    failed = False
+    for name in ("stt", "tts"):
+        entry = entries[name]
+        label = labels[name]
+        if entry["state"] == "unsupported":
+            print(f"  {label}: unsupported — {entry['error'] or 'not supported on this platform'}", file=sys.stderr)
+            failed = True
+            continue
+        print(f"› Preparing {label.lower()} model ({entry['repo']})...", flush=True)
+        try:
+            if name == "stt":
+                download.download_stt(ModelStore())
+            else:
+                repo, revision, files = status._chosen(status.TTS, entry["repo"])["repos"][0]
+                download.download_tts(repo, revision, files)
+            print(f"  {label}: model downloaded.")
+        except Exception as exc:  # noqa: BLE001 - report each model and allow retry
+            print(f"  {label}: download failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            failed = True
+    if failed:
+        print("Some models could not be prepared. Run `nexus voice init` again to retry.", file=sys.stderr)
+    print("Restart Core to use the new runtime: `nexus daemon stop` then `nexus daemon start`.")
+    return 1 if failed else 0

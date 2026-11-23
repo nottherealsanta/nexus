@@ -4,7 +4,7 @@ The plan used to be a single `PLAN.md` at the repo root. Since 2026-11-11 it is 
 work; `PLAN.md` was removed. The plan before 2026-11-06 is kept whole in
 [docs/archive/PLAN-2026-11-06.md](../docs/archive/PLAN-2026-11-06.md). **Section numbers quoted by older docs and code
 comments ("PLAN.md 8.2", "14.1") refer to that file.** Section numbers below (1–40) are the ones from the
-2026-11-06 plan where they existed, so "section 6" still means ZMX. Current behavior is in
+2026-11-06 plan where they existed, so "section 6" still means external workers (formerly ZMX). Current behavior is in
 [docs/README.md](../docs/README.md); deliberate changes from old Nexus are in the
 [porting ledger](../docs/porting-ledger.md).
 
@@ -12,7 +12,7 @@ comments ("PLAN.md 8.2", "14.1") refer to that file.** Section numbers below (1�
 
 - Preserve the visible, ordered context timeline: everything the model receives is shown in order, the UI shows nothing
   the model does not have, wire events are delivered live, deletion and clipping are announced. Exceptions: the Manager's
-  own context ([docs/manager.md](../docs/manager.md)) and ZMX children ([zmx-design.md](zmx-design.md) section 4.3).
+  own context ([docs/manager.md](../docs/manager.md)) and external worker children ([zmx-design.md](zmx-design.md) section 4.3).
 - **The TUI (Rust) and NSH (web/desktop) are separate, maintained peers** with a similar design and the same functions.
   The TUI is the reference and NSH always mimics every TUI function; a UI change lands in both in the same change
   ([.agents/skills/nexus-ui-parity/SKILL.md](../.agents/skills/nexus-ui-parity/SKILL.md)). A difference needs the user's
@@ -33,6 +33,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
+| 51 | [Firecrawl Local: scrape, documents, map, crawl](51-firecrawl.md) | **landed 2026-11-23** in Core and both clients; live run of the real binary done | JavaScript-page and Linux checks; NSH tests and paired screenshots; see the file |
+| 52 | [First-run onboarding](52-onboarding.md) | **landed 2026-11-23** | User tries it on a fresh home; real sign-in from the tour unverified |
 | 50 | [Core performance: Python first, Rust for proven hot spots](50-rust-core.md) | **new 2026-11-17**; trivial routes waited up to 1.3 s on Core's event loop; five workstreams (A–E) in worktrees | Merge workstreams; user restarts the daemon and collects a week of `nexus perf` |
 | 49 | [Markdown links](49-markdown-links.md) | **partial 2026-11-17** | Extend link clicks beyond assistant timeline Markdown; verify both clients |
 | 48 | [Context header: draft, then fixed](48-context-header-modes.md) | **landed 2026-11-17** except screenshots | Paired TUI/NSH screenshots in `reports/48-context-header-modes/`; try a real session with the switch on |
@@ -44,7 +46,7 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 | 28 | [Manager indicator and voice control](28-manager-indicator.md) | **mostly landed** | Screenshots of the four states; verify NSH indicator box on each target |
 | 27 | [Manager inspector](27-manager-inspector.md) | **new** | Design pass, then Core inspect endpoint |
 | 5 | [Mobile client and the NSH look](05-mobile-and-design.md) | 5.1 implemented, unverified on device; 5.2 mobile redesign and 5.3 web/macOS look **new** | Answer the open questions in 5.2; audit screenshots for 5.3 |
-| 6 | [ZMX mode](06-zmx.md) ([design](zmx-design.md)) | **Offline work and the live end-to-end check done 11-12** (agy exit grace fixed, `reports/zmx-2026-11-12/live/`) | M0 spikes; inspector rebuilt requests; vendor terms need a written answer |
+| 6 | [External workers (formerly ZMX)](06-zmx.md) ([design](zmx-design.md)) | **Renamed 11-23: `PTY · Claude Code`, `ACP · Antigravity`, `CLI · Antigravity` for legacy rows, `[workers]` config with `[zmx]` aliases; Antigravity ACP implemented; live Nexus E2E and TUI/NSH approval-card and denial-attention parity passed 11-23** (real approval API deny, fresh-process resume, usage recorded; short and long cards match, `reports/acp-approval-parity-2026-11-23/`; full `Needs attention` text wraps in both, `reports/zmx-attention-parity-2026-11-23/`); 194 offline ZMX tests before the rename; Claude Code unchanged | Mobile approval card; daemon restart; full NSH scenario `Connection reset by peer` flake; M0 Claude spikes; inspector rebuilt requests; vendor terms need a written answer |
 | 10 | [Fork subagent](10-fork.md) | Implemented; NSH captures in `reports/10-fork/`; TUI child blank in the TUI (not diagnosed), so the visual item stays open | Diagnose the blank TUI child timeline, then capture the TUI pair |
 | 24 | [Harness workflow audit](24-harness-audit.md) | One observation item open | Observe larger heaps |
 | 9 | [Backlog carried over](09-backlog.md) | Not scheduled | Pull an area into its own file when started |

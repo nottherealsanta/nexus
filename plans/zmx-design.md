@@ -1,12 +1,18 @@
 # ZMX: Claude Code and Antigravity inside Nexus
 
-Status (re-audited 2026-11-11): **M1 and most of M2 are implemented in Core and both clients, offline only.**
+Status (re-audited 2026-11-23): **M1 and most of M2 are implemented in Core and both clients, offline only.** On
+2026-11-23 Antigravity moved to ACP v1 (`agy acp`) with Nexus approval cards; Claude Code is unchanged. The ACP protocol
+was probed live against agy 1.5.14 and its shapes now have an offline fixture. The full Nexus E2E also passed (approval
+API deny, file absent, fresh-process resume, usage recorded); the TUI and NSH approval/prompt cards matched for short and
+long arguments, and the denial card's full `Needs attention` error now wraps in both. Mobile and a daemon restart are
+not verified.
 Written 2026-11-04; moved from the repo root `ZMX_plan.md` to `plans/zmx-design.md` on 2026-11-11. The current
 status table and the remaining work are in [06-zmx.md](06-zmx.md); tick items here and add a line to
 [landed.md](landed.md) as they land. Keep "not verified" honest.
 
-No live CLI/model run has happened (M0 is open), so every parser still follows the `nexus01` documented shapes.
-The per-vendor Settings control from section 6 of the old plan supersedes section 4.8's single switch.
+The legacy stream-json parser follows nexus01 and the 1.5.0 fixtures. The ACP worker follows ACP v1, the 1.5.14 probe
+and its fixture (section 4.4). The per-vendor Settings control from section 6 of the old plan supersedes section 4.8's
+single switch.
 
 The goal: a Nexus **subagent** can run on the real Claude Code or Antigravity (`agy`) CLI. This is **ZMX mode**. The
 vendor's own CLI runs its own agent loop, tools, permissions and sign-in, and Nexus shows all of it as a child session in
@@ -20,12 +26,17 @@ Scope, decided by the user on 2026-11-04:
 - **Always labelled.** The user can always tell a subagent is running in ZMX mode.
 - **Settings are aligned where that is cheap.** Otherwise the CLI uses its own (section 4.5).
 
+**Antigravity transport change (2026-11-23, user):** new Antigravity children run ACP v1 over stdio, not the legacy
+headless stream-json CLI. ACP permission requests go to Nexus's existing approval cards; Claude Code keeps its PTY
+contract. Old stream-json histories remain readable but cannot be continued. See sections 4.4 and 4.5.
+
 ## 1. What "ZMX" and "simulate" mean here
 
 - **"ZMX" is a historical name, not a dependency.** nexus01's plan started around the ZMX terminal multiplexer and then
   dropped it: *"No ZMX dependency is currently required"*. nexus01 uses a Python PTY for Claude Code and plain pipes for
-  `agy`. `zmx` is not installed on this machine, and this plan does not add it. "ZMX mode" is now the user-facing name
-  of this feature, even though no `zmx` program is involved. Code may say "worker".
+  `agy`. `zmx` is not installed on this machine, and this plan does not add it. "ZMX mode" was the user-facing name
+  until 2026-11-23, when it became **External workers**; no `zmx` program is involved. Code says "worker" or
+  "external worker".
 - **"Simulate" means driving the real, unmodified CLI.** It does not mean imitating a vendor client on the wire. Nexus
   never reads, extracts or forwards a CLI's tokens and never proxies its model traffic. `~/.gemini/oauth_creds.json` and
   the Claude credentials stay untouched. nexus01 had the same contract.
@@ -50,6 +61,9 @@ Sources: `plans/archives/CLAUDE_CODE_ZMX_PLAN.md`, `plans/archives/ANTIGRAVITY_P
 | Scope | Subagents only; a main agent used the Agent SDK instead | Subagents only |
 | Live evidence | Haiku 5.5 on 2.1.296: trust prompt, `Read`, transcript and `Stop` confirmed | Docs and fake `agy` at first; the troubleshooting doc later records real denial output from agy 1.3.6. No successful live run is recorded |
 | Still open at the end | Human handoff, root escalation, Sonnet/Opus IDs, orphan cleanup | Schema confirmation, `--mode plan` behaviour, automatic `/usage` |
+
+The Antigravity column is the **legacy** transport. Current Antigravity children use ACP v1 (section 4.4); the legacy
+worker remains for reading old sessions and for its fixtures.
 
 Shared parts: `WorkerPolicy` (authority stated in every result), `external.started/tool/finished` events,
 `snapshot_workspace` (Nexus measures changed files itself), and provider-generic UI rows in
@@ -103,9 +117,16 @@ Each of these was a real bug or a verified behaviour. Each needs a test in the p
 | `agy --print-timeout` default `0s`, "waits until the turn completes" | Remove nexus01's one-year timeout workaround | In `--help`; not tried |
 | `agy --input-format stream-json` "runs a turn for each" line | A long-lived process with several turns | In `--help`; not tried |
 
-No model turn was run for this plan. `agy models` was run and lists `gemini-3.8-flash-{high,medium,low}`,
-`claude-sonnet-4-6`, `claude-opus-4-6-thinking` and `gpt-oss-120b-medium`, preceded by a `Fetching available models...`
-line that the parser must skip.
+On 2026-11-23 a signed-in **agy 1.5.14** ACP probe ran two small turns in a scratch workspace. `session/new` and
+`session/resume` returned the session id and advertised `default`/`accept-edits`/`auto`/`plan`;
+`session/set_model` and `session/set_mode` succeeded; a real `write_file` request offered `allow_once`/`reject_once`
+and a deny failed the tool; `session/resume` worked in a fresh process. The advertised `configOptions.model` values were
+base ids while `session/set_model` accepted `gemini-3.8-flash-low`; the worker uses the exact id from
+`models.availableModels` for that path and confirms it through the following `configOptions` update. This was not a
+Nexus run.
+
+`agy models` lists `gemini-3.8-flash-{high,medium,low}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking` and
+`gpt-oss-120b-medium`, preceded by a `Fetching available models...` line that the parser must skip.
 
 ## 4. Design
 
@@ -140,24 +161,27 @@ guard. `request()` backs `/context` and needs its own answer (section 4.3).
 
 ### 4.2 Event mapping
 
-Each source line becomes a `WireEvent` first, so the inspector sees everything and wire events are never dropped. The
-normalized events derived from it follow.
+Each inbound source line becomes a `WireEvent` first, so the inspector sees everything and wire events are never
+dropped. The normalized events derived from it follow.
 
-| Claude transcript | agy stream | Nexus events |
+| Claude transcript | agy ACP | Nexus events |
 | --- | --- | --- |
-| (turn start) | `init` | `MessageAdded(user)`, then `session.worker` (new, section 4.6) |
-| first entry of a new `message.id` | a new `step_index` | `StepStart`, which opens a `turn_request` |
-| `thinking` block | reasoning step, if agy sends one (verify) | `ReasoningDelta`, `PartDone(Reasoning)` |
-| `text` block | `agent_response` `text_delta` | `TextDelta`, `PartDone(Text)` |
-| `tool_use` block | tool step | `ToolCallStarted`, `ToolArgsDelta`, `PartDone(ToolCall)` |
-| `message.usage` | `step_update.usage`, `result.usage` | `Usage` |
-| last block of the response | step `DONE` | `Done`, then `MessageAdded(assistant)`, then `ToolStart` per call |
-| `tool_result` block | tool step ended (`DONE`/`ERROR`/`CANCELED`) | `ToolEnd`, and `MessageAdded(tool)` when the step's calls are all in |
-| `Stop` hook | `result` `SUCCESS` | `TurnEnd("end_turn", steps)` |
-| `StopFailure`, unexpected exit | other status, EOF | `ProviderError`, so the turn fails through the existing path with its partial output kept |
-| prompt detected, soft denial | same | `needs_attention` (section 4.5) |
+| (turn start) | `session/new` or `session/resume` returns the session id | `MessageAdded(user)`, then `session.worker` (new, section 4.6) |
+| first entry of a new `message.id` | first `tool_call`/text update, or the prompt start | `StepStart`, which opens a `turn_request` |
+| `thinking` block | `agent_thought_chunk` | wire-only; **not** a reasoning row yet |
+| `text` block | `agent_message_chunk` (`type: text`) | `TextDelta`, `PartDone(Text)` |
+| `tool_use` block | `tool_call`, then `tool_call_update` | `ToolCallStarted`, `ToolArgsDelta`, `PartDone(ToolCall)` |
+| `message.usage` | prompt-result token fields; `usage_update` is used/size | `Usage` from the prompt result, normalized per turn; a result without token fields stays unknown |
+| last block of the response | `session/prompt` result `stopReason == "end_turn"` | `MessageAdded(assistant)` |
+| `tool_result` block | tool status `completed`/`failed` | `ToolEnd`; `failed` is an error result |
+| `Stop` hook | `stopReason == "end_turn"` with non-empty text | `TurnEnd("end_turn", steps)` |
+| `StopFailure`, unexpected exit | other stop reasons, ACP error, EOF | `ProviderError`, so the turn fails through the existing path with its partial output kept |
+| prompt detected, soft denial | `stopReason == "refusal"`, empty end turn, denied permission | `needs_attention` (section 4.5) |
+| (permission prompt) | `session/request_permission` | existing approval card; the tool row joins by `agy:<toolCallId>` |
 
-Every part has `origin` set to `claude-code` or `agy`, and `raw` set to the source entry, as the ledger requires.
+Every part has `origin` set to `claude-code` or `agy`, and `raw` set to the source entry, as the ledger requires. An ACP
+`session/update` for another session, a malformed update, an unknown update kind, thought chunks and context-window
+usage updates are wire-only and noted in the worker's notes. Nexus's own outbound ACP requests are not wire events.
 
 Things to get right:
 
@@ -195,37 +219,69 @@ Three levels, tested in this order:
 
 This is an **exception to the timeline rule at level 2**, accepted by the user for ZMX subagents only (D2). Level 1 is
 still worth trying if M0 shows it is cheap, but it no longer blocks anything: if it is costly, Claude Code uses level 2 too.
+The Antigravity ACP approval card does not narrow this exception: it shows one permission request the CLI chose to ask,
+not the CLI's system prompt, tools, memory or reminders.
 
 ### 4.4 Transport
 
-| Backend | First release | Why |
+| Backend | Transport | Why |
 | --- | --- | --- |
 | Claude Code | Interactive PTY, as in nexus01 | The contract nexus01 chose: real interactive use, not `-p` or the SDK. The `claude` provider already covers the SDK |
-| agy | Headless stream-json, as in nexus01 | Documented machine interface; no PTY needed |
+| agy | ACP v1 over stdio (`agy acp`); one process per turn | Gives structured updates and a real permission request Nexus can put on its approval card. The old headless stream-json worker is legacy-only |
 
 Decision D3 asks whether to measure `claude -p --output-format stream-json` too. It would give structured events and
 perhaps token deltas, but it is a different product path, and its subscription use may differ.
 
-**Process lifetime:** one CLI process per Nexus turn, with `--resume` / `--conversation` for the next one. It survives
-daemon restarts better than a long-lived process and matches nexus01. Long-lived processes are a later optimisation.
+**Process lifetime:** one CLI process per Nexus turn. Claude Code resumes with `--resume`; Antigravity resumes with
+`session/resume` when the agent advertises it and the stored policy fingerprint matches. It survives daemon restarts
+better than a long-lived process. Long-lived processes are a later optimisation.
 
-**Prompts:** Claude's argv cap stays at 64 KiB and refuses rather than truncates; agy is bounded on stdin. A prompt with
-images is refused with a clear error in the first release, as the `claude` provider does.
+**Prompts:** Claude's argv cap stays at 64 KiB and refuses rather than truncates; the ACP prompt is bounded at 64 KiB and
+is one text block. A prompt with images is refused with a clear error in the first release, as the `claude` provider
+does.
+
+**ACP setup is fail-closed (offline-tested; protocol-probed on 1.5.14):**
+
+- `initialize` must negotiate protocol v1. `session/new` sends `cwd` and `mcpServers: []`; `session/resume` is used only
+  for an `acp-v1` row with a session id, a matching policy fingerprint and an advertised resume capability.
+- A requested model must be exact. If the id is an advertised `model` config value, the worker sets that option and
+  requires its current value to match. Otherwise, if the id is in `models.availableModels`, it uses the
+  `session/set_model` extension and waits for the following `config_option_update` to confirm the base model and any
+  per-effort suffix; the live 1.5.14 server advertises base ids in the config option and exact per-effort ids in
+  `models.availableModels`. An older agent with no model surface may accept `session/set_model` and confirm the exact id
+  in its result. More than one model option, an unadvertised id or a different reported value fails.
+- Session modes must be advertised and include `default`; `session/set_mode` must not report another current mode. The
+  1.5.14 probe advertised `default`, `accept-edits`, `auto` and `plan`; `default` is described as asking before edits and
+  commands. New children always use `default` (section 4.5).
+- A resolved effort needs exactly one advertised `thought_level` option that allows it; a different reported value fails.
+- `session/prompt` is sent only after the above. Auth errors become `needs_attention` with `agy acp --login`; other setup
+  failures fail the turn before the model sees the assignment.
+
+The policy fingerprint covers transport, model, mode, effort, resolved directory, the empty MCP server list and the
+absent system prompt. ACP has no transcript: recovery records the session id and transport, and can resume only through
+the advertised capability.
+
+**Live Nexus E2E (2026-11-23):** a scratch Core ran an `agy/gemini-3.8-flash-low` child on agy 1.5.14. A real ACP
+`write_file` request reached the approval API, a deny left the file absent and the turn `needs_attention`, and a
+follow-up resumed the same ACP session in a fresh process and returned `resumed`. Usage was recorded on both turns.
+Evidence: `/tmp/nexus-zmx-live.anqGQS/results.json`. No visual client or daemon restart was checked.
 
 ### 4.5 Permissions, settings and attention
 
-Nexus does not mediate these tools. `permissions.py`, an agent's `permission:` rules, `disabled_tools` and path
-confinement do not reach inside a CLI. The child's ZMX label states this. Do not imply otherwise.
+Nexus does not run these tools and cannot enforce its own permission rules inside the CLI. `permissions.py`, an agent's
+`permission:` rules, `disabled_tools` and path confinement do not reach inside it. The child's ZMX label states this.
+Antigravity ACP is the narrow exception: the CLI's own `session/request_permission` goes to a Nexus approval card, and
+Nexus answers only that per-call allow/deny. Claude Code still answers no prompt.
 
 **Align where cheap, otherwise let the CLI decide:**
 
 | Nexus setting | Claude Code | agy |
 | --- | --- | --- |
-| Agent prompt | `--append-system-prompt` if M0 confirms it, otherwise a labelled prompt prefix as in nexus01 | Labelled prompt prefix |
-| Model and effort | `--model`, `--effort` | `--model`, `--effort` |
-| Working directory | `cwd` | `cwd` |
+| Agent prompt | `--append-system-prompt` if M0 confirms it, otherwise a labelled prompt prefix as in nexus01 | Labelled prompt prefix on the first ACP prompt |
+| Model and effort | `--model`, `--effort` | ACP model config option or `session/set_model`, and the `thought_level` config option; no CLI flags |
+| Working directory | `cwd` | ACP `cwd`; the policy fingerprint includes it |
 | Agent `tools:` | `--tools`, if the names map simply; otherwise the CLI's own set, disclosed | The CLI's own set, disclosed |
-| MCP servers | Pass the session's servers with `--mcp-config`: Nexus entries already use Claude Code's keys (`nexus/mcp/config.py`). If M0 shows otherwise, the CLI's own servers | The CLI's own servers |
+| MCP servers | Pass the session's servers with `--mcp-config`: Nexus entries already use Claude Code's keys (`nexus/mcp/config.py`). If M0 shows otherwise, the CLI's own servers | The CLI's own servers; ACP sends `mcpServers: []` |
 | Skills, memory, plugins, hooks | The CLI's own | The CLI's own |
 | CLI settings | Inherited; `setting_sources` can narrow them | Inherited |
 | Nexus `permission:` rules, `disabled_tools`, `steps` | Not applied, disclosed | Not applied, disclosed |
@@ -237,32 +293,44 @@ decision.
 
 **Permissions:**
 
-| Nexus session permission | Claude Code | agy |
+| Nexus session permission | Claude Code | agy (ACP) |
 | --- | --- | --- |
-| `ask` | `dontAsk`: what would prompt is denied | `--mode accept-edits`; soft denials end as `needs_attention` |
-| `allow` (the default for new sessions) | `auto`, the CLI's classifier, disclosed | `--mode auto`, with the fallback warning shown |
-| Bypass | Never | Only `worker_dangerously_skip_permissions` in user-level config, shown on the label |
+| `ask` | `dontAsk`: what would prompt is denied | Not mapped; ACP mode `default` |
+| `allow` (the default for new sessions) | `auto`, the CLI's classifier, disclosed | Not mapped; ACP mode `default` |
+| Bypass | Never | Never: `--dangerously-skip-permissions` exists in `agy acp --help` but Nexus does not pass it |
 
-- **Never** `bypassPermissions`, and never a keystroke that answers a prompt.
-- **Prompts are not answered inside Nexus.** Trust, sign-in and permission prompts end the child as `needs_attention`, with
-  the exact command the user must run.
+- **Claude Code:** **never** `bypassPermissions`, and never a keystroke that answers a prompt. Trust, sign-in and
+  permission prompts end the child as `needs_attention` with the exact command.
+- **Antigravity ACP approvals:** the CLI asks, and the request becomes an ordinary Nexus approval with the same card,
+  shortcuts, mobile card and `via Manager` path. Only per-call `allow_once`/`reject_once` options are selected; Nexus
+  never selects `allow_always`, `reject_always` or another persistent option and never edits the CLI's settings. If no
+  per-call allow option exists, no card is shown: the worker selects the per-call reject if present, otherwise cancels.
+  If approval fails, is interrupted or is missing, the request is denied/cancelled, never allowed.
+- **Session grants are exact.** "Allow for session" stores a runtime grant for the exact tool name and JSON argument
+  payload; another payload, even one string different, asks again. The grant is per-session, not persisted, lost on
+  daemon restart and cleared with session grants. A deny grants nothing. This deliberately means a `read`/`grep`-style
+  Nexus pre-approval or a `tools.permission` rule cannot auto-answer an ACP request.
+- **The card shows a claim, not a guarantee.** Its tool name, title and arguments come from the ACP payload and are
+  untrusted, bounded and sanitized for display. Nexus sends only the option id back; it does not rewrite or execute the
+  claimed arguments. A CLI can mislabel or skip the request entirely, so this is a gate, not a sandbox.
 - **`needs_attention` is its own end state.** It goes through the existing `escalate` path (`session.escalated`), so the
-  parent's report carries it, and the child's own timeline shows the instruction in full.
+  parent's report carries it, and the child's own timeline shows the instruction in full. A denied ACP request leaves
+  the turn failed and the worker `needs_attention`.
 
 ### 4.6 Nexus features and how each behaves
 
 | Feature | External session behaviour |
 | --- | --- |
-| Interrupt | Kills the process group (`start_new_session`; TERM, then KILL). Partial output stays |
+| Interrupt | ACP sends `session/cancel` when a session exists, then kills the owned process group (`start_new_session`; TERM, then KILL). Pending approvals are cancelled. Partial output stays |
 | Steer while working | Not delivered mid-turn. Converted to a queued input, with a visible notice. agy's per-line turns are a possible later change |
-| Queued input | Starts the next turn with `--resume` / `--conversation` |
+| Queued input | Starts the next turn with Claude `--resume` or ACP `session/resume` |
 | Continue (`NO_USER_MESSAGE`) | 409 with a reason: a CLI cannot resume with no message |
-| Switch model | Same backend: allowed for the next turn, if the spike confirms `--resume --model`. Otherwise refused |
+| Switch model | Refused on a ZMX child; start a new child. ACP also refuses a resume whose policy fingerprint differs |
 | Switch backend or provider | Refused in the first release. Nexus's stored history cannot enter a CLI's session, and the reverse carries foreign tool calls |
 | Handoff | First release: refused. Auto-handoff is off |
 | `/btw`, title generation, one-shots | Never run on an external model. Titles use the configured title models; `/btw` is refused with a reason |
 | Change directory | Refused while external: a Claude transcript belongs to its cwd. Decide later |
-| Worktree session | Runs with `cwd` = session directory. Trust prompts appear as `needs_attention` |
+| Worktree session | Runs with `cwd` = session directory. Claude Code trust prompts appear as `needs_attention` (auto-trust for a Nexus project folder). Antigravity writes no trust state |
 | Agent `steps` limit | Not mapped; shown as not enforced |
 | `ask`, `skill`, `code`, MCP, `session` tools | Not available: the CLI has its own. A later option is exposing control tools through `--mcp-config` |
 | Hooks (`hooks.py`) | Do not fire, since Nexus runs no tool. Documented |
@@ -274,9 +342,9 @@ decision.
 | Spend ledger | Real tokens where reported. Otherwise "unknown", never zero. Cost is not estimated |
 | Files changed | Nexus measures them with `snapshot_workspace`, and never takes the model's word |
 
-A new `session.worker` event records the launch facts durably: provider, CLI version, argv without the prompt, cwd,
-effective permission mode, settings sources, MCP, CLI session id, transcript path, and the authority statement. Replay
-shows the same thing as live.
+A new `session.worker` event records the launch facts durably: provider, transport (`acp-v1` or `stream-json-v1`), CLI
+version, argv without the prompt, cwd, effective permission mode, settings sources, MCP, CLI session id, transcript
+path, policy fingerprint and the authority statement. Replay shows the same thing as live.
 
 ### 4.7 Recovery
 
@@ -284,9 +352,11 @@ shows the same thing as live.
 
 - The `turn`, `turn_request` and `turn_tool` rows reconcile as they do today, but the text changes: a tool here was run by
   the CLI, and it may have **finished or may still be running**. Say so, and do not retry it.
-- Store the CLI session id in the durable worker record, so the next prompt can `--resume`.
-- On the next daemon start, read the rest of the transcript once to complete the record if the CLI finished after the
-  daemon died. Label this as recovered output.
+- Store the CLI session id and transport in the durable worker record, so the next prompt can Claude `--resume` or ACP
+  `session/resume`.
+- On the next daemon start, read the rest of a Claude transcript once to complete the record if the CLI finished after
+  the daemon died. Label this as recovered output. ACP has no transcript to read; a resumed ACP turn must not invent
+  the missing output.
 - Orphan processes: record pid + start time in `$NEXUS10_HOME/workers/`, and offer cleanup only when both still match.
   Never kill automatically. nexus01 left this open.
 
@@ -302,13 +372,17 @@ shows the same thing as live.
 - **Catalog:** `claude-code` reuses models.dev `anthropic`. `agy` reads `agy models` with a bounded probe, cached, no model
   turn. Exact ids only, no aliases and no silent substitution.
 - **Connected:** `claude-code` reuses `auth/claude.py` (`status`, `cli_path`, `child_env`). agy has no status command, so a
-  found CLI shows as **"installed, sign-in not verified"**, and the first failed turn says to run `agy`.
-- **Sign-in:** `claude auth login` as the `claude` provider does. For agy the Settings row says to run `agy` in a terminal,
-  with Re-check. Nexus signs nobody in to Antigravity.
-- **Executable:** `$NEXUS10_AGY_CLI`, then `PATH`, then usual locations, as `cli_path()` does. Version floor checked in
-  preflight, plus the required flags from `--help` (stdout and stderr).
+  found CLI shows as **"installed, sign-in not verified"**, and a failed ACP turn says to run `agy acp --login`. ACP
+  `initialize` advertises auth methods but no signed-in status.
+- **Sign-in:** `claude auth login` as the `claude` provider does. For agy the Settings row says to run
+  `agy acp --login` in a terminal (the flag is in `agy acp --help`; the 1.5.14 probe was signed in already), with
+  Re-check. Nexus signs nobody in to Antigravity.
+- **Executable:** `$NEXUS10_AGY_CLI`, then `PATH`, then usual locations, as `cli_path()` does. `nexus doctor` uses
+  `AntigravityAcpWorker.preflight()` and requires agy **1.5.0** or newer (the first `agy acp`); older CLIs fail with an
+  upgrade instruction, and a successful row names `ACP v1 stdio (agy acp)` and `sign-in not verified`.
 - **Usage panel:** `provider_usage.py` already runs `claude -p /usage`; add `agy -p /usage`, ported with its parser and
-  bounded.
+  bounded. ACP does not replace that command; ACP turn usage comes from the prompt result, and an absent result usage
+  stays unknown.
 - **Config (`config.py`):** port only the worker keys that still apply: `permission_mode`, `tools`, `allowed_tools`,
   `disallowed_tools`, `setting_sources`, `mcp_config`, `restricted`, `dangerously_skip_permissions` (user-level only).
   Unknown keys are errors, as elsewhere in Nexus. Exact placement is decided in M1 after reading `docs/config.md`.
@@ -320,22 +394,30 @@ Follow `.agents/skills/nexus-ui-parity/SKILL.md`. Any command or setting change 
 - **The ZMX label, the main requirement.** A child in ZMX mode says so everywhere it appears, with the same wording in both
   clients: a `ZMX · Claude Code` or `ZMX · Antigravity` mark on the subagent strip, the parent's child card and the child's
   tab, and a card at the top of the child's timeline stating model, cwd, permission mode, what was and was not applied from
-  section 4.5, and that the CLI ran its own tools without Nexus permissions.
+  section 4.5, and that the CLI ran its own tools. Antigravity adds that its permission requests go to Nexus approval
+  while Nexus permission rules still do not apply; Claude Code adds that it does not ask Nexus at all.
 - **Settings:** the off-by-default ZMX switch with a one-line explanation of what it gives up.
 - **Model choices:** ZMX models appear only in subagent model pools, and only when switched on, labelled `ZMX`. They never
   appear in the root model picker.
+- **Approvals:** Antigravity ACP permission requests reuse the existing approval cards in both clients and mobile, with
+  no separate ZMX card layout. The card labels the CLI request (`Antigravity · …`) and joins the ACP tool row.
 - **Tool cards:** the normal cards through the display mapping, with a quiet provenance mark, for example
-  `Claude Code (own tools)`.
+  `Claude Code (own tools)` or `Antigravity (own tools)`.
 - **`needs_attention`:** its own state with the full manual instruction, in the session and on the parent's child card.
-- **Turn footer:** real tokens, or "usage unknown". Never 0.
+- **Turn footer:** real tokens, or "usage unknown". Never 0. Antigravity ACP maps the prompt result's token fields and
+  shows usage unknown when the result has none.
 - **Composer:** while busy, sending says it will queue, since steering is unavailable.
 - **Refused actions:** on a ZMX child, switching, handoff and `/btw` are disabled with the reason, not hidden.
 - **Settings › Providers:** the two rows and their install, sign-in and re-check states.
-- **Inspector (`nexus/inspector`):** wire events, the raw entries and the rebuilt requests.
+- **Inspector (`nexus/inspector`):** inbound wire events and raw entries; outbound ACP requests and rebuilt requests
+  remain open.
 
 The file explorer, editor and Git rules are unaffected. Verify with a mock scenario in `nexus/mock/scenarios/` and
 screenshots from TUI (xterm.js) and NSH web, per the skill. This includes iOS only where the shared timeline already
-reaches it.
+reaches it. The 2026-11-23 ACP checks verified the TUI and NSH approval/prompt cards for a short `read_file` request and
+a long `execute` command after both clients began wrapping a value to three rows (`reports/acp-approval-parity-2026-11-23/`),
+and the denial card's full `Needs attention` error now wraps under the title in both
+(`reports/zmx-attention-parity-2026-11-23/`). Mobile is not checked.
 
 ### 4.10 Security
 
@@ -347,6 +429,13 @@ reaches it.
   response and never drives approval.
 - **Prompt detection never approves anything.** A model can print text that looks like a prompt; the worst result must be
   a false `needs_attention`.
+- **ACP permission requests are untrusted input and only a gate.** The payload's tool name, title and arguments are
+  sanitized for display; Nexus returns only the selected per-call option. The CLI can pre-approve, mislabel or skip the
+  request, so this is not a sandbox. Persistent ACP options are never selected, and Nexus advertises no filesystem or
+  terminal client capabilities and sends no MCP servers.
+- **Nexus permission rules do not decide ACP requests.** In particular, a `read`/`grep` auto-approval or a
+  `tools.permission` rule cannot answer one. "Allow for session" is keyed to the exact tool name and argument payload
+  and is lost on restart.
 - Project config cannot widen authority (`dangerously_skip_permissions`, and also `mcp_config` unless reviewed).
 - Transcript and stream content is untrusted data, and is shown as data. Bounds as in nexus01, and every clip is announced
   in the timeline.
@@ -356,18 +445,21 @@ reaches it.
 
 ```text
 nexus-core/nexus/workers/
-  __init__.py       ExternalAgent: LoopEvent surface, event mapping (section 4.2)
+  __init__.py       package docstring only; no discovery or credential reads on import
+  agent.py          ExternalAgent: LoopEvent surface, event mapping (section 4.2)
+  acp.py            ACP v1 stdio JSON-RPC client: framing, correlation, inbound requests, process bounds
   base.py           WorkerPolicy, WorkerResult, clip, bounds, terminal_text, snapshot_workspace, changed_paths, process-group stop
   claude_code.py    PTY, HOOK script, preflight, argv, supervise, startup/permission detection
   claude_transcript.py  TranscriptReader, entry parsing, API-response grouping, request rebuild
-  antigravity.py    argv, stdin protocol, NDJSON parsing, SCHEMA table, preflight
+  antigravity.py    AntigravityAcpWorker (ACP setup, updates, permission callback); AntigravityWorker is the legacy
+                    stream-json transport kept for old sessions and fixtures
 nexus-core/nexus/llmhub/
   providers.py      new dialect and two provider rows
   auth/agy.py       probes only (from antigravity_cli.py)
   catalog.py        agy dynamic models
 nexus-core/tests/
   fakes/            fake `claude` and `agy` executables
-  fixtures/workers/ recorded, sanitized, version-tagged transcripts and streams
+  fixtures/workers/ recorded, sanitized, version-tagged transcripts and streams; ACP adds agy-1.5.14-acp/live.json
 ```
 
 | nexus01 | Action |
@@ -422,8 +514,14 @@ Answer these with real but small runs, and record each answer in this file with 
   grace is now 10 s). `--settings` allow rule: not separately recorded.
 - [ ] agy: does `--mode auto` work on this account? What does a soft denial look like now? (`denial.ndjson` is the
   `--mode plan` denial; `auto` is not recorded.)
+- [x] agy 1.5.14 ACP: signed-in protocol probe (not through Nexus) confirmed `session/new`, advertised modes
+  `default`/`accept-edits`/`auto`/`plan`, `session/set_model`, `session/set_mode`, a real `write_file` permission
+  request with allow/deny, and `session/resume` in a fresh process. Two small turns. The advertised model config option
+  listed base ids while `session/set_model` accepted `gemini-3.8-flash-low`; see M6.
+- [ ] agy ACP through Nexus (parent/child turn, approval cards, UI, restart). Not run.
 - [~] Both: what an interrupt leaves behind, and whether `--resume` works after it. Offline tests cover resume after an
-  interrupt (`5dee5561`); a real interrupt followed by `--resume` was not recorded.
+  interrupt (`5dee5561`); a real Claude interrupt followed by `--resume`, and a real ACP interrupt followed by
+  `session/resume`, were not recorded.
 
 Done when: every box has an answer and a fixture, and section 4 is corrected where the spike disagrees with it.
 
@@ -456,11 +554,12 @@ Done when: the same real check passes on Haiku, and Sonnet and Opus ids are chec
 
 ### M3. Both clients and the timeline rule
 
-- [~] Section 4.9 in the TUI and NSH: Settings control, `ZMX · <vendor>` label, root-picker exclusion done; only the
-      normal-run scenario exists (`interface/scenarios/zmx-child.json`). Still needed: parallel tools, a denial,
-      `needs_attention`, an interrupt and a recovered turn.
+- [~] Section 4.9 in the TUI and NSH: Settings control, `ZMX · <vendor>` label and root-picker exclusion done. The
+      `zmx-*` scenarios include normal runs, parallel tools, denial, `needs_attention`, interrupt and recovery; the ACP
+      denial scenario asserts the full attention text in both clients.
 - [~] Section 4.3: disclosure starting context (`context incomplete`, `CLI inherited`, `Not applied`) in both clients; `/context` and level 1 open.
-- [~] Inspector shows raw entries (wire events). Rebuilt requests wait on the M0 api-request question.
+- [~] Inspector shows inbound raw entries (wire events). Outbound ACP requests are not recorded, and rebuilt requests
+  wait on the M0 api-request question.
 - [ ] Ledger row for any client difference, and only with the user's approval.
 
 Done when: TUI and NSH web screenshots of each scenario agree, and `check_manifest.py` and `check_theme.py` are clean.
@@ -471,13 +570,58 @@ Done when: TUI and NSH web screenshots of each scenario agree, and `check_manife
 - [x] Section 4.7: recovery text, reading the rest of a transcript, CLI session id reuse, orphan record and offer (`306670ac`, `5cf811c8`).
 - [x] Race tests: cancel during `Stop`, exit before flush, duplicate hook, crash between entries (`test_zmx_reliability.py`).
 - [x] Usage panel for agy (`agy --print /usage`); turn summaries and the spend ledger use reported usage, unknown when none.
-- [x] `nexus doctor` reports CLI, version and flags. Unknown shapes stay wire events and are disclosed.
+- [x] `nexus doctor` reports CLI, version and transport. Its Antigravity row uses the ACP preflight and requires 1.5.0 or
+  newer; Claude Code keeps its flag check. Unknown shapes stay wire events and are disclosed.
 - [x] `docs/daemon.md#crash-recovery`, `docs/external-workers.md`, `docs/README.md` and AGENTS.md's table (11-12).
 
-### M5. Later, not in the first release
+### M6. Antigravity ACP and approvals (2026-11-23)
 
-- Answering CLI prompts inside Nexus, for example through a `PermissionRequest` hook. Not verified, and not needed for
-  subagents, since `needs_attention` covers it.
+Migrates Antigravity only; Claude Code stays on PTY. The ACP protocol probe, the Nexus API E2E and the TUI/NSH approval
+cards are live evidence; mobile and a daemon restart are not.
+
+- [x] `workers/acp.py` (ACP v1 stdio JSON-RPC), `AntigravityAcpWorker`, ACP selection in `agent.py`, and
+  `Runtime._approve_external`. Implemented, offline-tested and exercised by the Nexus E2E through the approval API.
+- [x] Permission requests use the existing approval cards. Only per-call allow/deny is returned; persistent options are
+  never selected; a missing/failed approval denies or cancels. "Allow for session" is keyed to the exact tool name and
+  argument payload and is lost on restart. A denied request fails the turn and leaves the worker `needs_attention`.
+- [x] Legacy stream-json and unmarked Antigravity histories are readable; a prompt is refused before a new message and
+  the user is told to start a new child.
+- [x] ACP protocol probe on 1.5.14 (signed in, scratch workspace): `session/new`, modes, `session/set_model`,
+  `session/set_mode`, a real permission request and deny, and `session/resume` in a fresh process. No Nexus UI or
+  approval card was involved.
+- [x] Nexus E2E (2026-11-23): scratch Core, `agy/gemini-3.8-flash-low` child, real `write_file` approval surfaced and
+  denied, file absent, `needs_attention` turn, same ACP session resumed in a fresh process and returned `resumed`, and
+  usage recorded. Worker row showed `transport: acp-v1`, mode `default`, effort `low` and the same session id. Not
+  checked there: allow/allow-for-session live behavior, interrupt and a daemon restart. The visual check is separate
+  below.
+- [x] Model selection: 1.5.14 advertises `configOptions.model` values as base ids and exact per-effort ids in
+  `models.availableModels`; the worker uses `session/set_model` for the exact id and confirms it through the following
+  `configOptions` update. The Nexus E2E used `gemini-3.8-flash-low`.
+- [x] ACP usage mapping: prompt-result token fields are normalized per turn; `usage_update` stays used/size and
+  wire-only. Both E2E turns recorded usage.
+- [x] `nexus doctor` ACP preflight. It uses `AntigravityAcpWorker.preflight()` and requires agy 1.5.0 or newer, reporting
+  `ACP v1 stdio (agy acp)` and `sign-in not verified`.
+- [x] Sanitized ACP fixture (`tests/fixtures/workers/agy-1.5.14-acp/live.json`).
+- [x] TUI/NSH approval/prompt-card parity: short `read_file` and long `execute` cards match after both clients began
+  wrapping a parameter value to three rows; paired captures in `reports/acp-approval-parity-2026-11-23/`. Mobile is not
+  checked.
+- [x] Denial and escalation wording: ACP says `Denied through Nexus`; legacy stream-json and Claude keep `Denied by
+  the CLI`, and the parent escalation says Nexus denied the ACP request (`interface/scenarios/zmx-acp-denial.json`).
+- [x] Denial-card attention detail parity: both clients wrap the full `Needs attention` error under the title; paired
+  captures in `reports/zmx-attention-parity-2026-11-23/`.
+- [x] Scenario verification: the shared `zmx-acp-denial` scenario asserts the full text in both clients; TUI
+  `cargo test --test scenarios` passed 11 and the targeted NSH ACP-denial test passed. The full NSH scenario file still
+  has the known `Connection reset by peer` flake in unrelated tests.
+- [ ] Mobile approval card check.
+- [ ] Daemon restart with an ACP child: both E2E turns ran in one daemon process.
+
+Done when: the mobile check passes, an approval is answered by a real card, the exact grant behavior is observed, a
+daemon restart resumes the child, and the docs reflect the result.
+
+### M7. Later, not in the first release
+
+- Answering other CLI prompts inside Nexus (Claude trust/sign-in, non-permission ACP requests). ACP permission requests
+  are handled now; `needs_attention` covers the rest.
 - A live terminal view or human handoff into the PTY (nexus01 deferred this too). Needs a terminal surface in both clients.
 - Long-lived processes for steering. Nexus control tools through a local MCP server. Handoff between backends.
 - Windows: `pty` is POSIX only. Mark external providers unavailable there; do not fail at turn time. See PLAN.md 1.1.
@@ -486,18 +630,26 @@ Done when: TUI and NSH web screenshots of each scenario agree, and `check_manife
 
 | Layer | How | Real model? |
 | --- | --- | --- |
-| Parsers | Recorded, sanitized, version-tagged fixtures from M0 | No |
-| Workers | Fake executables: argv, cwd, tty state, stdin log, hook firing, delays, crashes, malformed output | No |
-| `ExternalAgent` + `_run` | Fake CLI through the real runtime; assert stored messages, turn rows, events, and replay equal to live | No |
+| Parsers | Recorded, sanitized, version-tagged fixtures from M0; ACP protocol shapes from the 1.5.14 probe (`agy-1.5.14-acp/live.json`) with fake clients | No |
+| Workers | Fake executables: argv, cwd, tty state, stdin log, hook firing, delays, crashes, malformed output; ACP framing, notifications, permission callbacks | No |
+| `ExternalAgent` + `_run` | Fake CLI through the real runtime; assert stored messages, turn rows, events, approval decisions, session grants and replay equal to live | No |
 | Guards | Each refused action in section 4.6 returns its reason and changes nothing | No |
 | Recovery | Kill at each boundary, restart, assert no duplicates and no invented results | No |
 | Regression | The existing Nexus-loop and `claude` provider suites pass unchanged | No |
 | Clients | Mock scenarios, TUI tests, NSH tests, screenshots | No |
 | Real | `tests/` marked and skipped by default; run by hand with approval, results recorded here | Yes |
 
+**Live E2E (2026-11-23):** scratch Core + agy 1.5.14; `agy/gemini-3.8-flash-low` child; a real `write_file` request
+on the approval API, denied (file absent), turn `needs_attention`; same ACP session resumed in a fresh process and
+returned `resumed`; usage recorded. It was not a visual client check and did not restart the daemon. Evidence:
+`/tmp/nexus-zmx-live.anqGQS/results.json`.
+
 Baseline before transport work (2026-11-10): `cd nexus-core && uv run pytest -q` — **1310 passed, 1 skipped**.
 Final full Core suite: **1387 passed, 1 skipped**; focused workers: **77 passed**; full Core Ruff and
-`git diff --check` pass. No real model/CLI turn or personal-home migration was run.
+`git diff --check` pass. **2026-11-23 ACP sync:** the six ZMX files (`test_zmx_acp.py`,
+`test_zmx_antigravity_acp.py`, `test_zmx_workers.py`, `test_zmx_claude.py`, `test_zmx_runtime.py`,
+`test_zmx_reliability.py`) pass **194 tests** offline; full Core, Ruff and diff checks for this change are not yet
+recorded. No personal-home migration was run.
 
 ## 8. Risks
 
@@ -510,6 +662,10 @@ Final full Core suite: **1387 passed, 1 skipped**; focused workers: **77 passed*
 | Hidden context | An accepted exception to the one-timeline rule | Section 4.3, D2; stated on the ZMX card |
 | Runaway usage with no deadline or step limit | Spends subscription quota | Interrupt, visible usage, and the idle notice. Consider a Nexus-side soft usage warning later |
 | Writes outside the workspace | CLI's own permissions are the only barrier | Disclose; `auto` is the CLI's classifier, not a sandbox |
+| ACP schema or agy behaviour changes | Setup fails or updates are misread | ACP v1 negotiation, fail-closed setup, unknown updates stay wire events, 1.5.14 probe, offline fixture and one Nexus E2E; no visual or restart check yet |
+| A CLI skips or mislabels `session/request_permission` | The user approves a misleading card or nothing is shown | The card is a gate only when asked; disclose that it is not a sandbox; never select persistent options; show the CLI's claimed payload sanitized |
+| Model ids differ between `agy models`, the ACP config option and `session/set_model` | A valid child is refused before the prompt | Fail closed today; reconcile the order and re-check live (M6) |
+| ACP usage fields are missing or misunderstood | Tokens show unknown, or a user assumes zero spend | Normalize the prompt result only, show "usage unknown" when absent and never zero, and keep the independent `/usage` panel |
 
 ## 9. Decisions
 
@@ -529,4 +685,5 @@ Final full Core suite: **1387 passed, 1 skipped**; focused workers: **77 passed*
 | --- | --- | --- |
 | D3 | Claude Code by PTY only, or also evaluate `claude -p` stream-json? | PTY as in nexus01; measure in M0 and revisit only with evidence |
 | D5 | Confirm dropping the `opencode-antigravity-auth` route from PLAN.md section 10 | **Confirmed 2026-11-16:** dropped. Read of the README ([NoeFabris/opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth), 708 commits, v2.1.2): it signs in with "Google OAuth (Antigravity)" (`opencode auth login google`), keeps the user's Google accounts and quota state, and calls Antigravity's models itself; the README says "Unofficial plugin. Google may restrict accounts using third-party clients." That is credential reuse by a third-party client, which section 1 rules out and which the Antigravity terms (section 6, `plans/06-zmx.md`) name as a breach. ZMX runs the unmodified `agy` under the user's own sign-in and reads no credentials. |
-| D7 | Default permission for `allow` sessions: `auto`, or something stricter? | `auto`, disclosed. Never bypass |
+| D7 | Default permission for `allow` sessions: `auto`, or something stricter? | Claude Code: `auto`, disclosed. Antigravity ACP: mode `default` (prompting) regardless of the Nexus policy; never bypass (2026-11-23) |
+| D9 | Antigravity transport and approval flow? | **ACP v1; Antigravity only; existing approval cards; per-call allow/deny; exact tool+argument session grants; old stream-json histories readable but not continuable (user, 2026-11-23).** Nexus E2E passed through the approval API (deny, file absent, fresh-process resume, usage recorded); visual clients and a daemon restart remain unverified |

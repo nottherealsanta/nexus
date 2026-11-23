@@ -26,9 +26,11 @@ import { ProjectsOverviewHost } from "./src/ui/projects-overview";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist, FileOperationDialog, WorktreeInfo } from "./src/ui/overlays";
 import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
-import { Splash } from "./src/ui/splash";
+import { Splash, splashDone } from "./src/ui/splash";
+import { Onboarding } from "./src/ui/onboarding";
+import { onboardingOffered, openOnboarding, shouldOfferOnboarding } from "./src/onboarding";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
-import { coreReady, coreUrl, m, model, selectSession, isNarrow, leftOpen, loadPrefs, native, phone, phonePage, railShown, startApp, syncView, themeChoice, viewed } from "./src/store";
+import { config, coreReady, coreUrl, m, model, selectSession, isNarrow, leftOpen, loadPrefs, native, phone, phonePage, railShown, startApp, syncView, themeChoice, viewed } from "./src/store";
 import { setColorScheme } from "nsh";
 // A value import, though nothing is read from it: `nsh package` links a native UI set into the web runtime only
 // when the bundle imports it, and the modules look it up by name (`nativeModule`), which the packager cannot see.
@@ -71,6 +73,8 @@ function App() {
   effect(() => { if (platform.os === "macos") Window.setTitleBar({ style: "hidden", height: 44 }); });
   effect(() => { if (!phone) installTray(); });
   void colorScheme;
+  // First run: Core says this home has not seen the tour (ui.onboarded); it opens once the launch splash is gone.
+  effect(() => { if (splashDone() && shouldOfferOnboarding(config(), phone, onboardingOffered())) openOnboarding(); });
   const leftPersistent = () => !isNarrow() && leftOpen();
   const rightPersistent = () => !isNarrow() && rightIsOpen(windowSize().width);
   const booting = () => native && !coreReady();
@@ -90,6 +94,7 @@ function App() {
           <Drawers />
         </View>
         </>}><PhoneShell /></If>
+        <If when={!phone}><Onboarding /></If>
         <ContextDetailModal />
         <SubagentDoneModal />
         <ResourcesModal />

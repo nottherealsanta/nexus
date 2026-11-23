@@ -214,6 +214,7 @@ function toolArg(name: string, args: string | undefined): string {
     case "patch": return typeof o.patch === "string" ? patchArg(o.patch) ?? "" : "";
     case "bash": return preview80(first(o.command));
     case "code": return "";
+    case "firecrawl": return [str(o.action), str(o.url)].filter(Boolean).join(" ");
     case "ask": return str(o.questions?.[0]?.question);
     case "fork": return preview80(first(o.title) || first(o.prompt));
     case "browser_exec": return preview80((str(o.code).split(/\r?\n/).find((l) => l.trim()) ?? "").trim());
@@ -486,7 +487,7 @@ function commandRows(name: string, args: string | undefined): ToolDetailLine[] {
     tone: "command" as const,
   }));
 }
-/** Claude's own subagent nested in its calling tool's card (ZMX), read-only. The TUI `sidechain_lines` writes the same words. */
+/** Claude's own subagent nested in its calling tool's card (external worker), read-only. */
 export function sidechainLines(side: any): ToolDetailLine[] {
   if (!side || !Array.isArray(side.entries)) return [];
   const clip = (text: unknown, limit: number) => {
@@ -915,7 +916,7 @@ function activitySummary(items: ActivityEntry[]): string {
       if (item.editFile !== undefined) editFiles.add(item.editFile);
       noun = ({
         bash: "command", read: "read", edit: "edit", patch: "edit", write: "edit",
-        code: "cell", ask: "question", web_search: "search", web_fetch: "page", session: "session", fork: "fork",
+        code: "cell", ask: "question", web_search: "search", web_fetch: "page", firecrawl: "page", session: "session", fork: "fork",
       } as Record<string, string>)[item.name] ?? "tool";
     }
     counts.set(noun, (counts.get(noun) ?? 0) + 1);
@@ -1416,7 +1417,7 @@ function ToolTone(tone: string): string {
 /** Member label and the verb icon (the status glyph replaces it while running, failed or waiting). */
 const VERB: Record<string, string> = {
   bash: "Shell", read: "Read", edit: "Edit", patch: "Edit", write: "Write", code: "Code", ask: "Ask",
-  web_search: "Search", web_fetch: "Fetch", fork: "Fork",
+  web_search: "Search", web_fetch: "Fetch", firecrawl: "Firecrawl", fork: "Fork",
   browser_exec: "Browser", browser_screenshot: "Screenshot",
 };
 function verbLabel(name: string): string { return VERB[name] ?? name; }
@@ -1424,7 +1425,7 @@ function verbIcon(name: string): IconName {
   if (name === "read") return "read";
   if (name === "edit" || name === "patch" || name === "write") return "edit";
   if (name.startsWith("bash")) return "shell";
-  if (name.startsWith("web_") || name.startsWith("browser_")) return "web";
+  if (name.startsWith("web_") || name === "firecrawl" || name.startsWith("browser_")) return "web";
   if (name === "grep" || name === "glob" || name === "search") return "search";
   if (name === "ask") return "ask";
   if (name === "session" || name === "fork") return "session";

@@ -1,4 +1,4 @@
-"""Shared, runtime-independent ZMX transport helpers, ported from nexus01 workers."""
+"""Shared, runtime-independent external-worker transport helpers, ported from nexus01 workers."""
 from __future__ import annotations
 
 import asyncio
@@ -35,10 +35,10 @@ class WorkerPolicy:
 
     def __post_init__(self) -> None:
         if self.permission_mode not in ("auto", "accept-edits", "plan"):
-            raise ValueError("ZMX permission mode must be auto, accept-edits or plan; bypass is not supported")
+            raise ValueError("External-worker permission mode must be auto, accept-edits or plan; bypass is not supported")
 
     def authority(self, workspace: Path, *, vendor: str) -> str:
-        return (f"ZMX · {vendor} ran its own tools in {workspace} (--mode {self.permission_mode}); "
+        return (f"CLI · {vendor} ran its own tools in {workspace} (--mode {self.permission_mode}); "
                 "the CLI's settings, MCP servers and plugins are inherited. Nexus permissions, tool restrictions "
                 "and step limits do not apply; no sandbox is requested. The CLI adds context Nexus cannot see.")
 

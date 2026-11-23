@@ -10,6 +10,9 @@ const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
 const session = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "Refactor loader", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
 const bash = { id: "apr_1", session_id: "ses_1", tool: "bash", call_id: "c1", args: { command: "pytest tests/test_loader.py -q", cwd: "~/repos/demo" } };
+// The ACP `execute` shape: one long single-line command.
+const longCommand = "cd /private/tmp/acp-parity/ws && npm run build -- --mode production && ./scripts/verify-artifacts --fail-on-warning --output dist/report.json";
+const longBash = { id: "apr_4", session_id: "ses_1", tool: "bash", call_id: "c4", args: { command: longCommand } };
 const edit = { id: "apr_2", session_id: "ses_1", tool: "edit", call_id: "c2", args: { path: "src/loader.py", old_string: Array.from({ length: 10 }, (_, i) => `old ${i}`).join("\n"), new_string: Array.from({ length: 10 }, (_, i) => `new ${i}`).join("\n") } };
 const question = { id: "qst_1", session_id: "ses_1", call_id: "c3", created: 1, questions: [
   { id: "q1", question: "Which cache?", options: [{ id: "a", label: "mtime" }, { id: "b", label: "hash" }], multiple: false, allow_free_text: true },
@@ -76,6 +79,17 @@ describe("waiting card (D14)", () => {
     expect(app.texts().includes("not offered by Core yet")).toBe(false);
     // The event stream reopens quietly, so Core stays live and the choices are offered normally.
     expect(app.texts().filter((t) => t === "Core is not connected").length).toBe(0);
+  });
+
+  test("a long parameter value reaches the card whole, to wrap, not clipped to one row", async () => {
+    // The table keeps the value whole; the card wraps it up to three rows (WAIT_VALUE_ROWS),
+    // like the TUI's WAIT_VALUE_ROWS. A clipped table would lose the tail here.
+    expect(approvalParts(longBash as any).table).toEqual([["command", longCommand]]);
+    const app = await view(snapshot({ approvals: [longBash] }));
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:waiting-card");
+    expect(app.texts()).toContain(longCommand);
   });
 
   test("an edit approval shows a capped diff with the rest counted", async () => {

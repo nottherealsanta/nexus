@@ -42,7 +42,7 @@ terms = [
   "terminal.open", "terminal.selected", "terminal.focused", "terminal.controlled",
   # connection and accounts
   "connection.lost", "connection.no_daemon", "provider.signed_in",
-  "has_notifications", "text_edit.active", "view.settings",
+  "has_notifications", "text_edit.active", "view.settings", "view.onboarding",
   # a question's context line has the keys (plan 47): Esc goes back to its options
   "waiting.question_field",
   # Manager (docs/manager-design.md 10.1, 10.6). Only the Manager's own keys read these.
@@ -115,6 +115,12 @@ id = "text_edit"
 when = ["text_edit.active"]
 action = "text_edit.cancel"
 note = "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+
+[[keymap.escape]]
+id = "onboarding"
+when = ["view.onboarding"]
+action = "onboarding.back"
+note = "Onboarding goes back one step; on the first step it does nothing (Skip is explicit). Provider details and pickers close first."
 
 [[keymap.escape]]
 id = "question_field"
@@ -216,7 +222,7 @@ order = 1
 views = ["session", "new_session", "settings"]
 default = "session"
 empty_project_view = "new_session"
-first_run_view = "welcome_sign_in"
+first_run_view = "onboarding"  # the full-window first-run tour ([onboarding], plans/52); not a centre view
 [navigation.centre.view_note]
 session = "Timeline plus composer; a child session uses the same view with breadcrumbs and back."
 new_session = "Starting context (agent, model, effort, directory, system prompt, AGENTS.md, tools, skills, MCP, token count) with the composer below."
@@ -423,7 +429,7 @@ kind = "choice"
 scope = "core"
 clients = "both"
 options = ["allow", "ask"]
-note = "For new sessions. Applies to bash, web_search and web_fetch; read-only and file tools never ask."
+note = "For new sessions. Applies to bash, web_search, web_fetch and firecrawl; read-only and file tools never ask."
 
 [[settings.section.row]]
 id = "tools.defaults"
@@ -450,27 +456,27 @@ clients = "both"
 command = "search.start"
 
 [[settings.section]]
-id = "zmx"
-label = "ZMX"
-note = "ZMX runs a vendor CLI as a subagent with its own loop, tools, permissions and sign-in. Off by default; it never runs root sessions or the Manager. Not verified: whether the vendors permit this use of a subscription."
+id = "workers"
+label = "External workers"
+note = "External workers run a vendor CLI as a subagent with its own loop, tools, permissions and sign-in. Off by default; they never run root sessions or the Manager. Not verified: whether the vendors permit this use of a subscription."
 
 [[settings.section.row]]
-id = "zmx.claude_backend"
+id = "workers.claude_backend"
 label = "Claude Code subagents"
 kind = "choice"
 scope = "core"
 clients = "both"
-options = ["Agent SDK", "ZMX"]
-note = "Use Agent SDK for an enterprise or full-price API account. Otherwise ZMX is usually better, but it does not use Nexus agents or tools. Core key [zmx] claude_backend."
+options = ["Agent SDK", "PTY"]
+note = "Use Agent SDK for an enterprise or full-price API account. Otherwise the CLI's PTY worker is usually better, but it does not use Nexus agents or tools. Core key [workers] claude_backend = \"cli\"."
 
 [[settings.section.row]]
-id = "zmx.antigravity"
+id = "workers.antigravity"
 label = "Antigravity subagents"
 kind = "choice"
 scope = "core"
 clients = "both"
-options = ["off", "ZMX"]
-note = "Antigravity has only ZMX: it does not use Nexus agents or tools, and its permissions are the CLI's own. Core key [zmx] antigravity."
+options = ["off", "ACP"]
+note = "Antigravity runs over ACP v1: it does not use Nexus agents or tools, and its permissions are the CLI's own. Core key [workers] antigravity."
 
 [[settings.section]]
 id = "browser"
@@ -496,6 +502,8 @@ note = "Whether browser_exec and browser_screenshot can run here: uvx, a Chrome,
 [[settings.section]]
 id = "mcp"
 label = "MCP"
+page = true
+note = "Remote and local MCP servers: add, sign in, switch off, remove."
 
 [[settings.section.row]]
 id = "mcp.full_definitions"
@@ -716,6 +724,141 @@ scope = "client"
 clients = "both"
 command = "app.open_inspector"
 
+[[settings.section.row]]
+id = "about.onboarding"
+label = "Replay onboarding"
+kind = "action"
+scope = "client"
+clients = "both"
+command = "app.onboarding"
+
+# --- Onboarding ---------------------------------------------------------------
+# The first-run tour (plans/52). Both clients draw these steps, in this order, with this wording; only the
+# medium differs. `{key:<command id>}` is filled with that command's key in the client's own syntax.
+# `kind`: info (text only), provider (the provider list), agents (the `[[onboarding.agent]]` rows), done.
+
+[onboarding]
+finish_no_project = "You have no project yet, so Finish opens Add project."
+no_provider = "No provider is connected yet. Connect one first, then choose models."
+quest_provider = "Connect a provider"
+hints_info = "enter next · ← back · esc back · s skip"
+hints_rows = "↑↓ choose · enter change · → next · ← back · esc back · s skip"
+
+[[onboarding.step]]
+id = "welcome"
+kind = "info"
+title = "Welcome to Nexus"
+lines = [
+  "Nexus is a workspace where AI agents work on your code, and you can see everything they do.",
+  "This short tour connects a provider, sets up your agents and teaches the basics. It takes about two minutes.",
+  "Every choice can be changed later in Settings. Replay the tour from the command palette ({key:palette.open}) or with /onboarding.",
+]
+tip = "Skip the tour at any time; Nexus will not ask again."
+
+[[onboarding.step]]
+id = "provider"
+kind = "provider"
+title = "Connect a provider"
+lines = [
+  "A provider is where the models come from: a ChatGPT, Copilot or Claude subscription, or an API key. Connect at least one to start.",
+  "You can connect more, or change and disconnect them later in Settings > Providers.",
+]
+tip = "Sign-in happens in your browser or with an API key. Nexus Core stores the credentials."
+
+[[onboarding.step]]
+id = "agents"
+kind = "agents"
+title = "Choose models for your agents"
+lines = [
+  "Nexus works as a team. You talk to one agent, and it can hand jobs to others. Each agent can use its own model, so quick cheap models do the reading and your best model does the thinking.",
+  "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models, fallbacks, effort.",
+]
+tip = "Type part of a name in the picker to filter it."
+
+[[onboarding.agent]]
+name = "default"
+kind = "root"
+role = "Starts every new session"
+hint = "build does the work itself. orchestrate coordinates scouts, planners and builders, which suits big tasks."
+options = ["build", "orchestrate"]
+
+[[onboarding.agent]]
+name = "scout"
+kind = "model"
+role = "Reads code and gathers facts; never edits"
+hint = "A small, fast model: luna, haiku or hydrogen class. It reads a lot, so cheap and quick wins."
+
+[[onboarding.agent]]
+name = "quick"
+kind = "model"
+role = "Small, self-contained errands"
+hint = "Also a small, fast model, like scout: luna, haiku or hydrogen class."
+
+[[onboarding.agent]]
+name = "plan"
+kind = "model"
+role = "Turns findings into a work plan"
+hint = "A strong reasoning model. It thinks more than it reads."
+
+[[onboarding.agent]]
+name = "build"
+kind = "model"
+role = "Writes and edits the code"
+hint = "Your best coding model."
+
+[[onboarding.step]]
+id = "timeline"
+kind = "info"
+title = "One timeline"
+lines = [
+  "A session is a single timeline. Everything the model receives is shown in it, in order: your messages, its replies, every tool it runs and every notice.",
+  "Nothing is hidden, and nothing is shown that the model does not have. Long output is clipped and says so; old history is folded and announced.",
+  "Tool calls gather into activity rows. Open one for details. The level of detail is in Settings, or press {key:timeline.detail_cycle}.",
+]
+tip = "If you wonder what the model knows, the timeline is the answer."
+
+[[onboarding.step]]
+id = "team"
+kind = "info"
+title = "Agents and subagents"
+lines = [
+  "For small jobs one agent does everything. For big ones it hands work to specialists: scout reads and reports, plan designs, build edits and quick runs small errands.",
+  "Each subagent appears as a card in your timeline. Open it to watch it work, then press Esc to return to the parent.",
+  "Need a side answer without disturbing the session? /btw asks a quick read-only question.",
+]
+tip = "The models you chose a moment ago decide who does what."
+
+[[onboarding.step]]
+id = "control"
+kind = "info"
+title = "You stay in control"
+lines = [
+  "With Default permission set to ask (Settings > Tools), shell and web tools wait for you. Allow once ({key:waiting.allow_once}), allow for the session ({key:waiting.allow_session}) or deny ({key:waiting.deny}).",
+  "An agent can also ask you a question. Its card sits above the composer.",
+  "While an agent works: {key:composer.steer} steers it with a new message, {key:composer.queue} queues one for the next turn, {key:composer.interrupt_send} interrupts and sends, and {key:session.interrupt} interrupts.",
+]
+tip = "Nothing the agent does is out of your sight or your reach."
+
+[[onboarding.step]]
+id = "moving"
+kind = "info"
+title = "Find your way"
+lines = [
+  "{key:palette.open} opens the command palette: every action lives there. In the composer, / runs a command and @ mentions a file.",
+  "{key:session.new} starts a new session and {key:session.switch} jumps between them. A project is a folder; its sessions, files and Git changes live together.",
+  "{key:app.settings} opens Settings and {key:app.help_keys} lists every shortcut.",
+]
+tip = "The sidebar lists your sessions, files and Git changes."
+
+[[onboarding.step]]
+id = "done"
+kind = "done"
+title = "You're ready"
+lines = [
+  "That is the tour. Describe what you want in the composer and press Enter to start your first session.",
+  "Settings holds everything you chose here, and /onboarding plays the tour again.",
+]
+
 # --- Strings ------------------------------------------------------------------
 # Shared UI text. `key = "text"`; `{name}` placeholders are filled by the client
 # (`ui_text` in the TUI, `uiText` in NSH). Keys are dotted and lower case. Plurals
@@ -857,6 +1000,26 @@ unavailable_reason = "A Core daemon is already running."
 placement = ["palette", "banner"]
 
 [[command]]
+id = "app.onboarding"
+title = "Open onboarding"
+category = "app"
+slash = "onboarding"
+when = ["always"]
+placement = ["palette", "settings"]
+note = "The first-run tour: connect a provider, choose models for agents, learn the basics. Opens by itself once per Nexus home (ui.onboarded); this replays it. Desktop and web only: the phone connects to a Core that is already set up."
+
+[[command]]
+id = "onboarding.back"
+title = "Back one onboarding step"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["view.onboarding"]
+unavailable_reason = "Onboarding is not open."
+placement = ["palette"]
+note = "Does nothing on the first step."
+
+[[command]]
 id = "notifications.open"
 title = "Notifications"
 category = "notifications"
@@ -943,7 +1106,7 @@ category = "navigation"
 when = ["terminal.selected"]
 unavailable_reason = "Select a terminal first."
 placement = ["panel"]
-note = "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first while it runs (plan 45)."
+note = "Closes the focused terminal tab: the same as layout.tab_close on a terminal tab. It terminates the terminal, asking first only while a command runs in it (plan 45)."
 
 [[command]]
 id = "terminal.acquire"
@@ -1118,7 +1281,7 @@ leader = ["w"]
 when = ["layout.tab_active"]
 unavailable_reason = "Open a tab first."
 placement = ["palette", "menu", "panel"]
-note = "Closes the focused group's active tab of any kind. A file with unsaved changes asks layout.unsaved.title (Save, Discard, Cancel); a running terminal asks before it is terminated; a session tab only closes the tab. Closing the last tab of a group removes the group. session.tab_close (alt+x, /close) and session.tab_next / session.tab_prev (alt+], alt+[) keep their ids and act on the focused group's tabs."
+note = "Closes the focused group's active tab of any kind. A file with unsaved changes asks layout.unsaved.title (Save, Discard, Cancel); a terminal with a command running asks before it is terminated; a session tab only closes the tab. Closing the last tab of a group removes the group. session.tab_close (alt+x, /close) and session.tab_next / session.tab_prev (alt+], alt+[) keep their ids and act on the focused group's tabs."
 
 [[command]]
 id = "layout.group_close"
@@ -1128,7 +1291,7 @@ leader = ["shift+w"]
 when = ["layout.split_multiple"]
 unavailable_reason = "The centre has only one group."
 placement = ["palette", "menu"]
-note = "Closes every tab of the focused group and gives its space to the sibling. A group holding unsaved files asks once for all of them (Save, Discard, Cancel); a running terminal asks before it is terminated. Absent from the group menu when there is only one group."
+note = "Closes every tab of the focused group and gives its space to the sibling. A group holding unsaved files asks once for all of them (Save, Discard, Cancel); a terminal with a command running asks before it is terminated. Absent from the group menu when there is only one group."
 
 [[command]]
 id = "layout.open_to_side"

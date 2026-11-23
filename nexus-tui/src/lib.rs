@@ -34,6 +34,7 @@ pub mod manifest;
 pub mod markdown;
 pub mod mermaid;
 pub use nexus_mermaid::text as mermaid_text;
+pub mod onboarding;
 pub mod paint;
 pub mod partial;
 pub mod perf;

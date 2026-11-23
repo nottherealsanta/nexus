@@ -30,9 +30,11 @@ hover tooltips in both clients; text actions use square brackets, including
 Taking or releasing control is always explicit.
 Opening or creating a terminal tab takes control if available and focuses its screen;
 otherwise a read-only banner offers **Take control**. There is no hiding or detaching by closing: closing a terminal
-tab terminates it. Closing a running terminal first asks
-`Close running terminal?` with **Close terminal** and **Cancel**. An exited
-terminal closes without that warning. Closed resources are omitted from the
+tab terminates it. Closing a terminal that is running a command first asks
+`Close running terminal?` with **Close terminal** and **Cancel**. An idle shell (nothing
+but the shell holds the terminal's foreground) and an exited terminal close without that
+warning; the clients read `busy` from `GET /api/terminal/{id}` just before closing, and ask
+when it is unavailable. Closed resources are omitted from the
 restored layout. An exit frame immediately marks its tab ended and disables input, even if an
 older successful control request is still completing.
 
@@ -50,8 +52,7 @@ the terminal rather than global Nexus shortcuts, except the ``Ctrl+` `` shortcut
 **Ctrl+]** returns focus to the group's tab strip without sending that key to the
 shell. Closing the tab moves focus to the group's next tab, or to the composer when the group is gone. Paste goes only to the focused terminal, using bracketed paste when
 requested by the application. Mouse interaction is owned by the terminal screen
-when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selection and an explicit **Copy** action
-are required before emitting OSC 52. Escape sequences in terminal output never
+when focused and by Nexus otherwise. Applications that request mouse reports receive them; hold Shift to select text instead. Selecting text with the mouse copies it as soon as the button is released (both clients; the TUI says `Copied - N chars`); the **Copy** action copies the current selection again. A user selection is required before any copy; terminal output never writes the clipboard. Escape sequences in terminal output never
 write the clipboard or open URLs or files by themselves. Resizing the screen
 resizes the PTY only while this attachment has control. Interactive terminal contents
 are never automatically added to model context.
@@ -141,7 +142,7 @@ not reveal resource existence. Responses containing terminal state or output use
 | --- | --- | --- |
 | `POST /api/terminal` | `project_id`, `workspace`, optional `session_id`, `client_id`, `rows`, `cols` | 201 and metadata; fail rather than silently choose a different workspace |
 | `GET /api/terminal?project_id=…` | project identity | metadata list, including ended resources |
-| `GET /api/terminal/{id}` | | metadata |
+| `GET /api/terminal/{id}` | | metadata plus `busy`: true while a command other than the idle shell holds the PTY foreground (false once exited) |
 | `PATCH /api/terminal/{id}` | `name` | updated metadata; rename any resource, including ended resources |
 | `POST /api/terminal/{id}/attach` | `client_id` | new opaque attachment ID, initially read-only; an attachment belongs to one stream connection |
 | `GET /api/terminal/{id}/stream?attachment_id=…` | optional `after` sequence | versioned stream described below |

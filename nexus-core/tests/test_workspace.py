@@ -22,7 +22,7 @@ from nexus.store import Store
 from nexus.tools import Tool, ToolError
 
 TOKEN = "t0ken"
-TASK_TOOLS = ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "patch", "write", "web_search", "web_fetch", "ask", "code", "browser_exec", "browser_screenshot", "fork"]
+TASK_TOOLS = ["read", "grep", "glob", "ls", "bash", "bash_output", "bash_kill", "edit", "patch", "write", "web_search", "web_fetch", "firecrawl", "ask", "code", "browser_exec", "browser_screenshot", "fork"]
 
 
 class Scripted:

@@ -111,19 +111,19 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/kernel` | `?summary=1` | Live kernels, metadata, retained cells and variable previews; `summary` omits the retained cell bodies |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
-| GET | `/api/config` | | `{revision, values, defaults, schema, errors, zmx_unavailable}` for the initial settings; `zmx_unavailable` is why ZMX cannot run on this machine (non-POSIX), else null |
-| PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config; stale revision is 409 |
+| GET | `/api/config` | | `{revision, values, defaults, schema, errors, workers_unavailable}` for the initial settings; `workers_unavailable` is why external workers cannot run on this machine (non-POSIX), else null. `zmx_unavailable` is the older key with the same value |
+| PATCH | `/api/config` | `{expected_revision, set, unset}` | updated config in the GET shape, including `workers_unavailable`/`zmx_unavailable` because clients replace their config object from this response; stale revision is 409 |
 | GET | `/api/info` | | `{name, version, api_version: {major, minor}, code, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retention_status, retry, idempotency}` |
 | GET | `/api/debug/perf` | | request timings per route, slow requests, event-loop stalls and what was in flight; see [Performance](#performance) |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/search` | `?q=`, `?project=`, `?archived=exclude\|only\|include`, `?limit=` (1..100, default 30) | `{query, hits: [{session_id, kind: "title", "user" or "final_answer", message_id, snippet, rank, session}]}`: one hit per session, best first ([Search](#search-k5)) |
 | GET, POST | `/api/usage` | | GET reads the saved snapshot; POST refreshes it. `{fetched, providers: [{id, label, source, plan, windows, notes, error}]}` ([Usage](#usage-k11)) |
 | GET | `/api/artifact/{id}` | | the stored bytes, served as an attachment with the stored media type ([Artifacts](#artifacts-k8)) |
-| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null); `claude` adds `note` ("Needs Claude Code 2.1.248 or newer", or that Claude Code is not installed), shown in the provider detail of both clients. With ZMX on, `claude-code`/`agy` rows follow with `zmx: true`, `dialect: "external-cli"` and no `methods` ([external-workers.md](external-workers.md)) |
+| GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, connected, verified, methods}]`; `methods` are the sign-ins a client can start (`browser`, `device`, `cli`, `local`, `api_key`); an API-key provider adds `key_hint`, `key_env` and `key_source` (`stored`, `env` or null); `claude` adds `note` ("Needs Claude Code 2.1.248 or newer", or that Claude Code is not installed), shown in the provider detail of both clients. With external workers on, `claude-code`/`agy` rows follow with `zmx: true` (the compatibility flag), `dialect: "external-cli"` and no `methods` ([external-workers.md](external-workers.md)) |
 | GET | `/api/provider/{id}/login` | | the in-progress sign-in, or `{status: "idle"}` ([Configuration](#configuration-provider-login-and-context-budget)) |
 | POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a browser, device, CLI or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. 400 for a method the provider does not list. A `browser` flow listens on the daemon's `127.0.0.1:1455` and publishes its URL; the client opens it |
 | DELETE | `/api/provider/{id}/login` | | 204; cancels a pending flow and signs out |
-| GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers; ZMX models add `zmx: true` and are offered only in subagent pools |
+| GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers; external-worker models add `zmx: true` (the compatibility flag) and are offered only in subagent pools |
 | GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
 | (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error, scope?: "global" or "project"}]`: what the starting-context header switches. `state` is `on`, `off` or `unavailable`; a disabled project entry is not part of the session ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md#project-servers)) |
@@ -132,6 +132,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/skill/preview` | `{source, scope, project?}` | `{fetch_id, source, scope, requested, problems, found: [{name, description, installed, warnings}]}`; the fetch is kept 10 minutes ([tools.md](tools.md#learn-installing-skills)) |
 | GET | `/api/skill/{name}` | same | one skill plus `body`, `content` (complete UTF-8 `SKILL.md`, including frontmatter), `extra`, `files` (tool-readable resource paths), and `children` (sorted immediate supporting file/folder names, excluding `SKILL.md`; directories end in `/`, symlinks are not followed) |
 | GET | `/api/mcp` | | `{servers: [...]}`: MCP server states, no secrets, never connects ([mcp.md](mcp.md#api-and-events)) |
+| POST | `/api/mcp` | `{entry, name?}` | add a global server (201 with its row; the name is made from the address when omitted). Also `PUT`/`PATCH`/`DELETE /api/mcp/{name}` and `POST`/`GET`/`DELETE …/login` (OAuth); the same under `/api/project/{id}/mcp` ([mcp.md](mcp.md#managing-servers)) |
 | GET | `/api/mcp/{name}` | | one server plus `tool_names`, `log` |
 | POST | `/api/mcp/{name}/restart` | | close and reconnect; returns the row |
 | GET | `/api/mcp/{name}/resources`, `/resource`, `/prompts`, `/prompt` | `?uri=` / `?name=&arguments=` | read-only MCP resources and prompts, fenced untrusted text; connects the server; also under `/api/project/{id}/mcp/{name}/` ([mcp.md](mcp.md#api-and-events)) |
@@ -190,7 +191,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/session/{id}/git` | | branch, ahead/behind and changed paths ([Project files and Git](#project-files-and-git)) |
 | GET | `/api/session/{id}/git/diff` | `?path=` | separate staged and unstaged diffs; untracked contents are not included |
 | POST | `/api/session/{id}/shell` | `{command}` | 200 `{status, exit_code}`; runs `bash -c` in the session directory (composer `!` mode), adds command and output to context as a user message, never starts a turn |
-| POST | `/api/session/{id}/prompt` | `{text?, images?, pastes?, mode?: "send"\|"steer"\|"queue"\|"interrupt"}` | 202. `send` (default) returns `{status: "busy", turn_id, origin, idempotency_key?}` and is 409 while a turn runs. `steer` and `queue` return `{input_id, mode, state: "pending"}`; while a turn runs they wait, and while idle the daemon starts that input immediately `interrupt` cancels the running turn exactly as `POST …/interrupt` does (denying a waiting approval, cancelling a question, stopping subagents), then starts a turn with this message and returns the `send` body plus `mode: "interrupt", interrupted: true`. Pending steers and queued messages stay and run after it (nothing is returned to the composer). Idle, it is `send`. It is checked first (empty text is 400, archived 409, ZMX 409), so a refused message never costs the running turn; it is idempotent under `Idempotency-Key` like `send` ([Pending inputs](#pending-inputs-steer-and-queue), [Image prompts](#image-prompts), [Collapsed text pastes](#collapsed-text-pastes)) |
+| POST | `/api/session/{id}/prompt` | `{text?, images?, pastes?, mode?: "send"\|"steer"\|"queue"\|"interrupt"}` | 202. `send` (default) returns `{status: "busy", turn_id, origin, idempotency_key?}` and is 409 while a turn runs. `steer` and `queue` return `{input_id, mode, state: "pending"}`; while a turn runs they wait, and while idle the daemon starts that input immediately `interrupt` cancels the running turn exactly as `POST …/interrupt` does (denying a waiting approval, cancelling a question, stopping subagents), then starts a turn with this message and returns the `send` body plus `mode: "interrupt", interrupted: true`. Pending steers and queued messages stay and run after it (nothing is returned to the composer). Idle, it is `send`. It is checked first (empty text is 400, archived 409, external worker 409), so a refused message never costs the running turn; it is idempotent under `Idempotency-Key` like `send` ([Pending inputs](#pending-inputs-steer-and-queue), [Image prompts](#image-prompts), [Collapsed text pastes](#collapsed-text-pastes)) |
 | GET | `/api/session/{id}/input` | | `{inputs, held}` |
 | POST | `/api/session/{id}/input/next` | | release a held queue and send its next item |
 | PATCH | `/api/session/{id}/input/{iid}` | `{text?, mode?}` | edit text, or promote `queue` to `steer` |
@@ -209,7 +210,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/session/{id}/btw` | child session id | `{session, head, inherited, calls, running, error, messages, partial, events}`: reconnect checkpoint for a side run. Messages exclude the inherited prefix; events are compact tool/nested-call progress. 400 for a non-btw session |
 | POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
 | POST | `/api/draft/context` | session-creation fields | the first request a new session would send, with nothing stored ([Configuration](#configuration-provider-login-and-context-budget)) |
-| GET | `/api/session/{id}/context` | `?summary=1` | the provider request body plus `used`, `window`, `exact` context budget; with `summary` only `{used, window, exact}` (and `context_complete` for a ZMX child), a few bytes instead of the whole request (about 500 KB on a long session) |
+| GET | `/api/session/{id}/context` | `?summary=1` | the provider request body plus `used`, `window`, `exact` context budget; with `summary` only `{used, window, exact}` (and `context_complete` for an external worker child), a few bytes instead of the whole request (about 500 KB on a long session) |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
@@ -250,7 +251,7 @@ Configuration patch paths and polling behavior are described in [config.md](conf
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom; a child row also has "tokens" (input + output spent)
  "fork": null,  // a fork child: {"parent_id": "ses_…", "inherited": 12}; its first `inherited` messages are copied from the parent, in order
- "worker": null,  // a ZMX child (external-workers.md): {provider, label, model, status, permission_mode, context_complete: false, disclosure, not_applied, …}; its `tools`, `skills` and `mcp` are []
+ "worker": null,  // an external worker child (external-workers.md): {provider, label, model, status, permission_mode, context_complete: false, disclosure, not_applied, …}; its `tools`, `skills` and `mcp` are []
  "model": "codex/gpt-6.1-terra", "model_source": "session",   // session | agent | parent | none (default: only before models were remembered)
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
@@ -723,7 +724,7 @@ watermark:
 ```jsonc
 {
   "watermark": {"generation": "log_…", "head": 4200, "floor": 0, "head_cursor": "log_…:4200"},
-  "projects": [Project], "sessions": [raw session rows],  // each row also carries `worker` (null, or a ZMX child's facts)
+  "projects": [Project], "sessions": [raw session rows],  // each row also carries `worker` (null, or an external worker child's facts)
   "running": [turn], "approvals": [pending approval], "questions": [pending question],
   "selected": {"session_id": "ses_…", "messages": [Message], "messages_limit": 200,
                "messages_more": false, "oldest_seq": 1}
@@ -1071,6 +1072,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `skills.changed` | `{}`: a skill file changed; global, live only; reload `/api/skill` |
 | `mcp.changed` | `{}`: the MCP servers or the two `[mcp]` settings in `config.toml` changed; running sessions keep theirs; global, live only |
 | `mcp.connected` / `mcp.disconnected` / `mcp.failed` / `mcp.tools_changed` | `{server, …}`: an MCP server's connection changed; global, live only ([mcp.md](mcp.md)) |
+| `mcp.login` | `{server, status: pending\|signed_in\|failed\|signed_out, message?, verification_uri?}` (project scope adds `project_id`, `scope`): an MCP OAuth sign-in's link and end; global, live only, no token ([mcp.md](mcp.md#remote-servers-and-oauth)) |
 | `extension.failed` | `{path, error}`: a user tool file is invalid; global, live only |
 | `project.created` / `project.updated` | `Project`; global, stored |
 | `project.reordered` | `{order: [id, …]}`: all visible projects in their new saved order; global, stored |
@@ -1098,7 +1100,7 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `session.notified` | `{from, text, notice}`: a `wait: false` child finished, and its answer goes to this (parent) session. `notice` is the structured subagent metadata clients also receive on the stored message |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
 | `browser.failed` / `browser.tools_changed` | `{server, error}` / `{server, added, removed}`: a session's browser-use process failed or changed its tool list ([tools.md](tools.md#browser-tools)) |
-| `session.worker` | a ZMX child's `worker` object, each time its CLI starts or ends a turn ([external-workers.md](external-workers.md)); `session.updated` follows with the same object on the session |
+| `session.worker` | an external worker child's `worker` object, each time its CLI starts or ends a turn ([external-workers.md](external-workers.md)); `session.updated` follows with the same object on the session |
 | `session.escalated` | `{needed, why, parent_id}`: a child reported it is blocked (its parent's report carries it) |
 | `session.message_tool` | `{active, tools}`: `message_session` was exposed by the session's first `session` call (once) |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |

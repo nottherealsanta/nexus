@@ -154,7 +154,7 @@ count). The answer is cached for 30 s because `connected()` asks often. The CLI 
 locations); Nexus does not ship it, and without it the provider is not connected and `login` says Claude Code is not installed. `login` runs `claude auth login --claudeai` and passes the first URL it prints to the client
 (`Open <url> to sign in to Claude.`); `logout` runs `claude auth logout`. `nexus login claude` works from a terminal.
 
-## ZMX providers (`claude-code`, `agy`)
+## External worker providers (`claude-code`, `agy`)
 
 No sign-in in Nexus, and no credential read: the CLI signs itself in (`claude auth login`, or run `agy` once in a
 terminal). Nexus only checks that the switch is on and the CLI exists; an Antigravity sign-in is not verified until a

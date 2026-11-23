@@ -132,6 +132,10 @@ pub enum ApiCall {
     TerminalClose {
         id: String,
     },
+    /// Ask Core whether a command runs in the terminal, to decide whether closing needs a prompt.
+    TerminalBusy {
+        id: String,
+    },
     /// Connect (`method`: `device`, `local`, `api_key` with `key`) or, with `sign_out`, disconnect or cancel.
     Provider {
         id: String,
@@ -222,6 +226,15 @@ pub enum ApiCall {
     SearchServiceStart,
     /// What the browser tools need on Core's machine (Settings › Browser).
     BrowserStatus,
+    /// The MCP servers Settings lists: the global ones and, with a project, that project's.
+    McpList {
+        project: Option<String>,
+    },
+    /// Add (`entry` with no `name` lets Core derive one), change, remove, restart or sign in to one MCP server.
+    Mcp {
+        project: Option<String>,
+        op: McpOp,
+    },
     VoiceModel {
         target: VoiceTarget,
         operation: VoiceOperation,
@@ -454,6 +467,7 @@ impl ApiCall {
             | ApiCall::TerminalCreate { .. }
             | ApiCall::TerminalRename { .. }
             | ApiCall::TerminalClose { .. }
+            | ApiCall::TerminalBusy { .. }
             | ApiCall::TerminalControl { .. }
             | ApiCall::TerminalInput { .. }
             | ApiCall::TerminalResize { .. } => "",
@@ -477,7 +491,15 @@ impl ApiCall {
             | ApiCall::ManagerLive { .. }
             | ApiCall::ManagerSpeakStop
             | ApiCall::Seen { .. } => "",
-            ApiCall::SearchServiceStatus | ApiCall::BrowserStatus => "",
+            ApiCall::SearchServiceStatus | ApiCall::BrowserStatus | ApiCall::McpList { .. } => "",
+            ApiCall::Mcp { op, .. } => match op {
+                McpOp::Add { .. } => "Server added",
+                McpOp::Patch { .. } => "Server updated",
+                McpOp::Remove { .. } => "Server removed",
+                McpOp::Restart { .. } => "Server restarted",
+                McpOp::SignIn { .. } => "Sign-in started",
+                McpOp::SignOut { .. } => "Signed out",
+            },
             ApiCall::SearchServiceStart => "Web search is running",
             ApiCall::VoiceDownload { .. } => "Voice model download started",
             ApiCall::VoiceModel {
@@ -560,6 +582,7 @@ pub struct Done {
     pub file_count: Option<u64>,
     pub terminals: Option<Vec<crate::terminal_api::TerminalResource>>,
     pub terminal: Option<crate::terminal_api::TerminalResource>,
+    pub terminal_busy: Option<bool>,
     /// A session the app should open (new sessions).
     pub open: Option<String>,
     /// The created session itself, so its tab can render before its event arrives.
@@ -594,12 +617,25 @@ pub struct Done {
     pub search_service: Option<Value>,
     /// Core's `/api/browser` answer.
     pub browser_status: Option<Value>,
+    /// Core's answers for Settings › MCP: the list, or the row a write returned.
+    pub mcp: Option<Value>,
     /// A transcription result. It remains a response until the app inserts it.
     pub transcript: Option<String>,
     /// The answer to a `/btw` question.
     pub answer: Option<String>,
     pub btw_context: Option<String>,
     pub btw_state: Option<Value>,
+}
+
+/// One write to an MCP server (Settings › MCP).
+#[derive(Debug, Clone, PartialEq)]
+pub enum McpOp {
+    Add { entry: Value },
+    Patch { name: String, entry: Value },
+    Remove { name: String },
+    Restart { name: String },
+    SignIn { name: String },
+    SignOut { name: String },
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -862,6 +898,15 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::StopJob { id } => {
             api.stop_bash_job(id).await.map_err(e)?;
+        }
+        ApiCall::TerminalBusy { id } => {
+            // An unreadable answer asks rather than closing a terminal that may be busy.
+            done.terminal_busy = Some(
+                crate::terminal_api::TerminalApi(api.http.clone())
+                    .busy(id)
+                    .await
+                    .unwrap_or(true),
+            );
         }
         ApiCall::TerminalClose { id } => {
             done.terminal = Some(
@@ -1265,6 +1310,65 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         }
         ApiCall::BrowserStatus => {
             done.browser_status = Some(api.http.get("/api/browser", &[]).await.map_err(e)?);
+        }
+        ApiCall::McpList { project } => {
+            let global = api.http.get("/api/mcp", &[]).await.map_err(e)?;
+            let mut servers: Vec<Value> = global["servers"].as_array().cloned().unwrap_or_default();
+            for server in &mut servers {
+                server["scope"] = json!("global");
+            }
+            let mut files = Value::Null;
+            if let Some(project) = project {
+                let scoped = api
+                    .http
+                    .get(&format!("/api/project/{project}/mcp"), &[])
+                    .await
+                    .map_err(e)?;
+                for row in scoped["servers"].as_array().into_iter().flatten() {
+                    let mut row = row.clone();
+                    row["scope"] = json!("project");
+                    servers.push(row);
+                }
+                files = json!({"file": scoped["file"], "error": scoped["error"]});
+            }
+            done.mcp = Some(json!({"servers": servers, "project_file": files}));
+        }
+        ApiCall::Mcp { project, op } => {
+            let base = project
+                .as_ref()
+                .map_or("/api/mcp".to_owned(), |p| format!("/api/project/{p}/mcp"));
+            let (method, path, body) = match op {
+                McpOp::Add { entry } => {
+                    (reqwest::Method::POST, base, Some(json!({ "entry": entry })))
+                }
+                McpOp::Patch { name, entry } => (
+                    reqwest::Method::PATCH,
+                    format!("{base}/{name}"),
+                    Some(json!({ "entry": entry })),
+                ),
+                McpOp::Remove { name } => (reqwest::Method::DELETE, format!("{base}/{name}"), None),
+                McpOp::Restart { name } => (
+                    reqwest::Method::POST,
+                    format!("{base}/{name}/restart"),
+                    None,
+                ),
+                McpOp::SignIn { name } => (
+                    reqwest::Method::POST,
+                    format!("{base}/{name}/login"),
+                    Some(json!({})),
+                ),
+                McpOp::SignOut { name } => (
+                    reqwest::Method::DELETE,
+                    format!("{base}/{name}/login"),
+                    None,
+                ),
+            };
+            let reply = api
+                .http
+                .call(method, &path, &[], body.as_ref(), None, None)
+                .await
+                .map_err(e)?;
+            done.mcp = Some(reply.body);
         }
         ApiCall::SearchServiceStart => {
             done.search_service = Some(

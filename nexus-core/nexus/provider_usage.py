@@ -52,14 +52,14 @@ COPILOT_URL = "https://api.github.com/copilot_internal/user"
 OPENCODE_URL = "https://opencode.ai/zen/go/v1/usage"
 XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 XAI_SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
-LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"} | {"agy": "ZMX · Antigravity"}
+LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"} | {"agy": "ACP · Antigravity"}
 SOURCES = {
     "codex": "chatgpt.com · wham/usage",
     "claude": "Claude OAuth · api/oauth/usage (CLI fallback)",
     "grok": "cli-chat-proxy.grok.com · v1/billing",
     "copilot": "api.github.com · copilot_internal/user",
     "opencode": "opencode.ai · zen/go/v1/usage",
-    "agy": "agy · /usage (ZMX, off by default)",
+    "agy": "agy · /usage (external worker, off by default)",
 }
 NO_LIMITS_NOTE = "Plan limits are not exposed here; token usage is in the session totals."
 MAX_BODY = 512 * 1024
@@ -599,7 +599,7 @@ AGY_USAGE_TIMEOUT = 20.0
 
 
 async def _agy(_client: httpx.AsyncClient) -> dict[str, Any]:
-    """ZMX Antigravity usage from the CLI's own `/usage` command; no model turn, no credential read by Nexus."""
+    """Antigravity external-worker usage from the CLI's own `/usage` command; no model turn, no credential read."""
     from .workers.base import child_env as worker_env
     from .workers.registry import cli_path as zmx_cli
 
@@ -649,7 +649,7 @@ def connected_providers() -> list[str]:
     from .workers.registry import cli_path as zmx_cli
     from .workers.registry import enabled as zmx_enabled
 
-    if zmx_enabled("agy") and zmx_cli("agy"):  # ZMX off (the default) asks for nothing and probes nothing
+    if zmx_enabled("agy") and zmx_cli("agy"):  # off (the default) asks for nothing and probes nothing
         out.append("agy")
     return out
 

@@ -52,6 +52,29 @@ def test_patch_preserves_comments_and_rejects_stale_revision(tmp_path: Path) -> 
     assert config.read()["values"]["defaults"]["effort"] == "high"
 
 
+def test_workers_settings_read_and_write_the_old_zmx_alias(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[zmx]\nclaude_backend = "zmx"\nantigravity = true\n')
+    config = ConfigFile(path)
+    state = config.read()
+    assert state["values"]["workers"] == {"claude_backend": "cli", "antigravity": True}
+    assert state["values"]["zmx"] == {"claude_backend": "zmx", "antigravity": True}
+
+    # An older client still sends the old path and value; it lands in the canonical table as `cli`,
+    # while the old projection keeps reporting `zmx` to that client.
+    result = config.patch(state["revision"], {"zmx.claude_backend": "zmx"}, [])
+    assert result["values"]["workers"]["claude_backend"] == "cli"
+    assert result["values"]["zmx"]["claude_backend"] == "zmx"
+    import tomllib
+
+    assert tomllib.loads(path.read_text())["workers"]["claude_backend"] == "cli"
+
+    # A newer client writes the canonical path; the old projection still understands it.
+    result = config.patch(result["revision"], {"workers.claude_backend": "cli", "workers.antigravity": False}, [])
+    assert result["values"]["workers"] == {"claude_backend": "cli", "antigravity": False}
+    assert result["values"]["zmx"] == {"claude_backend": "zmx", "antigravity": False}
+
+
 def test_patch_validates_all_before_writing(tmp_path: Path) -> None:
     config = ConfigFile(tmp_path / "config.toml")
     with pytest.raises(ValueError):
@@ -259,10 +282,10 @@ def test_shared_ui_preferences_validate_independently(tmp_path):
     result = config.patch(config.read()["revision"], {
         "ui.detail": "high", "ui.reduced_motion": True,
     }, [])
-    assert result["values"]["ui"] == {"detail": "high", "reduced_motion": True, "favorite_models": []}
+    assert result["values"]["ui"] == {"detail": "high", "reduced_motion": True, "favorite_models": [], "onboarded": False}
     config.path.write_text('[ui]\ndetail = "unknown"\nreduced_motion = true\n')
     result = config.read()
-    assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True, "favorite_models": []}
+    assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True, "favorite_models": [], "onboarded": False}
     assert "ui.detail: invalid value" in result["errors"]
 
 
@@ -327,3 +350,15 @@ async def test_a_project_only_disabled_name_does_not_drop_the_other_defaults(tmp
         created = await client.post("/api/session", json={"directory": str(tmp_path)})
         assert created.status_code == 200, created.text
         assert created.json()["disabled_tools"] == ["bash"]
+
+
+def test_onboarded_flag_defaults_off_and_validates(tmp_path):
+    config = ConfigFile(tmp_path / "config.toml")
+    assert config.read()["values"]["ui"]["onboarded"] is False
+    result = config.patch(config.read()["revision"], {"ui.onboarded": True}, [])
+    assert result["values"]["ui"]["onboarded"] is True
+    for bad in ("yes", 1, None):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"ui.onboarded": bad}, [])
+    result = config.patch(config.read()["revision"], {}, ["ui.onboarded"])
+    assert result["values"]["ui"]["onboarded"] is False

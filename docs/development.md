@@ -47,11 +47,12 @@ system `ar` cannot replace it.
 
 Run one NSH web test file through the same wrapper, from `nexus-nsh`:
 `node scripts/nsh-web.mjs test --target web <file>.test.tsx` (or `npm test -- <file>.test.tsx`,
-which also regenerates `gen/`). It finds an installed Chrome and the archiver, so it needs no
-`--browser` and no `PATH=…/llvm/bin`. `nsh` is the binary in `~/.local/bin`: never run `npx nsh`,
-which installs an unrelated npm package of that name. (2026-11-12: agents spent about 300 shell
-calls in two days hand-resolving a Playwright browser and an llvm path that this wrapper makes
-unnecessary.)
+which also regenerates `gen/`). It normally finds an installed Chrome and the archiver.
+If successive tests fail at launch with “the browser is gone” on macOS, use Playwright's
+Chromium **headless shell** instead of full Chrome: run `npx playwright install chromium --only-shell`,
+then `npm test -- --browser /path/to/chrome-headless-shell`. Use the executable inside the
+installation directory printed by Playwright. `nsh` is the binary in `~/.local/bin`: never run
+`npx nsh`, which installs an unrelated npm package of that name.
 
 The shared Mermaid crate accepts `unicode-width` 0.2 patch releases: the dedicated
 Ratatui client retains its 0.2.0 lock, while NSH 0.4 requires 0.2.2 or newer.
@@ -70,7 +71,7 @@ nexus/
   llmhub/            types, sse, responses, chat, claude, providers, catalog, hub
   llmhub/auth/       store, device, api_key, codex, copilot, grok, opencode, claude, ollama, errors
   mock/              dev-only scripted provider (NEXUS10_DEV)
-  tools/             base, read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, ask, code
+  tools/             base, read, grep, glob, ls, bash, edit, patch, write, web_search, web_fetch, firecrawl, ask, code
   mcp/               MCP client, global manager, project MCP files (.mcp.json, .agents/mcp.json)
   skills/            skill files, /learn install, the skill tool
   voice/             speech-to-text and text-to-speech
@@ -110,6 +111,7 @@ nexus/
   files.py           project file browse, search and editor writes
   artifacts.py       stored media from tool results
   net.py             public-internet-only GET for web_fetch
+  firecrawl.py       install, process and client of the local Firecrawl behind the firecrawl tool
   provider_usage.py  every connected provider's usage; plan windows where reported
   doctor.py          `nexus doctor` and the release check
   kernels.py         daemon-owned persistent Monty kernels
@@ -251,6 +253,10 @@ Then, from any directory:
 | `nexus update` | Compares with the latest GitHub release; reports only |
 | `./install.sh` | In a checkout, builds and installs the `nexus` uv tool (Claude's SDK built from source, so no bundled CLI), `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--release [vX.Y.Z]` installs a GitHub release instead; `--uninstall` removes them and never touches `$NEXUS10_HOME`. Without a checkout (`curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh \| sh`) it installs the latest release: it downloads the Core wheel, the TUI binary for this platform and the web bundle if the release has one, checks each against the release's `SHA256SUMS`, then installs. Downloads retry (curl retries GitHub's `5xx`/timeout answers, then the script retries the whole file) because the release asset edge sometimes answers `504`; a released asset stays checksummed, so a retried download is either verified or refused. Either way, a Core daemon that is running is then restarted with the new `nexus` (a stopped one stays stopped), so it never keeps serving the old code. It is POSIX `sh`; Alpine/musl is refused. `NEXUS_RELEASE_BASE` points it at a mirror or a `file://` directory, which is how `scripts/test-install.sh` (run by `nexus test`, `nexus check` and CI, with a stub `curl` that answers `504` twice) exercises it offline. On Linux it warns when `libasound.so.2` is missing, since the TUI links it |
 | `nexus core <args>` | Core CLI explicitly |
+
+The installer runs uv quietly instead of listing every package, while retaining errors. Its completion message suggests
+`nexus voice init` for the optional speech-to-text and text-to-speech runtime and both models.
+A release also installs `firecrawl-local` (`$PREFIX/bin`) for the `firecrawl` tool; a checkout install builds it at the version pinned in `nexus/firecrawl.py`, and `nexus firecrawl init` is the fallback when a release has no binary for the platform ([tools.md](tools.md#firecrawl)).
 
 Anything not listed is passed to the Core CLI, so `nexus login codex`,
 `nexus chat`, `nexus session list` and similar commands work unchanged. The

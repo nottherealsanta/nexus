@@ -24,6 +24,7 @@ import "../../fonts/MonaspaceArgon-Bold.otf";
 export type CtxBody =
   | { kind: "grid"; items: { name: string; on: boolean }[] }
   | { kind: "inventory"; items: InventoryRow[] }
+  | { kind: "note"; text: string }
   | { kind: "none" };
 export interface CtxSection { key: string; title: string; tokens?: number; count?: number; meta: string; body: CtxBody; detail: string; markdown?: boolean; entries?: ContextEntry[] }
 
@@ -146,18 +147,20 @@ export function disabledOf(session: { disabled_tools?: unknown } | null | undefi
 }
 
 /** The sections of a frozen starting context (`GET …/snapshot`), as the timeline shows them. */
-/** A ZMX child's starting context: what Nexus knows about the CLI run, never a complete prompt (the CLI adds context Nexus cannot see). */
-export function zmxSections(w: { label: string; disclosure?: string; permission_mode?: string; directory?: string; model?: string; not_applied?: string[]; session_id?: string; status?: string; error?: string | null; denied_actions?: string[] }): { sections: CtxSection[]; total: number } {
+/** An external worker child's starting context: what Nexus knows about the CLI run, never a complete prompt. */
+export function zmxSections(w: { label: string; disclosure?: string; transport?: string; permission_mode?: string; directory?: string; model?: string; not_applied?: string[]; session_id?: string; status?: string; error?: string | null; denied_actions?: string[] }): { sections: CtxSection[]; total: number } {
   const facts = [w.model ? `model ${w.model}` : "", w.permission_mode ? `permission ${w.permission_mode}` : "", w.directory ? `cwd ${w.directory}` : ""].filter(Boolean).join(" · ");
   const section = (key: string, title: string, meta: string, detail: string): CtxSection => ({ key, title, meta, body: { kind: "none" }, detail });
+  const note = (key: string, title: string, text: string): CtxSection => ({ key, title, meta: "", body: { kind: "note", text }, detail: text });
   const denied = Array.isArray(w.denied_actions) ? w.denied_actions : [];
   return {
     total: 0,
     sections: [
-      section("zmx", w.label, "context incomplete", w.disclosure ?? "The CLI adds context Nexus cannot see."),
-      // The CLI stopped for a prompt it cannot answer here; Nexus approved nothing and says what to do by hand.
-      ...(w.status === "needs_attention" ? [section("zmx-attention", "Needs attention", w.error ?? "Run the CLI interactively to continue.", w.error ?? "Run the CLI interactively to continue.")] : []),
-      ...(denied.length ? [section("zmx-denied", "Denied by the CLI", `${denied.length} action${denied.length === 1 ? "" : "s"}`, denied.join("\n"))] : []),
+      section("zmx", w.label || "External worker", "context incomplete", w.disclosure ?? "The CLI adds context Nexus cannot see."),
+      // ACP attention can follow a Nexus denial. Claude and legacy CLI prompts are never answered by Nexus.
+      // The detail is the section's full text, wrapped under its title; a one-line meta clipped it.
+      ...(w.status === "needs_attention" ? [note("zmx-attention", "Needs attention", w.error ?? "Run the CLI interactively to continue.")] : []),
+      ...(denied.length ? [section("zmx-denied", w.transport === "acp-v1" ? "Denied through Nexus" : "Denied by the CLI", `${denied.length} action${denied.length === 1 ? "" : "s"}`, denied.join("\n"))] : []),
       section("zmx-run", "Run", facts || "not started", facts || "The CLI has not started yet."),
       section("zmx-settings", "Settings", "CLI inherited", "The CLI's own settings, memory, MCP servers and plugins apply."),
       section("zmx-not-applied", "Not applied", (w.not_applied ?? []).join(", "), "Nexus permission rules, disabled tools and step limits do not reach inside the CLI, which ran its own tools."),
@@ -240,6 +243,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
   const names = () => s.body.kind === "grid" ? s.body.items.map((item) => item.name) : s.body.kind === "inventory" ? s.body.items.map((item) => [item.name, item.meta, item.tools == null ? "" : `${item.tools} tools`, item.locked ? "new session" : ""].filter(Boolean).join(" · ")) : [];
   const grid = (most: number) => contextGrid(names(), p.width, most);
   const shownMeta = !offNote && !!s.meta && s.tokens === undefined;
+  const note = () => s.body.kind === "note" ? s.body.text : "";
   return (
     <View testID={`ctx-${s.key}`}>
       <Button onPress={p.onOpen} testID={`ctx-${s.key}-open`} accessibilityLabel={`View ${s.title} details`}
@@ -251,6 +255,7 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
         <If when={s.tokens !== undefined}><Text class={`shrink-0 ${HEAD} text-foreground-secondary tabular-nums`}>{`${p.estimated ? "~" : ""}${contextTokens(s.tokens ?? 0)}`}</Text></If>
         <If when={shownMeta}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ml-1 ${HEAD} text-muted-foreground`}>{s.meta}</Text></If>
       </Button>
+      <If when={!!note()}><Text style={{ userSelect: "text" }} class={`${HEAD} text-muted-foreground`} testID={`ctx-${s.key}-note`}>{note()}</Text></If>
       <If when={s.body.kind === "grid"}>
         <View class="flex-row pl-1" testID={`ctx-${s.key}-grid`}>
           <Each of={inColumns((s.body as { items: { name: string; on: boolean }[] }).items, grid(4).columns)} key={(_, i) => `${i}`}>

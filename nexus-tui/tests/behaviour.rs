@@ -1043,14 +1043,21 @@ fn mcp_settings_patch_core_values_with_a_bounded_number() {
     a.execute("app.settings");
     a.ui.settings_section = "mcp".into();
     a.ui.settings_nav_focus = false;
-    let rows = a.settings_rows();
-    let items = a.settings_items();
-    let position = |id: &str| {
-        rows.iter()
-            .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
-            .unwrap()
+    a.ui.settings_page = None;
+    // MCP is a page (plan: remote servers): its two settings are items below the server list.
+    let select = |a: &mut App, id: &str| {
+        let lines = a.settings_page_lines();
+        let at = lines
+            .iter()
+            .position(|l| matches!(l, nexus_tui::app::PageLine::Item { action: nexus_tui::app::PageAction::Setting(row), .. } if row.id == id))
+            .unwrap();
+        a.ui.settings_page_row = a
+            .settings_page_items()
+            .iter()
+            .position(|i| *i == at)
+            .unwrap();
     };
-    a.ui.settings_row = position("mcp.full_definitions");
+    select(&mut a, "mcp.full_definitions");
     press(&mut a, &["right"]);
     assert!(matches!(
         a.effects.last(),
@@ -1058,7 +1065,7 @@ fn mcp_settings_patch_core_values_with_a_bounded_number() {
             if revision == "cfg-1" && path == "mcp.full_definitions" && value == &serde_json::json!(true)
     ));
     a.effects.clear();
-    a.ui.settings_row = position("mcp.max_listed_tools");
+    select(&mut a, "mcp.max_listed_tools");
     press(&mut a, &["right"]);
     assert!(matches!(
         a.effects.last(),
@@ -3473,6 +3480,23 @@ fn launching_in_a_new_directory_adds_the_project_with_one_toast() {
 }
 
 #[test]
+fn a_project_added_from_the_rail_opens_on_its_new_session_screen() {
+    let mut a = app();
+    a.effects.clear();
+    a.apply_done(ActionDone {
+        call: ApiCall::AddProject {
+            path: "/work/new-project".into(),
+        },
+        result: Ok(Done {
+            project: Some("prj_new".into()),
+            ..Done::default()
+        }),
+    });
+    assert_eq!(a.ui.project.as_deref(), Some("prj_new"));
+    assert!(a.viewed_id().is_none(), "the new-session screen is shown");
+}
+
+#[test]
 fn configuration_problems_are_listed_in_settings_instead_of_toasted() {
     let mut a = app();
     a.ui.alerts.toasts.clear();
@@ -3495,19 +3519,20 @@ fn configuration_problems_are_listed_in_settings_instead_of_toasted() {
 }
 
 #[test]
-fn zmx_settings_show_core_s_unavailable_reason_and_change_nothing() {
-    let reason = "ZMX requires POSIX PTYs/process groups; it is unavailable on this platform";
+fn workers_settings_show_core_s_unavailable_reason_and_change_nothing() {
+    let reason =
+        "External workers require POSIX PTYs/process groups; they are unavailable on this platform";
     let mut a = app();
     a.state.config = Some(serde_json::json!({
-        "revision": "cfg-1", "zmx_unavailable": reason,
-        "values": {"zmx": {"claude_backend": "sdk", "antigravity": false}}
+        "revision": "cfg-1", "workers_unavailable": reason,
+        "values": {"workers": {"claude_backend": "sdk", "antigravity": false}}
     }));
     a.execute("app.settings");
-    a.ui.settings_section = "zmx".into();
+    a.ui.settings_section = "workers".into();
     a.ui.settings_nav_focus = false;
     let rows = a.settings_rows();
     let items = a.settings_items();
-    for id in ["zmx.claude_backend", "zmx.antigravity"] {
+    for id in ["workers.claude_backend", "workers.antigravity"] {
         let at = rows
             .iter()
             .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
@@ -3529,20 +3554,31 @@ fn zmx_settings_show_core_s_unavailable_reason_and_change_nothing() {
         press(&mut a, &["right"]);
         assert!(
             a.effects.is_empty(),
-            "{id} must not patch while ZMX is unavailable"
+            "{id} must not patch while external workers are unavailable"
         );
     }
-    // Where ZMX can run, the rows are editable again.
-    a.state.config.as_mut().unwrap()["zmx_unavailable"] = serde_json::Value::Null;
+    // Where external workers can run, the rows are editable again.
+    a.state.config.as_mut().unwrap()["workers_unavailable"] = serde_json::Value::Null;
     let found = rows.iter().find_map(|at| match &items[*at] {
         SettingsItem::Row {
             row,
             section_reason,
             ..
-        } if row.id == "zmx.antigravity" => Some(a.settings_reason(row, section_reason.as_deref())),
+        } if row.id == "workers.antigravity" => {
+            Some(a.settings_reason(row, section_reason.as_deref()))
+        }
         _ => None,
     });
     assert_eq!(found, Some(None));
+
+    // The choices name the transport, and the section uses the neutral umbrella.
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1", "workers_unavailable": null,
+        "values": {"workers": {"claude_backend": "cli", "antigravity": true}}
+    }));
+    let shown = draw(&mut a, 120, 36).1.join("\n");
+    assert!(shown.contains("External workers"), "{shown}");
+    assert!(shown.contains("PTY") && shown.contains("ACP"), "{shown}");
 }
 
 #[test]
