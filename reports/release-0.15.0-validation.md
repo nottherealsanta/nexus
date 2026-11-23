@@ -12,6 +12,7 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 - [Hosted artifact dry run](https://github.com/nottherealsanta/nexus/actions/runs/45168609035) **passed** on `e12f45df`: Core wheel and source archive, four TUI binaries, four Firecrawl binaries and the required NSH web archive. The eight binaries match their named architectures. The downloaded NSH archive contains `Nexus/index.html` and `serve.mjs`, and the extracted host served that index locally (HTTP 200). These are dry-run artifacts, not assets from the v0.15.0 tag.
 - The [Core matrix on `61decaa9`](https://github.com/nottherealsanta/nexus/actions/runs/45174708746) passed on Ubuntu and both TUI jobs passed. macOS reported eight watchdog errors and one bash-job test failure: the test awaited the internal reader task even after `kill()` had settled it, which can legitimately cancel the task. The test now verifies the terminal job state and checks cleanup without awaiting that cancelled task. Other fixes move the Git and database test setup seen in hosted stacks off the loop. All **93 affected tests** passed locally; hosted confirmation is pending.
 - The [Core matrix on `0417b026`](https://github.com/nottherealsanta/nexus/actions/runs/45176734604) again passed on Ubuntu, and all macOS test assertions passed. Four macOS watchdog errors remained: the stack samples named the browser's cold schema import and two worker tests' synchronous SQLite initialization; the remote-MCP sample lacked a stack. MCP now loads the validator and builds transports off-loop, and the worker test setup runs off-loop. **165 focused tests passed** locally; hosted confirmation is pending.
+- Those four stalls did not recur in the [Core matrix on `ce6a2b82`](https://github.com/nottherealsanta/nexus/actions/runs/45178485304). All assertions passed on both platforms, but other tests hit the watchdog (four on macOS, three on Ubuntu). Samples identified synchronous fixture work in all but one macOS Git route sample; that sample was in the launch of an already-async Git subprocess. The follow-up moves confirmed blocking SQLite, app setup and test Git calls off-loop without changing the gate. **Seven affected tests passed** locally.
 
 ## Core: blocking issues
 
@@ -23,6 +24,7 @@ The user approved publishing with the known **NSH** failures disclosed. The late
 | [PR #106, `c27096e8`](https://github.com/nottherealsanta/nexus/actions/runs/45173126853) | 1,773 passed, 14 skipped, 12 watchdog errors | 1,774 passed, 13 skipped, 4 watchdog errors |
 | [PR #106, `61decaa9`](https://github.com/nottherealsanta/nexus/actions/runs/45174708746) | 1,772 passed, 14 skipped, 1 failure, 8 watchdog errors | **1,774 passed, 13 skipped** |
 | [PR #106, `0417b026`](https://github.com/nottherealsanta/nexus/actions/runs/45176734604) | 1,773 passed, 14 skipped, 4 watchdog errors | **passed** |
+| [PR #106, `ce6a2b82`](https://github.com/nottherealsanta/nexus/actions/runs/45178485304) | 1,773 passed, 14 skipped, 4 watchdog errors | 1,774 passed, 13 skipped, 3 watchdog errors |
 
 ### macOS: fake Firecrawl startup (passed on `c230c75e`)
 

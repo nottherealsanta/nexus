@@ -1130,16 +1130,24 @@ def test_closed_turn_before_cleanup_is_recovered_once(tmp_path, idle_published):
         rt.store.close()
 
 
-async def test_permission_storage_failure_does_not_release_tool(tmp_path, monkeypatch):
+@pytest.fixture
+def permission_runtime(tmp_path):
     store = Store(tmp_path / "nexus.db")
-    rt = Runtime(remembering(store, "scripted/m"), Bus())
+    try:
+        yield Runtime(remembering(store, "scripted/m"), Bus())
+    finally:
+        store.close()
+
+
+async def test_permission_storage_failure_does_not_release_tool(permission_runtime, monkeypatch):
+    rt = permission_runtime
     future = asyncio.get_running_loop().create_future()
     rt.approvals["per_test"] = ("ses_test", future, {})
 
     def fail(*args, **kwargs):
         raise OSError("disk unavailable")
 
-    monkeypatch.setattr(store, "append_event", fail)
+    monkeypatch.setattr(rt.store, "append_event", fail)
     try:
         with pytest.raises(OSError, match="disk unavailable"):
             rt.reply("ses_test", "per_test", True)
@@ -1147,7 +1155,6 @@ async def test_permission_storage_failure_does_not_release_tool(tmp_path, monkey
         assert not future.done()
     finally:
         future.cancel()
-        store.close()
 
 
 

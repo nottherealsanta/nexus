@@ -84,10 +84,18 @@ async def test_provider_usage_reads_saved_snapshot_and_refreshes_on_post(setup, 
     assert calls == 1
 
 
-async def test_an_anonymous_server_answers_without_a_token(tmp_path, monkeypatch):
+@pytest.fixture
+def anonymous_app(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
-    app = build_app(make_runtime(remembering(Store(tmp_path / "anon.db"), "scripted/m")), token="", url="http://test")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    store = Store(tmp_path / "anon.db")
+    try:
+        yield build_app(make_runtime(remembering(store, "scripted/m")), token="", url="http://test")
+    finally:
+        store.close()
+
+
+async def test_an_anonymous_server_answers_without_a_token(anonymous_app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=anonymous_app), base_url="http://test") as client:
         assert (await client.get("/api/info")).status_code == 200
         # A supplied token is ignored rather than rejected.
         assert (await client.get("/api/info", headers={"authorization": "Bearer anything"})).status_code == 200
@@ -1166,7 +1174,7 @@ async def test_removed_projects_stay_removed_after_a_restart(setup):
     reopened.close()
 
 
-async def test_old_store_without_order_or_status_columns_migrates_in_creation_order(tmp_path):
+def test_old_store_without_order_or_status_columns_migrates_in_creation_order(tmp_path):
     import sqlite3
     store = Store(tmp_path / "nexus.db")
     for name in ("a", "b", "c"):
@@ -1226,10 +1234,11 @@ async def test_file_watch_lease_rejects_cross_project_session_and_releases(setup
         await client._transport.app.state.file_watches.close()
 
 
-async def test_project_git_live_guard_and_keyed_action(setup):
+@pytest.fixture
+def project_git(setup):
     import subprocess
 
-    rt, client, _provider, workspace = setup
+    _, _, _, workspace = setup
     def git(*args):
         return subprocess.run(["git", *args], cwd=workspace, check=True, capture_output=True, text=True)
 
@@ -1239,6 +1248,14 @@ async def test_project_git_live_guard_and_keyed_action(setup):
     (workspace / "file").write_text("before\n")
     git("add", "file")
     git("commit", "-qm", "initial")
+    return git
+
+
+async def test_project_git_live_guard_and_keyed_action(setup, project_git):
+    rt, client, _provider, workspace = setup
+    async def git(*args):
+        return (await asyncio.to_thread(project_git, *args)).stdout
+
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()
     session = (await client.post("/api/session", json={"project": project["id"]})).json()
     base = f"/api/project/{project['id']}/git"
@@ -1259,22 +1276,22 @@ async def test_project_git_live_guard_and_keyed_action(setup):
     commit = {"action": "commit", "value": "save", "confirmed_live": []}
     refused = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "refused-git"})
     assert refused.status_code == 409 and refused.json()["code"] == "worktree_live"
-    assert git("log", "-1", "--format=%s").stdout.strip() == "initial"
+    assert (await git("log", "-1", "--format=%s")).strip() == "initial"
     commit["confirmed_live"] = [session["id"]]
     done = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "commit-git"})
     assert done.status_code == 200, done.text
     replay = await client.post(base + "/action", json=commit, headers={"Idempotency-Key": "commit-git"})
     assert replay.status_code == 200 and replay.headers["idempotent-replayed"] == "true"
-    assert git("log", "-1", "--format=%s").stdout.strip() == "save"
-    git("branch", "safe-delete")
+    assert (await git("log", "-1", "--format=%s")).strip() == "save"
+    await git("branch", "safe-delete")
     force = {"action": "branch_delete_force", "value": "safe-delete", "confirmed_live": [session["id"]]}
     rejected = await client.post(base + "/action", json=force, headers={"Idempotency-Key": "force-refused"})
     assert rejected.status_code == 400 and "force_confirmed" in rejected.text
-    assert "safe-delete" in git("branch", "--list").stdout
+    assert "safe-delete" in await git("branch", "--list")
     force["force_confirmed"] = True
     accepted = await client.post(base + "/action", json=force, headers={"Idempotency-Key": "force-approved"})
     assert accepted.status_code == 200
-    assert "safe-delete" not in git("branch", "--list").stdout
+    assert "safe-delete" not in await git("branch", "--list")
     events = rt.store.replay(0, rt.store.log_head(), 1000)
     assert all(event["session_id"] is None for event in events if event["type"] == "git.changed")
     del rt.approvals["per_git"]

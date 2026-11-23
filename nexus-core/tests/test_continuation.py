@@ -296,7 +296,8 @@ async def test_continuation_after_clean_interruption_keeps_the_closed_result(env
     assert not (workspace / "after_interrupt.txt").exists()
 
 
-async def test_continuation_after_startup_recovery_keeps_unknown_tools_uncertain(tmp_path, monkeypatch):
+@pytest.fixture
+def recovered_continuation(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
     workspace = tmp_path / "proj"
     workspace.mkdir()
@@ -308,6 +309,14 @@ async def test_continuation_after_startup_recovery_keeps_unknown_tools_uncertain
     app = build_app(rt, token=TOKEN, url="http://test")
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
                                headers={"authorization": f"Bearer {TOKEN}"})
+    try:
+        yield rt, client, provider, workspace, session_id, turn_id
+    finally:
+        rt.store.close()
+
+
+async def test_continuation_after_startup_recovery_keeps_unknown_tools_uncertain(recovered_continuation):
+    rt, client, provider, workspace, session_id, turn_id = recovered_continuation
     try:
         stored = await _messages(client, session_id)
         assert [m["role"] for m in stored] == ["user", "assistant", "assistant", "tool", "user"]

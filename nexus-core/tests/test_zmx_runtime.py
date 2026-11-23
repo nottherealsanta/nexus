@@ -423,7 +423,8 @@ async def test_legacy_or_unmarked_agy_is_readable_but_refused(tmp_path, monkeypa
     assert turn["status"] == "failed" and "legacy transport" in turn["error"]["message"]
 
 
-async def test_acp_allow_rule_cannot_bypass_the_approval_card(tmp_path, monkeypatch):
+@pytest.fixture
+def acp_rule_session(tmp_path, monkeypatch):
     rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission")
     enable()
     config = ConfigFile()
@@ -431,6 +432,11 @@ async def test_acp_allow_rule_cannot_bypass_the_approval_card(tmp_path, monkeypa
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission="allow")
     child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    return rt, child
+
+
+async def test_acp_allow_rule_cannot_bypass_the_approval_card(acp_rule_session):
+    rt, child = acp_rule_session
     rt.prompt(child.id, "do it")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     assert pending["tool"] == "Antigravity · read_file — Read a.txt" and "rule" not in pending
