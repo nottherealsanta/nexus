@@ -1,6 +1,6 @@
 # Nexus v0.15.0 release handoff
 
-**Status (2026-11-23): not published.** v0.14.0 is still the latest release. The feature changes are on `main` via [#104](https://github.com/nottherealsanta/nexus/pull/104). The Firecrawl fixture follow-up [#105](https://github.com/nottherealsanta/nexus/pull/105) also shows as merged, but its hosted Core checks failed. [Release PR #103](https://github.com/nottherealsanta/nexus/pull/103) is the version bump; its checks can pass without running Core. Do not interpret that result as validation of the candidate.
+**Status (2026-11-23): published.** [v0.15.0](https://github.com/nottherealsanta/nexus/releases/tag/v0.15.0) is the latest release. #106 and release PR #103 are merged. The tag's first artifact run lost two macOS arm64 jobs that never got a runner. A `workflow_dispatch` re-run ([run](https://github.com/nottherealsanta/nexus/actions/runs/45190048956)) built and attached every asset. All 13 assets match `SHA256SUMS` and their named architectures, and the NSH archive contains `Nexus/index.html` and `serve.mjs`. The release notes carry the Core and NSH disclosures below.
 
 The user approved publishing with the known **NSH** failures disclosed. On 2026-11-23 the user also approved publishing once Core had no assertion failures, with any remaining hosted loop-stall watchdog errors disclosed.
 
