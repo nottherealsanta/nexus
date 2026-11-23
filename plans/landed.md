@@ -4,7 +4,7 @@ One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when th
 
 - **Phone tool-group summaries.** The phone conversation keeps tool groups in order as compact, always-collapsed, non-expandable rows with working/waiting/done status, counts from every member and the diff, and no tool detail; approvals stay usable and desktop is unchanged ([plan 05](05-mobile-and-design.md)).
 
-- **Antigravity ACP defaults to Auto.** Nexus declines remaining permission requests without prompting; `ask` still shows cards and existing children keep their mode. Verified offline ([plan 06](06-zmx.md)).
+- **Antigravity ACP defaults to Auto.** Nexus declines remaining permission requests without prompting; `ask` still shows cards; resumed `default` children move to Auto under `allow`. Verified offline ([plan 06](06-zmx.md)).
 
 - **Large-read regression test.** Assert reader and encoder thread placement for all three large history/snapshot responses rather than a scheduler-dependent ticker deadline. Worker and worktree test setup also moved off-loop; 42 focused tests passed ([plan 50](50-rust-core.md)).
 

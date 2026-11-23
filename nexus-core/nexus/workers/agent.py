@@ -118,16 +118,15 @@ class ExternalAgent:
                            "Its history remains readable; start a new child session.")
             if refusal is None:
                 effort = None if re.search(r"-(low|medium|high)$", self.model) else self.reasoning_effort
-                # A resumed child keeps its verified mode, including children created before Auto became the default.
-                mode = "default" if self.permission == "ask" else "auto"
-                if resume is not None and self.worker.get("permission_mode") == "default":
-                    mode = "default"
-                acp_policy = AcpPolicy(mode, effort)
+                # The session policy picks the mode on every turn, so a child created in the prompting mode
+                # moves to Auto when its policy is allow (and back to prompting under ask).
+                acp_policy = AcpPolicy("default" if self.permission == "ask" else "auto", effort)
                 acp_fingerprint = acp_policy.fingerprint(self.model, self.workspace.resolve(strict=True))
                 if resume is not None and not acp_resumable(self.worker):
                     refusal = ("This Antigravity ACP session's transport or policy could not be verified, so it "
                                "cannot be continued. Its history remains readable; start a new child session.")
-                elif resume is not None and self.worker.get("policy_fingerprint") != acp_fingerprint:
+                elif resume is not None and not acp_policy.resumes(self.worker.get("policy_fingerprint"), self.model,
+                                                                   self.workspace.resolve(strict=True)):
                     refusal = ("This Antigravity ACP session was created with a different model, mode, effort or "
                                "directory; start a new child session. Its history remains readable.")
         if refusal is not None:

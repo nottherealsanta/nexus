@@ -29,7 +29,8 @@ shown as legacy CLI), and label normalization works when an old row has no `prov
 ## 2026-11-23: Antigravity ACP migration (implemented; live protocol probe and Nexus E2E passed)
 
 - [x] **Follow-up: no permission prompts by default.** New `allow` children run in ACP `auto`; Nexus rejects or cancels
-  any remaining permission request without a card. `ask` still prompts and existing children retain their saved mode.
+  any remaining permission request without a card. `ask` still prompts. Resumed children also follow the policy (a
+  `default` child moves to `auto` under `allow`; only that mode switch is allowed on resume).
   Verified offline with fake ACP workers; live Auto behavior was not tested.
 
 **Decision (user):** move Antigravity only from the headless stream-json transport to ACP v1 (`agy acp`); leave Claude

@@ -15,7 +15,7 @@ import re
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,6 +51,8 @@ SETUP_UPDATE_TIMEOUT_SECONDS = 5.0
 # Expected ACP ids from the draft/scout. The worker only uses an id the agent
 # actually advertises in its modes response, so an unverified id cannot be assumed.
 ACP_MODES = ("default", "accept-edits", "auto", "plan")
+# A resumed child may switch between these; the mode is re-applied and confirmed by session/set_mode every run.
+RESUME_SWITCHABLE_MODES = ("default", "auto")
 Emit = Callable[[WorkerEvent], Awaitable[None]]
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
@@ -96,6 +98,15 @@ class AcpPolicy:
         body = {"transport": ACP_TRANSPORT, "mode": self.permission_mode, "model": model, "effort": self.effort,
                 "directory": str(workspace), "mcp_servers": [], "system_prompt": None}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+    def resumes(self, previous: str | None, model: str, workspace: Path) -> bool:
+        """Whether a stored fingerprint may continue under this policy: everything must match except a
+        default <-> auto mode switch, which session/set_mode applies and confirms on every run."""
+        if previous == self.fingerprint(model, workspace):
+            return True
+        return self.permission_mode in RESUME_SWITCHABLE_MODES and any(
+            previous == replace(self, permission_mode=mode).fingerprint(model, workspace)
+            for mode in RESUME_SWITCHABLE_MODES)
 
     def authority(self, workspace: Path) -> str:
         permissions = ("Nexus declines any CLI permission requests without prompting" if self.permission_mode == "auto"
@@ -817,7 +828,7 @@ class AntigravityAcpWorker:
             if previous_transport != ACP_TRANSPORT:
                 raise LegacyAntigravitySession("this Antigravity session was created by the legacy stream-json "
                                                "transport and cannot be continued; start a new child session")
-            if previous_fingerprint != fingerprint:
+            if not policy.resumes(previous_fingerprint, model, workspace):
                 raise WorkerError("this Antigravity ACP session was created with a different model, mode, effort "
                                   "or directory; start a new child session")
         version = await self.preflight()

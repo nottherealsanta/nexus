@@ -305,7 +305,7 @@ async def test_acp_auto_declines_permission_without_a_card(tmp_path, monkeypatch
     assert rt.session_json(rt.session(child.id))["worker"]["status"] == "needs_attention"
 
 
-async def test_existing_allow_child_resumes_in_its_original_prompting_mode(env):
+async def test_existing_prompting_allow_child_resumes_in_auto(env):
     rt, workspace, _ = env
     enable()
     project = rt.open_project(str(workspace))
@@ -320,8 +320,21 @@ async def test_existing_allow_child_resumes_in_its_original_prompting_mode(env):
     await idle(rt)
     log = acp_log(workspace)
     assert any(entry.get("method") == "session/resume" for entry in log)
-    assert [entry["params"]["modeId"] for entry in log if entry.get("method") == "session/set_mode"] == ["default"]
-    assert rt.session_json(rt.session(child.id))["worker"]["status"] == "completed"
+    assert [entry["params"]["modeId"] for entry in log if entry.get("method") == "session/set_mode"] == ["auto"]
+    worker = rt.session_json(rt.session(child.id))["worker"]
+    assert worker["status"] == "completed" and worker["permission_mode"] == "auto"
+    assert worker["policy_fingerprint"] == AcpPolicy("auto").fingerprint(MODEL.split("/", 1)[1], workspace.resolve())
+
+
+def test_acp_resume_switches_only_between_default_and_auto(tmp_path):
+    model, workspace = "gemini-3-pro", tmp_path.resolve()
+    default, auto = AcpPolicy("default"), AcpPolicy("auto")
+    assert auto.resumes(default.fingerprint(model, workspace), model, workspace)
+    assert default.resumes(auto.fingerprint(model, workspace), model, workspace)
+    assert not auto.resumes(AcpPolicy("plan").fingerprint(model, workspace), model, workspace)
+    assert not AcpPolicy("plan").resumes(default.fingerprint(model, workspace), model, workspace)
+    assert not auto.resumes(default.fingerprint("other-model", workspace), model, workspace)
+    assert not auto.resumes(AcpPolicy("default", "high").fingerprint(model, workspace), model, workspace)
 
 
 async def test_acp_permission_denied_is_honored_and_never_allowed(tmp_path, monkeypatch):

@@ -87,7 +87,7 @@ work unchanged. One CLI process per Nexus turn; the next turn resumes the CLI's 
 | Events from | The CLI's own transcript (`~/.claude/projects/…/<session>.jsonl`), which must resolve under the CLI's config directory | `session/update` notifications and the prompt result |
 | Text | Arrives per block (the transcript is written per block), not per token | `agent_message_chunk` text deltas stream live |
 | Permission requests | None are answered; a prompt ends the turn as `needs_attention` | In `auto`, Nexus rejects or cancels without a card. In ACP `default`, requests go to the existing approval card; only per-call allow/deny is returned |
-| Nexus `ask` / `allow` session permission | `ask` → `dontAsk`; `allow` → `auto` (the CLI's classifier) | For new children: `ask` → ACP `default` (prompting); `allow` → ACP `auto` (the default). Existing children keep their saved mode |
+| Nexus `ask` / `allow` session permission | `ask` → `dontAsk`; `allow` → `auto` (the CLI's classifier) | `ask` → ACP `default` (prompting); `allow` → ACP `auto` (the default). Applied every turn, so a resumed child created in `default` moves to `auto` under `allow` |
 | Bypass | Never | Never: `always-proceed` is refused and Nexus never passes `agy acp --dangerously-skip-permissions` |
 
 ### Antigravity ACP setup
@@ -224,7 +224,7 @@ on `session.updated`, and as its own `session.worker` event (see [api.md](api.md
 | `status` | `not_started`, `running`, then the CLI's outcome: `completed`, `needs_attention` or `failed` (an interrupted turn stays `running` in the record; the turn row says `interrupted`) |
 | `error` | The instruction or failure text (for `needs_attention`: the exact command to run) |
 | `transport` | `acp-v1` for new Antigravity children, `stream-json-v1` for legacy rows; Claude rows may omit it. A missing marker with existing Antigravity history is treated as legacy |
-| `session_id`, `transcript_path`, `policy_fingerprint` | The CLI's session/conversation id, (Claude) transcript path, and the policy the worker started with. Claude Code and ACP resume require the same policy fingerprint; ACP also requires a session id |
+| `session_id`, `transcript_path`, `policy_fingerprint` | The CLI's session/conversation id, (Claude) transcript path, and the policy the worker started with. Claude Code and ACP resume require the same policy fingerprint; ACP allows only a `default` ↔ `auto` mode change (re-applied and confirmed by `session/set_mode`) and also requires a session id |
 | `context_complete` | Always `false` |
 | `disclosure`, `not_applied`, `settings`, `mcp` | The authority statement shown on the card |
 | `usage` | Last reported usage or `null`; ACP maps the prompt result's token fields, and stays `null` when the result has none |
