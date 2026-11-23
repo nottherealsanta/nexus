@@ -155,11 +155,11 @@ async def test_api_refuses_removal_while_a_session_uses_the_worktree_and_merges_
     await client.post("/api/session", json={"directory": str(feature)})
     base = f"/api/project/{project['id']}/worktree"
     head = (await client.get(base + "/review", params={"worktree": str(feature)})).json()["head"]
-    before = git(repo, "rev-parse", "HEAD").strip()
+    before = await asyncio.to_thread(git, repo, "rev-parse", "HEAD")
     refused = await client.post(base + "/integrate", headers={"Idempotency-Key": "k2"},
                                 json={"worktree": str(feature), "expected_head": head, "mode": "ff", "remove": True})
     assert refused.status_code == 400 and "directory of session" in refused.text
-    assert git(repo, "rev-parse", "HEAD").strip() == before
+    assert await asyncio.to_thread(git, repo, "rev-parse", "HEAD") == before
     kept = await client.post(base + "/integrate", headers={"Idempotency-Key": "k3"},
                              json={"worktree": str(feature), "expected_head": head, "mode": "ff"})
     assert kept.status_code == 200 and feature.exists() and kept.json()["removed"]["worktree"] is False

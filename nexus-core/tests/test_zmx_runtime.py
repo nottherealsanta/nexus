@@ -331,12 +331,19 @@ async def test_acp_reject_only_permission_does_not_show_an_unusable_card(tmp_pat
     assert turn["status"] == "failed" and "declined" in turn["error"]["message"]
 
 
-async def test_acp_persistent_permission_never_reaches_a_card(tmp_path, monkeypatch):
-    rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission-persistent")
+@pytest.fixture
+def acp_permission_session(request, tmp_path, monkeypatch):
+    rt, workspace, _ = build_env(tmp_path, monkeypatch, request.param)
     enable()
     project = rt.open_project(str(workspace))
     root = rt.create_session(project, title=None, model=None, permission=None)
     child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+    return rt, workspace, child
+
+
+@pytest.mark.parametrize("acp_permission_session", ["permission-persistent"], indirect=True)
+async def test_acp_persistent_permission_never_reaches_a_card(acp_permission_session):
+    rt, workspace, child = acp_permission_session
     rt.prompt(child.id, "do it")
     await idle(rt)
     assert rt.store.events(child.id, types=["permission.asked"]) == []
@@ -345,12 +352,9 @@ async def test_acp_persistent_permission_never_reaches_a_card(tmp_path, monkeypa
     assert turn["status"] == "failed" and "could not obtain an approval" in turn["error"]["message"]
 
 
-async def test_acp_session_grant_only_covers_the_exact_payload(tmp_path, monkeypatch):
-    rt, workspace, _ = build_env(tmp_path, monkeypatch, "permission")
-    enable()
-    project = rt.open_project(str(workspace))
-    root = rt.create_session(project, title=None, model=None, permission=None)
-    child = rt.create_session(project, title=None, model=MODEL, permission="allow", parent=root)
+@pytest.mark.parametrize("acp_permission_session", ["permission"], indirect=True)
+async def test_acp_session_grant_only_covers_the_exact_payload(acp_permission_session):
+    rt, workspace, child = acp_permission_session
     rt.prompt(child.id, "first")
     [pending] = await until(lambda: rt.pending_approvals(child.id))
     rt.reply(child.id, pending["id"], True, scope="session")

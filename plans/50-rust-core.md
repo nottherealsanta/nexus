@@ -56,6 +56,8 @@ Why Python is enough for most of it, and where it is not:
   collections of up to 50 ms landing in random steps late in the run; hosted errors moved between tests each run.
 - [x] Use hosted stall samples to move MCP cold imports and transport construction, and the worker API tests' database
   setup, off the loop. The focused browser, MCP and worker suites pass; hosted results are in the release handoff.
+- [x] Check that the large history and snapshot routes perform reads and encoding on worker threads directly. This
+  replaces an absolute ticker-lateness assertion that could fail on a runner pause; the suite-wide stall guard stays on.
 - [ ] Restart the daemon on the instrumented build and collect a week of `nexus perf` (user; not from an agent session).
 - [ ] When a stall appears, `py-spy dump`/`record` it and name the code. Record the causes here.
 - [x] Fixture generator: a large synthetic `nexus.db` with the real schema (thousands of sessions, one with 5,000
