@@ -89,6 +89,20 @@ async def test_close_stops_the_process(fake, ctx):
     assert process.returncode is not None
 
 
+async def test_startup_failure_reports_child_exit(tmp_path, monkeypatch, ctx):
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path))
+    script = tmp_path / "firecrawl-local"
+    script.write_text("#!/bin/sh\nexit 3\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(firecrawl, "binary", lambda: str(script))
+    try:
+        with pytest.raises(ToolError, match=r"did not start \(pid \d+ exited with code 3; see .*firecrawl\.log"):
+            await fc({"action": "scrape", "url": "https://x.example/a"}, ctx)
+        assert firecrawl.server().process is None
+    finally:
+        await firecrawl.close()
+
+
 async def test_refused_targets_and_http_errors(fake, ctx):
     with pytest.raises(ToolError, match="only public internet addresses"):
         await fc({"action": "scrape", "url": "https://blocked.example/"}, ctx)

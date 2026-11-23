@@ -516,7 +516,8 @@ or release with no binary: it runs `cargo install firecrawl-local --version <VER
 when the installed version is not the pinned one (it is still used). Core never installs it, and when it is missing the
 error tells the model not to install it or retry and to use `web_fetch` or tell the user (as `web_search` does). The first `firecrawl` call starts `firecrawl-local serve` on a free `127.0.0.1` port with a random
 bearer token and keeps it for the daemon's life; a call after it died starts it again; daemon shutdown stops it. Its log is
-`~/.nexus/logs/firecrawl.log`. Nothing runs until a call.
+`~/.nexus/logs/firecrawl.log`. A startup failure reports the child PID and either its exit code or the last health probe
+result. Nothing runs until a call.
 
 **What it can reach.** Nexus starts the server with `FIRECRAWL_CLOUD=off`, a scrubbed environment (`PATH`, `HOME`, `LANG`,
 `TMPDIR`, `USER` and its own `FIRECRAWL_*` values, so no API keys) and never `--allow-private`. A page this machine cannot

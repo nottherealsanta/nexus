@@ -29,6 +29,8 @@ Playwright, Redis, RabbitMQ, Postgres) is not used. Behaviour is in [tools.md](.
 - [x] Both clients: Tools grid chip, `Firecrawl` timeline label and argument, web icon, `page` activity noun (TUI and NSH
   edited together; the manifest note regenerated into `nexus-nsh/src/gen/manifest.ts`).
 - [x] 14 tests with a stand-in server (`tests/test_firecrawl.py`); Core suite and `cargo test` pass.
+- [x] Report Firecrawl startup diagnostics and remove reverse DNS from the stand-in HTTP server's bind path; 16 focused
+  tests pass on local macOS. Hosted confirmation is tracked in the [0.15.0 handoff](../reports/release-0.15.0-validation.md).
 - [x] Live run of the crates.io build: example.com scrape, crawl and map; an arXiv PDF as Markdown; docs.firecrawl.dev map;
   `127.0.0.1`, `localhost` refused; a 404 reported as an error; no process left behind.
 

@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 
 args = sys.argv[1:]
 port = int(args[args.index("--port") + 1])
@@ -70,4 +71,15 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_DELETE = handle_any
 
 
-ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind resolves the address before calling listen().
+        # This loopback-only fixture must not depend on the runner's DNS.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
+
+
+print(f"Fake Firecrawl pid {os.getpid()} binding 127.0.0.1:{port}", flush=True)
+with Server(("127.0.0.1", port), Handler) as server:
+    print(f"Fake Firecrawl listening on 127.0.0.1:{port}", flush=True)
+    server.serve_forever()
