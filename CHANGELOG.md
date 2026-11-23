@@ -15,6 +15,21 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.16.0](https://github.com/nottherealsanta/nexus/compare/v0.15.0...v0.16.0) (2026-11-23)
+
+
+### Features
+
+* **nsh:** phone tool summaries and persistent tabs ([d59643b](https://github.com/nottherealsanta/nexus/commit/d59643be27eef5589b7e5f2d1c249e065b70c683))
+* **workers:** Antigravity ACP children default to Auto ([d5ff3cc](https://github.com/nottherealsanta/nexus/commit/d5ff3ccd91e859eccaf9ab2c17cdd04d8224d765))
+
+
+### Bug fixes
+
+* **mcp:** report signed_in only after the server reconnects ([cf0b1bb](https://github.com/nottherealsanta/nexus/commit/cf0b1bbe38dfb124adef7d25d368675ed68d0242))
+* **tui:** sessions in two worktrees no longer alternate ([8b8e52b](https://github.com/nottherealsanta/nexus/commit/8b8e52b211c53fd97b9635ececc1053811b13ebd))
+* **workers:** resumed Antigravity children follow the Auto default ([200582a](https://github.com/nottherealsanta/nexus/commit/200582acdd093ecf4179a57eae303322bf1b002b))
+
 ## [0.15.0](https://github.com/nottherealsanta/nexus/compare/v0.14.0...v0.15.0) (2026-11-23)
 
 
