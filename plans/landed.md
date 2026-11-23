@@ -2,6 +2,18 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Large-read regression test.** Assert reader and encoder thread placement for all three large history/snapshot responses rather than a scheduler-dependent ticker deadline. Worker and worktree test setup also moved off-loop; 42 focused tests passed ([plan 50](50-rust-core.md)).
+
+- **Core loop stalls from MCP setup.** Load the schema validator and construct transports off-loop; recheck the captured configuration before opening the transport. Worker tests also move database setup off-loop. 165 focused tests passed ([plan 50](50-rust-core.md)).
+
+- **v0.15 artifact dry run passed.** Hosted NSH web packaging, Core packages and both architectures of TUI and Firecrawl on Linux and macOS built. The downloaded NSH archive served its index from the bundled host. Publication remains gated by the hosted Core matrix ([handoff](../reports/release-0.15.0-validation.md)).
+
+- **v0.15 NSH release packaging.** Enable the NSH web artifact job, pin the locally validated NSH 0.4.0 revision, and include the loopback host alongside the web assets. The offline installer test covers installing both; hosted build tracked in the [release handoff](../reports/release-0.15.0-validation.md).
+
+- **Core release validation.** Search and terminal HTTP fixtures run blocking setup before the loop starts; the offline suite blocks live models.dev downloads without changing the 100 ms watchdog ([plan 50](50-rust-core.md)).
+
+- **Firecrawl startup diagnostics.** Core reports the child PID and either its exit code or the last health probe result; the stand-in server no longer depends on reverse DNS to listen. All 16 focused tests pass locally; hosted checks pending ([plan 51](51-firecrawl.md)).
+
 - **External workers rename (11-23).** ZMX is now **External workers** in Core, both clients, Settings and docs: `PTY · Claude Code`, `ACP · Antigravity`, and `CLI · Antigravity` for a legacy stream-json history. Settings options are `Agent SDK`/`PTY` and `off`/`ACP`. `[workers] claude_backend = "cli"` is canonical; `[zmx]`/`"zmx"` and the old API keys remain aliases, and an old-client write stores `cli`. `GET` and `PATCH /api/config` both carry the unavailable reason. A new Antigravity child carries the ACP marker from creation, so a failure before its first prompt is not labelled legacy CLI. Old worker labels are normalized for display (including rows without a provider) without rewriting model context. Tests: Core config/workers/scenarios; TUI and NSH scenario/settings checks; paired Settings captures in `reports/external-workers-rename-2026-11-23/`.
 
 - **First-run onboarding (11-23).** Both clients open a full-window tour once per Nexus home (`ui.onboarded` in Core's config): connect a provider, choose models per agent (scout and quick get a small-model hint), then lessons on the timeline, subagents, approvals and navigation. Replay with `/onboarding`. Steps and wording live in `interface/manifest.toml`; desktop and web only. Core `test_config.py`, TUI `onboarding.rs`, NSH `onboarding.test.tsx`. **Not verified:** a real provider sign-in from the tour, light theme, narrow NSH. See [plan 52](52-onboarding.md).

@@ -344,18 +344,25 @@ async def test_filter_membership_from_recorded_creates_and_tombstones(tmp_path):
 # -- global lifecycle events and tombstones -----------------------------------
 
 
-async def test_global_lifecycle_events_and_deletion_tombstones_are_durable(env):
-    rt, store = env.rt, env.store
+@pytest.fixture
+def lifecycle_tree(env):
+    rt = env.rt
     project = rt.open_project(str(env.workspace))
     rt.rename_project(project.id, "renamed")
     root = new_session(rt, env.workspace, title="root")
     child = new_session(rt, env.workspace, title="child", parent=root)
     publish(rt, child.id, 1)
+    return project, root, child
+
+
+async def test_global_lifecycle_events_and_deletion_tombstones_are_durable(env, lifecycle_tree):
+    rt, store = env.rt, env.store
+    project, root, child = lifecycle_tree
 
     await rt.delete_session(root.id)  # cascades to the child
     await rt.delete_project(project.id)
 
-    rows = store.replay(0, store.log_head(), 1000)
+    rows = await store.r.replay(0, store.log_head(), 1000)
     types = [row["type"] for row in rows]
     assert types[:2] == ["project.created", "project.updated"] and "project.deleted" in types
     tombstones = [row for row in rows if row["type"] == "session.deleted"]

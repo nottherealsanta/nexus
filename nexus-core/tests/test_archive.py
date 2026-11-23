@@ -174,34 +174,37 @@ async def test_whole_tree_archive_preserves_messages_events_and_snapshots(env):
     assert rt.store.snapshot(root["id"]) == before_snapshot
 
 
-async def test_archiving_does_not_touch_worktrees_or_branches(env):
-    _, client, _, workspace = env
+@pytest.fixture
+def archive_repo(env):
+    _, _, _, workspace = env
     git(workspace, "init", "-q", "-b", "main")
     git(workspace, "add", "-A")
     git(workspace, "commit", "-qm", "init")
+    return env
+
+
+async def test_archiving_does_not_touch_worktrees_or_branches(archive_repo):
+    _, client, _, workspace = archive_repo
     root = await _create(client, workspace)
-    path = env.tmp_path / "wt-feature"
+    path = archive_repo.tmp_path / "wt-feature"
     created = (await client.post(f"/api/session/{root['id']}/worktrees",
                                  json={"action": "create", "path": str(path), "branch": "feature"})).json()
     assert created["path"] == str(path.resolve())
-    before = git(workspace, "worktree", "list", "--porcelain")
-    before_branch = git(workspace, "branch", "--list", "feature")
+    before = await asyncio.to_thread(git, workspace, "worktree", "list", "--porcelain")
+    before_branch = await asyncio.to_thread(git, workspace, "branch", "--list", "feature")
 
     assert (await client.post(f"/api/session/{root['id']}/archive")).status_code == 200
-    assert git(workspace, "worktree", "list", "--porcelain") == before
-    assert git(workspace, "branch", "--list", "feature") == before_branch
+    assert await asyncio.to_thread(git, workspace, "worktree", "list", "--porcelain") == before
+    assert await asyncio.to_thread(git, workspace, "branch", "--list", "feature") == before_branch
     assert path.is_dir()
     assert (await client.get(f"/api/session/{root['id']}")).json()["directory"] == str(workspace.resolve())
     assert (await client.post(f"/api/session/{root['id']}/unarchive")).status_code == 200
 
 
-async def test_archived_session_still_protects_its_worktree(env):
-    _, client, _, workspace = env
-    git(workspace, "init", "-q", "-b", "main")
-    git(workspace, "add", "-A")
-    git(workspace, "commit", "-qm", "init")
+async def test_archived_session_still_protects_its_worktree(archive_repo):
+    _, client, _, workspace = archive_repo
     root = await _create(client, workspace)
-    path = env.tmp_path / "wt-kept"
+    path = archive_repo.tmp_path / "wt-kept"
     created = (await client.post(f"/api/session/{root['id']}/worktrees",
                                  json={"action": "create", "path": str(path), "branch": "kept"})).json()
     moved = await client.post(f"/api/session/{root['id']}/directory", json={"directory": created["path"]})

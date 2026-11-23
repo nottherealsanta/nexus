@@ -29,6 +29,8 @@ Playwright, Redis, RabbitMQ, Postgres) is not used. Behaviour is in [tools.md](.
 - [x] Both clients: Tools grid chip, `Firecrawl` timeline label and argument, web icon, `page` activity noun (TUI and NSH
   edited together; the manifest note regenerated into `nexus-nsh/src/gen/manifest.ts`).
 - [x] 14 tests with a stand-in server (`tests/test_firecrawl.py`); Core suite and `cargo test` pass.
+- [x] Report Firecrawl startup diagnostics and remove reverse DNS from the stand-in HTTP server's bind path; 16 focused
+  tests pass on local macOS. Hosted confirmation is tracked in the [0.15.0 handoff](../reports/release-0.15.0-validation.md).
 - [x] Live run of the crates.io build: example.com scrape, crawl and map; an arXiv PDF as Markdown; docs.firecrawl.dev map;
   `127.0.0.1`, `localhost` refused; a 404 reported as an error; no process left behind.
 
@@ -40,14 +42,15 @@ Playwright, Redis, RabbitMQ, Postgres) is not used. Behaviour is in [tools.md](.
 - [ ] NSH: the test runner (`nsh`) is not installed here, so NSH's settings and timeline edits are checked by reading only.
   Paired TUI/NSH screenshots of the Tools grid and a `firecrawl` row are not captured.
 - [ ] Whether a model picks `firecrawl` over `web_fetch` sensibly; look at real sessions after a week.
-- [ ] **Release path unrun.** `scripts/test-install.sh` covers the installer offline (passes), but the new `firecrawl` job in
-  `build-artifacts.yml` has never run on CI: the Linux (glibc 22.04, x86_64 and arm64) and macOS x86_64 builds of
-  `firecrawl-local` are untried, and no real release has carried it. Run the workflow's `workflow_dispatch` dry run before the
-  next release. Not tried: a downloaded macOS binary being quarantined or needing signing.
+- [x] **Hosted dry run.** The [artifact workflow](https://github.com/nottherealsanta/nexus/actions/runs/45168609035)
+  built and ran `--version` on Firecrawl Local for Linux x86_64 and arm64 and macOS x86_64 and arm64. Downloaded
+  binaries matched their named architectures. `scripts/test-install.sh` covers the installer offline.
+- [ ] Verify binaries from the published release against `SHA256SUMS`. Not tried: a downloaded macOS binary being
+  quarantined or needing signing.
 - [ ] A release with no firecrawl binary (older releases) leaves the tool saying it is not installed; `install.sh` prints the
   `nexus firecrawl init` hint.
-- [ ] AGPL-3.0: Nexus now **redistributes** the unmodified binary, so the AGPL's source offer applies to it. The release
-  carries `THIRD-PARTY/firecrawl-local.md` (licence, pinned version, where the source is); Nexus talks to it over HTTP as a
-  separate program. Needs the user's or a lawyer's sign-off before the first release that includes it; this is not legal advice.
+- [x] AGPL-3.0: the user signed off on redistributing the unmodified Firecrawl Local 0.1.1 binaries for v0.15.0
+  with `THIRD-PARTY/firecrawl-local.md` (licence, pinned version, where the source is). Nexus talks to the binary over
+  HTTP as a separate program.
 - [ ] Upgrades: the version is pinned once, in `nexus/firecrawl.py` (`VERSION`); the release job, `install.sh` and `init` all
   read it. Moving it is a manual, tested change.

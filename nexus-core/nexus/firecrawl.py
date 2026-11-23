@@ -166,17 +166,22 @@ class Server:
         assert self.client is not None and self.process is not None
         loop = asyncio.get_running_loop()
         deadline = loop.time() + START_WAIT_S
+        last_probe = "no health response"
         while loop.time() < deadline:
             if self.process.returncode is not None:
                 break
             try:
-                if (await self.client.get("/health", timeout=2)).status_code == 200:
+                response = await self.client.get("/health", timeout=2)
+                if response.status_code == 200:
                     return
-            except httpx.HTTPError:
-                pass
+                last_probe = f"health returned HTTP {response.status_code}"
+            except httpx.HTTPError as exc:
+                last_probe = f"health probe: {type(exc).__name__}"
             await asyncio.sleep(0.1)
+        pid, code = self.process.pid, self.process.returncode
+        detail = f"pid {pid}, {last_probe}" if code is None else f"pid {pid} exited with code {code}"
         await self._stop()
-        raise ToolError(f"firecrawl: {CRATE} did not start (see {log_path()}); the next call tries again")
+        raise ToolError(f"firecrawl: {CRATE} did not start ({detail}; see {log_path()}); the next call tries again")
 
     async def request(self, method: str, path: str, *, body: dict[str, Any] | None = None,
                       timeout: float) -> tuple[int, dict[str, Any]]:

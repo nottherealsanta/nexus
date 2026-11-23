@@ -49,7 +49,7 @@ def log_path(name: str) -> Path:
     return home() / "logs" / "mcp" / f"{bridge.part(name)}.log"
 
 
-_MCP_MODULES = ("mcp", "mcp.client.stdio", "mcp.client.sse", "mcp.client.streamable_http", "httpx2")
+_MCP_MODULES = ("mcp", "mcp.client.stdio", "mcp.client.sse", "mcp.client.streamable_http", "httpx2", "jsonschema")
 
 
 def _load_mcp() -> None:
@@ -202,7 +202,10 @@ class Connection:
                     auth = oauth.connection_auth(self.scope, config, required)
                 else:
                     auth = oauth.unauthorized_probe(required)
-            async with Client(_transport(config, errlog, auth), read_timeout_seconds=config.call_timeout,
+            # Streamable HTTP initializes its TLS trust store when the transport is built.
+            transport = await asyncio.to_thread(_transport, config, errlog, auth)
+            self._check()
+            async with Client(transport, read_timeout_seconds=config.call_timeout,
                               message_handler=on_message) as client:
                 self.client = client
                 self.tools = await self._list()

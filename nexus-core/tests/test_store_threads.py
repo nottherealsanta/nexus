@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 import time
-from typing import Self
 
 import httpx
 import pytest
 from conftest import remembering
 
+from nexus import jsonenc
 from nexus import store as store_module
 from nexus.llmhub.types import Message, Text
 from nexus.server import build_app, make_runtime
@@ -48,29 +49,6 @@ async def timed(client, path: str) -> float:
     response = await client.get(path)
     assert response.status_code == 200, response.text
     return time.perf_counter() - started
-
-
-class Lateness:
-    """How late a 5 ms ticker wakes: the event loop's stall, measured directly."""
-
-    def __init__(self) -> None:
-        self.max = 0.0
-        self._task: asyncio.Task | None = None
-
-    async def __aenter__(self) -> Self:
-        async def tick() -> None:
-            loop = asyncio.get_running_loop()
-            while True:
-                before = loop.time()
-                await asyncio.sleep(0.005)
-                self.max = max(self.max, loop.time() - before - 0.005)
-        self._task = asyncio.create_task(tick())
-        await asyncio.sleep(0.05)
-        self.max = 0.0
-        return self
-
-    async def __aexit__(self, *exc) -> None:
-        self._task.cancel()
 
 
 SLOW = 0.8
@@ -117,19 +95,46 @@ async def test_a_slow_write_does_not_hold_other_requests(env):
     assert store.preference("probe") == "1"
 
 
-async def test_a_large_read_does_not_stall_the_loop(env):
+async def test_large_reads_and_encodes_run_off_the_loop(env, monkeypatch):
     _rt, store, client, session = env
     big = "x" * 4000
     # Seeded on the writer thread: 3,000 appends in one loop step would be the stall, not the reads under test.
     await store.w.run(lambda s: [s.append_message(session.id, user(f"{n} {big}")) for n in range(3000)])
-    async with Lateness() as lateness:
-        for path in (f"/api/session/{session.id}/message",  # all 3000, ~12 MB
-                     f"/api/session/{session.id}/message?limit=500",
-                     f"/api/snapshot?session={session.id}&message_limit=1000"):
-            response = await client.get(path)
-            assert response.status_code == 200
-    # The SQLite read, row conversion and the 12 MB encode (ajson) all run off the loop.
-    assert lateness.max < 0.25, f"loop stalled {lateness.max * 1000:.0f} ms"
+    loop_thread = threading.get_ident()
+    reading, encoding = [], []
+    messages, messages_page, snapshot, dumps = Store.messages, Store.messages_page, Store.state_snapshot, jsonenc.dumps
+
+    def read_messages(*args, **kwargs):
+        reading.append(threading.get_ident())
+        return messages(*args, **kwargs)
+
+    def read_page(*args, **kwargs):
+        reading.append(threading.get_ident())
+        return messages_page(*args, **kwargs)
+
+    def read_snapshot(*args, **kwargs):
+        reading.append(threading.get_ident())
+        return snapshot(*args, **kwargs)
+
+    def encode(value):
+        body = dumps(value)
+        if len(body) > 1_000_000:
+            encoding.append(threading.get_ident())
+        return body
+
+    monkeypatch.setattr(Store, "messages", read_messages)
+    monkeypatch.setattr(Store, "messages_page", read_page)
+    monkeypatch.setattr(Store, "state_snapshot", read_snapshot)
+    monkeypatch.setattr(jsonenc, "dumps", encode)
+    for path in (f"/api/session/{session.id}/message",  # all 3000, ~12 MB
+                 f"/api/session/{session.id}/message?limit=500",
+                 f"/api/snapshot?session={session.id}&message_limit=1000"):
+        reading.clear()
+        encoding.clear()
+        response = await client.get(path)
+        assert response.status_code == 200 and len(response.content) > 1_000_000
+        assert reading and loop_thread not in reading
+        assert encoding and loop_thread not in encoding
 
 
 async def test_writing_then_reading_sees_the_write(env):

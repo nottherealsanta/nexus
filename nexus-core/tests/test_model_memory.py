@@ -1,5 +1,7 @@
 """There is no default model: a new session starts with the user's last selection."""
 
+import asyncio
+
 import httpx
 import pytest
 from conftest import remembering
@@ -32,12 +34,15 @@ def env(tmp_path, monkeypatch):
                                    headers={"authorization": "Bearer t"})
         return rt, client
 
-    return make, workspace
+    async def start(last=""):
+        return await asyncio.to_thread(make, last)
+
+    return start, workspace
 
 
 async def test_without_a_selection_a_session_has_no_model_and_cannot_run(env):
     make, workspace = env
-    _, client = make()
+    _, client = await make()
     session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     assert (session["model"], session["model_source"]) == ("", "none")
     assert (await client.get("/api/model/last")).json() == {"model": "", "source": "none"}
@@ -47,7 +52,7 @@ async def test_without_a_selection_a_session_has_no_model_and_cannot_run(env):
 
 async def test_selection_is_remembered_globally_and_per_agent(env):
     make, workspace = env
-    _, client = make()
+    _, client = await make()
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()["id"]
     first = (await client.post("/api/session", json={"project": project, "model": "scripted/a"})).json()
     assert first["model"] == "scripted/a"
@@ -70,7 +75,7 @@ async def test_selection_is_remembered_globally_and_per_agent(env):
 
 async def test_model_switch_is_remembered_and_agent_switch_keeps_the_model(env):
     make, workspace = env
-    _, client = make()
+    _, client = await make()
     session = (await client.post("/api/session", json={"directory": str(workspace), "model": "scripted/a"})).json()
     session = (await client.post(f"/api/session/{session['id']}/model", json={"model": "scripted/c"})).json()
     assert (await client.get("/api/model/last")).json()["model"] == "scripted/c"
@@ -82,7 +87,7 @@ async def test_model_switch_is_remembered_and_agent_switch_keeps_the_model(env):
 
 async def test_agent_pin_applies_until_the_session_leaves_it(env):
     make, workspace = env
-    _, client = make("scripted/last")
+    _, client = await make("scripted/last")
     session = (await client.post("/api/session", json={"directory": str(workspace), "agent": "pinned"})).json()
     assert (session["model"], session["model_source"]) == ("scripted/pin", "agent")
     session = (await client.post(f"/api/session/{session['id']}/agent", json={"agent": "orchestrate"})).json()
@@ -94,19 +99,19 @@ async def test_agent_pin_applies_until_the_session_leaves_it(env):
 
 async def test_a_remembered_model_is_replaced_by_the_next_selection(env):
     make, workspace = env
-    _, client = make("scripted/last")
+    _, client = await make("scripted/last")
     project = (await client.post("/api/project", json={"path": str(workspace)})).json()["id"]
     assert (await client.post("/api/session", json={"project": project})).json()["model"] == "scripted/last"
     await client.post("/api/session", json={"project": project, "model": "scripted/picked"})
     assert (await client.post("/api/session", json={"project": project})).json()["model"] == "scripted/picked"
     # The memory is on disk: a restarted daemon still has it.
-    _, client2 = make()
+    _, client2 = await make()
     assert (await client2.get("/api/model/last")).json()["model"] == "scripted/picked"
 
 
 async def test_subagent_inherits_the_parent_model(env):
     make, workspace = env
-    rt, _ = make()
+    rt, _ = await make()
     project = rt.open_project(str(workspace))
     parent = rt.create_session(project, title=None, model="scripted/a", permission=None)
     child = rt.create_session(project, title=None, model=None, permission=None, agent="scout", parent=parent)
@@ -119,13 +124,13 @@ async def test_subagent_inherits_the_parent_model(env):
 
 async def test_effort_selection_is_remembered_for_new_root_sessions(env):
     make, workspace = env
-    _, client = make()
+    _, client = await make()
     first = (await client.post("/api/session", json={"directory": str(workspace), "effort": "high"})).json()
     project = first["project_id"]
     second = (await client.post("/api/session", json={"project": project})).json()
     assert second["effort"] == "high"
     await client.patch(f"/api/session/{second['id']}", json={"effort": "low"})
-    _, restarted = make()
+    _, restarted = await make()
     third = (await restarted.post("/api/session", json={"project": project})).json()
     assert third["effort"] == "low"
     child = (await restarted.post("/api/session", json={"parent": third["id"], "agent": "scout", "effort": "high"})).json()

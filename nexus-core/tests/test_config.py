@@ -333,9 +333,8 @@ def test_tools_disabled_accepts_project_only_names_but_not_malformed_ones(tmp_pa
             config.patch(config.read()["revision"], {"tools.disabled": bad}, [])
 
 
-async def test_a_project_only_disabled_name_does_not_drop_the_other_defaults(tmp_path: Path, monkeypatch) -> None:
-    import httpx
-
+@pytest.fixture
+def disabled_defaults_app(tmp_path, monkeypatch):
     from nexus.server import build_app, make_runtime
     from nexus.store import Store
 
@@ -343,9 +342,18 @@ async def test_a_project_only_disabled_name_does_not_drop_the_other_defaults(tmp
     home.mkdir()
     monkeypatch.setenv("NEXUS10_HOME", str(home))
     (home / "config.toml").write_text('[tools]\ndisabled = ["bash", "only_elsewhere", "skill:nothing"]\n')
-    runtime = make_runtime(remembering(Store(tmp_path / "store.db"), "codex/model"))
-    app = build_app(runtime, token="token", url="http://test")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+    store = Store(tmp_path / "store.db")
+    try:
+        runtime = make_runtime(remembering(store, "codex/model"))
+        yield build_app(runtime, token="token", url="http://test")
+    finally:
+        store.close()
+
+
+async def test_a_project_only_disabled_name_does_not_drop_the_other_defaults(tmp_path, disabled_defaults_app) -> None:
+    import httpx
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=disabled_defaults_app), base_url="http://test",
                                  headers={"authorization": "Bearer token"}) as client:
         created = await client.post("/api/session", json={"directory": str(tmp_path)})
         assert created.status_code == 200, created.text

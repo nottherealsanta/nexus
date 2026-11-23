@@ -61,7 +61,9 @@ An exact shared 0.2.0 pin prevents the NSH native host from resolving dependenci
 Core tests run a loop-stall watchdog (plan 50, rule R1, `tests/conftest.py`): any asyncio callback or task step
 that runs 100 ms or more without yielding fails its test. `NEXUS_TEST_STALL_MS=250` raises the limit (0 turns it off),
 `NEXUS_TEST_STALL_REPORT=1` never fails and prints every stall at the end, and `@pytest.mark.blocks_loop("reason")`
-marks a test that blocks on purpose. Wait for conditions with `tests/waiting.py` `until(...)` (a generous ceiling,
+marks a test that blocks on purpose. Garbage-collection time inside a step is reported but not counted: a full
+collection scans the whole test process's heap, so its pause depends on where in the run a step lands. A stall
+report includes the stack sampled while the step was blocked. Wait for conditions with `tests/waiting.py` `until(...)` (a generous ceiling,
 returns at once), never a fixed short poll.
 
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):
@@ -258,6 +260,18 @@ The installer runs uv quietly instead of listing every package, while retaining 
 `nexus voice init` for the optional speech-to-text and text-to-speech runtime and both models.
 A release also installs `firecrawl-local` (`$PREFIX/bin`) for the `firecrawl` tool; a checkout install builds it at the version pinned in `nexus/firecrawl.py`, and `nexus firecrawl init` is the fallback when a release has no binary for the platform ([tools.md](tools.md#firecrawl)).
 
+For a release with `nexus-web.tar.gz`, the installer puts the NSH web client and its same-origin host in
+`$PREFIX/share/nexus/web`. With Node 22 or newer and `nexus` on `PATH`, start the host and open `http://127.0.0.1:4820`:
+
+```sh
+web="${PREFIX:-$HOME/.local}/share/nexus/web"
+node "$web/serve.mjs" --static "$web/Nexus"
+```
+
+The host can discover or start local Core. The release build pins the same NSH revision used in local validation;
+it type-checks the app, runs the host tests, and packages the built client and host together. The full browser suite
+is not a release gate.
+
 Anything not listed is passed to the Core CLI, so `nexus login codex`,
 `nexus chat`, `nexus session list` and similar commands work unchanged. The
 launcher honours `NEXUS10_HOME`; it refuses an unmigrated `~/.nexus`.
@@ -384,8 +398,10 @@ posting, renders the turn (including questions and approvals), and accepts
 
 ## Tests
 
-`tests/` needs no network or credentials. `pytest-asyncio` runs in `auto` mode
-(`asyncio_mode = "auto"`), so async tests need no marker.
+`tests/` needs no external network or credentials. Catalog lookups can read test caches, but the default
+fixture disables downloads from models.dev. `pytest-asyncio` runs in `auto` mode (`asyncio_mode = "auto"`),
+so async tests need no marker. Use synchronous fixtures for blocking setup such as Git commands and SQLite
+initialization so the loop watchdog measures the async code under test.
 
 | File | Covers |
 | --- | --- |
