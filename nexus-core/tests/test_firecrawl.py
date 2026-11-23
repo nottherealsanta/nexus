@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ async def fake(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("NEXUS10_HOME", str(home))
     script = tmp_path / "firecrawl-local"
-    script.write_text(f"#!/bin/sh\nexec {sys.executable} {FIXTURE} \"$@\"\n")
+    script.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(FIXTURE))} \"$@\"\n")
     script.chmod(0o755)
     record = home / "firecrawl" / "state" / "record.jsonl"
     monkeypatch.setattr(firecrawl, "binary", lambda: str(script))
