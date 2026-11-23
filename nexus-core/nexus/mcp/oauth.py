@@ -295,10 +295,11 @@ class Logins:
             except Exception:  # noqa: BLE001 - never leak a provider failure or a credential
                 state.update(status="failed", message="Sign-in failed; try again.", verification_uri=None)
             else:
-                state.update(status="signed_in", message=None, verification_uri=None)
-            if state["status"] == "signed_in":
+                # Reconnect before reporting success, so a client that sees `signed_in` also sees the server's
+                # state after the sign-in, never the `connecting` in between.
                 with contextlib.suppress(Exception):
                     await done()
+                state.update(status="signed_in", message=None, verification_uri=None)
             self.publish("mcp.login", dict(state))
 
         self.tasks[ident] = asyncio.create_task(run(), name=f"mcp-login-{config.name}")
