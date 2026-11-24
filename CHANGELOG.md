@@ -15,6 +15,13 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.17.0](https://github.com/nottherealsanta/nexus/compare/v0.16.0...v0.17.0) (2026-11-24)
+
+
+### Features
+
+* **core:** update Nexus from a release or a checkout ([ed7c96c](https://github.com/nottherealsanta/nexus/commit/ed7c96c70cdadc31f5d17ec7f16dfc6fb381bbc2))
+
 ## [0.16.0](https://github.com/nottherealsanta/nexus/compare/v0.15.0...v0.16.0) (2026-11-23)
 
 
