@@ -6,6 +6,7 @@ Made (user):
 
 | Date | Decision |
 | --- | --- |
+| 2026-11-24 | **`nexus update` installs (user):** a release install runs the latest release's `install.sh`, pinned to the checked tag and verified against that tag's `SHA256SUMS` before execution; a checkout install only fast-forwards its upstream branch, then runs `./install.sh --source`. Dirty checkouts (including untracked files), local commits, detached HEADs, missing upstreams and installs that `direct_url.json` cannot classify are refused with instructions and changed only when safe. `--check` and `--json` stay report-only (JSON shape unchanged) and `--yes` is for automation. Both installers restart a running daemon, and an interrupted restart leaves it stopped for `nexus daemon start`. |
 | 2026-11-23 | **The phone shows tool-group summaries (user):** the phone session view keeps tool groups in timeline order as one compact, always-collapsed, non-expandable row each, with running/waiting/done status, the group's counts (from every member, including ones a running group truncates) and its diff, and no member or tool detail; approvals stay in their separate card. This replaces the earlier "no tool groups" rule for mobile only; desktop/web keep the expandable group. |
 | 2026-11-23 | **Antigravity ACP runs without permission cards by default (user):** new `allow` children use agy's Auto mode and Nexus declines any residual ACP requests. New `ask` children use the prompting mode. Existing ACP children follow the policy on resume too (user: AGY asked every time); only a `default` ↔ `auto` switch is allowed. No permission-skip flag. |
 | 2026-11-23 | **v0.15.0 packaging (user):** include a hosted-built NSH web bundle before publishing, disclose the known NSH browser test failures, and bundle the unmodified Firecrawl Local 0.1.1 binaries with the licence and source notice. [Release handoff](../reports/release-0.15.0-validation.md). |
@@ -51,7 +52,6 @@ Open (each has a default that holds unless the user objects):
 | --- | --- |
 | Browser (old 14.4): still wanted? | Deferred. Only the terminal is in this plan; the browser stays in 9.21. If picked up, decide first: rendering in terminals without image support (a lossy text view needs approval and a ledger row), remote browser access (no powerful resource on a tokenless non-loopback server), profile persistence and scoped agent control (start isolated, user-controlled), Chromium distribution, and Core-parsed grid vs raw bytes per client (`reports/section14/spikes.md`) |
 | Terminal parser strategy, access model, agent typing (section 2) | Defaults in section 2; confirm at the design review |
-| Does `nexus update` install or only report? | Report only until decided |
 | Manager Q4: can `navigate` open Settings (now a mobile tab too)? | Open to show a section; never change a value or sign in |
 | Do Anthropic Messages and Gemini ship in 0.10.x? | — |
 | Can a parent card steer a child session? Persist session grants? Output caps (lines or bytes)? | — |

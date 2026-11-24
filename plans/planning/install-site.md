@@ -143,8 +143,9 @@ and manages the Python Core needs, so the user installs no Python.
      about it).
    - Linux note: the TUI needs `libasound.so.2` (`libasound2` / `libasound2t64` / `alsa-lib`), with the exact message the installer
      prints.
-2. **Update** (`/update`): re-run the installer (it restarts a running daemon), or pin a version. Today `nexus update` only checks and
-   prints a URL; do not document it as an updater.
+2. **Update** (`/update`): `nexus update` installs the latest release's checksum-verified installer (it restarts a running daemon);
+   from a checkout it fast-forwards upstream and reinstalls from source. `nexus update --check` only reports. Mention pinning a version
+   with `sh install.sh --release vX.Y.Z` and that dirty, diverged or unrecognized installs are refused rather than changed.
 3. **Uninstall** (`/uninstall`): `sh install.sh --uninstall` needs the file, so the page shows
    `curl -fsSL https://nexus.santa.build/install.sh | sh -s -- --uninstall`. Say what it removes and that `~/.nexus` is never touched.
 4. **iOS** (`/ios`): the build-it-yourself flow. See "iOS page" below.

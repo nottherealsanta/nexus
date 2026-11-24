@@ -43,8 +43,10 @@ cache age (warns past 7 days), config errors (fails), the `[web] search_url`
 container, `firecrawl-local` (warns when it is not installed), the browser tools (warns when `uvx` or a Chrome, Chromium or Edge is missing, or
 Google Chrome is with `[browser] use_my_chrome` on; `browser.requirements`), MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
 Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon,
-loads a model or downloads. `nexus update` compares `/api/info`'s version with
-the latest GitHub release and never installs. The daemon's version (also sent
+loads a model or downloads. `nexus update --check` compares the running version with
+the latest GitHub release and changes nothing; plain `nexus update` installs it (a
+release's checksum-verified installer, or a fast-forward plus source install in a
+checkout) and restarts a running daemon. The daemon's version (also sent
 in the SSE `connected` event) comes from the installed `nexus10` distribution
 metadata, so release and development versions follow the package version.
 

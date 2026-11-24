@@ -108,6 +108,17 @@ curl_stub 1
 NEXUS_TEST_DAEMON_STATE=running run "$TMP/running" > "$TMP/out" 2> "$TMP/err" || fail "running-daemon update failed"
 [ "$(cat "$TMP/daemon.log")" = "$(printf 'daemon status\ndaemon stop\ndaemon start')" ] || fail "running daemon was not restarted in order"
 
+# A payload that does not match SHA256SUMS must stop before uv installs anything.
+cp "$REL/$WHEEL" "$TMP/wheel.orig"
+printf 'tampered\n' > "$REL/$WHEEL"
+curl_stub 1
+: > "$TMP/uv.log"
+if run "$TMP/checksum" > "$TMP/out" 2> "$TMP/err"; then fail "a wheel with the wrong checksum was installed"; fi
+mv "$TMP/wheel.orig" "$REL/$WHEEL"
+grep -q 'does not match SHA256SUMS' "$TMP/err" || { cat "$TMP/err"; fail "the checksum failure was not reported"; }
+[ ! -e "$TMP/checksum/bin/nexus-tui" ] || fail "a checksum failure left a TUI behind"
+[ ! -s "$TMP/uv.log" ] || fail "a checksum failure still installed the Core wheel"
+
 # Not flaky: one 504 that never clears must stop before anything is installed.
 curl_stub 0
 : > "$TMP/uv.log"

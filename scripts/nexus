@@ -23,7 +23,8 @@
 #   nexus test                Core, TUI and shared Mermaid tests
 #   nexus fmt                 format the TUI and Mermaid crates and regenerate shared files
 #   nexus doctor              versions and paths, then Core's checks (daemon code, sign-ins, ...)
-#   nexus update              check for a newer release (never installs)
+#   nexus update [flags]      update Nexus (release or checkout); --check reports only,
+#                             --json prints the check, --yes skips the prompt
 #   nexus core <args>         run the Core CLI (login, chat, session, ...)
 #
 # Anything not listed is passed to the Core CLI, so `nexus login codex`,
@@ -437,7 +438,14 @@ case "${1:-}" in
   test)                shift; test_all "$@" ;;
   fmt)                 shift; fmt_all "$@" ;;
   doctor)              shift; doctor "$@" ;;
-  update)              shift; ensure_home; core update "$@" ;;
+  update)
+    shift
+    report_only=0
+    for arg in "$@"; do
+      case "$arg" in --check|--json) report_only=1 ;; esac
+    done
+    [ "$report_only" = 1 ] || ensure_home
+    core update "$@" ;;
   core)                shift; core "$@" ;;
   help|-h|--help)      usage ;;
   *)                   core "$@" ;;

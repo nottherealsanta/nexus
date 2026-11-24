@@ -1246,8 +1246,10 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--quiet", action="store_true", help="no progress on stderr")
     workers = sub.add_parser("workers", help="external worker CLI processes that outlived Nexus")
     workers.add_argument("action", choices=["list", "clean"], help="`clean` stops listed processes whose pid and start time still match")
-    update = sub.add_parser("update", help="check for a newer release (never installs anything)")
-    update.add_argument("--json", action="store_true", help="print the result as JSON")
+    update = sub.add_parser("update", help="update Nexus (a release, or a checkout from its upstream); --check only reports")
+    update.add_argument("--check", action="store_true", help="report whether an update is available; change nothing")
+    update.add_argument("--json", action="store_true", help="print the release check as JSON; change nothing")
+    update.add_argument("--yes", action="store_true", help="do not ask for confirmation (for automation)")
     serve = sub.add_parser("serve", help="run the daemon in the foreground")
     serve.add_argument("--port", type=int)
     serve.add_argument("--host", help="address to bind (default 0.0.0.0, or $NEXUS_HOST); serves without a token off loopback: trusted networks only; use 127.0.0.1 for local-only access")
@@ -1394,11 +1396,9 @@ def main(argv: list[str] | None = None) -> int:
             if not found:
                 print("no external worker processes are running outside Nexus")
         elif args.command == "update":
-            from . import doctor
+            from . import update as updater
             from .server import VERSION
-            result = doctor.update_check(VERSION)
-            print(json.dumps(result, indent=2) if args.json else
-                  result["detail"] + (f"\n{result['url']}\nUpdate by pulling the checkout and running ./install.sh." if result["state"] == "available" else ""))
+            return updater.run(VERSION, check_only=args.check, as_json=args.json, yes=args.yes)
         elif args.command == "serve":
             daemon.serve(args.port, args.host)
         elif args.command == "pair":

@@ -224,19 +224,32 @@ def _version_key(text: str) -> tuple[tuple[int, ...], int]:
     return numbers, 0 if dev else 1
 
 
-def update_check(current: str) -> dict[str, Any]:
-    """Compare with the latest GitHub release. Reports only; never installs."""
+def check_release(current: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Compare with the latest GitHub release and return the report plus the release itself."""
     try:
         response = httpx.get(RELEASES_URL, headers={"accept": "application/vnd.github+json"}, timeout=10)
     except httpx.HTTPError as exc:
-        return {"current": current, "latest": None, "state": "unknown", "detail": f"could not reach GitHub: {exc}"}
+        return {"current": current, "latest": None, "state": "unknown", "detail": f"could not reach GitHub: {exc}"}, None
     if response.status_code == 404:
-        return {"current": current, "latest": None, "state": "none", "detail": "no release has been published yet"}
+        return {"current": current, "latest": None, "state": "none", "detail": "no release has been published yet"}, None
     if response.status_code != 200:
-        return {"current": current, "latest": None, "state": "unknown", "detail": f"GitHub answered HTTP {response.status_code}"}
-    release = response.json()
+        return {"current": current, "latest": None, "state": "unknown",
+                "detail": f"GitHub answered HTTP {response.status_code}"}, None
+    try:
+        release = response.json()
+    except ValueError as exc:
+        return {"current": current, "latest": None, "state": "unknown",
+                "detail": f"GitHub sent an unreadable release: {exc}"}, None
+    if not isinstance(release, dict):
+        return {"current": current, "latest": None, "state": "unknown",
+                "detail": "GitHub sent an unexpected release"}, None
     latest = str(release.get("tag_name", "")).lstrip("v")
     newer = _version_key(latest) > _version_key(current)
     return {"current": current, "latest": latest, "url": release.get("html_url"),
             "state": "available" if newer else "current",
-            "detail": f"{latest} is available" if newer else f"{current} is the latest release"}
+            "detail": f"{latest} is available" if newer else f"{current} is the latest release"}, release
+
+
+def update_check(current: str) -> dict[str, Any]:
+    """Compare with the latest GitHub release. Reports only; never installs."""
+    return check_release(current)[0]

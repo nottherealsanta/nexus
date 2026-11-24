@@ -58,7 +58,7 @@ restart_daemon() {
   nexus_bin="$(uv tool dir --bin 2>/dev/null)/nexus"
   [ -x "$nexus_bin" ] || return 0
   "$nexus_bin" daemon status 2>/dev/null | grep -q '^running' || return 0
-  step "Restart the Core daemon"
+  step 'Restart the Core daemon (an interruption leaves it stopped; run `nexus daemon start`)'
   "$nexus_bin" daemon stop >/dev/null 2>&1 || true
   "$nexus_bin" daemon start || printf 'warning: the daemon did not restart; run `nexus daemon start`.\n' >&2
 }

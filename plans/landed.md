@@ -294,3 +294,17 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
 
 The Sessions, Manager and Settings tabs remain visible in a phone conversation; headless phone tests pass, physical-device verification remains open (plan 05).
 
+# 2026-11-24: `nexus update` installs
+
+`nexus update` now updates instead of only reporting. It reads the PEP 610 `direct_url.json` of the `nexus10` distribution: a
+release wheel hands off (via `exec`, so the old `uv` process is gone) to that tag's `install.sh`, downloaded from the hard-coded
+GitHub release URL and verified against the tag's `SHA256SUMS` before execution; the installer then verifies every payload and
+restarts a running daemon. A checkout install refuses a detached HEAD, missing upstream, in-progress merge/rebase, local changes
+including untracked files, and local commits, then fetches, fast-forwards only, and runs the checkout's `install.sh --source`.
+Installs with no usable install metadata, a VCS source or a vanished directory fail closed with reinstall instructions. A prompt
+names what will change and the daemon restart; without a terminal `--yes` is required. `--check` and `--json` remain report-only
+with the same JSON shape. Verified offline: mocked release downloads/checksums, real temporary Git clones for fast-forward,
+dirty/diverged/detached refusals, CLI flag wiring, `ruff`, focused and full Core tests, `sh -n install.sh`,
+`sh scripts/test-install.sh` (now including a tampered wheel that must not install) and `bash -n scripts/nexus`. No real update
+or home migration was run.
+

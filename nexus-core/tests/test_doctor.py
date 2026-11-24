@@ -33,6 +33,14 @@ def test_update_check_reports_each_outcome(monkeypatch):
     assert doctor.update_check("0.10.0")["state"] == "unknown"
 
 
+def test_check_release_gives_the_updater_the_exact_tag(monkeypatch):
+    body = {"tag_name": "v0.10.0", "html_url": "u", "assets": [{"name": "install.sh"}]}
+    monkeypatch.setattr(doctor.httpx, "get", lambda *a, **k: httpx.Response(200, json=body))
+    report, release = doctor.check_release("0.9.0")
+    assert report["state"] == "available" and report["latest"] == "0.10.0"
+    assert release == body
+
+
 def test_daemon_row_flags_other_code(monkeypatch):
     found = {"url": "http://x", "token": "t"}
     monkeypatch.setattr(doctor, "_get", lambda f, path: {"pid": 1, "version": "v", "code": "stale"})

@@ -32,7 +32,8 @@ Rechecked 2026-11-09 against freshly fetched refs and GitHub. Release PR #100 me
   Rust, Node 22; source install checks `/usr/bin/env`, which the Monty launcher explicitly executes. Real Linux kernel execution remains part of the platform matrix.
 - [x] Remove `nexus-design-mockup/` (11-07); no leftover `nexus10` branch wording remains in `AGENTS.md` or `docs/development.md`.
 - [ ] Bump to the next `-dev` version after published-release verification.
-- [x] **`nexus update`:** reports only, following the default decision. Core CLI, launcher and offline update-check tests are implemented.
+- [x] **`nexus update`:** initially reported only. On 2026-11-24 it installs: a release install runs the pinned release's verified
+  installer, a checkout fast-forwards upstream and reinstalls from source, and `--check`/`--json` stay report-only.
 - [ ] Platform matrix: macOS arm64 from a clean home, then Linux x86_64 and aarch64 (install, `nexus doctor`, daemon,
   TUI, NSH web, a scripted turn, a kernel run).
 
