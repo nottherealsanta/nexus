@@ -139,6 +139,8 @@ pub enum PaletteMode {
     PoolModels,
     /// A model for one agent in the first-run tour (`AppUi::onboarding_pick` says which).
     OnboardingModels,
+    /// An agent's per-model effort in Settings or the first-run tour (`AppUi::effort_pick` says which).
+    AgentEfforts,
     Agents,
     Efforts,
     Export,
@@ -163,6 +165,12 @@ pub enum PaletteKind {
     PoolModel(String),
     /// A model chosen in the tour; `None` is "use the session's model".
     OnboardingModel(Option<String>),
+    /// An agent's effort for one model; `None` is the effective default and clears the override.
+    AgentEffort {
+        agent: String,
+        model: String,
+        level: Option<String>,
+    },
     Agent(String),
     Effort(String),
     /// (format, scope): `markdown|json`, `session|tree`.
@@ -694,6 +702,8 @@ pub enum OnboardingTarget {
     Back,
     Next,
     Row(usize),
+    /// The effort line under a model row in the first-run tour.
+    Effort(usize),
     Retry,
 }
 

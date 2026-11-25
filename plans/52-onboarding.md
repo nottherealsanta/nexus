@@ -12,8 +12,9 @@ teach the basics of Nexus like a game tutorial.
 - **Form:** a full-window step-by-step view, not a modal, with progress dots, Back / Next / Skip and a goal on the provider
   step ("Connect a provider", checked when one is connected).
 - **Agents:** one row per agent with a hint; a picker limited to connected providers' models writes `agents.models.<agent>` (one
-  model). The root row cycles `defaults.agent` (`build` / `orchestrate`). Unset means the agent uses its parent's model. There is
-  no "suggest for me" button.
+  model). After selecting a model with catalog-listed effort levels, an effort picker offers its supported levels and the
+  effective agent or model default; `e` reopens it. Overrides are per agent and model. The root row cycles `defaults.agent`
+  (`build` / `orchestrate`). Unset means the agent uses its parent's model. There is no "suggest for me" button.
 - **Web search (user, 2026-11-24):** desktop onboarding has a Web search step after the agent models. Core starts the
   SearXNG behind `web_search` in the background as a container (Apple `container` when installed, else Docker), using
   the settings packaged in the wheel and copied to `$NEXUS10_HOME/search/`. The step shows running, starting, stopped,

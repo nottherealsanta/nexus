@@ -1,0 +1,40 @@
+
+  nexus                                            ● ● ● ○ ○ ○ ○ ○ ○                                   3 / 9  [ Skip ]
+
+                      Choose models for your agents
+
+                      Nexus works as a team. You talk to one agent, and it can hand jobs to
+                      others. Each agent can use its own model, so quick cheap models do the
+                      reading and your best model does the thinking.
+
+                      Le
+                      it  Reasoning effort
+
+                          ⌕ type to filter efforts                                              ld
+                          ────────────────────────────────────────────────────────────────────
+                         ▌  Agent default: low
+                            none
+                      ▌     low                                                                 ra
+                            medium
+                            high
+                            xhigh
+                            max
+                                                                                                el
+
+
+
+                                                                                                el
+                                                                                                re
+
+
+                          ↑↓ move · enter run · esc close                               1 of 7  el
+
+
+
+                      ⓘ Type part of a name in the picker to filter it.
+
+
+
+                      ↑↓ choose · enter change · e effort · → next · ← back · esc back · s skip
+                      [ Back ]                                                            [ Next ]
+

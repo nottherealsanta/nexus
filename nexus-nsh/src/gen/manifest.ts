@@ -934,6 +934,7 @@ export const manifest = {
   "quest_provider": "Connect a provider",
   "hints_info": "enter next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
   "hints_rows": "\u2191\u2193 choose \u00b7 enter change \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "hints_agents": "\u2191\u2193 choose \u00b7 enter change \u00b7 e effort \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
   "hints_search": "enter retry \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
   "search_retry": "Retry",
   "step": [
@@ -964,7 +965,7 @@ export const manifest = {
     "title": "Choose models for your agents",
     "lines": [
      "Nexus works as a team. You talk to one agent, and it can hand jobs to others. Each agent can use its own model, so quick cheap models do the reading and your best model does the thinking.",
-     "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models, fallbacks, effort."
+     "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models and fallbacks."
     ],
     "tip": "Type part of a name in the picker to filter it."
    },
@@ -1107,7 +1108,13 @@ export const manifest = {
   "web_search.state.unavailable": "unavailable",
   "web_search.loading": "loading status\u2026",
   "web_search.no_status": "status unavailable",
-  "web_search.runtime": "runtime {runtime}"
+  "web_search.runtime": "runtime {runtime}",
+  "effort.agent_default": "Agent default: {effort}",
+  "effort.model_default": "Model default",
+  "effort.row": "effort {value}",
+  "effort.no_levels": "{model} lists no effort levels",
+  "effort.choose_model": "Choose a model first.",
+  "effort.settings_hint": "\u2190/\u2192 sets this model's effort; open it for every level. Changes apply to new subagents; running ones keep what they started with."
  },
  "command": [
   {

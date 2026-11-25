@@ -163,9 +163,11 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   submits a single choice or free-text answer immediately; multi-select keeps one submit
   action, without a review page. Multi-question asks retain their step-through and review
   page (listing every question and answer), using the `text.primary` rail. Options
-  have the keys first (Up/Down move, a single choice follows the highlight, Space selects,
-  Enter goes on; a multi-select ticks with Space or Enter, and a click or digit ticks). A
-  click or digit on a single choice chooses and goes on. While a question is on screen in the
+  have the keys first (Up/Down move, a single choice follows the highlight, and Space or
+  Enter goes on; a multi-select ticks with Space and stays, and Enter goes on or, with
+  nothing ticked, ticks). A
+  click or digit on a single choice chooses and goes on. Space types in the answer's
+  “Add context…” line and does nothing on the review, where Enter sends. While a question is on screen in the
   viewed session it replaces the composer
   (plan 47): the card and the composer's input are one dock under one rail, and the input is
   the answer's “Add context…” line, which typing or Down from the last option reaches and

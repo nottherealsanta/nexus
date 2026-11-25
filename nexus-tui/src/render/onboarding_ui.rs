@@ -2,7 +2,7 @@
 //! `nexus-nsh/src/ui/onboarding.tsx`; the wording comes from `interface/manifest.toml`.
 
 use super::*;
-use crate::onboarding::{agent_model_line, fill_keys, root_agent, Tour};
+use crate::onboarding::{agent_model_line, agent_models, fill_keys, root_agent, Tour};
 use crate::ui::OnboardingTarget as T;
 
 /// The widest the text column grows; narrower windows use the whole width less a margin.
@@ -427,9 +427,12 @@ fn draw_agents(
     // Each row is its line, up to two detail lines and a gap; start at the first row from which the selected one fits.
     let height = |agent: &crate::onboarding::AgentRow| {
         let detail = format!("{} \u{2014} {}", agent.role, agent.hint);
-        1 + crate::text::wrap(&detail, w.saturating_sub(2) as usize)
-            .len()
-            .min(2)
+        let effort =
+            !agent.is_root() && !agent_models(a.state.config.as_ref(), &agent.name).is_empty();
+        1 + usize::from(effort)
+            + crate::text::wrap(&detail, w.saturating_sub(2) as usize)
+                .len()
+                .min(2)
             + 1
     };
     let room = limit.saturating_sub(y) as usize;
@@ -455,10 +458,25 @@ fn draw_agents(
         } else {
             agent.name.as_str()
         };
-        let value = if agent.is_root() {
-            root_agent(a.state.config.as_ref(), &agent.options)
+        let (value, effort) = if agent.is_root() {
+            (root_agent(a.state.config.as_ref(), &agent.options), None)
         } else {
-            agent_model_line(a.state.config.as_ref(), &agent.name)
+            let models = agent_models(a.state.config.as_ref(), &agent.name);
+            let effort = models.first().map(|model| {
+                let value = a
+                    .agent_effort(&agent.name, model)
+                    .unwrap_or_else(|| a.effort_default_label(&agent.name));
+                let editable = !a.model_efforts(model).is_empty()
+                    || a.agent_effort(&agent.name, model).is_some();
+                (
+                    a.manifest.ui_text("effort.row", &[("value", &value)]),
+                    editable,
+                )
+            });
+            (
+                agent_model_line(a.state.config.as_ref(), &agent.name),
+                effort,
+            )
         };
         let vw = (width(&value) as u16).min(w.saturating_sub(16));
         let lw = w.saturating_sub(vw + 4);
@@ -492,6 +510,22 @@ fn draw_agents(
         );
         hits.add(Rect::new(x, y, w, 1), Target::Onboarding(T::Row(i)));
         y += 1;
+        if let Some((effort, editable)) = effort {
+            if y < limit {
+                put(
+                    buf,
+                    x + 2,
+                    y,
+                    &effort,
+                    cx.st(if editable { SECONDARY } else { MUTED }, CANVAS),
+                    w.saturating_sub(2),
+                );
+                if editable {
+                    hits.add(Rect::new(x, y, w, 1), Target::Onboarding(T::Effort(i)));
+                }
+                y += 1;
+            }
+        }
         let detail = format!("{} \u{2014} {}", agent.role, agent.hint);
         for line in crate::text::wrap(&detail, w.saturating_sub(2) as usize)
             .into_iter()

@@ -750,17 +750,20 @@ reached by scrolling; drafts stay with their questions. On desktop a question re
 composer: the composer's input is the answer's "add context" line, where you type to answer in
 your own words or to add context to a selected option. Options have the keys first: Up/Down
 move, and a single-choice answer follows the highlight (Left/Right also move it on a lone
-question); Space selects or ticks the highlighted option and Enter locks the answer and goes on;
-a number or a click chooses a single choice and goes on (on a multi-select it ticks). A
-multi-select shows checkboxes and "Select all that apply"; arrows move, Space ticks, and Enter
-with nothing ticked ticks the highlighted option and stays (the next Enter goes on). Typing, or
-Down from the last option, moves into the line; Up or Esc returns to the options. A question with
+question); Space and Enter both lock the answer and go on, so Space sends a lone question at once
+and opens the review after the last page; a number or a click chooses a single choice and goes on
+(on a multi-select it ticks). A
+multi-select shows checkboxes and "Select all that apply"; arrows move, Space ticks and stays, and
+Enter locks the ticks and goes on (with nothing ticked, Enter ticks the highlighted option and
+stays). Typing, or
+Down from the last option, moves into the line, and Space types normally there; Up or Esc returns
+to the options. A question with
 no options starts in the line. With several
 questions, Left/Right and `Alt+Left`/`Alt+Right` change pages in the TUI while the options have
 the keys (NSH has no page keys and uses its Back/Next buttons), and Left/Right move the caret in
-the line. The last page is a review listing every question and its answer, where Enter sends the
-whole reply. The composer's own draft is left untouched and comes back afterwards. The question
-card does not show an elapsed timer.
+the line. The last page is a review listing every question and its answer, where Space does
+nothing and Enter sends the whole reply. The composer's own draft is left untouched and comes
+back afterwards. The question card does not show an elapsed timer.
 
 ```jsonc
 // arguments

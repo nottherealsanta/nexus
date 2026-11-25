@@ -47,8 +47,10 @@ per-model rows and unknown writes; `omitted` and notes are listed. Keys are the 
 commands in `interface/manifest.toml` (the same bare keys as the TUI). The Sessions tree is a wrapping one-line list like the TUI's, and `j`/`k` keep the selected row in view.
 See [the inspector guide](../docs/inspector.md).
 
-The Rust TUI is the visual reference for the shared NSH app. NSH uses Monaspace
-Argon for interface text and prose and a full-width reading column with a fixed 12 px
+Open session tabs follow title changes as they arrive from Core, including automatic names and changes made in another client.
+
+The Rust TUI is the visual reference for the shared NSH app. NSH uses Google Sans
+for interface text and prose and a full-width reading column with a fixed 12 px
 outer gutter, with a 16 px left inset for user messages and activity groups. Tool labels and arguments, and child-session labels and metadata, use 16 px text. Desktop and web controls use bundled,
 theme-tinted SVGs, including icon-only desktop sidebar tabs in a compact segmented
 control whose names and shortcuts appear on hover, and the Settings row alongside its label. The narrow drawer retains
@@ -260,8 +262,8 @@ Clipping is announced and the control restores the whole output. In the context 
 
 The app sets a 16 px default with 24 px leading; the shared kit's title, body and
 code roles use that size, and hierarchy comes from weight and colour rather than
-size (some timeline chrome still sets a smaller size explicitly). Monaspace Argon
-carries interface text, prose, inline code, fenced code, paths and tool arguments.
+size (some timeline chrome still sets a smaller size explicitly). Google Sans carries
+interface text and prose; Monaspace Argon carries inline code, fenced code, paths and tool arguments.
 NSH imports the bundled faces so the packaged
 app registers them before rendering. Child cards label background calls,
 distinguish failed and running status, and allow the full tool result to be
@@ -290,6 +292,8 @@ under its title, so a long error is never clipped to one line. Claude Code's
 own subagents show read-only inside the calling tool's card. As in the TUI.
 New Antigravity children use Auto by default and decline any remaining permission requests without a card. Use the
 Ask permission policy for a new child to review requests.
+
+A parent remains working in the sidebar, tab and composer activity bar while any subagent runs, even after its own turn ends.
 
 Selecting a session loads, after the bounded snapshot view, one bundle
 (`GET /api/session/{id}/open`): the session row, the frozen starting context, the
@@ -333,12 +337,14 @@ capped at 12 rows with `N more rows`, and a key-chip choice list: allow once, al
 for session (`scope: "session"`), deny, and deny with a note
 (the note is the composer's text; empty, it says so). Questions show radios or checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
 the composer's input are one dock under one rail, and the input is the answer's `Add context…` line (`Type your
-answer…` for a question without options). Options have the keys first: Up/Down move, Space selects (a multi-select
-ticks), Enter goes on and sends on the last page, and a single-choice answer follows the highlight; on a lone
-question Left/Right also move the options. A multi-select draws checkboxes and `Select all that apply`: arrows move,
-Space ticks, and Enter with nothing ticked ticks the highlight and stays. A click or number key chooses a single
-option and goes on at once (on a multi-select it ticks). Typing, or Down from the last option, moves into the line;
-Up from its first line or Esc returns to the options, with the text kept. A question
+answer…` for a question without options). Options have the keys first: Up/Down move, a single choice follows the
+highlight, and Space or Enter goes on (`space/enter send`, `next` or `review`); a multi-select ticks with Space and
+stays, Enter goes on and sends on the last page, and Enter with nothing ticked ticks the highlight and stays. On a
+lone question Left/Right also move the options. A multi-select draws checkboxes and `Select all that apply`. A click
+or number key chooses a single
+option and goes on at once (on a multi-select it ticks). Typing, or Down from the last option, moves into the line,
+where Space types normally; Up from its first line or Esc returns to the options, with the text kept. The review
+sends with Enter, and Space does nothing there. A question
 without options starts in the line. The composer draft is left alone and returns when the question is answered. A
 multi-select still has the one `Submit answers` button (`⌘↵`). The phone keeps its compact card and its own field. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
@@ -467,9 +473,9 @@ cost from Core's spend ledger (per model, plus live usage it has not counted
 yet; it is re-read after each `turn.summary`), and the context bar from the
 newest request with known usage. A ledger that began counting well after the
 first message is labelled `Totals since …`, and requests that reported no usage
-are counted as unknown. It also counts descendant sessions. Right-click or Shift+F10 opens the
-manifest-driven session/project row menu, including confirmed project removal,
-and Projects, opened by its command, has a trailing `+ Add project` row; an added project is selected and opens on its new-session screen. A 48 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
+are counted as unknown. It also counts descendant sessions. Right-click, Shift+F10 or a row's ⋯
+control opens the manifest-driven session/project row menu at the pointer or beside that control, including confirmed project removal,
+and Projects, opened by its command, has a trailing `+ Add project` row; an added project is selected and opens on its new-session screen. A 40 px project rail (NSH only; the TUI keeps its five cells) stays beside the sidebar whether it is open or
 closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in Core's saved order (drag a tile to reorder, or Alt+Up / Alt+Down and the row menu's Move project up/down; Esc or dropping outside the rail cancels; a press without travel still selects), without inactive projects, with stable uppercase initials in creation order (moving a project never changes a label)
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
 within the last hour are lighter gray; passive projects are dimmed further and idle ones are darker. The row menu sets a project's status (current, passive, inactive; the names are the user's, 2026-11-06). An inactive project leaves the rail and is restored by pressing it in the Projects tab. Remove project asks first, only unregisters the project (its sessions are kept and return if the folder is added again; files are never touched) and is refused while a session runs. The selected project, and the selected session row in the sidebar, share one active
@@ -481,7 +487,7 @@ nine shown as `*`. A project with
 no counts shows a muted rule below its initials instead. Hover or
 focus spells out all four counts with the project name;
 clicking restores the project's last selected session in this client, or its newest
-unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects, each three text cells high with no gap between them or below Settings. The sidebar lists the current project's sessions only, with three actions (`New session`, `Search sessions`, `Show archived`) pinned above the list under a rule, even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archived lists archived sessions after the active ones, with a rule between the two.
+unarchived root session, or the new-session view when empty; pressing the project already open toggles its Sessions sidebar. The switcher (`⌘K`) leads each session row with its state glyph (running spinner, attention/error/unread dot or idle dot), then the title, with the age or message match at the right. A `+` under the projects adds one, and `+` and Settings are pinned together at the rail's foot below the projects, each 39 px square inside the rail's 1 px border, with no gap between them or below Settings. The sidebar lists the current project's sessions only, with three actions (`New session`, `Search sessions`, `Show archived`) pinned above the list under a rule, even when the list is empty. On phone, New session remains available from the phone session controls and the archive filter stays with the scope chips. Show archived lists archived sessions after the active ones, with a rule between the two.
 You can type and send in an archived session: **Resume archived session** warns
 that a large uncached context may be slower and cost more, and that code kernels
 restart fresh. Cancel keeps the draft; Resume unarchives the whole tree before
@@ -508,8 +514,8 @@ rendered in the right pane: each provider row opens a detail modal with one
 button per sign-in method (browser or device), a clickable link, a copyable
 code, key entry, connect/disconnect and catalog refresh; the default agent and effort
 with a line per subagent that opens its model and fallback lists (Esc returns
-from that detail); each model row has an effort stepper (`‹ effort low ›`, or Right after pressing it) writing
-`agents.efforts`. Tools keeps one permission choice, labelled with the tools it
+from that detail); model rows offer an effort picker and stepper writing `agents.efforts`. The picker offers catalog-listed
+levels and the effective agent or model default; a model without listed levels has no control unless an override can be cleared. Tools keeps one permission choice, labelled with the tools it
 governs, and one clickable tool grid (including `firecrawl`, the local Firecrawl; a call shows as `Firecrawl <action> <url>`, as in the TUI). Desktop session rows place the status mark before the title with a gap. Hovering a row shows an archive box at the upper right and an actions menu below it; archived sessions show only the menu. Session rows show the project in Global scope and the checkout branch (or linked worktree name) in Project scope, instead of the agent; an unknown branch is left blank. Worktree data is loaded for branch/location display (and read again when the
 session view's `directory` differs from the one it was read for, as after a move), while directory
 and worktree actions remain disabled with a reason. Kernel state is the remaining
@@ -930,7 +936,7 @@ estimate.
 
 ## Onboarding
 
-While Core's `ui.onboarded` is false, desktop and web NSH open a full-window tour once the splash is gone (`src/onboarding.ts`, `src/ui/onboarding.tsx`, mounted in `App.tsx`; the phone never shows it). It matches the TUI step for step: welcome, connect a provider (the same connection modal as Settings), choose models for agents (a picker of connected providers' models writes `agents.models`; the default agent button cycles `defaults.agent`), start web search, then lessons. On the search step (`search-service.ts`) NSH asks for SearXNG's state and starts it in the background unless it already runs or cannot start, then polls until it runs; the step shows the state, address, runtime, detail and last error, and its Retry button starts it again. Next never waits for the container. Enter, ←/→, ↑↓, `s` and the buttons work; Finish and Skip write `ui.onboarded`. `/onboarding`, the palette and Settings > About replay it. Settings → Tools shows the same search status and follows a background start. Wording is `[onboarding]` in `interface/manifest.toml`. Test: `onboarding.test.tsx`, including the shared `interface/scenarios/web-search.json`.
+While Core's `ui.onboarded` is false, desktop and web NSH open a full-window tour once the splash is gone (`src/onboarding.ts`, `src/ui/onboarding.tsx`, mounted in `App.tsx`; the phone never shows it). It matches the TUI step for step: welcome, connect a provider (the same connection modal as Settings), choose models for agents (a picker of connected providers' models writes `agents.models`; the default agent button cycles `defaults.agent`), start web search, then lessons. On the search step (`search-service.ts`) NSH asks for SearXNG's state and starts it in the background unless it already runs or cannot start, then polls until it runs; the step shows the state, address, runtime, detail and last error, and its Retry button starts it again. Next never waits for the container. Selecting a model with listed effort levels opens its per-agent effort picker; `e` or the effort button reopens it. Enter, ←/→, ↑↓, `s` and the buttons work; Finish and Skip write `ui.onboarded`. `/onboarding`, the palette and Settings > About replay it. Settings → Tools shows the same search status and follows a background start. Wording is `[onboarding]` in `interface/manifest.toml`. Test: `onboarding.test.tsx`, including the shared `interface/scenarios/web-search.json`.
 
 ## The Manager
 

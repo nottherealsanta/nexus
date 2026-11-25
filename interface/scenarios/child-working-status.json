@@ -1,0 +1,7 @@
+{
+  "child_id": "ses_child_working",
+  "child_title": "Background research",
+  "parent_finished": {"status": "idle", "turn_id": "turn_parent", "turn_finished": true},
+  "child_running": {"status": "busy", "turn_id": "turn_child"},
+  "child_finished": {"status": "idle", "turn_id": "turn_child"}
+}

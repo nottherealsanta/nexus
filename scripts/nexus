@@ -350,7 +350,7 @@ check_all() {
   printf '› Shared annotation tests and lints\n'
   (cd "$ANNOTATE" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
   printf '› Shared interface checks\n'
-  (cd "$ROOT" && python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml && python3 interface/check_manifest.py)
+  (cd "$ROOT" && uv run --project "$CORE" --no-sync python interface/check_theme.py --overlay nexus-nsh/theme-void.toml && uv run --project "$CORE" --no-sync python interface/check_manifest.py)
   printf '› Installer\n'
   (cd "$ROOT" && sh scripts/test-install.sh)
   printf '› NSH checks\n'

@@ -1744,6 +1744,11 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             data = store.state_snapshot(session_id=sid, message_limit=limit)
             data["_selected"] = selected
             data["running"] = store.running_turns()
+            running = {turn["session_id"] for turn in data["running"]}
+            busy = running | {s["parent_id"] for s in data["sessions"]
+                              if s["id"] in running and s["parent_id"]}
+            for session in data["sessions"]:
+                session["status"] = "busy" if session["id"] in busy else "idle"
             data["held_sessions"] = [r["session_id"] for r in store.db.execute("select session_id from input_hold")]
             data["inputs"] = runtime.inputs.list()
             return data

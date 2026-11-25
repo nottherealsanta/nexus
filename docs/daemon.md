@@ -125,7 +125,8 @@ metadata, so release and development versions follow the package version.
     separate from busy/idle `status`; see [Session archiving](#session-archiving).
   - `status`: busy while its own turn or any child turn is running, even if its
     own turn has finished. A `session.status` event with `turn_finished: true`
-    closes that turn while retaining the busy session status.
+    closes that turn while retaining the busy session status. Reconnect snapshots
+    carry the same aggregate status, separately from the list of running turns.
   - `snapshot`: the frozen agent, prompt, tool definitions, child catalog and
     instruction file resolved at creation ([agents.md](agents.md#session-snapshots)).
 - **Messages.** Append-only rows in session order, saved as each one is

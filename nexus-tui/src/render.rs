@@ -5907,10 +5907,9 @@ fn ask_hint_list(
     let enter_tick = c.multiple() && options && ticked == 0 && !typed;
     if options && !field {
         hints.push((updown(cx).to_owned(), "move".into()));
-        hints.push((
-            "space".into(),
-            if c.multiple() { "tick" } else { "select" }.into(),
-        ));
+        if c.multiple() {
+            hints.push(("space".into(), "tick".into()));
+        }
     }
     if options && field {
         hints.push(("esc".into(), "options".into()));
@@ -5919,8 +5918,14 @@ fn ask_hint_list(
         hints.push((format!("alt+{}", leftright(cx)), "pages".into()));
     }
     submit = None;
+    // A single choice's Space goes on as Enter does; a multi-select's Space only ticks.
+    let go_on = if options && !field && !c.multiple() {
+        "space/enter"
+    } else {
+        "enter"
+    };
     hints.push((
-        "enter".into(),
+        go_on.into(),
         if enter_tick {
             "tick"
         } else if c.total == 1 {
@@ -7847,7 +7852,15 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
         let sel_row = sel
             .and_then(|i| display.iter().position(|l| *l == Some(i)))
             .unwrap_or(0);
-        let top = (sel_row + 1).saturating_sub(list_h);
+        // A selectable item can own the muted second line below it; keep both on screen.
+        let sel_h = sel
+            .and_then(|i| {
+                lines
+                    .get(i + 1)
+                    .map(|next| 1 + usize::from(matches!(next, PageLine::Sub(_))))
+            })
+            .unwrap_or(1);
+        let top = (sel_row + sel_h).saturating_sub(list_h);
         let tone = |t: Tone| match t {
             Tone::Muted => MUTED,
             Tone::Secondary => SECONDARY,
@@ -7896,6 +7909,41 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                         cx.st(tone(*t), RAISED),
                         content_w,
                     );
+                }
+                PageLine::Sub(text) => {
+                    let owner = i.checked_sub(1).and_then(|p| {
+                        matches!(lines.get(p), Some(PageLine::Item { .. })).then(|| {
+                            let position = items.iter().position(|it| *it == p).unwrap_or(0);
+                            (p, position)
+                        })
+                    });
+                    let selected = owner.is_some_and(|(p, _)| Some(p) == sel);
+                    let style = cx.st(
+                        if selected { SECONDARY } else { MUTED },
+                        if selected {
+                            "interactive.settings_selection"
+                        } else {
+                            RAISED
+                        },
+                    );
+                    if selected {
+                        clear(buf, Rect::new(content_x, y, content_w, 1), style);
+                    }
+                    let sw = (width(text) as u16).min(content_w);
+                    put(
+                        buf,
+                        content_x + content_w - sw,
+                        y,
+                        &truncate(text, sw as usize, cx.ell()),
+                        style,
+                        sw,
+                    );
+                    if let Some((_, position)) = owner {
+                        hits.add(
+                            Rect::new(content_x, y, content_w, 1),
+                            Target::SettingsPageRow(position),
+                        );
+                    }
                 }
                 PageLine::Item {
                     label,
@@ -8257,6 +8305,16 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
                     m.w,
                 );
             }
+            PageLine::Sub(text) => {
+                put(
+                    buf,
+                    m.x + 2,
+                    y,
+                    &truncate(text, m.w.saturating_sub(2) as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    m.w.saturating_sub(2),
+                );
+            }
             PageLine::Item {
                 label,
                 value,
@@ -8398,6 +8456,16 @@ fn draw_mcp_detail(
                     &truncate(text, m.w as usize, cx.ell()),
                     cx.st(tone(*t), RAISED),
                     m.w,
+                );
+            }
+            PageLine::Sub(text) => {
+                put(
+                    buf,
+                    m.x + 2,
+                    y,
+                    &truncate(text, m.w.saturating_sub(2) as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    m.w.saturating_sub(2),
                 );
             }
             PageLine::Item {
@@ -9357,6 +9425,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Models => "Change model",
         PaletteMode::PoolModels => "Add a model",
         PaletteMode::OnboardingModels => "Choose a model",
+        PaletteMode::AgentEfforts => "Reasoning effort",
         PaletteMode::Agents => "Change agent",
         PaletteMode::Efforts => "Reasoning effort",
         PaletteMode::Export => "Export session",
@@ -9382,6 +9451,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
                 "type to filter models"
             }
             PaletteMode::Agents => "type to filter agents",
+            PaletteMode::AgentEfforts => "type to filter efforts",
             PaletteMode::Efforts => "type to filter efforts",
             PaletteMode::Export => "choose a format and scope",
             PaletteMode::LearnScope => "choose where the skills go",

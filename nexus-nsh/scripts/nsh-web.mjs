@@ -15,17 +15,25 @@ export function webEnvironment(env = process.env, run = execFileSync, executable
   const onPath = (env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
   const binary = process.platform === 'win32' ? 'llvm-ar.exe' : 'llvm-ar';
   if (onPath.some(dir => executable(join(dir, binary)))) return env;
-  try {
-    const rustc = env.RUSTC || 'rustc';
+  const probe = rustc => {
     const sysroot = run(rustc, ['--print', 'sysroot'], { env, encoding: 'utf8' }).trim();
     const version = run(rustc, ['-vV'], { env, encoding: 'utf8' });
     const host = /^host: (.+)$/m.exec(version)?.[1].trim();
     if (host) {
       const ar = join(sysroot, 'lib', 'rustlib', host, 'bin', binary);
-      if (executable(ar)) return { ...env, [key]: ar };
+      if (executable(ar)) return ar;
     }
+  };
+  try {
+    const ar = probe(env.RUSTC || 'rustc');
+    if (ar) return { ...env, [key]: ar };
+  } catch { /* Try the rustup toolchain below. */ }
+  try {
+    const rustc = run('rustup', ['which', 'rustc'], { env, encoding: 'utf8' }).trim();
+    const ar = probe(rustc);
+    if (ar) return { ...env, [key]: ar };
   } catch { /* Give an actionable error below instead of a cc-rs build failure. */ }
-  throw new Error('NSH web needs llvm-ar. Run `rustup component add llvm-tools` for the active toolchain, or set AR_wasm32_unknown_unknown to a WebAssembly-capable llvm-ar.');
+  throw new Error('NSH web needs llvm-ar. Run `rustup component add llvm-tools` for the active rustup toolchain, or set AR_wasm32_unknown_unknown to a WebAssembly-capable llvm-ar.');
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

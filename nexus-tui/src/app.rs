@@ -598,6 +598,8 @@ pub enum PageLine {
     /// A heading with muted detail on the right (an agent's source and tools).
     Title(String, String),
     Text(String, Tone),
+    /// A muted second line under the selectable item just above it (an agent model's effort).
+    Sub(String),
     Item {
         label: String,
         value: String,
@@ -643,6 +645,13 @@ pub enum PageAction {
     McpOpen(McpKey),
     /// One action in an MCP server's detail modal (`sign_in`, `sign_out`, `cancel`, `header`, `toggle`, `restart`, `remove`).
     McpRun(McpKey, String),
+}
+
+/// The agent and model whose per-model effort a picker is choosing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEffortPick {
+    pub agent: String,
+    pub model: String,
 }
 
 /// The row that starts one provider sign-in method.
@@ -962,6 +971,8 @@ pub struct Ui {
     pub pool_pick: Option<(String, bool)>,
     /// The agent whose model the tour's picker is choosing.
     pub onboarding_pick: Option<String>,
+    /// The agent and model whose effort the picker is choosing (Settings or the tour).
+    pub effort_pick: Option<AgentEffortPick>,
     pub overlay: Option<Overlay>,
     pub btw: Option<crate::btw::Btw>,
     pub dialog: Option<Dialog>,
@@ -1452,6 +1463,7 @@ impl App {
                 mcp_detail_row: 0,
                 pool_pick: None,
                 onboarding_pick: None,
+                effort_pick: None,
                 overlay: None,
                 btw: None,
                 dialog: None,
@@ -1585,6 +1597,12 @@ impl App {
                 .get(id)
                 .and_then(|s| s.status.as_deref())
                 == Some("busy")
+            || self.state.model.sessions.values().any(|s| {
+                s.id != id
+                    && self.is_descendant(&s.id, id)
+                    && (self.state.model.running.contains_key(&s.id)
+                        || s.status.as_deref() == Some("busy"))
+            })
     }
 
     pub fn current_project(&self) -> Option<String> {
@@ -2752,7 +2770,8 @@ impl App {
         }
     }
 
-    /// A click or a digit: pick the option and move on, as Enter would. A multi-select only ticks.
+    /// A click, a digit or Space on a single choice: pick the option and move on,
+    /// as Enter would. A multi-select only ticks.
     pub fn ask_choose(&mut self, i: usize) {
         self.ask_pick(i);
         if self
@@ -2760,6 +2779,21 @@ impl App {
             .is_some_and(|c| !c.multiple() && !c.sent && !c.review() && i < c.options().len())
         {
             self.ask_confirm();
+        }
+    }
+
+    /// Space on the options: a single choice goes on as Enter would (a lone
+    /// question sends, the last page opens the review); a multi-select ticks the
+    /// highlighted option and stays. In the context line Space types.
+    fn ask_space(&mut self) {
+        let Some(cur) = self.ask_current() else {
+            return;
+        };
+        let cursor = cur.pick().map_or(0, |p| p.cursor);
+        if cur.multiple() {
+            self.ask_pick(cursor);
+        } else {
+            self.ask_choose(cursor);
         }
     }
 
@@ -3004,10 +3038,7 @@ impl App {
                 }
             }
             "enter" => self.ask_confirm(),
-            "space" if n_opts > 0 && !field => {
-                let cursor = cur.pick().map_or(0, |p| p.cursor);
-                self.ask_pick(cursor);
-            }
+            "space" if n_opts > 0 && !field => self.ask_space(),
             _ => {
                 let digit = name
                     .parse::<usize>()
@@ -3066,15 +3097,15 @@ impl App {
         Some(format!("Nexus: {title} {what}"))
     }
 
-    /// The attention mark of a session row, by precedence: `waiting`, `error`,
-    /// `running`, `unread`.
+    /// The attention mark of a session row, by precedence: `waiting`, `running`,
+    /// `error`, `unread`.
     pub fn session_mark(&self, id: &str) -> Option<&'static str> {
         if self.session_waiting(id) {
             Some("waiting")
-        } else if self.ui.failed_sessions.contains(id) {
-            Some("error")
         } else if self.is_busy(id) {
             Some("running")
+        } else if self.ui.failed_sessions.contains(id) {
+            Some("error")
         } else if self.ui.unread_sessions.contains(id) {
             Some("unread")
         } else {
@@ -3982,6 +4013,15 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
+        if matches!(
+            self.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::Palette(Palette {
+                mode: PaletteMode::AgentEfforts,
+                ..
+            }))
+        ) {
+            self.ui.effort_pick = None;
+        }
         if let Some(btw) = self.ui.btw.take() {
             if btw.running {
                 if let Some(session) = btw.session {
@@ -4852,6 +4892,56 @@ impl App {
                     ));
                 }
             }
+            PaletteMode::AgentEfforts => {
+                let Some(pick) = self.ui.effort_pick.clone() else {
+                    return Vec::new();
+                };
+                let current = self.agent_effort(&pick.agent, &pick.model);
+                let default = self.effort_default_label(&pick.agent);
+                if let Some(score) = fuzzy(&q, &default) {
+                    scored.push((
+                        score,
+                        0,
+                        PaletteItem {
+                            kind: PaletteKind::AgentEffort {
+                                agent: pick.agent.clone(),
+                                model: pick.model.clone(),
+                                level: None,
+                            },
+                            label: default,
+                            hint: String::new(),
+                            category: if current.is_none() {
+                                "current"
+                            } else {
+                                "effort"
+                            }
+                            .into(),
+                            reason: None,
+                        },
+                    ));
+                }
+                for (i, level) in self.model_efforts(&pick.model).into_iter().enumerate() {
+                    let Some(score) = fuzzy(&q, &level) else {
+                        continue;
+                    };
+                    let is_current = current.as_deref() == Some(level.as_str());
+                    scored.push((
+                        score,
+                        i + 1,
+                        PaletteItem {
+                            kind: PaletteKind::AgentEffort {
+                                agent: pick.agent.clone(),
+                                model: pick.model.clone(),
+                                level: Some(level.clone()),
+                            },
+                            label: level,
+                            hint: String::new(),
+                            category: if is_current { "current" } else { "effort" }.into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
             PaletteMode::Efforts => {
                 let mut opts: Vec<String> = Vec::new();
                 let in_use = self.effective_model(self.viewed());
@@ -5158,6 +5248,11 @@ impl App {
                     self.ui.draft.effort = Some(effort);
                 }
             }
+            PaletteKind::AgentEffort {
+                agent,
+                model,
+                level,
+            } => self.patch_agent_effort(&agent, &model, level),
         }
     }
 
@@ -14789,7 +14884,7 @@ impl App {
     }
 
     /// `[agents.efforts]` for one agent and model: the reasoning effort a subagent uses when it runs that model.
-    fn agent_effort(&self, agent: &str, model: &str) -> Option<String> {
+    pub fn agent_effort(&self, agent: &str, model: &str) -> Option<String> {
         self.state
             .config
             .as_ref()
@@ -14797,8 +14892,19 @@ impl App {
             .map(str::to_owned)
     }
 
+    /// The agent file's own `effort`, when it sets one.
+    pub fn agent_file_effort(&self, agent: &str) -> Option<String> {
+        self.state
+            .agents
+            .iter()
+            .find(|a| a["name"].as_str() == Some(agent))
+            .and_then(|a| a["effort"].as_str())
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned)
+    }
+
     /// The reasoning efforts the catalog lists for a model; empty when it lists none.
-    fn model_efforts(&self, model: &str) -> Vec<String> {
+    pub fn model_efforts(&self, model: &str) -> Vec<String> {
         self.state
             .models
             .iter()
@@ -14812,23 +14918,67 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// What a pool or fallback row shows for effort: the chosen level, `default`, or nothing for a model without levels.
-    fn effort_label(&self, agent: &str, model: &str) -> Option<String> {
+    /// The option that applies when no per-model override is set: the agent file's effort, else the model default.
+    pub fn effort_default_label(&self, agent: &str) -> String {
+        match self.agent_file_effort(agent) {
+            Some(effort) => self
+                .manifest
+                .ui_text("effort.agent_default", &[("effort", &effort)]),
+            None => self.manifest.ui_text("effort.model_default", &[]),
+        }
+    }
+
+    /// What a pool or fallback row shows for effort: the override, the effective default, or nothing.
+    pub fn effort_label(&self, agent: &str, model: &str) -> Option<String> {
         if self.model_efforts(model).is_empty() && self.agent_effort(agent, model).is_none() {
             return None;
         }
-        Some(format!(
-            "effort {}",
-            self.agent_effort(agent, model)
-                .unwrap_or_else(|| "default".into())
-        ))
+        let value = self
+            .agent_effort(agent, model)
+            .unwrap_or_else(|| self.effort_default_label(agent));
+        Some(self.manifest.ui_text("effort.row", &[("value", &value)]))
     }
 
-    /// Step through effort levels; advancing past the last returns to `default`.
+    /// Open the explicit effort picker for one agent and model. A model without catalog levels has no control,
+    /// unless a stale override can still be cleared.
+    pub fn open_agent_effort_picker(&mut self, agent: &str, model: &str) {
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
+        let levels = self.model_efforts(model);
+        let current = self.agent_effort(agent, model);
+        if levels.is_empty() && current.is_none() {
+            let text = self
+                .manifest
+                .ui_text("effort.no_levels", &[("model", model)]);
+            self.toast(Level::Warning, text);
+            return;
+        }
+        self.ui.effort_pick = Some(AgentEffortPick {
+            agent: agent.to_owned(),
+            model: model.to_owned(),
+        });
+        self.open_palette(PaletteMode::AgentEfforts);
+    }
+
+    /// Step through effort levels; advancing past the last returns to the default. A stale override on a
+    /// model that lists no levels is cleared.
     fn step_agent_effort(&mut self, agent: &str, model: &str, by: isize) {
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
         let levels = self.model_efforts(model);
         if levels.is_empty() {
-            self.toast(Level::Warning, format!("{model} lists no effort levels"));
+            if self.agent_effort(agent, model).is_some() {
+                self.patch_agent_effort(agent, model, None);
+            } else {
+                let text = self
+                    .manifest
+                    .ui_text("effort.no_levels", &[("model", model)]);
+                self.toast(Level::Warning, text);
+            }
             return;
         }
         let current = self.agent_effort(agent, model);
@@ -14946,9 +15096,9 @@ impl App {
                 .into_iter()
                 .find(|a| a["name"].as_str() == Some(name.as_str()))
                 .and_then(|a| a["description"].as_str().map(str::to_owned)),
-            PageAction::Ref { .. } | PageAction::Add { .. } => Some(
-                "\u{2190}/\u{2192} sets this model's effort. Changes apply to new subagents; running ones keep what they started with.".into(),
-            ),
+            PageAction::Ref { .. } | PageAction::Add { .. } => {
+                Some(self.manifest.ui_text("effort.settings_hint", &[]))
+            }
             PageAction::Setting(row) => Some(row.note.clone()).filter(|n| !n.is_empty()),
             PageAction::OpenProvider(_) => {
                 Some("Enter opens this provider's connection and sign-in details.".into())
@@ -15152,17 +15302,11 @@ impl App {
                 }
                 for model in &pool {
                     let on = self.ref_connected(model);
+                    let effort = self.effort_label(name, model);
                     out.push(PageLine::Item {
                         label: model.clone(),
                         value: if on {
-                            [
-                                self.effort_label(name, model),
-                                Some(format!("{:.0}%", 100.0 / eligible as f64)),
-                            ]
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>()
-                            .join(" \u{b7} ")
+                            format!("{:.0}%", 100.0 / eligible as f64)
                         } else {
                             "not connected \u{b7} skipped".into()
                         },
@@ -15173,6 +15317,9 @@ impl App {
                             model: model.clone(),
                         },
                     });
+                    if let Some(effort) = effort {
+                        out.push(PageLine::Sub(effort));
+                    }
                 }
                 out.push(PageLine::Item {
                     label: "+ add model".into(),
@@ -15189,10 +15336,11 @@ impl App {
                 ));
                 for (i, model) in self.agent_refs(name, true).iter().enumerate() {
                     let on = self.ref_connected(model);
+                    let effort = self.effort_label(name, model);
                     out.push(PageLine::Item {
                         label: format!("{}. {model}", i + 1),
                         value: if on {
-                            self.effort_label(name, model).unwrap_or_default()
+                            String::new()
                         } else {
                             "not connected \u{b7} skipped".into()
                         },
@@ -15203,6 +15351,9 @@ impl App {
                             model: model.clone(),
                         },
                     });
+                    if let Some(effort) = effort {
+                        out.push(PageLine::Sub(effort));
+                    }
                 }
                 out.push(PageLine::Item {
                     label: "+ add fallback".into(),
@@ -15623,8 +15774,8 @@ impl App {
                     self.settings_activate_row(*row);
                 }
             }
-            PageAction::Ref { .. } => {
-                self.toast(Level::Info, "d removes it; K/J move a fallback");
+            PageAction::Ref { agent, model, .. } => {
+                self.open_agent_effort_picker(&agent, &model);
             }
             PageAction::Add { agent, fallback } => {
                 self.ui.pool_pick = Some((agent, fallback));
@@ -15646,6 +15797,10 @@ impl App {
 
     /// Write one agent's effort for one model; `None` clears it, and an agent with none left is removed.
     fn patch_agent_effort(&mut self, agent: &str, model: &str, effort: Option<String>) {
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
         let Some(config) = &self.state.config else {
             self.toast(Level::Warning, "Configuration is not loaded");
             return;

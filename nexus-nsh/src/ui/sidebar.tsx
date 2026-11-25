@@ -1,12 +1,12 @@
 import { fileWatchStatus } from "../file-watch";
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
-import { Button, ContextMenu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
+import { Button, ContextMenu, Menu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
 import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest, uiText } from "../gen/manifest";
 import { desktopOnly, phoneSessionGroups } from "../mobile";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
-import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
+import { railDrag, archivedFilter, centre, connection, currentProject, drawer, leftOpen, railShown, focusedSidebarRow, flowProject, flowSession, flowStage, info, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, sidebarRowMenuAt, tick, live, touch, userHome, viewed, savePrefs, SidebarRowTarget, loadProjectWorktrees, loadSessionWorktrees, projectWorktrees, worktreeForDirectory, currentWorktree, phone, phonePage, width } from "../store";
 import { Project, Session } from "../core/api";
 import { request } from "../core/transport";
 import { fileTree, filesExpanded, loadFiles, openFile, toggleFileDir, selectedFileEntry, gitPage, loadGitPage, selectedGitFile, gitOpen, toggleGitFolder, gitSummary, gitFolders, gitGroups, inGitGroup } from "../store";
@@ -228,8 +228,9 @@ export function SessionRail() {
         </View>
       </Scroll>
       <View class="w-full items-center" style={{ paddingBottom: safeArea().bottom }}>
-        <IconButton icon="plus" label="Add project" testID="rail-add-project" class="w-full h-[72px]" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
-        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={`w-full h-[72px] ${centre() === "settings" ? "bg-selection" : ""}`} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
+        {/* 39 px: the rail's 40 px width less its 1 px border. */}
+        <IconButton icon="plus" label="Add project" testID="rail-add-project" class="w-[39px] h-[39px]" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
+        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={`w-[39px] h-[39px] ${centre() === "settings" ? "bg-selection" : ""}`} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
       </View>
     </View>
   );
@@ -331,7 +332,7 @@ export function rowSessions(): Session[] {
     return Number(!!a.archived) - Number(!!b.archived) || order.indexOf(a.project_id) - order.indexOf(b.project_id) || la - lb || (ra < rb ? -1 : ra > rb ? 1 : 0);
   });
 }
-function sessionRunning(s: Session) { return s.status === "busy" || model.tree(s.id).some((id) => model.running.has(id)); }
+function sessionRunning(s: Session) { m(); return model.isBusy(s.id); }
 function childCount(id: string) { let n = 0; for (const s of model.sessions.values()) if (s.parent_id === id) n++; return n; }
 export function attention(id: string): "waiting" | "error" | null {
   const tree = model.tree(id);
@@ -478,16 +479,21 @@ function SessionRow(p: { s: () => Session }) {
   const n = () => childCount(s().id);
   const att = () => { m(); return attention(s().id); };
   const flowCursor = () => flowStage() === "sessions" && flowSession() === s().id;
+  const menuOpen = () => sidebarRowMenu()?.kind === "session" && sidebarRowMenu()?.id === s().id;
+  const setMenuOpen = (open: boolean, at: "trigger" | "pointer") => {
+    if (open) {
+      sidebarRowMenuAt.set(at);
+      focusedSidebarRow.set(ref());
+      sidebarRowMenu.set(ref());
+      if (!phone) void selectSession(s().id);
+    } else if (menuOpen() && sidebarRowMenuAt() === at) {
+      sidebarRowMenu.set(null);
+    }
+  };
   return (
     <ContextMenu
-      open={sidebarRowMenu()?.kind === "session" && sidebarRowMenu()?.id === s().id}
-      onOpenChange={({ open }) => {
-        if (open) {
-          focusedSidebarRow.set(ref());
-          sidebarRowMenu.set(ref());
-          if (!phone) void selectSession(s().id);
-        } else if (sidebarRowMenu()?.id === s().id) sidebarRowMenu.set(null);
-      }}
+      open={menuOpen() && sidebarRowMenuAt() === "pointer"}
+      onOpenChange={({ open }) => setMenuOpen(open, "pointer")}
       popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
       trigger={
         <View role="button"
@@ -501,8 +507,8 @@ function SessionRow(p: { s: () => Session }) {
           <View class={`flex-row items-center gap-2 h-6 ${phone ? "" : "pr-7"}`}>
             <If when={!phone}><View class="w-4 items-center justify-center">
               <If when={att()}><AttentionMark kind="waiting" /></If>
-              <If when={!att() && s().status === "busy"}><Status kind="running" /></If>
-              <If when={!att() && s().status !== "busy"}><Icon name="session" size={14} class="tint-muted-foreground" /></If>
+              <If when={!att() && sessionRunning(s())}><Status kind="running" /></If>
+              <If when={!att() && !sessionRunning(s())}><Icon name="session" size={14} class="tint-muted-foreground" /></If>
             </View></If>
             <If when={phone && !!att()}><AttentionMark kind="waiting" /></If>
             <If when={phone && !att() && sessionRunning(s())}><Status kind="running" /></If>
@@ -526,11 +532,21 @@ function SessionRow(p: { s: () => Session }) {
             class={`absolute right-1.5 top-1 size-6 ${touch ? "" : "opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
             <Icon name="archive" size={16} class="tint-foreground-secondary" />
           </Button></If>
-          <Button onPress={() => { focusedSidebarRow.set(ref()); sidebarRowMenu.set(ref()); if (!phone) void selectSession(s().id); }}
-            accessibilityLabel={`Actions for ${s().title || "Untitled"}`} testID={`row-menu-${s().id}`}
-            class={`absolute right-1.5 ${phone ? "top-3 size-11" : touch ? "bottom-1 size-6" : "bottom-1 size-6 opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
-            <Icon name="more" size={16} class="tint-foreground-secondary" />
-          </Button>
+          <Menu
+            open={menuOpen() && sidebarRowMenuAt() === "trigger"}
+            onOpenChange={({ open }) => setMenuOpen(open, "trigger")}
+            placement="bottom" align="end" offset={4}
+            popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
+            trigger={
+              <Button onPress={() => { focusedSidebarRow.set(ref()); if (!phone) void selectSession(s().id); }}
+                accessibilityLabel={`Actions for ${s().title || "Untitled"}`} testID={`row-menu-${s().id}`}
+                class={`absolute right-1.5 ${phone ? "top-3 size-11" : touch ? "bottom-1 size-6" : "bottom-1 size-6 opacity-0 group-hover/row:opacity-100 focus:opacity-100"} items-center justify-center rounded-(--radius) hover:bg-hover ${FOCUS}`}>
+                <Icon name="more" size={16} class="tint-foreground-secondary" />
+              </Button>
+            }
+          >
+            <RowMenuItems row={ref} />
+          </Menu>
         </View>
       }
     >

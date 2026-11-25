@@ -726,12 +726,16 @@ watermark:
 ```jsonc
 {
   "watermark": {"generation": "log_…", "head": 4200, "floor": 0, "head_cursor": "log_…:4200"},
-  "projects": [Project], "sessions": [raw session rows],  // each row also carries `worker` (null, or an external worker child's facts)
+  "projects": [Project], "sessions": [raw session rows],  // each also carries `status` and `worker`
   "running": [turn], "approvals": [pending approval], "questions": [pending question],
   "selected": {"session_id": "ses_…", "messages": [Message], "messages_limit": 200,
                "messages_more": false, "oldest_seq": 1}
 }
 ```
+
+Each session's `status` is `busy` while its own turn or a child turn runs, and
+`idle` otherwise, matching the live session status events. `running` lists only
+the actual turns, not their idle parents.
 
 The watermark is read in the same SQLite read transaction as the lists and the
 bounded selected-session view. Apply events strictly after `head`; do not infer

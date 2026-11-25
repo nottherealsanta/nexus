@@ -11,7 +11,7 @@ import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, railShown, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, questionLine, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
+  composerFocused, questionLine, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, sidebarRowMenuAt, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
@@ -562,6 +562,7 @@ function openFocusedSidebarMenu() {
   const row = focusedSidebarRow();
   if (!row) return;
   sidebarRowMenu.set(row);
+  sidebarRowMenuAt.set("trigger");
   if (row.kind === "session") void selectSession(row.id);
   else selectProject(row.id);
 }

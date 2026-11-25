@@ -438,6 +438,9 @@ export class Model {
   projectsRecent(): Project[] {
     return [...this.projects.values()].sort((a, b) => b.updated - a.updated || (a.id < b.id ? -1 : 1));
   }
+  isBusy(id: string): boolean {
+    return this.tree(id).some((sid) => this.running.has(sid) || this.sessions.get(sid)?.status === "busy");
+  }
   /** Ids of a session and all its descendants. */
   tree(id: string): string[] {
     const out = [id];

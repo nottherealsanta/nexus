@@ -107,7 +107,7 @@ def check_onboarding(m: dict, ids: dict, err) -> None:
                 err(f"onboarding.agent {name}: missing {req}")
         if a.get("kind") == "root" and len(a.get("options", [])) < 2:
             err(f"onboarding.agent {name}: a root row needs at least two options")
-    for req in ("finish_no_project", "no_provider", "quest_provider", "hints_info", "hints_rows", "hints_search", "search_retry"):
+    for req in ("finish_no_project", "no_provider", "quest_provider", "hints_info", "hints_rows", "hints_agents", "hints_search", "search_retry"):
         if not ob.get(req):
             err(f"onboarding: missing {req}")
 

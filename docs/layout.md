@@ -18,7 +18,11 @@ A **tab** has a kind and a resource id; the pair is its identity, so the same fi
 groups and shares one buffer or one live state.
 While a session's history is loading and no content is available yet, its timeline says **Loading session…**.
 Tabs have square corners in both clients.
-The workspace header does not repeat the active session's name; session names remain in the group tabs.
+The workspace header does not repeat the active session's name; session names remain in the group tabs. Open session
+tabs update when a session's title changes, including changes from another client or automatic naming.
+When a parent has finished its own turn but a subagent is still running, its sidebar and tab keep the running
+spinner and its composer keeps the working row and animated activity bar. Waiting for user input takes precedence;
+reduced motion keeps the indicators still.
 
 | Kind | Shows |
 | --- | --- |

@@ -180,7 +180,7 @@ function EditableComposer() {
     }
   };
   const ses = () => viewed();
-  const busy = () => { m(); const s = ses(); return s?.status === "busy" || (!!s && !!pendingTurns()[s.id]); };
+  const busy = () => { m(); const s = ses(); return !!s && (model.isBusy(s.id) || !!pendingTurns()[s.id]); };
   // While this session waits on the user, the waiting card owns the row: `Working · 2m 01s` above it
   // would run into `waiting on you`.
   const working = () => { m(); return busy() && waitItems().length === 0; };
@@ -1121,7 +1121,9 @@ function dockedQuestion(): Question | null {
   return w?.kind === "question" ? model.questions.get(w.id) ?? null : null;
 }
 
-/** One choice: a multi-select toggles; a single choice is the answer. A click or digit goes on (a lone question sends, another page moves on); Space only selects. */
+/** One choice: a multi-select toggles; a single choice is the answer. A click, digit or (desktop)
+ *  Space on a single choice goes on (a lone question sends, another page moves on); Space on a
+ *  multi-select only ticks. */
 function chooseAnswer(q: Question, qq: QuestionItem, option: string, advance = true) {
   const id = `${q.id}:${qq.id}`;
   waitError.set(null);
@@ -1380,8 +1382,10 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     if (q && one && live() && one.options.length === 10) {
       letter("0", () => { choice.set(9); chooseAnswer(q, one, one.options[9].id); });
     }
-    // Space selects (or, multi-select, ticks) the highlighted option and stays on the page; Enter goes on.
-    if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id, false); });
+    // Space on a single choice goes on as Enter does (a lone question sends, the last page opens
+    // the review); a multi-select ticks the highlighted option and stays. The phone keeps its
+    // touch card, where Space only selects.
+    if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id, !one.multiple && !phone); });
     const off = bindOpenKeys(map);
     return () => { off(); offs.forEach((f) => f()); };
   });
@@ -1507,9 +1511,12 @@ function QuestionHints(p: { q: Question; page: number }) {
   const hint = (key: string, label: string) => <Text class={T.meta}><Text class="font-medium text-foreground-secondary">{key}</Text>{` ${label}`}</Text>;
   return (
     <View class="flex-row flex-wrap items-center gap-x-3.5 gap-y-0.5" testID="question-hints">
-      <If when={!!one().options.length && !line()}>{hint("↑↓", "move")}{hint("space", one().multiple ? "tick" : "select")}</If>
+      <If when={!!one().options.length && !line()}>
+        {hint("↑↓", "move")}
+        <If when={one().multiple}>{hint("space", "tick")}</If>
+      </If>
       <If when={line()}>{hint("esc", "options")}</If>
-      {hint("enter", enter())}
+      {hint(one().options.length && !line() && !one().multiple ? "space/enter" : "enter", enter())}
       <If when={!line()}>{hint("esc", "stop")}</If>
     </View>
   );
@@ -1664,7 +1671,7 @@ export function PeerComposer(p: { sid: string; onFocus: () => void }) {
   const ses = () => { m(); return model.sessions.get(p.sid) ?? null; };
   const text = () => draft()[p.sid] ?? "";
   const agent = () => ses()?.agent ?? "build";
-  const busy = () => ses()?.status === "busy" || !!pendingTurns()[p.sid];
+  const busy = () => { m(); return model.isBusy(p.sid) || !!pendingTurns()[p.sid]; };
   const modelName = () => {
     const s = ses();
     const ref = s?.model ? String(s.model) : (agentCatalog().agents.find((a) => a.name === agent())?.model || rememberedModel(s?.project_id ?? null, agent()) || "");

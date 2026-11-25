@@ -16,6 +16,7 @@ import { refreshSearchService, searchService, searchStartReason, searchStatusLin
 import { browserStatusLines, refreshBrowserStatus } from "../browser-status";
 import { MANAGER_ROWS, managerControl } from "./manager/settings";
 import { McpPage, loadMcp, mcpDetail, mcpServers } from "./mcp-settings";
+import { agentEfforts, catalogEfforts, effortLabel, effortRowLabel, effortText, openEffortPicker, writeAgentEffort } from "../effort";
 import type { VoiceTarget } from "../voice-state";
 
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
@@ -368,28 +369,33 @@ function AgentCard(p: { a: any }) {
     if (refs.length) values[name()] = refs; else delete values[name()];
     void patchConfig(`agents.${key}`, values);
   };
-  const efforts = (): Record<string, string> => config()?.values?.agents?.efforts?.[name()] ?? {};
-  const levels = (ref: string): string[] => ((data().models?.models ?? []).find((item: any) => item.ref === ref)?.efforts ?? []).map(String);
+  const efforts = (): Record<string, string> => agentEfforts(config(), name());
+  const levels = (ref: string): string[] => catalogEfforts(data().models, ref);
+  const agentEffort = (): string | null => (typeof p.a.effort === "string" && p.a.effort ? p.a.effort : null);
   /** Advancing past the last effort returns to "default". */
   const stepEffort = (ref: string, by: number) => {
     const all = levels(ref);
-    if (!all.length) { toast("info", `${ref} lists no effort levels`); return; }
+    if (!all.length) {
+      if (!efforts()[ref]) { toast("warning", effortText("effort.no_levels", { model: ref })); return; }
+      void writeAgentEffort(name(), ref, null);
+      return;
+    }
     const at = efforts()[ref] ? all.indexOf(efforts()[ref]) + 1 : 0;
     const next = by > 0 ? (at + by) % (all.length + 1) : Math.max(0, Math.min(all.length, at + by));
     if (next === at) return;
-    const mine = { ...efforts() };
-    if (next === 0) delete mine[ref]; else mine[ref] = all[next - 1];
-    const values = { ...(config()?.values?.agents?.efforts ?? {}) };
-    if (Object.keys(mine).length) values[name()] = mine; else delete values[name()];
-    void patchConfig("agents.efforts", values);
+    void writeAgentEffort(name(), ref, next === 0 ? null : all[next - 1]);
   };
   const EffortStepper = (q: { model: string }) => {
     const target = () => { bindEffortKeys(); effortTarget.set({ agent: name(), ref: q.model, step: (by) => stepEffort(q.model, by) }); };
+    const open = () => { if (!live()) return; target(); openEffortPicker(name(), q.model, agentEffort(), levels(q.model)); };
     return <If when={levels(q.model).length || efforts()[q.model]}>
-      <View focusable onFocus={target} accessibilityLabel={`Effort for ${q.model}`} testID={`agent-effort-${name()}-${q.model}`} class="flex-row items-center gap-1">
-        <Btn label="‹" kind="ghost" disabled={!live()} onPress={() => { target(); stepEffort(q.model, -1); }} testID={`agent-effort-down-${name()}-${q.model}`} />
-        <Text class={`w-24 text-center ${T.meta}`}>{`effort ${efforts()[q.model] ?? "default"}`}</Text>
-        <Btn label="›" kind="ghost" disabled={!live()} onPress={() => { target(); stepEffort(q.model, 1); }} testID={`agent-effort-up-${name()}-${q.model}`} />
+      <View accessibilityLabel={`Effort for ${q.model}`} testID={`agent-effort-${name()}-${q.model}`} class="flex-row items-center gap-1">
+        <Btn label="‹" kind="ghost" disabled={!live()} onFocus={target} onPress={() => { target(); stepEffort(q.model, -1); }} testID={`agent-effort-down-${name()}-${q.model}`} />
+        <View role="button" focusable disabled={!live()} onFocus={target} onPress={open} accessibilityLabel={`Set effort for ${q.model}: ${effortLabel(efforts()[q.model] ?? null, agentEffort())}`}
+          testID={`agent-effort-pick-${name()}-${q.model}`} class={`rounded-(--radius) px-1 hover:bg-accent disabled:opacity-50 ${FOCUS}`}>
+          <Text style={{ numberOfLines: 1 }} class={`w-48 text-center ${T.meta}`}>{effortRowLabel(efforts()[q.model] ?? null, agentEffort())}</Text>
+        </View>
+        <Btn label="›" kind="ghost" disabled={!live()} onFocus={target} onPress={() => { target(); stepEffort(q.model, 1); }} testID={`agent-effort-up-${name()}-${q.model}`} />
       </View>
     </If>;
   };
@@ -414,25 +420,30 @@ function AgentCard(p: { a: any }) {
     <Text style={{ userSelect: "text" }} class={T.meta}>{[p.a.source, tools(), p.a.path].filter(Boolean).join(" · ")}</Text>
     <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Models</Text><Text class={T.meta}>one picked at random</Text></View>
     <If when={!pool().length}><Text class={T.sec} testID={`agent-models-empty-${name()}`}>{`None: uses ${agentDefault(p.a)}.`}</Text></If>
-    <Each of={pool()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-model-${name()}-${ref()}`}>
-      <Text class={`flex-1 ${T.sec}`}>{ref()}</Text>
-      <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
-      <If when={connectedRef(ref())}><EffortStepper model={ref()} /><Text class={`w-12 text-right ${T.meta}`}>{odds(ref())}</Text></If>
-      <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("models", pool().filter((v) => v !== ref()))} testID={`agent-model-remove-${name()}-${ref()}`} />
+    <Each of={pool()} key={(ref) => ref}>{(ref) => <View class="gap-1" testID={`agent-model-${name()}-${ref()}`}>
+      <View class="flex-row items-center gap-2">
+        <Text class={`flex-1 ${T.sec}`} style={{ numberOfLines: 1 }}>{ref()}</Text>
+        <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
+        <If when={connectedRef(ref())}><Text class={`w-12 text-right ${T.meta}`}>{odds(ref())}</Text></If>
+        <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("models", pool().filter((v) => v !== ref()))} testID={`agent-model-remove-${name()}-${ref()}`} />
+      </View>
+      <View class="flex-row justify-end"><EffortStepper model={ref()} /></View>
     </View>}</Each>
     <View class="flex-row"><Btn label="Add model" disabled={!live() || !data().models} testID={`agent-model-add-${name()}`} onPress={() => add("models")} /></View>
     <View class="flex-row items-baseline gap-2 pt-2"><Text class={T.label}>Fallbacks</Text><Text class={T.meta}>tried in order on failure</Text></View>
-    <Each of={fallbacks()} key={(ref) => ref}>{(ref) => <View class="flex-row items-center gap-2" testID={`agent-fallback-${name()}-${ref()}`}>
-      <Text class={`w-5 ${T.meta}`}>{`${fallbacks().indexOf(ref()) + 1}.`}</Text>
-      <Text class={`flex-1 ${T.sec}`}>{ref()}</Text>
-      <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
-      <If when={connectedRef(ref())}><EffortStepper model={ref()} /></If>
-      <Btn label="Up" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === 0} onPress={() => move(ref(), -1)} />
-      <Btn label="Down" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === fallbacks().length - 1} onPress={() => move(ref(), 1)} />
-      <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("fallbacks", fallbacks().filter((v) => v !== ref()))} testID={`agent-fallback-remove-${name()}-${ref()}`} />
+    <Each of={fallbacks()} key={(ref) => ref}>{(ref) => <View class="gap-1" testID={`agent-fallback-${name()}-${ref()}`}>
+      <View class="flex-row items-center gap-2">
+        <Text class={`w-5 ${T.meta}`}>{`${fallbacks().indexOf(ref()) + 1}.`}</Text>
+        <Text class={`flex-1 ${T.sec}`} style={{ numberOfLines: 1 }}>{ref()}</Text>
+        <If when={!connectedRef(ref())}><Text class={`${TS.base} text-warning`}>not connected · skipped</Text></If>
+        <Btn label="Up" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === 0} onPress={() => move(ref(), -1)} />
+        <Btn label="Down" kind="ghost" disabled={!live() || fallbacks().indexOf(ref()) === fallbacks().length - 1} onPress={() => move(ref(), 1)} />
+        <Btn label="Remove" kind="ghost" disabled={!live()} onPress={() => save("fallbacks", fallbacks().filter((v) => v !== ref()))} testID={`agent-fallback-remove-${name()}-${ref()}`} />
+      </View>
+      <View class="flex-row justify-end"><EffortStepper model={ref()} /></View>
     </View>}</Each>
     <View class="flex-row"><Btn label="Add fallback" disabled={!live() || !data().models} testID={`agent-fallback-add-${name()}`} onPress={() => add("fallbacks")} /></View>
-    <Text class={`pt-2 ${T.meta}`}>←/→ sets this model's effort. Changes apply to new subagents; running ones keep what they started with.</Text>
+    <Text class={`pt-2 ${T.meta}`}>{effortText("effort.settings_hint")}</Text>
   </View>;
 }
 

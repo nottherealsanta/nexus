@@ -11,7 +11,6 @@ import {
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
-import { ProjectMcpPanel } from "./project-mcp";
 import { sessionInventoryRows } from "../skills-mcp";
 import type { InventoryKind, InventoryRow, McpEntry, SkillEntry } from "../skills-mcp";
 import { TimelineColumn, USER_BAND_INSET } from "./reading-column";
@@ -495,7 +494,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
   });
     return (
     // A draft is a card; from the first send the header is fixed and loses its background (plan 48).
-    <View class={`w-full ${p.fixed ? "" : "bg-card"} px-4 py-6 gap-4`} testID={p.fixed ? "context-sections-fixed" : "context-sections"}
+    <View class={`w-full ${p.fixed ? "" : "bg-card"} px-4 py-3 gap-4`} testID={p.fixed ? "context-sections-fixed" : "context-sections"}
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => {
@@ -527,7 +526,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
 /** The starting context in the timeline and before a session starts: one card, one width. */
 export function StartingContext(p: { sections: CtxSection[]; total: number; estimated: boolean; window?: number; reconstructed?: boolean; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void; fixed?: boolean; worktree?: DraftWorktree; worktreeStatus?: WorktreeStatus }) {
   return (
-    <View class="w-full my-4" testID="context-section">
+    <View class="w-full my-1" testID="context-section">
       <ContextSections
         sections={p.sections} total={p.total} estimated={p.estimated} window={p.window} reconstructed={p.reconstructed}
         onInventoryToggle={p.onInventoryToggle} fixed={p.fixed} worktree={p.worktree} worktreeStatus={p.worktreeStatus}
@@ -612,13 +611,12 @@ export function NewSessionView() {
                 onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)}
                 worktree={worktreeOffer() ? { on: !!sessionDraft().worktree, changes: worktreeOffer()!.changes ?? 0, onToggle: toggleDraftWorktree } : undefined}
                 worktreeStatus={pendingFirstPrompt() && sessionDraft().worktree && worktreeOffer() ? { text: "⌥ new worktree requested", warning: false } : undefined} />
-              <View class="w-full px-4"><ProjectMcpPanel /></View>
               <If when={pendingFirstPrompt()}>
                 {() => <View class="w-full pt-4 pb-2" testID="first-prompt-sending">
                   <View class={`relative w-full bg-band py-3 ${phone ? "rounded-2xl px-4" : USER_BAND_INSET}`} testID="pending-user-band">
                     <If when={!phone}><View class="absolute left-0 top-0 bottom-0 w-0.5 bg-border-strong" /></If>
                     <If when={pendingFirstPrompt()!.images > 0}><Text class={`${T.sec} pb-2`}>{`[${pendingFirstPrompt()!.images} image${pendingFirstPrompt()!.images === 1 ? "" : "s"}]`}</Text></If>
-                    <Text style={{ userSelect: "text", fontFamily: "Monaspace Argon" }} class="text-[14px] leading-6 text-foreground">{pendingFirstPrompt()!.text}</Text>
+                    <Text style={{ userSelect: "text", fontFamily: "Google Sans" }} class="text-[14px] leading-6 text-foreground">{pendingFirstPrompt()!.text}</Text>
                   </View>
                 </View>}
               </If>

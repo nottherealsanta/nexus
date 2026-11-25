@@ -1,0 +1,45 @@
+  ◧  [Sessions] [Files] [Git]     Settings                                                                                                □
+     │                                                                                                                                 +  ⋯
+▏    │ + New session             ▌
+▏ N  │ ⌕ Search sessions ctrl+k
+▏─── │ ▣ Show archived              System prompt ~2.1K
+     │──────────────────────────
+     │  No sessions yet. Type       AGENTS.md  unavailable or not read
+  S  │  in the composer to
+ ─── │  start one.          Settings › Agents › scout
+     │
+     │                      ⌕ Filter settings…
+     │                      ────────────────────────────────────────────────────────────────────────────────────
+     │                        Appearance          │ Reads the material and reports the context that is relevant…
+     │                        Providers           │
+     │                        Agents              │ MODELS                                  one picked at random
+     │                        Tools               │ ▌ codex/gpt-6.1-terra                                   100%
+     │                        External workers    │                                    effort Agent default: low
+     │                        Browser             │   + add model
+     │                        MCP                 │
+     │                        Context             │ FALLBACKS                          tried in order on failure
+     │                        Voice and speech    │   + add fallback
+     │                        Manager             │
+     │                        Keybindings         │
+     │                        Notifications       │
+     │                        About               │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │ ←/→ sets this model's effort; open it for every level.
+     │                                            │ Changes apply to new subagents; running ones keep what they
+     │                                              started with.
+     │                      enter select · → effort · d remove · K/J reorder · ← sections · esc back 13 sections
+     │
+     │
+     │                               Message to start a new session
+  +  │
+     │                               Build · … · default                                                                               0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                              /private/tmp/tui-effort-shots.nJEajs/ws/nexus-demo  ⌥ main
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

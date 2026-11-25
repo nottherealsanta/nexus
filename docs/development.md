@@ -21,8 +21,8 @@ starts the daemon. Both build from `interface/manifest.toml` and
 `interface/theme.toml`; check edits with `python3 interface/check_manifest.py` and
 `python3 interface/check_theme.py`. NSH's Void palette is `nexus-nsh/theme-void.toml`, merged
 over the shared file by `nexus-nsh/scripts/gen.py`; check it with
-`python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. The TUI reads only the
-shared file.
+`python3 interface/check_theme.py --overlay nexus-nsh/theme-void.toml`. These checks require Python
+3.11 or newer; `nexus check` uses Core's uv-managed Python. The TUI reads only the shared file.
 
 NSH uses bundled theme-tinted SVG control icons on web and native targets. Its
 interface font is Monaspace Argon; text defaults to 14 px on web and macOS and
@@ -38,10 +38,14 @@ The TUI and `nexus-mermaid` need Rust 1.97 or newer: the client enables the shar
 `raster` feature and Ondine's compiler requires 1.97. NSH's native crate uses the same features on
 every target, including web. The `nexus-mermaid` default feature set alone still builds on 1.85.
 
+NSH generation (`npm run gen`, also run by builds and tests) uses Core's uv-managed Python,
+not the system `python3`, because its TOML parser requires Python 3.11 or newer.
+
 NSH web commands (`npm run build`, `npm test`, `nexus dev web`) locate zstd's
 WebAssembly archiver through `nexus-nsh/scripts/nsh-web.mjs`: explicit `AR`
-settings take precedence, followed by `llvm-ar` on PATH and the active Rust
-toolchain's `llvm-ar`. If missing, install `rustup component add llvm-tools` or
+settings take precedence, followed by `llvm-ar` on PATH, the active Rust
+compiler's toolchain, and the active rustup toolchain (even if another `rustc` is on PATH).
+If missing, install `rustup component add llvm-tools` or
 set `AR_wasm32_unknown_unknown` to a WebAssembly-capable archiver. macOS's
 system `ar` cannot replace it.
 

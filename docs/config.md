@@ -35,8 +35,10 @@ for the refs it can run as `model_efforts` in its snapshot, so a later edit does
 session runs a model with is, in order: the session's own, this entry (`effort_source: "config"`), the agent file's
 `effort`, the provider's default. A fallback model switches to its own entry (else the agent's or provider's default)
 rather than inheriting the failed model's effort. Settings › Agents › name shows each model's effort next to its
-odds; ←/→ steps it through `default` and the levels the catalog lists for that model, a model with none listed has no
-control, and it writes this key.
+odds. Open the effort picker to choose a catalog-listed level or clear the override; ←/→ also steps through the choices.
+The default identifies an agent-file effort when present, otherwise the model default. Models with no listed levels have
+no control unless an existing override can be cleared. Onboarding offers the same per-agent, per-model choice after a
+model is selected; changes apply to new children.
 After retries, a failed request can switch to the next fallback only before any
 response stream event; partial responses are never replayed automatically. The
 switch and a notice in the model's context are visible, and the new model remains

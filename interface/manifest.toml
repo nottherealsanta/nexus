@@ -745,6 +745,7 @@ no_provider = "No provider is connected yet. Connect one first, then choose mode
 quest_provider = "Connect a provider"
 hints_info = "enter next · ← back · esc back · s skip"
 hints_rows = "↑↓ choose · enter change · → next · ← back · esc back · s skip"
+hints_agents = "↑↓ choose · enter change · e effort · → next · ← back · esc back · s skip"
 hints_search = "enter retry · → next · ← back · esc back · s skip"
 search_retry = "Retry"
 
@@ -775,7 +776,7 @@ kind = "agents"
 title = "Choose models for your agents"
 lines = [
   "Nexus works as a team. You talk to one agent, and it can hand jobs to others. Each agent can use its own model, so quick cheap models do the reading and your best model does the thinking.",
-  "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models, fallbacks, effort.",
+  "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models and fallbacks.",
 ]
 tip = "Type part of a name in the picker to filter it."
 
@@ -917,6 +918,12 @@ lines = [
 "web_search.loading" = "loading status…"
 "web_search.no_status" = "status unavailable"
 "web_search.runtime" = "runtime {runtime}"
+"effort.agent_default" = "Agent default: {effort}"
+"effort.model_default" = "Model default"
+"effort.row" = "effort {value}"
+"effort.no_levels" = "{model} lists no effort levels"
+"effort.choose_model" = "Choose a model first."
+"effort.settings_hint" = "←/→ sets this model's effort; open it for every level. Changes apply to new subagents; running ones keep what they started with."
 
 # --- Commands -----------------------------------------------------------------
 # `leader` is the Ctrl+X leader sequence old Nexus bound in the TUI. NSH's keymap

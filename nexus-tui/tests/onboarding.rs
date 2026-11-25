@@ -8,7 +8,7 @@ use nexus_tui::app::{App, Effect};
 use nexus_tui::actions::{ActionDone, ApiCall, Done};
 use nexus_tui::sync::{Command as SyncCommand, SyncMsg};
 use nexus_tui::theme::{Mode, Tier};
-use nexus_tui::ui::{OverlayKind, Target, View};
+use nexus_tui::ui::{OverlayKind, PaletteMode, Target, View};
 use serde_json::{json, Value};
 
 fn app() -> App {
@@ -56,6 +56,24 @@ fn patches(a: &App) -> Vec<(String, Value)> {
 
 fn text(a: &mut App) -> String {
     draw(a, 120, 36).1.join("\n")
+}
+
+/// A tour whose catalog gives `codex/gpt-6-luna` effort levels, with `scout` preferring `low` in its agent file.
+fn effort_app() -> App {
+    let mut a = app();
+    a.state.models[0]["efforts"] = json!(["low", "medium", "high"]);
+    a.state.agents = vec![json!({
+        "name": "scout", "mode": "subagent", "source": "builtin", "effort": "low"
+    })];
+    a.apply_sync(config(false));
+    a.effects.clear();
+    a
+}
+
+fn open_scout_model_picker(a: &mut App) {
+    press(a, &["right", "right", "down", "enter"]);
+    typing(a, "luna");
+    press(a, &["enter"]);
 }
 
 #[test]
@@ -131,6 +149,82 @@ fn an_agent_row_writes_its_model_and_skip_marks_it_done() {
     assert!(patches(&a)
         .iter()
         .any(|(p, v)| p == "ui.onboarded" && *v == json!(true)));
+}
+
+#[test]
+fn a_model_with_efforts_opens_the_picker_and_escape_keeps_the_agent_default() {
+    let mut a = effort_app();
+    open_scout_model_picker(&mut a);
+    let Some(OverlayKind::Palette(palette)) = a.ui.overlay.as_ref().map(|o| &o.kind) else {
+        panic!("the effort picker should open after a model with levels");
+    };
+    assert_eq!(palette.mode, PaletteMode::AgentEfforts);
+    let labels: Vec<String> = a.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["Agent default: low", "low", "medium", "high"]);
+    // Esc leaves the agent-file default in place and keeps the model that was just chosen.
+    press(&mut a, &["esc"]);
+    assert!(a.ui.overlay.is_none());
+    assert_eq!(a.ui.view, View::Onboarding);
+    let patches = patches(&a);
+    assert!(patches.iter().any(|(path, value)| {
+        path == "agents.models" && value["scout"] == json!(["codex/gpt-6-luna"])
+    }));
+    assert!(!patches.iter().any(|(path, _)| path == "agents.efforts"));
+    // With one model set, the row says what its effort will be without implying the provider's default.
+    a.state.config.as_mut().unwrap()["values"]["agents"]["models"]["scout"] =
+        json!(["codex/gpt-6-luna"]);
+    let shown = text(&mut a);
+    assert!(shown.contains("codex/gpt-6-luna"), "{shown}");
+    assert!(shown.contains("effort Agent default: low"), "{shown}");
+}
+
+#[test]
+fn choosing_effort_after_a_model_keeps_the_model_and_effort_writes() {
+    let mut a = effort_app();
+    open_scout_model_picker(&mut a);
+    // The default is first, then low, medium, high.
+    press(&mut a, &["down", "down", "enter"]);
+    let patches = patches(&a);
+    assert!(patches.iter().any(|(path, value)| {
+        path == "agents.models" && value["scout"] == json!(["codex/gpt-6-luna"])
+    }));
+    assert!(patches.iter().any(|(path, value)| {
+        path == "agents.efforts" && value["scout"]["codex/gpt-6-luna"] == json!("medium")
+    }));
+}
+
+#[test]
+fn the_onboarding_effort_line_opens_the_picker_when_tapped() {
+    let mut a = effort_app();
+    a.state.config.as_mut().unwrap()["values"]["agents"]["models"]["scout"] =
+        json!(["codex/gpt-6-luna"]);
+    press(&mut a, &["right", "right"]);
+    draw(&mut a, 120, 36);
+    let effort = a
+        .hits
+        .rect_of(&Target::Onboarding(
+            nexus_tui::ui::OnboardingTarget::Effort(1),
+        ))
+        .expect("the scout effort line");
+    click(&mut a, effort.x, effort.y);
+    let Some(OverlayKind::Palette(palette)) = a.ui.overlay.as_ref().map(|o| &o.kind) else {
+        panic!("the effort line should open the picker");
+    };
+    assert_eq!(palette.mode, PaletteMode::AgentEfforts);
+}
+
+#[test]
+fn e_on_an_onboarding_model_row_opens_the_same_picker() {
+    let mut a = effort_app();
+    a.state.config.as_mut().unwrap()["values"]["agents"]["models"]["scout"] =
+        json!(["codex/gpt-6-luna"]);
+    press(&mut a, &["right", "right", "down", "e"]);
+    let Some(OverlayKind::Palette(palette)) = a.ui.overlay.as_ref().map(|o| &o.kind) else {
+        panic!("e should open the effort picker");
+    };
+    assert_eq!(palette.mode, PaletteMode::AgentEfforts);
+    let labels: Vec<String> = a.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["Agent default: low", "low", "medium", "high"]);
 }
 
 #[test]

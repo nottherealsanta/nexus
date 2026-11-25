@@ -18,6 +18,7 @@ pub struct Tour {
     pub quest_provider: String,
     pub hints_info: String,
     pub hints_rows: String,
+    pub hints_agents: String,
     pub hints_search: String,
     pub search_retry: String,
     #[serde(default)]
@@ -83,7 +84,9 @@ impl Tour {
     }
 
     pub fn hints(&self, state: &Onboarding) -> &str {
-        if self.has_rows(state) {
+        if self.current(state).kind == "agents" {
+            &self.hints_agents
+        } else if self.has_rows(state) {
             &self.hints_rows
         } else if self.is_search(state) {
             &self.hints_search
@@ -127,15 +130,25 @@ fn key_label(key: &str) -> String {
     key.to_owned()
 }
 
+/// The models configured for one agent, in order.
+pub fn agent_models(config: Option<&Value>, name: &str) -> Vec<String> {
+    config
+        .and_then(|c| c["values"]["agents"]["models"][name].as_array())
+        .map(|l| {
+            l.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// What an agent row shows: the model set for it, or what it uses without one.
 pub fn agent_model_line(config: Option<&Value>, name: &str) -> String {
-    let refs: Vec<&str> = config
-        .and_then(|c| c["values"]["agents"]["models"][name].as_array())
-        .map(|l| l.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+    let refs = agent_models(config, name);
     match refs.as_slice() {
         [] => "the session's model".into(),
-        [one] => (*one).to_owned(),
+        [one] => one.clone(),
         [first, more @ ..] => format!("{first} +{}", more.len()),
     }
 }
@@ -323,6 +336,27 @@ impl App {
         };
         let patch = agent_models_patch(self.state.config.as_ref(), &agent, model.as_deref());
         self.patch_config_value("agents.models", patch);
+        if let Some(model) = model.filter(|m| !self.model_efforts(m).is_empty()) {
+            self.open_agent_effort_picker(&agent, &model);
+        }
+    }
+
+    /// `e` on an agent row: the explicit effort picker for the model the row shows.
+    pub fn onboarding_open_effort(&mut self) {
+        let tour = Tour::of(&self.manifest);
+        let Some(agent) = tour.agent.get(self.ui.onboarding.row) else {
+            return;
+        };
+        if agent.is_root() || tour.current(&self.ui.onboarding).kind != "agents" {
+            return;
+        }
+        let models = agent_models(self.state.config.as_ref(), &agent.name);
+        let Some(model) = models.first() else {
+            let text = self.manifest.ui_text("effort.choose_model", &[]);
+            self.toast(Level::Warning, text);
+            return;
+        };
+        self.open_agent_effort_picker(&agent.name, model);
     }
 
     /// Keys while the tour is up. The provider modal and the picker take their own keys first.
@@ -358,6 +392,7 @@ impl App {
                     self.onboarding_step_to(self.ui.onboarding.step + 1);
                 }
             }
+            _ if code == KeyCode::Char('e') => self.onboarding_open_effort(),
             _ if code == KeyCode::Char('s') => self.close_onboarding(false),
             _ => return false,
         }
@@ -385,6 +420,10 @@ impl App {
             T::Row(i) => {
                 self.ui.onboarding.row = i;
                 self.onboarding_activate();
+            }
+            T::Effort(i) => {
+                self.ui.onboarding.row = i;
+                self.onboarding_open_effort();
             }
             T::Retry => self.retry_onboarding_search(),
         }
@@ -416,6 +455,26 @@ mod tests {
         assert!(t.step[search].lines.iter().any(|l| l.contains("image")));
         assert!(!t.hints_search.is_empty());
         assert!(!t.search_retry.is_empty());
+    }
+
+    #[test]
+    fn only_the_agents_step_offers_the_effort_key() {
+        let (_, t) = tour();
+        let mut state = Onboarding::default();
+        state.step = t
+            .step
+            .iter()
+            .position(|s| s.kind == "provider")
+            .expect("a provider step");
+        assert_eq!(t.hints(&state), t.hints_rows);
+        assert!(!t.hints(&state).contains("e effort"));
+        state.step = t
+            .step
+            .iter()
+            .position(|s| s.kind == "agents")
+            .expect("an agents step");
+        assert_eq!(t.hints(&state), t.hints_agents);
+        assert!(t.hints(&state).contains("e effort"));
     }
 
     #[test]

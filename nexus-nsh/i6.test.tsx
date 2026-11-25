@@ -102,7 +102,7 @@ describe("sessions sidebar (I6)", () => {
     expect(app.shows("id:rail-popup-prj_1")).toBe(true);
   });
 
-  test("the hover ⋯ button opens the same row menu as a right click", async () => {
+  test("the hover ⋯ button toggles the row menu and Shift+F10 opens it too", async () => {
     const app = await open("./App.tsx", { network: network([session("ses_1", "Refactor loader")]), width: 1440, height: 900, platform: "web" });
     await app.waitFor("id:session-ses_1");
     await app.hover("id:session-ses_1");
@@ -110,6 +110,12 @@ describe("sessions sidebar (I6)", () => {
     await app.press("id:row-menu-ses_1");
     await app.waitFor("id:row-action-session.rename");
     expect(app.shows("id:row-action-session.delete")).toBe(true);
+    // The three-dot control is the menu's trigger: pressing it again closes the menu.
+    await app.press("id:row-menu-ses_1");
+    await app.waitUntil(() => !app.shows("id:row-action-session.rename"));
+    await app.press("id:session-ses_1");
+    await app.keyboard.press("shift+f10");
+    await app.waitFor("id:row-action-session.rename");
   });
 });
 

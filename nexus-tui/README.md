@@ -7,10 +7,10 @@ the Nexus home is its own preferences file, `tui.json` (see Preferences below). 
 `~/repos/nexus-old/rust/tui` is reference.
 
 This client is also the visual reference for `nexus nsh tui`, which runs the shared
-NSH TSX app rather than this Rust implementation. NSH now uses the shared Unicode
-sidebar/fold/tool glyphs, a monospace interface and compact full-width reading
-gutters on terminal, web and native targets. This does not change the Rust client's
-existing layout or controls.
+NSH TSX app rather than this Rust implementation. NSH uses the shared Unicode
+sidebar/fold/tool glyphs and compact full-width reading gutters. Its interface and
+prose use proportional text, while the TUI uses the terminal's monospace font;
+code and commands remain monospace in both.
 
 In a session timeline, hold the left mouse button and scroll to extend a text
 selection beyond the visible rows. Releasing the button copies the selected text;
@@ -163,7 +163,8 @@ confirmations. Each group has a one-row strip of tabs
 one cell width for every tab, so a long title ellipsises, and a gap-free strip scrolls around the active tab with a
 `…`. A group that is not focused still shows its session's own timeline, read-only (its view is pinned and watched
 while drawn); only the focused group has the composer. Session tabs show their status mark, files a `●` when they hold unsaved text, terminals a status dot and diffs
-`±`. A group's active tab is bold on the page surface when the group is focused (secondary when not); the others
+`±`. A parent remains working in the sidebar, tab and composer activity bar while any subagent runs, even after its own turn ends.
+A group's active tab is bold on the page surface when the group is focused (secondary when not); the others
 are muted on the band. Below the strip the session page keeps exactly one heading row: a root session leaves it blank (the full title is already its tab), while a viewed subagent shows its title on the left and right-aligned `agent · model · provider · effort` metadata, shifted right by a full-height four-cell muted-grey back strip at the far left of the centre. The strip runs from the heading through the composer, centres its `←` both vertically and horizontally, and the whole strip is clickable; it and Left outside the composer, text fields, the editor and overlays return straight to the root. Esc still returns to the immediate parent, and a root session has no strip. There is no second subagent-tab row; child cards remain the navigation path to a subagent. The viewed tab is bold on the page surface, the others muted on the band. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
@@ -269,8 +270,8 @@ sign-in link and code are their own rows, so Enter opens the link (the URL is
 underlined) and Enter on the code copies it. Agents: the default agent and effort, then one line per
 subagent; Enter opens its pane with its Models (and their odds) and Fallbacks,
 where Enter on `+ add …` picks a model, `d` removes one, `K`/`J` move a
-fallback and Right on a model cycles its effort (`effort default`, then the levels the
-catalog lists for it; a model with none listed shows no effort). Tools shows one permission choice and one tool grid; Right chooses a tool
+fallback, Enter on a model opens its effort picker, and Right cycles its effort. The picker offers catalog-listed
+levels and the effective agent or model default; a model without listed levels has no control unless an override can be cleared. Tools shows one permission choice and one tool grid; Right chooses a tool
 and Enter toggles it.
 Session outcomes appear in a non-dismissible strip immediately above the composer, not in the timeline or
 footer. The latest error/interruption, retry or recovery wins, with a count of additional diagnostics. The strip
@@ -797,19 +798,20 @@ and previews wrap fully, and Page Up/Page Down scroll the card. **A question rep
 composer** (plan 47): the card and the composer's input are one dock under one rail, and the
 composer's input line is the answer's "add context" line (`Add context…`, or `Type your
 answer…` when the question has no options), with its own text per question. The options have
-the keys first: Up/Down move, and a single-choice answer follows the highlight; Space
-selects and Enter goes on. A multi-select draws checkboxes and `Select all that apply`: arrows
-move, Space ticks, and Enter with nothing ticked ticks the highlight and stays (the next Enter
-goes on). Left/Right also move a lone question's options. A number key (1-9, 0 for the tenth)
+the keys first: Up/Down move, and a single-choice answer follows the highlight; Space and Enter
+both go on (`space/enter send`, `next` or `review`). A multi-select draws checkboxes and `Select all that apply`: arrows
+move, Space ticks and stays, and Enter with nothing ticked ticks the highlight and stays (the next
+Enter goes on). Left/Right also move a lone question's options. A number key (1-9, 0 for the tenth)
 or a click chooses a single option and goes on at once (on a multi-select it ticks). Typing, or
-Down from the last option, moves into the line; Up from its first line, or Esc, returns to the
+Down from the last option, moves into the line, where Space types normally; Up from its first
+line, or Esc, returns to the
 options (the text stays; Esc on the options keeps its normal meaning). A question with no
 options starts in the line. **With
-exactly one question**, Enter sends a ready answer at once (a multi-select with nothing ticked
-ticks the highlight first) and never shows a review page. **Two or more questions** keep the
-step-through: Enter locks the answer
+exactly one question**, Space or Enter sends a ready answer at once (a multi-select with nothing
+ticked ticks the highlight first) and never shows a review page. **Two or more questions** keep
+the step-through: Space or Enter locks the answer
 and moves to the next question, the last leads to a review page whose rail is `text.primary`
-(white in the dark theme), and Enter there sends the reply. `Alt+Left`/`Alt+Right` move between
+(white in the dark theme), and Enter there sends the reply (Space does nothing on the review). `Alt+Left`/`Alt+Right` move between
 the questions and review, while Left/Right page when the options have the keys and move the
 caret in the line. A multi-select question uses the violet `interactive.multi` rail and
 ticks. The reply is sent once, as a
@@ -827,7 +829,7 @@ modal using old Nexus's panel geometry and a searchable root/drill list. Press
 before closing the panel. Existing Core-backed controls retain their own focus
 and keyboard handling.
 
-**Onboarding.** While Core's `ui.onboarded` is false the TUI opens a full-window tour (`View::Onboarding`, `onboarding.rs`, `render/onboarding_ui.rs`): welcome, connect a provider, choose models for agents (scout and quick are advised small, fast models), start web search, then lessons on the timeline, subagents, permissions and navigation. ↑↓ choose a row, Enter changes it (a provider opens its connection modal, an agent opens the model picker, the default agent cycles), →/← or Next/Back move, `s` or Skip finishes it. On the search step Core is asked for SearXNG's state and, unless it already runs or cannot start, the TUI starts it in the background and keeps polling while the step is open; the state, address, runtime and last error are shown, Enter on Retry starts it again, and Next never waits for the container. Finish and Skip both write `ui.onboarded`. `/onboarding` or Settings > About replays it. Wording is `[onboarding]` in `interface/manifest.toml`. Tests: `tests/onboarding.rs` (the shared `interface/scenarios/web-search.json` included).
+**Onboarding.** While Core's `ui.onboarded` is false the TUI opens a full-window tour (`View::Onboarding`, `onboarding.rs`, `render/onboarding_ui.rs`): welcome, connect a provider, choose models for agents (scout and quick are advised small, fast models), start web search, then lessons on the timeline, subagents, permissions and navigation. ↑↓ choose a row, Enter changes it (a provider opens its connection modal, an agent opens the model picker, the default agent cycles), →/← or Next/Back move, `s` or Skip finishes it. Selecting a model with listed effort levels opens its per-agent effort picker; `e` reopens it. On the search step Core is asked for SearXNG's state and, unless it already runs or cannot start, the TUI starts it in the background and keeps polling while the step is open; the state, address, runtime and last error are shown, Enter on Retry starts it again, and Next never waits for the container. Finish and Skip both write `ui.onboarded`. `/onboarding` or Settings > About replays it. Wording is `[onboarding]` in `interface/manifest.toml`. Tests: `tests/onboarding.rs` (the shared `interface/scenarios/web-search.json` included).
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
 key). `Shift+Tab` cycles the composer's eligible agents (primary agents, or subagents

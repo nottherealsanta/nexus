@@ -306,19 +306,20 @@ describe("questions (plan 30)", () => {
     await app.waitUntil(() => app.value("id:composer-input") === scenario.draft, { timeout: 3000 });
   });
 
-  test("arrows move, space selects without sending, and enter sends", async () => {
+  test("arrows move and space sends a lone single choice like Enter", async () => {
     const app = await openApp({ questions: [scenario.question] });
     await openSession(app, "ses_1");
     await app.waitFor("id:waiting-card");
     await app.wait(150);
+    expect(app.texts().some((t) => t.includes("space/enter send"))).toBe(true);
     await app.keyboard.press("down");
     await app.keyboard.press("space");
-    await app.wait(300);
-    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/"))).toBe(false);
-    await app.keyboard.press("enter");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 1);
+    await app.wait(300);
+    expect(app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length).toBe(1);
     const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
     expect(body.answers[0].selected).toEqual(["fast"]);
+    expect(app.shows("text:Review answers")).toBe(false);
   });
 
   test("Esc and Up leave the context line for the options, keeping its text", async () => {
@@ -343,8 +344,9 @@ describe("questions (plan 30)", () => {
     await app.waitFor("text:esc options");
     await app.keyboard.press("up");
     await app.waitUntil(() => !app.shows("text:esc options"));
+    // The options have the keys again: Space on the single choice sends, as Enter does.
+    await app.waitFor("text:space/enter send");
     await app.keyboard.press("space");
-    await app.keyboard.press("enter");
     await app.waitUntil(() => app.requests().filter((r) => r.method === "POST" && r.url.includes("/question/")).length === 1);
     const body = JSON.parse(app.requests().find((r) => r.method === "POST" && r.url.includes("/question/"))!.body as string);
     expect(body.answers[0].text).toBe("n");

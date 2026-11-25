@@ -10,7 +10,8 @@ export function SessionStatus() {
   const slow = () => { m(); tick(); const id = viewed()?.id; const p = id ? pendingTurns()[id] : undefined; return !!p?.key && !p.queued && !p.accepted && Date.now() - p.started >= PENDING_SLOW_MS; };
   const outcome = () => {
     m();
-    if (viewed()?.status === "busy" || refused() || slow()) return null;
+    const id = viewed()?.id;
+    if ((id && model.isBusy(id)) || refused() || slow()) return null;
     const turn = model.selected?.turns.at(-1);
     const scratch = (model.selected?.scratch ?? []).filter((e) => ["session.error", "retry_scheduled", "retry_started", "retry_exhausted", "turn.recovered"].includes(e.type) || (["permission.replied", "question.replied"].includes(e.type) && e.data?.outcome === "cancelled" && e.data?.origin !== "manager")).map(diag).filter((r) => r != null);
     const rows = scratch.length ? scratch.map((row) => ({ row })) : turn ? summaryDiags(turn) : [];

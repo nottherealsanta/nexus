@@ -1,0 +1,45 @@
+  ◧  [Sessions] [Files] [Git]     Settings                                                                                                □
+     │                                                                                                                                 +  ⋯
+▏    │ + New session             ▌
+▏ N  │ ⌕ Search sessions ctrl+k
+▏  4 │ ▣ Show archived              System prompt ~2.1K
+     │──────────────────────────
+     │   Refactor the loader 4m     AGENTS.md  unavailable or not read
+  S  │   ⌥ main
+   1 │                      Settings › Agents › plan
+     │   Review the CJK wi
+     │   ⌥ main             ⌕ Filter settings…
+     │                      ────────────────────────────────────────────────────────────────────────────────────
+     │   Release notes for    Appearance          │ Designs a change and writes the plan. May write Markdown pl…
+     │   ⌥ main               Providers           │
+     │                        Agents              │ MODELS                                  one picked at random
+     │   Fix flaky test in    Tools               │ ▌ claude/claude-haiku-4-5                               100%
+     │   ⌥ main               External workers    │   + add model
+     │                        Browser             │
+     │                        MCP                 │ FALLBACKS                          tried in order on failure
+     │                        Context             │   + add fallback
+     │                        Voice and speech    │
+     │                        Manager             │
+     │                        Keybindings         │
+     │                        Notifications       │
+     │                        About               │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │
+     │                                            │ ←/→ sets this model's effort; open it for every level.
+     │                                            │ Changes apply to new subagents; running ones keep what they
+     │                                              started with.
+     │                      enter select · → effort · d remove · K/J reorder · ← sections · esc back 13 sections
+     │
+     │
+     │                               Message to start a new session
+  +  │
+     │                               Build · … · default                                                                               0
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                              /private/tmp/tui-effort-shots.nJEajs/ws/nexus-demo  ⌥ main
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

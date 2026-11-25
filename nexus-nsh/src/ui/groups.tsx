@@ -3,7 +3,7 @@
 // screens live in one flat layer keyed by terminal, so moving a terminal tab between groups moves a mounted
 // WebView instead of remounting it: the attachment and the screen survive the move.
 import { PanResponder, Scroll, Text, View, effect, signal, type ViewRef } from "nsh";
-import { Button, ContextMenu, MenuItem } from "nsh/base";
+import { Button, Menu, MenuItem } from "nsh/base";
 import { Icon, Spinner, FOCUS, TONE, TS, T } from "./kit";
 import { attention } from "./sidebar";
 import { MARQUEE_HOLD_MS, MARQUEE_SPEED, marqueeShift, tabBox, tabHeight, tabTitleOverflow, tabTitleRoomCells } from "./header";
@@ -38,10 +38,9 @@ const origin = signal({ x: 0, y: 0 });
 function tabStatus(tab: Tab) {
   m();
   if (tab.kind === "session") {
-    const session = model.sessions.get(tab.id);
     const waiting = attention(tab.id) === "waiting" ? attentionGlyph.waiting : null;
     if (waiting) return { glyph: waiting.unicode, tone: TONE[waiting.token], label: "waiting", spin: false };
-    if (session?.status === "busy") return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
+    if (model.isBusy(tab.id)) return { glyph: statusGlyphs.running.unicode, tone: TONE[statusGlyphs.running.token], label: "running", spin: true };
     if (model.failedSessions.has(tab.id)) return { glyph: statusGlyphs.error.unicode, tone: TONE[statusGlyphs.error.token], label: "failed", spin: false };
     if (model.unreadSessions.has(tab.id)) return { glyph: attentionGlyph.unread.unicode, tone: TONE[attentionGlyph.unread.token], label: "unread", spin: false };
     return { glyph: "·", tone: "text-muted-foreground", label: "idle", spin: false };
@@ -57,7 +56,7 @@ function tabStatus(tab: Tab) {
 function GroupTab(p: { group: string; tab: Tab; width: number }) {
   const tab = p.tab;
   const k = tabKey(tab);
-  const title = () => tabTitle(tab);
+  const title = () => { m(); return tabTitle(tab); };
   const hovered = signal(false);
   const shift = signal(0);
   const measured = signal(0);
@@ -180,9 +179,9 @@ function GroupMenu(p: { group: string }) {
   );
   const here = (fn: () => void) => () => { focusGroup(p.group); fn(); };
   return (
-    <ContextMenu open={open()} onOpenChange={({ open: o }) => setOpen(o)} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
+    <Menu open={open()} onOpenChange={({ open: o }) => setOpen(o)} placement="bottom" align="end" offset={4} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg"
       trigger={
-        <Button onPress={() => { focusGroup(p.group); setOpen(!open()); }} accessibilityLabel={uiText("layout.menu.tooltip")} testID={`group-menu-${p.group}`}
+        <Button onPress={() => focusGroup(p.group)} accessibilityLabel={uiText("layout.menu.tooltip")} testID={`group-menu-${p.group}`}
           class={`shrink-0 items-center justify-center rounded-(--radius) ${isNarrow() ? "size-10" : "size-8"} text-muted-foreground hover:bg-accent ${FOCUS}`}>
           <Text class={`${TS.base} text-muted-foreground`}>⋯</Text>
         </Button>
@@ -194,7 +193,7 @@ function GroupMenu(p: { group: string }) {
       {item("group-menu-new-terminal", uiText("layout.terminal.split"), here(() => void newTerminalTab()), null)}
       {item("group-menu-close-tab", uiText("layout.menu.close_tab"), here(() => void run("layout.tab_close")), key("layout.tab_close"))}
       <If when={multiple()}>{item("group-menu-close-group", uiText("layout.menu.close_group"), here(() => void run("layout.group_close")), key("layout.group_close"))}</If>
-    </ContextMenu>
+    </Menu>
   );
 }
 

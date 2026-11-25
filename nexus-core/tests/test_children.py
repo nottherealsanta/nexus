@@ -100,10 +100,17 @@ async def test_non_blocking_child_wakes_the_idle_parent(env):
     statuses = [e["data"] for e in rt.store.events(parent["id"], limit=5000) if e["type"] == "session.status"]
     assert statuses[-1]["status"] == "busy" and statuses[-1]["turn_finished"] is True
     assert all(s["status"] == "busy" for s in statuses)
+    snapshot = (await client.get("/api/snapshot", params={"session": parent["id"]})).json()
+    sessions = {s["id"]: s for s in snapshot["sessions"]}
+    [child] = [s for s in sessions.values() if s["parent_id"] == parent["id"]]
+    assert sessions[parent["id"]]["status"] == child["status"] == "busy"
+    assert parent["id"] not in {turn["session_id"] for turn in snapshot["running"]}
 
     gate.set()
     await _idle(rt)
     assert (await client.get(f"/api/session/{parent['id']}")).json()["status"] == "idle"
+    snapshot = (await client.get("/api/snapshot")).json()
+    assert next(s for s in snapshot["sessions"] if s["id"] == parent["id"])["status"] == "idle"
     texts = await _texts(client, parent["id"])
     assert next(t for role, t in texts if role == "tool").startswith("Started sub agent")
     notice = [t for role, t in texts if role == "user" and t.startswith("[Notification: sub agent finished]")]

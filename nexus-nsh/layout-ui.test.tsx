@@ -1,6 +1,8 @@
 // Plan 45: tabs and splits in the NSH desktop/web client (docs/layout.md).
 import { describe, expect, test } from "nsh/test";
 import { open } from "./open-bundle";
+import childWorking from "../interface/scenarios/child-working-status.json";
+import { Model } from "./src/core/reduce";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -74,6 +76,25 @@ const openFileTab = async (app: any) => {
 };
 
 describe("tabs and splits (desktop and web)", () => {
+  test("a finished parent shows working in the sidebar, tab and activity bar while its child runs", async () => {
+    const child = { ...session, id: childWorking.child_id, parent_id: session.id, title: childWorking.child_title, status: "busy" };
+    const app = await boot({ network: {
+      ...inputs, ...network,
+      "GET */api/snapshot*": { body: { ...snapshot, sessions: [{ ...session, status: "idle" }, child], running: [{ id: "turn_child", session_id: child.id }] } },
+    } });
+    await app.waitFor("id:activity-pulse");
+    expect(app.shows("label:Refactor loader, running")).toBe(true);
+    expect(app.shows("label:Rename Refactor loader, running")).toBe(true);
+    expect(app.shows("id:working-row")).toBe(true);
+
+    const m = new Model();
+    m.applySnapshot({ ...snapshot, sessions: [{ ...session, status: "idle" }, child], running: [] } as any);
+    m.applyEvent({ id: 1, time: 1, type: "session.status", session_id: session.id, data: childWorking.parent_finished } as any);
+    m.applyEvent({ id: 2, time: 2, type: "session.status", session_id: child.id, data: childWorking.child_running } as any);
+    expect(m.isBusy(session.id)).toBe(true);
+    m.applyEvent({ id: 3, time: 3, type: "session.status", session_id: child.id, data: childWorking.child_finished } as any);
+    expect(m.isBusy(session.id)).toBe(false);
+  });
   test("the header tab strip is a group strip, and there is no terminal dock or file modal", async () => {
     const app = await boot();
     expect(app.shows("id:session-tab-ses_1")).toBe(true);
@@ -81,6 +102,17 @@ describe("tabs and splits (desktop and web)", () => {
     expect(app.shows("id:group-menu-g1")).toBe(true);
     expect(app.shows("id:terminal-panel-shell")).toBe(false);
     expect(app.shows("id:file-panel-shell")).toBe(false);
+  });
+
+  test("an open session tab follows a later title update", async () => {
+    const updated = { ...session, title: "Updated session title", revision: 2 };
+    const frame = `event: message\ndata: ${JSON.stringify({ id: 1, time: 1, type: "session.updated", session_id: session.id, data: updated })}\n\n`;
+    const app = await boot({ network: {
+      ...inputs, ...network,
+      "GET */api/event*": { body: sse(connected, frame), delay: 1500, headers: { "content-type": "text/event-stream" } },
+    } });
+    await app.waitFor("label:/^Rename Updated session title,/");
+    expect(app.shows("label:/^Rename Refactor loader,/")).toBe(false);
   });
 
   test("a file opens as a tab beside the session tab, with the session kept", async () => {

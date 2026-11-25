@@ -31,7 +31,7 @@ import "../../fonts/MonaspaceArgon-Bold.otf";
 
 type Tone = "info" | "accent" | "warning" | "error";
 /** Desktop timeline text is 14 px; phone prose uses its own Google Sans scale below. */
-const size16 = (c: string) => c.replaceAll("font-(family-name:--font-ui)", "font-(family-name:--font-code)").replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[14px]").replace(/leading-[45]\b/g, "leading-6");
+const size16 = (c: string) => c.replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[14px]").replace(/leading-[45]\b/g, "leading-6");
 const sized = <O extends Record<string, string>>(o: O) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, size16(v)])) as O;
 const T = sized(KitT), TS = sized(KitTS), PROSE = sized(KitPROSE);
 /** Phone prose reads in the bundled Google Sans at its own scale; code and commands keep the mono face. */
@@ -52,11 +52,9 @@ const PHONE_PROSE = {
 };
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
-/** The timeline reads in the monospace face, like the TUI. */
-const UI_FONT = { fontFamily: "Monaspace Argon" };
-/** Timeline metadata uses the app's monospace face. */
+const UI_FONT = { fontFamily: "Google Sans" };
 const META = `${T.meta}`;
-const TOOL_TEXT = "text-[14px] leading-6 font-(family-name:--font-code)";
+const TOOL_TEXT = "text-[14px] leading-6 font-(family-name:--font-ui)";
 /** A tool argument or error line: a path or command you could type. */
 const ARG = "font-(family-name:--font-code) text-[14px] leading-6 text-foreground-secondary";
 /** A tappable row: finger-sized on a phone, its desktop height otherwise. */
@@ -1048,7 +1046,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                   : <CodeFence block={block} />;
               }}
               classes={phone ? PHONE_PROSE : PROSE}
-              styles={{ root: phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 23 } : { fontFamily: "Monaspace Argon", fontSize: 14, lineHeight: 24 } }}
+              styles={{ root: phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 23 } : { fontFamily: "Google Sans", fontSize: 14, lineHeight: 24 } }}
             />
           </View>
         </If>
@@ -1566,7 +1564,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
   const key = () => x().running ? "reason:streaming" : `reason:${x().key}`;
   const preview = () => x().encrypted ? "encrypted, replayed to the provider" : stripEmphasis(firstLine(x().text));
   return (
-    <View class={`py-1.5 ${p.nested ? "" : TURN_INSET}`}>
+    <View class={p.nested ? "" : `py-1.5 ${TURN_INSET}`}>
       <Button onPress={() => { if (!x().encrypted) toggle(key(), !!x().running); }} disabled={!!x().encrypted} accessibilityLabel={`${roles.reasoning.label}, ${x().open ? "collapse" : "expand"}`} testID="reasoning"
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={activityIconSize("diamond")} class="tint-muted-foreground" /></View>
@@ -1623,7 +1621,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }>; nested?: boolean 
     </Button>
   );
   return (
-    <View class={`py-1.5 ${p.nested ? "" : TURN_INSET}`}>
+    <View class={p.nested ? "" : `py-1.5 ${TURN_INSET}`}>
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => {
         markFocused();
         // Enter or a press on an open, clipped row brings the rest of its output back.

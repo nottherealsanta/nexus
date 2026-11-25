@@ -1,0 +1,36 @@
+  ◧  [Sessions] [Files] [Git]                                                                                         □
+     │                            · Refactor the loader ×                                                          +  ⋯
+▏    │ + New session
+▏ N  │ ⌕ Search sessions ctrl+k   │  Go ahead, but keep the change small.                                #2 · 2:47 PM
+▏  4 │ ▣ Show archived            │  日本語のコメントも残してください。
+     │──────────────────────────  │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ↑ 21 lines of this turn above
+     │▏  Refactor the load… now
+  S  │▏  ⌥ main             1 ↳                ▄▄▄▄▄▄▄▄▄▄▄▄▄
+   1 │                                         ▄▀▀▀▀▀▀▀▀▀▀▀
+     │   Review the CJK wi… now
+     │   ⌥ main
+     │                                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │   Release notes for… now
+     │   ⌥ main
+     │
+     │   Fix flaky test in… now
+     │   ⌥ main
+     │                                              ▄▄▄
+     │                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │
+     │
+     │                                        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+     │                                        ▀▀▀▀▄▄▀▀ ▄▀▄▀▀▄
+     │                                        ▀▀ ▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                                                est on its mtime, and the new test checks that
+     │                                ▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▀
+     │                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     │                                         GPT-6.1 Terra · 2 tools · 156Ki · 4.0Ko · 720r · 80%c · 0.0s · 2:47 PM
+     │
+     │
+     │                               Type a message…
+  +  │
+     │                               Build · … · default                                                       48.2K
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                              /private/tmp/tui-shots-rowmenu.lHU7V6/ws/nexus-demo  ⌥ main
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

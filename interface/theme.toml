@@ -104,7 +104,7 @@ idle      = "#6f757c"   # = text.faint
 canvas = "#f7f7f5"
 panel  = "#efefec"
 raised = "#ffffff"
-sidebar = "#f0f0ed"
+sidebar = "#eeeeee"     # light neutral gray chrome
 
 
 [light.agent]

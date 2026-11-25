@@ -1,0 +1,24 @@
+  □   Settings                                                                □
+                                                                           +  ⋯
+▏    ▌
+▏ N
+▏─
+    Settings › Agents › scout
+
+    ⌕ Filter settings…
+ ─  ────────────────────────────────────────────────────────────────────────
+      Appearance          │ Reads the material and reports the context that…
+      Providers           │
+      Agents              │ MODELS                      one picked at random
+      Tools               │ ▌ codex/gpt-6.1-terra                       100%
+      External workers    │                        effort Agent default: low
+      ↓ 7 more            │   + add model
+                          │ ←/→ sets this model's effort; open it for every
+                          │ level. Changes apply to new subagents; running
+                            ones keep what they started with.
+    enter select · → effort · d remove · K/J reorder · ← sections13 sections
+
+         Build · … · default                                               0
+       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙     /private/tmp/tui-effort-shots.nJEajs/ws/nexus-demo  ⌥ main
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

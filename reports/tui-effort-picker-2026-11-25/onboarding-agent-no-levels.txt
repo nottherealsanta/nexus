@@ -1,0 +1,45 @@
+
+  nexus                                            ● ● ● ○ ○ ○ ○ ○ ○                                   3 / 9  [ Skip ]
+
+                      Choose models for your agents
+
+                      Nexus works as a team. You talk to one agent, and it can hand jobs to
+                      others. Each agent can use its own model, so quick cheap models do the
+                      reading and your best model does the thinking.
+
+                      Leave a row unset and the agent uses the model of the session that starts
+                      it. Settings > Agents has more: several models, fallbacks, effort.
+
+                      ▌ Default agent                                                        build
+                        Starts every new session — build does the work itself. orchestrate
+                        coordinates scouts, planners and builders, which suits big tasks.
+
+                        scout                                              claude/claude-haiku-4-5
+                        effort Agent default: low
+                        Reads code and gathers facts; never edits — A small, fast model: luna,
+                        haiku or hydrogen class. It reads a lot, so cheap and quick wins.
+
+                        quick                                                  the session's model
+                        Small, self-contained errands — Also a small, fast model, like scout:
+                        luna, haiku or hydrogen class.
+
+                        plan                                                   the session's model
+                        Turns findings into a work plan — A strong reasoning model. It thinks more
+                        than it reads.
+
+                        build                                                  the session's model
+                        Writes and edits the code — Your best coding model.
+
+
+                      ⓘ Type part of a name in the picker to filter it.
+
+
+
+
+
+
+
+
+                      ↑↓ choose · enter change · e effort · → next · ← back · esc back · s skip
+                      [ Back ]                                                            [ Next ]
+

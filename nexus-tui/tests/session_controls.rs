@@ -115,6 +115,64 @@ fn scenario_question() -> serde_json::Value {
     scenario["question"]["questions"].clone()
 }
 
+#[test]
+fn child_work_keeps_finished_parent_indicators_working() {
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/child-working-status.json"
+    ))
+    .unwrap();
+    let child = scenario["child_id"].as_str().unwrap();
+    let mut app = app();
+    app.theme.opts.reduced_motion = false;
+    add_session(
+        &mut app,
+        child,
+        Some(SESSION),
+        scenario["child_title"].as_str().unwrap(),
+    );
+    event(
+        &mut app,
+        1,
+        "session.status",
+        Some(SESSION),
+        scenario["parent_finished"].clone(),
+    );
+    event(
+        &mut app,
+        2,
+        "session.status",
+        Some(child),
+        scenario["child_running"].clone(),
+    );
+    assert!(!app.state.model.running.contains_key(SESSION));
+    assert!(app.is_busy(SESSION));
+    assert_eq!(app.session_mark(SESSION), Some("running"));
+    app.frame = 0;
+    let (first, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("Working ·"));
+    let spinner = app.theme.spinner(0);
+    assert!(
+        joined(&rows).matches(spinner).count() >= 2,
+        "sidebar and tab: {rows:?}"
+    );
+    app.frame = 30;
+    let (second, _) = draw(&mut app, 120, 36);
+    let r = app.regions.composer;
+    assert!(
+        (r.x..r.right()).any(|x| first[(x, r.bottom() - 2)] != second[(x, r.bottom() - 2)]),
+        "activity bar animates"
+    );
+    event(
+        &mut app,
+        3,
+        "session.status",
+        Some(child),
+        scenario["child_finished"].clone(),
+    );
+    assert!(!app.is_busy(SESSION));
+    assert!(!joined(&draw(&mut app, 120, 36).1).contains("Working ·"));
+}
+
 // ---- 29. Archive closes its tab, /archive, /search --------------------------------
 
 #[test]
@@ -417,7 +475,7 @@ fn a_short_terminal_keeps_the_context_line_in_the_card() {
 }
 
 #[test]
-fn arrows_move_space_selects_and_enter_goes_on() {
+fn arrows_move_and_space_goes_on_as_enter() {
     let mut app = app();
     ask(
         &mut app,
@@ -429,17 +487,22 @@ fn arrows_move_space_selects_and_enter_goes_on() {
         ]),
     );
     assert!(!app.ask_current().unwrap().field());
-    press(&mut app, &["down", "space"]);
+    press(&mut app, &["down"]);
     let c = app.ask_current().unwrap();
     assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![1]));
-    // Space selects; it does not advance.
-    press(&mut app, &["enter"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("space/enter next"), "{all}");
+    // Space on a single choice goes on as Enter would: the first page moves to the second.
+    press(&mut app, &["space"]);
+    assert!(sent_answers(&app).is_empty());
     assert_eq!(app.ask_current().unwrap().page, 1);
+    // Space on a multi-select ticks the highlight and stays.
     press(&mut app, &["space", "down", "down"]);
     assert!(
         app.ask_current().unwrap().field(),
         "down from the last option enters the line"
     );
+    assert_eq!(app.ask_current().unwrap().page, 1);
     typing(&mut app, "a note ");
     assert_eq!(
         app.ask_current()
@@ -468,6 +531,127 @@ fn arrows_move_space_selects_and_enter_goes_on() {
             {"question_id": "db", "selected": ["lite"], "text": null},
             {"question_id": "tags", "selected": ["a"], "text": "a note"}
         ])]
+    );
+}
+
+#[test]
+fn space_sends_a_lone_single_choice_at_once() {
+    let mut app = app();
+    ask(&mut app, scenario_question());
+    assert!(!app.ask_current().unwrap().field());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("space/enter send"), "{all}");
+    // The highlight is enough: Space sends the second option without a review page.
+    press(&mut app, &["down", "space"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([{"question_id": "approach", "selected": ["fast"], "text": null}])]
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(!all.contains("review"), "{all}");
+}
+
+#[test]
+fn space_opens_the_review_on_the_last_page_and_does_not_send_there() {
+    let mut app = app();
+    ask(
+        &mut app,
+        serde_json::json!([
+            {"id": "db", "question": "Which database?", "multiple": false,
+             "allow_free_text": false, "options": [
+                {"id": "pg", "label": "PostgreSQL"},
+                {"id": "lite", "label": "SQLite"}
+             ]},
+            {"id": "checks", "question": "Which checks?", "multiple": false,
+             "allow_free_text": false, "options": [
+                {"id": "unit", "label": "Unit tests"},
+                {"id": "e2e", "label": "End-to-end tests"}
+             ]}
+        ]),
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("space/enter next"), "{all}");
+    press(&mut app, &["space"]);
+    assert!(sent_answers(&app).is_empty());
+    assert_eq!(app.ask_current().unwrap().page, 1);
+    // The last question's Space opens the review, as Enter does.
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("space/enter review"), "{all}");
+    press(&mut app, &["space"]);
+    assert!(sent_answers(&app).is_empty());
+    let c = app.ask_current().unwrap();
+    assert!(c.review(), "the last page's Space opens the review");
+    // Space on the review is not a submit; Enter is.
+    press(&mut app, &["space"]);
+    assert!(sent_answers(&app).is_empty());
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([
+            {"question_id": "db", "selected": ["pg"], "text": null},
+            {"question_id": "checks", "selected": ["unit"], "text": null}
+        ])]
+    );
+}
+
+#[test]
+fn space_ticks_a_multi_select_and_stays() {
+    let mut app = app();
+    ask(
+        &mut app,
+        serde_json::json!([{
+            "id": "tags", "question": "Which tags?", "multiple": true,
+            "allow_free_text": false,
+            "options": [
+                {"id": "a", "label": "alpha"},
+                {"id": "b", "label": "beta"}
+            ]
+        }]),
+    );
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("space tick") && all.contains("enter tick"),
+        "{all}"
+    );
+    assert!(!all.contains("space/enter"), "{all}");
+    // Space ticks the highlight and stays; it never sends.
+    press(&mut app, &["down", "space"]);
+    let c = app.ask_current().unwrap();
+    assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![1]));
+    assert!(sent_answers(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("space tick") && all.contains("enter send"),
+        "{all}"
+    );
+    // Space again unticks the same row.
+    press(&mut app, &["space"]);
+    assert!(app.ask_current().unwrap().pick().unwrap().chosen.is_empty());
+    assert!(sent_answers(&app).is_empty());
+}
+
+#[test]
+fn space_types_in_the_question_line() {
+    let mut app = app();
+    ask(&mut app, scenario_question());
+    typing(&mut app, "x y");
+    assert!(app.ask_current().unwrap().field());
+    assert_eq!(
+        app.ask_current()
+            .unwrap()
+            .pick()
+            .unwrap()
+            .input
+            .expanded_text(),
+        "x y"
+    );
+    assert!(sent_answers(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(!all.contains("space/enter"), "{all}");
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([{"question_id": "approach", "selected": [], "text": "x y"}])]
     );
 }
 
@@ -939,7 +1123,8 @@ fn screenshots() {
         .composer()
         .set_text(scenario["draft"].as_str().unwrap());
     ask(&mut question, scenario_question());
-    shot("tui-question-lock-120x36-dark", &mut question, (120, 36));
+    press(&mut question, &["down"]);
+    shot("tui-question-single-120x36-dark", &mut question, (120, 36));
 
     let mut multi = app();
     ask(

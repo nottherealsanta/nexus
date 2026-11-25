@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "gen": "python3 scripts/gen.py",
+    "gen": "uv run --project ../nexus-core --no-sync python scripts/gen.py",
     "check": "npm run gen && nsh check",
     "build": "npm run gen && node scripts/nsh-web.mjs package App.tsx --target web --out dist && node scripts/icons-web.mjs dist",
     "serve": "node scripts/serve.mjs",

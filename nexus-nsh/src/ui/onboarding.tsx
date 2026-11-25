@@ -4,17 +4,20 @@ import { Scroll, Text, View, effect, keymap } from "nsh";
 import { Btn, Icon, T, TS } from "./kit";
 import { ProviderDetailModal, loadSettingsData, openProviderDetail, providerStatus, settingsData } from "./settings";
 import { byId, keyLabel, run } from "../commands";
-import { centre, config, confirmDialog, currentProject, live, patchConfig, picker, providerDetail, providerLogins, settingsReload } from "../store";
+import { centre, config, confirmDialog, currentProject, live, patchConfig, picker, providerDetail, providerLogins, settingsReload, toast } from "../store";
 import { ensureSearchStarted, refreshSearchService, searchService, searchServiceError, searchStartError, searchStartReason, searchStarting, searchStatusLines, startSearchService } from "../search-service";
 import {
-  ONBOARDING, agentModelLine, agentModelsPatch, closeOnboarding, currentStep, fillKeys, lastStep, nextStep, onboardingOpen, onboardingStep,
+  ONBOARDING, agentModelLine, agentModelRef, agentModelsPatch, closeOnboarding, currentStep, fillKeys, lastStep, nextStep, onboardingOpen, onboardingStep,
   onboardingSteps, previousStep, rootAgent,
 } from "../onboarding";
 import type { OnboardingAgent } from "../onboarding";
+import { agentFileEffort, catalogEfforts, effortOverride, effortRowLabel, effortText, openEffortPicker } from "../effort";
 
-/** The actionable row buttons of the open step, in order; ↑↓ move among them, Enter presses the focused one. */
-let rows: { focus: () => void }[] = [];
-const rowRef = (i: number) => (n: any) => { if (n) rows[i] = n; else rows.length = Math.min(rows.length, i); };
+/** The actionable row buttons of the open step, in order; ↑↓ move among them, Enter presses the focused one, `e` opens its effort. */
+let rows: { focus: () => void; effort?: () => void }[] = [];
+const rowRef = (i: number, effort?: () => void) => (n: any) => {
+  if (n) rows[i] = { focus: () => n.focus(), effort }; else rows.length = Math.min(rows.length, i);
+};
 const keyText = (text: string) => fillKeys(text, (id) => { const c = byId.get(id); return c ? keyLabel(c) : null; });
 const providers = () => (settingsData().providers ?? []).filter((p: any) => p.id !== "mock");
 const connected = () => providers().filter((p: any) => p.connected);
@@ -42,28 +45,56 @@ function ProviderStep() {
   </View>;
 }
 
+/** Write the row's model, then offer its effort levels; Escape in that second picker keeps the default. */
+async function applyAgentModel(agent: OnboardingAgent, ref: string | null) {
+  picker.set(null);
+  await patchConfig("agents.models", agentModelsPatch(config(), agent.name, ref));
+  if (!ref || !onboardingOpen() || currentStep().kind !== "agents") return;
+  const levels = catalogEfforts(settingsData().models, ref);
+  if (levels.length) openEffortPicker(agent.name, ref, agentFileEffort(settingsData().agents, agent.name), levels);
+}
+
 function chooseModel(agent: OnboardingAgent) {
   const items = [
-    { id: "none", label: "Use the session's model", hint: "no model set for this agent", run: async () => { picker.set(null); await patchConfig("agents.models", agentModelsPatch(config(), agent.name, null)); } },
-    ...models().map((m: any) => ({ id: m.ref, label: m.ref, hint: m.name ?? undefined, run: async () => { picker.set(null); await patchConfig("agents.models", agentModelsPatch(config(), agent.name, m.ref)); } })),
+    { id: "none", label: "Use the session's model", hint: "no model set for this agent", run: () => applyAgentModel(agent, null) },
+    ...models().map((m: any) => ({ id: m.ref, label: m.ref, hint: m.name ?? undefined, run: () => applyAgentModel(agent, m.ref) })),
   ];
   picker.set({ title: `Model for ${agent.name}`, note: "Connected providers only", items });
+}
+
+/** The row's effort control acts on the one model the row writes. */
+function openAgentEffort(agent: OnboardingAgent) {
+  const ref = agentModelRef(config(), agent.name);
+  if (!ref) { toast("warning", effortText("effort.choose_model")); return; }
+  openEffortPicker(agent.name, ref, agentFileEffort(settingsData().agents, agent.name), catalogEfforts(settingsData().models, ref));
 }
 
 function AgentRow(p: { a: OnboardingAgent; index: number }) {
   const root = p.a.kind === "root";
   const none = () => !connected().length;
+  const ref = () => agentModelRef(config(), p.a.name);
+  const defaultEffort = () => agentFileEffort(settingsData().agents, p.a.name);
+  const override = () => ref() ? effortOverride(config(), p.a.name, ref()!) : null;
+  const levels = () => ref() ? catalogEfforts(settingsData().models, ref()!) : [];
+  const editable = () => !!ref() && (levels().length > 0 || !!override());
   return <View class="gap-1 rounded-(--radius) bg-raised px-3 py-2" testID={`onboarding-agent-${p.a.name}`}>
     <View class="flex-row items-center gap-3">
       <View class="flex-1">
         <Text class={T.label}>{root ? "Default agent" : p.a.name}</Text>
         <Text class={T.sec}>{p.a.role}</Text>
       </View>
-      <If when={root} else={<Btn ref={rowRef(p.index)} label={agentModelLine(config(), p.a.name)} disabled={!live() || none()} reason={none() ? ONBOARDING.no_provider : undefined}
+      <View class="items-end gap-1">
+      <If when={root} else={<Btn ref={rowRef(p.index, () => openAgentEffort(p.a))} label={agentModelLine(config(), p.a.name)} disabled={!live() || none()} reason={none() ? ONBOARDING.no_provider : undefined}
         onPress={() => chooseModel(p.a)} testID={`onboarding-model-${p.a.name}`} />}>
         <Btn ref={rowRef(p.index)} label={rootAgent(config(), p.a.options ?? [])} disabled={!live()} testID="onboarding-root-agent"
           onPress={() => { const o = p.a.options ?? []; void patchConfig("defaults.agent", o[(o.indexOf(rootAgent(config(), o)) + 1) % o.length]); }} />
       </If>
+      <If when={!root && !!ref()}>
+        <If when={editable()} else={<Text class={`${TS.base} text-muted-foreground`} testID={`onboarding-effort-${p.a.name}`}>{effortRowLabel(override(), defaultEffort())}</Text>}>
+          <Btn label={effortRowLabel(override(), defaultEffort())} kind="ghost" disabled={!live() || none()} reason={none() ? ONBOARDING.no_provider : undefined} onPress={() => openAgentEffort(p.a)} testID={`onboarding-effort-${p.a.name}`} />
+        </If>
+      </If>
+      </View>
     </View>
     <Text class={T.meta}>{p.a.hint}</Text>
   </View>;
@@ -128,6 +159,7 @@ function OnboardingBody() {
       keymap.bind("up", () => move(-1), { when: "notEditing" }),
       keymap.bind("right", () => { if (free() && !lastStep()) nextStep(); }, { when: "notEditing" }),
       keymap.bind("left", () => { if (free()) previousStep(); }, { when: "notEditing" }),
+      keymap.bind("e", () => { if (free() && step().kind === "agents") rows[at]?.effort?.(); }, { when: "notEditing" }),
       keymap.bind("s", () => { if (free()) void finish(false); }, { when: "notEditing" }),
     ];
     return () => offs.forEach((off) => off());
@@ -153,7 +185,7 @@ function OnboardingBody() {
       </Scroll>
       <View class="flex-row items-center justify-between gap-3 px-6 py-4">
         <Btn label="Back" kind="ghost" disabled={onboardingStep() === 0} onPress={previousStep} testID="onboarding-back" />
-        <Text class={T.meta} testID="onboarding-hints">{step().kind === "provider" || step().kind === "agents" ? ONBOARDING.hints_rows : step().kind === "search" ? ONBOARDING.hints_search : ONBOARDING.hints_info}</Text>
+        <Text class={T.meta} testID="onboarding-hints">{step().kind === "provider" ? ONBOARDING.hints_rows : step().kind === "agents" ? (ONBOARDING.hints_agents ?? ONBOARDING.hints_rows) : step().kind === "search" ? ONBOARDING.hints_search : ONBOARDING.hints_info}</Text>
         <If when={!lastStep()} else={<Btn ref={(n) => { primary = n; }} label="Finish" kind="primary" onPress={() => void finish(true)} testID="onboarding-finish" />}>
           <Btn ref={(n) => { primary = n; }} label="Next" kind="primary" onPress={nextStep} testID="onboarding-next" />
         </If>

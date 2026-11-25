@@ -163,6 +163,55 @@ describe("waiting card (D14)", () => {
     expect(String(post.body ?? "")).toContain('"selected":["b"]');
   });
 
+  test("Space on a single choice goes on and opens the review, where it does not submit", async () => {
+    const two = { ...question, questions: [
+      { ...question.questions[0], question: "Which cache?", allow_free_text: false },
+      { ...question.questions[0], id: "q2", question: "Which runner?", allow_free_text: false,
+        options: [{ id: "x", label: "pytest" }, { id: "y", label: "vitest" }] },
+    ] };
+    const app = await view(snapshot({ questions: [two] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("text:Which cache?");
+    expect(app.texts().some((t) => t.includes("space/enter next"))).toBe(true);
+    // Space advances a single-choice page exactly as Enter does.
+    await app.keyboard.press("space");
+    await app.waitFor("text:Which runner?");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    expect(app.texts().some((t) => t.includes("space/enter review"))).toBe(true);
+    await app.keyboard.press("space");
+    await app.waitFor("id:question-review");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    // Space on the review is not a submit; Enter is.
+    await app.keyboard.press("space");
+    await app.wait(300);
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    const answers = JSON.parse(String(post.body ?? "{}")).answers;
+    expect(answers.map((a: { selected: string[] }) => a.selected)).toEqual([["a"], ["x"]]);
+  });
+
+  test("Space types in the context line and never sends from it", async () => {
+    const lone = { ...question, questions: [{ ...question.questions[0], allow_free_text: true }] };
+    const app = await view(snapshot({ questions: [lone] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-b");
+    await app.keyboard.press("x");
+    await app.waitUntil(() => app.value("id:composer-input") === "x");
+    await app.keyboard.press("space");
+    await app.waitUntil(() => app.value("id:composer-input") === "x ");
+    await app.keyboard.press("y");
+    await app.waitUntil(() => app.value("id:composer-input") === "x y");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(JSON.parse(String(post.body ?? "{}")).answers[0]).toEqual({ question_id: "q1", selected: [], text: "x y" });
+  });
+
   test("ticking a multi-select keeps the highlight, and Enter sends every tick", async () => {
     const multi = { ...question, questions: [{
       id: "q1", question: "Which checks?", multiple: true, allow_free_text: false,
@@ -172,8 +221,12 @@ describe("waiting card (D14)", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:choice-mark-a");
+    // Space ticks a multi-select and stays; it never goes on.
+    expect(app.texts().some((t) => t.includes("space tick"))).toBe(true);
+    expect(app.texts().some((t) => t.includes("space/enter"))).toBe(false);
     // Tick unit, e2e and perf in turn. Ticking e2e must not pull the cursor back to unit.
     await app.keyboard.press("space");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
     await app.keyboard.press("down");
     await app.keyboard.press("space");
     await app.keyboard.press("down");

@@ -7,7 +7,7 @@ use nexus_tui::actions::ApiCall;
 use nexus_tui::app::Effect;
 use nexus_tui::manifest::Manifest;
 use nexus_tui::theme::{Mode, Tier};
-use nexus_tui::ui::Target;
+use nexus_tui::ui::{OverlayKind, PaletteMode, Target};
 use ratatui::style::Color;
 
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 36), (160, 48)];
@@ -2361,8 +2361,7 @@ fn question_card_shows_options_and_a_number_key_answers() {
         all.contains("Which database?")
             && all.contains("1 PostgreSQL")
             && all.contains("2 SQLite")
-            && all.contains("space select")
-            && all.contains("enter send"),
+            && all.contains("space/enter send"),
         "{all}"
     );
     assert!(!all.contains("arrives with"), "{all}");
@@ -2662,9 +2661,9 @@ fn typed_text_for_an_option_question_is_its_custom_answer() {
 #[test]
 fn a_selected_option_and_custom_context_are_sent_together() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
-    // Space marks PostgreSQL; Down moves the answer to SQLite (the arrow selects),
-    // and the second Down focuses the line. The text is added to SQLite.
-    press(&mut app, &["space", "down", "down"]);
+    // Down moves the answer to SQLite (the arrow selects), and the second Down
+    // focuses the line. The text is added to SQLite.
+    press(&mut app, &["down", "down"]);
     typing(&mut app, "2nd choice");
     press(&mut app, &["enter"]);
     assert_eq!(
@@ -3244,9 +3243,25 @@ fn agent_model_rows_step_effort_with_right_and_left_returns_to_sections() {
     draw(&mut app, 120, 50);
     press(&mut app, &["down", "down", "enter"]);
     assert_eq!(app.ui.settings_page.as_deref(), Some("agents/scout"));
-    let all = joined(&draw(&mut app, 120, 50).1);
-    assert!(all.contains("effort low \u{b7} 50%"), "{all}");
-    assert!(!all.contains("effort default \u{b7} 50%\n"), "{all}");
+    let rows = draw(&mut app, 120, 50).1;
+    let all = joined(&rows);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("codex/gpt-5") && row.contains("50%")),
+        "{all}"
+    );
+    // The effort text is its own line under the model, not part of the value.
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("effort low") && !row.contains("50%")),
+        "{all}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.contains("effort low") && row.contains("50%")),
+        "{all}"
+    );
     let patch = |app: &nexus_tui::app::App| {
         app.effects.iter().rev().find_map(|e| match e {
             Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }) => {
@@ -3282,6 +3297,195 @@ fn agent_model_rows_step_effort_with_right_and_left_returns_to_sections() {
     app.effects.clear();
     press(&mut app, &["down", "right"]);
     assert_eq!(patch(&app), None);
+}
+
+fn settings_agent_models(
+    agent_effort: Option<&str>,
+    catalog: &[&str],
+    configured_effort: Option<&str>,
+) -> nexus_tui::app::App {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.models = vec![serde_json::json!({"ref": "codex/gpt-5", "efforts": catalog})];
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": true, "methods": ["device"]}),
+    ];
+    let mut agent = serde_json::json!({"name": "scout", "mode": "subagent", "source": "builtin"});
+    if let Some(effort) = agent_effort {
+        agent["effort"] = serde_json::json!(effort);
+    }
+    app.state.agents = vec![agent];
+    let efforts = configured_effort
+        .map(|level| serde_json::json!({"scout": {"codex/gpt-5": level}}))
+        .unwrap_or_else(|| serde_json::json!({}));
+    app.state.config = Some(serde_json::json!({"revision": "r1", "values": {
+        "defaults": {"effort": "", "agent": "", "permission": "allow"},
+        "agents": {"models": {"scout": ["codex/gpt-5"]}, "fallbacks": {}, "efforts": efforts}}}));
+    app.execute("app.settings");
+    app.ui.settings_section = "agents".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
+    draw(&mut app, 120, 50);
+    press(&mut app, &["down", "down", "enter"]);
+    assert_eq!(app.ui.settings_page.as_deref(), Some("agents/scout"));
+    app
+}
+
+fn settings_agent_with_models(models: &[&str], fallbacks: &[&str]) -> nexus_tui::app::App {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (100, 20));
+    app.state.models = models
+        .iter()
+        .chain(fallbacks)
+        .map(|model| serde_json::json!({"ref": model, "efforts": ["low", "medium", "high"]}))
+        .collect();
+    app.state.providers = vec![
+        serde_json::json!({"id": "codex", "label": "Codex", "connected": true, "methods": ["device"]}),
+    ];
+    app.state.agents = vec![serde_json::json!({
+        "name": "scout", "mode": "subagent", "source": "builtin", "effort": "low"
+    })];
+    app.state.config = Some(serde_json::json!({"revision": "r1", "values": {
+        "defaults": {"effort": "", "agent": "", "permission": "allow"},
+        "agents": {"models": {"scout": models}, "fallbacks": {"scout": fallbacks}, "efforts": {}}}}));
+    app.execute("app.settings");
+    app.ui.settings_section = "agents".into();
+    app.ui.settings_nav_focus = false;
+    app.ui.settings_page = None;
+    draw(&mut app, 100, 20);
+    press(&mut app, &["down", "down", "enter"]);
+    assert_eq!(app.ui.settings_page.as_deref(), Some("agents/scout"));
+    app
+}
+
+fn config_patch(app: &nexus_tui::app::App) -> Option<(String, serde_json::Value)> {
+    app.effects.iter().rev().find_map(|e| match e {
+        Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }) => {
+            Some((path.clone(), value.clone()))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn enter_on_a_settings_model_row_opens_the_explicit_effort_picker() {
+    let mut app = settings_agent_models(None, &["low", "medium", "high"], Some("low"));
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    let Some(OverlayKind::Palette(palette)) = app.ui.overlay.as_ref().map(|o| &o.kind) else {
+        panic!("the effort picker should be open");
+    };
+    assert_eq!(palette.mode, PaletteMode::AgentEfforts);
+    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["Model default", "low", "medium", "high"]);
+    // The effective default is first; choosing it clears the override.
+    assert_eq!(palette.selected, 0);
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        config_patch(&app),
+        Some(("agents.efforts".into(), serde_json::json!({})))
+    );
+}
+
+#[test]
+fn settings_effort_labels_name_the_agent_default_when_the_agent_file_sets_effort() {
+    let mut app = settings_agent_models(Some("medium"), &["low", "medium", "high"], None);
+    let all = joined(&draw(&mut app, 120, 50).1);
+    assert!(all.contains("effort Agent default: medium"), "{all}");
+    assert!(!all.contains("effort Model default"), "{all}");
+    press(&mut app, &["enter"]);
+    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["Agent default: medium", "low", "medium", "high"]);
+}
+
+#[test]
+fn settings_effort_controls_are_read_only_offline() {
+    let mut app = settings_agent_models(None, &["low", "medium", "high"], Some("low"));
+    app.state.connection = nexus_tui::state::ConnectionState::Offline {
+        reason: "gone".into(),
+    };
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(app.ui.overlay.is_none(), "no picker offline");
+    assert_eq!(config_patch(&app), None);
+    let toasts = |app: &nexus_tui::app::App| {
+        app.ui
+            .alerts
+            .toasts
+            .iter()
+            .filter(|t| t.text.contains("Read-only until Core is connected again."))
+            .count()
+    };
+    assert_eq!(toasts(&app), 1, "Enter says why it is read-only");
+    // The arrows are the other effort control on the row, and they are read-only too.
+    press(&mut app, &["right"]);
+    assert_eq!(config_patch(&app), None);
+    assert!(toasts(&app) > 1, "Right says why it is read-only");
+}
+
+#[test]
+fn a_model_without_catalog_efforts_has_no_picker_unless_a_stale_override_can_be_cleared() {
+    let mut app = settings_agent_models(None, &[], None);
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    assert!(app.ui.overlay.is_none(), "no control without levels");
+    assert!(app
+        .ui
+        .alerts
+        .toasts
+        .iter()
+        .any(|t| t.text.contains("lists no effort levels")));
+
+    // A stale override is still clearable through the same row.
+    app.state.config.as_mut().unwrap()["values"]["agents"]["efforts"] =
+        serde_json::json!({"scout": {"codex/gpt-5": "low"}});
+    app.effects.clear();
+    press(&mut app, &["enter"]);
+    let labels: Vec<String> = app.palette_items().into_iter().map(|i| i.label).collect();
+    assert_eq!(labels, ["Model default"]);
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        config_patch(&app),
+        Some(("agents.efforts".into(), serde_json::json!({})))
+    );
+}
+
+#[test]
+fn the_settings_effort_second_line_fits_at_a_narrow_width() {
+    let mut app = settings_agent_models(Some("medium"), &["low", "medium", "high"], None);
+    let rows = draw(&mut app, 80, 24).1;
+    let all = joined(&rows);
+    assert!(all.contains("codex/gpt-5"), "{all}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("effort Agent default: medium")),
+        "{all}"
+    );
+    assert!(
+        !all.contains("effort Agent default: med\u{2026}"),
+        "the effort line must not truncate at 80 columns: {all}"
+    );
+}
+
+#[test]
+fn the_settings_effort_second_line_stays_with_its_model_when_scrolled() {
+    let models = [
+        "codex/m0", "codex/m1", "codex/m2", "codex/m3", "codex/m4", "codex/m5",
+    ];
+    let fallbacks = ["codex/f0", "codex/f1", "codex/f2"];
+    let mut app = settings_agent_with_models(&models, &fallbacks);
+    // Items: 6 models, + add model, 3 fallbacks, + add fallback. Select the last fallback.
+    app.ui.settings_page_row = 9;
+    let rows = draw(&mut app, 100, 20).1;
+    let all = joined(&rows);
+    let at = rows
+        .iter()
+        .position(|row| row.contains("3. codex/f2"))
+        .unwrap_or_else(|| panic!("the selected fallback is not visible:\n{all}"));
+    assert!(
+        rows.get(at + 1)
+            .is_some_and(|row| row.contains("effort Agent default: low")),
+        "the effort line must stay with the scrolled model:\n{all}"
+    );
+    assert!(!all.contains("codex/m0"), "the list should scroll: {all}");
 }
 
 #[test]
@@ -4381,7 +4585,7 @@ fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees()
 
 #[test]
 fn the_mark_slot_follows_attention_precedence() {
-    // waiting > error > running > unread.
+    // waiting > running > error > unread.
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     assert_eq!(app.session_mark(SESSION), None);
     app.ui.unread_sessions.insert(SESSION.into());
@@ -4389,7 +4593,7 @@ fn the_mark_slot_follows_attention_precedence() {
     busy(&mut app);
     assert_eq!(app.session_mark(SESSION), Some("running"));
     app.ui.failed_sessions.insert(SESSION.into());
-    assert_eq!(app.session_mark(SESSION), Some("error"));
+    assert_eq!(app.session_mark(SESSION), Some("running"));
     app.state.model.approvals.insert(
         "perm".into(),
         serde_json::from_value(serde_json::json!({

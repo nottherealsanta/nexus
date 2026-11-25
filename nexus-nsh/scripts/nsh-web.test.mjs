@@ -32,6 +32,17 @@ test('finds llvm-ar in the active Rust toolchain when PATH lacks it', () => {
   assert.equal(env.AR_wasm32_unknown_unknown, undefined);
 });
 
+test('finds rustup llvm-ar when PATH rustc uses a different sysroot', () => {
+  const env = { PATH: '/tools' };
+  const ar = '/rustup/lib/rustlib/aarch64-apple-darwin/bin/llvm-ar';
+  const run = (command, args) => {
+    if (command === 'rustup') return '/rustup/bin/rustc\n';
+    if (args[0] === '-vV') return 'host: aarch64-apple-darwin\n';
+    return command === 'rustc' ? '/homebrew\n' : '/rustup\n';
+  };
+  assert.deepEqual(webEnvironment(env, run, p => p === ar), { ...env, AR_wasm32_unknown_unknown: ar });
+});
+
 test('explains how to install a missing archiver before starting the build', () => {
   assert.throws(() => webEnvironment({}, () => '', () => false), /rustup component add llvm-tools/);
 });

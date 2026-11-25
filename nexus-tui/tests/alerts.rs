@@ -186,7 +186,7 @@ fn question_card_marks_single_and_multiple_choice_and_offers_free_text() {
     // The composer's slot is the context line now.
     assert!(all.contains("Add context"), "{all}");
     assert!(!all.contains("Answer the question above"), "{all}");
-    assert!(all.contains("space select"), "{all}");
+    assert!(all.contains("space/enter next"), "{all}");
     press(&mut app, &["enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);

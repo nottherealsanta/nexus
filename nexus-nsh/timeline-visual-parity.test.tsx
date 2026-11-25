@@ -1,4 +1,4 @@
-// Timeline visual parity with the TUI: monospace content, delivery tags,
+// Timeline visual parity with the TUI: delivery tags,
 // completed-thought timings and the parent's child card. Existing parity.test.tsx is untouched.
 import { describe, expect, test } from "nsh/test";
 import { open } from "./open-bundle";

@@ -8,7 +8,7 @@ export interface OnboardingStep { id: string; kind: "info" | "provider" | "agent
 export interface OnboardingAgent { name: string; kind: "model" | "root"; role: string; hint: string; options?: readonly string[] }
 
 export const ONBOARDING = manifest.onboarding as unknown as {
-  finish_no_project: string; no_provider: string; quest_provider: string; hints_info: string; hints_rows: string; hints_search: string; search_retry: string;
+  finish_no_project: string; no_provider: string; quest_provider: string; hints_info: string; hints_rows: string; hints_agents?: string; hints_search: string; search_retry: string;
   step: readonly OnboardingStep[]; agent: readonly OnboardingAgent[];
 };
 export const onboardingSteps = ONBOARDING.step;
@@ -46,6 +46,11 @@ export function agentModelLine(config: any, name: string): string {
   const refs: string[] = config?.values?.agents?.models?.[name] ?? [];
   if (!refs.length) return "the session's model";
   return refs.length === 1 ? refs[0] : `${refs[0]} +${refs.length - 1}`;
+}
+
+/** The model the tour's effort control acts on: the row writes exactly one model, so the first is the one. */
+export function agentModelRef(config: any, name: string): string | null {
+  return config?.values?.agents?.models?.[name]?.[0] ?? null;
 }
 
 /** The config patch that gives one agent exactly this one model (or none), leaving the other agents as they are. */

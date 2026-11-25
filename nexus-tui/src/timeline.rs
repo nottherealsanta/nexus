@@ -2302,8 +2302,6 @@ impl Builder<'_> {
             // session has started it is fixed, so it sits on the timeline's own
             // background with nothing to switch (plan 48); the draft is the panel box.
             let pad = b.st(MUTED, CANVAS);
-            b.line(Vec::new());
-            Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
             for row in rows {
                 let section = row.iter().find_map(|(text, role)| {
                     (*role == CtxRole::Title).then(|| text.trim().to_owned())
@@ -2351,8 +2349,6 @@ impl Builder<'_> {
                 b.line(vec![Span::raw("  ".to_owned()), Span::styled(text, style)]);
                 Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
             }
-            b.line(Vec::new());
-            Rc::make_mut(b.out.last_mut().unwrap()).bg = Some(pad);
         });
     }
 

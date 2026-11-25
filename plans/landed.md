@@ -2,11 +2,17 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
-- **Question choices: arrows select, multi-select is clear (11-25).** A single-choice question now follows the
-  highlighted option with the arrows (including Left/Right on a lone question, which no longer opens a review page),
-  multi-selects draw checkboxes and a ticked count, Enter with nothing ticked ticks the highlight and stays, and NSH
-  no longer resets its highlight when an answer changes. The phone card is unchanged. TUI tests 43/43 pass; NSH tests
-  updated but not run (no `node`/`nsh` in this checkout). See
+- **Per-agent reasoning effort (11-25).** Settings and onboarding offer a model-specific effort picker with catalog-supported levels and the effective agent or model default, in both clients. See [plan 52](52-onboarding.md).
+
+- **Parent working status while subagents run (11-25).** Snapshots include child-aware busy status; both clients also derive the sidebar, tab and composer indicators from running descendants when the parent's turn has ended. See [plan 21](done/21-session-status.md).
+
+- **Question choices: arrows select, Space goes on, multi-select is clear (11-25).** A single-choice question
+  follows the highlighted option with the arrows (including Left/Right on a lone question, which no longer opens
+  a review page), and Space goes on exactly as Enter does: it advances, opens the review after the last page, or
+  sends a lone question at once. Multi-selects draw checkboxes and a ticked count, tick with Space and stay, and
+  Enter with nothing ticked ticks the highlight and stays. Space types in the free-text line and does nothing on
+  the review; NSH no longer resets its highlight when an answer changes. The phone card is unchanged. TUI tests
+  43/43 pass; NSH tests updated but not run (no `node`/`nsh` in this checkout). See
   [plans/53](done/53-question-choice-ux.md).
 
 - **Firecrawl from its own release; SearXNG managed by Core (11-24).** `install.sh` downloads pinned `firecrawl-local` 0.1.1
