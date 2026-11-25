@@ -2,6 +2,13 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Question choices: arrows select, multi-select is clear (11-25).** A single-choice question now follows the
+  highlighted option with the arrows (including Left/Right on a lone question, which no longer opens a review page),
+  multi-selects draw checkboxes and a ticked count, Enter with nothing ticked ticks the highlight and stays, and NSH
+  no longer resets its highlight when an answer changes. The phone card is unchanged. TUI tests 43/43 pass; NSH tests
+  updated but not run (no `node`/`nsh` in this checkout). See
+  [plans/53](done/53-question-choice-ux.md).
+
 - **Firecrawl from its own release; SearXNG managed by Core (11-24).** `install.sh` downloads pinned `firecrawl-local` 0.1.1
   from the public `nottherealsanta/firecrawl-local-builds` release, verifies that release's `SHA256SUMS`, warns and
   installs Nexus without the tool when the release or platform asset is missing, and stops on a mismatch; Nexus CI no

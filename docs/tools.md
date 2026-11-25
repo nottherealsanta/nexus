@@ -749,13 +749,18 @@ questions in one scrollable card. The answer fields and submit controls can be
 reached by scrolling; drafts stay with their questions. On desktop a question replaces the
 composer: the composer's input is the answer's "add context" line, where you type to answer in
 your own words or to add context to a selected option. Options have the keys first: Up/Down
-move, Space selects (a multi-select ticks) and Enter locks the answer and goes on; a number or a
-click chooses and goes on. Typing, or Down from the last option, moves into the line; Up or Esc
-returns to the options. A question with no options starts in the line. `Alt+Left`/`Alt+Right`
-revisit pages in the TUI, while Left/Right move the caret in the line (or page when the options
-have the keys). The last page is a review listing every question and its answer, where Enter
-sends the whole reply. The composer's own draft is left untouched and comes back afterwards. The
-question card does not show an elapsed timer.
+move, and a single-choice answer follows the highlight (Left/Right also move it on a lone
+question); Space selects or ticks the highlighted option and Enter locks the answer and goes on;
+a number or a click chooses a single choice and goes on (on a multi-select it ticks). A
+multi-select shows checkboxes and "Select all that apply"; arrows move, Space ticks, and Enter
+with nothing ticked ticks the highlighted option and stays (the next Enter goes on). Typing, or
+Down from the last option, moves into the line; Up or Esc returns to the options. A question with
+no options starts in the line. With several
+questions, Left/Right and `Alt+Left`/`Alt+Right` change pages in the TUI while the options have
+the keys (NSH has no page keys and uses its Back/Next buttons), and Left/Right move the caret in
+the line. The last page is a review listing every question and its answer, where Enter sends the
+whole reply. The composer's own draft is left untouched and comes back afterwards. The question
+card does not show an elapsed timer.
 
 ```jsonc
 // arguments

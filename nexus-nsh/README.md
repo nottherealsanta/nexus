@@ -334,8 +334,11 @@ for session (`scope: "session"`), deny, and deny with a note
 (the note is the composer's text; empty, it says so). Questions show radios or checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
 the composer's input are one dock under one rail, and the input is the answer's `Add context…` line (`Type your
 answer…` for a question without options). Options have the keys first: Up/Down move, Space selects (a multi-select
-ticks), Enter goes on and sends on the last page; a click or number key chooses and goes on at once. Typing, or Down from the
-last option, moves into the line; Up from its first line or Esc returns to the options, with the text kept. A question
+ticks), Enter goes on and sends on the last page, and a single-choice answer follows the highlight; on a lone
+question Left/Right also move the options. A multi-select draws checkboxes and `Select all that apply`: arrows move,
+Space ticks, and Enter with nothing ticked ticks the highlight and stays. A click or number key chooses a single
+option and goes on at once (on a multi-select it ticks). Typing, or Down from the last option, moves into the line;
+Up from its first line or Esc returns to the options, with the text kept. A question
 without options starts in the line. The composer draft is left alone and returns when the question is answered. A
 multi-select still has the one `Submit answers` button (`⌘↵`). The phone keeps its compact card and its own field. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
 oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its

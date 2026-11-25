@@ -1,0 +1,36 @@
+  ◧  [Sessions] [Files] [Git]                                                     ◆ waiting for you                   □
+     │                            ◆ Ask me which database t… ×                                                     +  ⋯
+▏1   │ + New session
+▏ N  │ ⌕ Search sessions ctrl+k     MCP [0]  none
+▏    │ ▣ Show archived
+     │──────────────────────────    total  ~5,308 tok
+     │▏◆ Ask me which datab… 8m
+     │▏
+     │                            │
+     │                            │  Ask me which database to use.                                       #1 · 9:38 AM
+     │                            │
+     │
+     │                               ⏷ Working
+     │                               ◆ Ask  Which database should the migration target?                       waiting
+     │
+     │
+     │
+     │                             ┃
+     │                             ┃  ◆ Nexus asks
+     │                             ┃  waiting on you
+     │                             ┃
+     │                             ┃  Which database should the migration target?
+     │                             ┃  ( ) 1 PostgreSQL
+     │                             ┃▸ (•) 2 SQLite
+     │                             ┃
+     │                             ┃  ↑↓ move · space select · enter send · esc stop
+     │                             ┃
+     │                             ┃
+     │                             ┃
+     │                             ┃
+     │                             ┃ Add context…
+  +  │                             ┃
+     │                             ┃ Build · m scripted · default                                                ~59
+     │                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ⚙  │                              /private/tmp/tui-ws.ADgFCe/a                                    Working · 8m 15s
+     │                              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

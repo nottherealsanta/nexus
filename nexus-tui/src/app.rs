@@ -500,7 +500,7 @@ fn ask_pick_problem(q: &Value, pick: &AskPick) -> Option<&'static str> {
         }
     } else if q["multiple"].as_bool().unwrap_or(false) {
         if selected == 0 && !text {
-            return Some("Pick at least one option (space or a number)");
+            return Some("Pick at least one option (space or enter)");
         }
     } else {
         if selected > 1 {
@@ -2763,7 +2763,9 @@ impl App {
         }
     }
 
-    fn ask_move(&mut self, down: bool) {
+    /// Move the option highlight. `enter_field` lets Down from the last option
+    /// step into the context line; Left/Right stay within the options.
+    fn ask_move(&mut self, down: bool, enter_field: bool) {
         let Some(cur) = self.ask_current() else {
             return;
         };
@@ -2772,17 +2774,24 @@ impl App {
         }
         let last = cur.options().len().saturating_sub(1);
         let cursor = cur.pick().map_or(0, |p| p.cursor);
+        let multiple = cur.multiple();
         let d = self.ask_picks(&cur.wait.id, cur.total);
         if let Some(pick) = d.picks.get_mut(cur.page) {
-            if down && cursor >= last {
+            if down && enter_field && cursor >= last {
                 pick.field = true;
                 return;
             }
-            pick.cursor = if down {
+            let target = if down {
                 (cursor + 1).min(last)
             } else {
                 cursor.saturating_sub(1)
             };
+            pick.cursor = target;
+            // A single choice follows the highlight: arrows select the answer they land on.
+            // A multi-select only moves the highlight; Space and Enter tick options.
+            if !multiple {
+                pick.chosen = vec![target];
+            }
         }
     }
 
@@ -2840,7 +2849,8 @@ impl App {
         let Some(cur) = self.ask_current() else {
             return;
         };
-        if cur.sent {
+        // A lone question answers in one step and never has a review page.
+        if cur.sent || cur.total < 2 {
             return;
         }
         let target = if forward {
@@ -2876,6 +2886,12 @@ impl App {
         let use_text = !pick.input.expanded_text().trim().is_empty();
         if !cur.multiple() && pick.chosen.is_empty() && !opts.is_empty() && !use_text {
             pick.chosen = vec![pick.cursor.min(opts.len() - 1)];
+        }
+        // Enter never strands a multi-select on an error: with nothing ticked it
+        // ticks the highlighted option, and the next Enter goes on.
+        if cur.multiple() && pick.chosen.is_empty() && !opts.is_empty() && !use_text {
+            self.ask_pick(pick.cursor.min(opts.len() - 1));
+            return;
         }
         let Some(q) = cur.question() else {
             return;
@@ -2972,13 +2988,17 @@ impl App {
                 }
             }
             "up" | "down" if n_opts == 0 || field => self.ask_input_key(ev, name),
-            "up" => self.ask_move(false),
-            "down" => self.ask_move(true),
+            "up" => self.ask_move(false, true),
+            "down" => self.ask_move(true, true),
             "alt+left" => self.ask_page(false),
             "alt+right" => self.ask_page(true),
             "left" | "right" => {
                 if field {
                     self.ask_input_key(ev, name);
+                } else if cur.total == 1 && n_opts > 0 {
+                    // A lone question has no pages: Left/Right are just more arrows
+                    // for the options, as users expect from a choice list.
+                    self.ask_move(name == "right", false);
                 } else {
                     self.ask_page(name == "right");
                 }

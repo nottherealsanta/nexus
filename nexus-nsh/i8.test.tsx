@@ -149,6 +149,78 @@ describe("waiting card (D14)", () => {
     expect(String(post.body ?? "")).toContain('"selected":["b"]');
   });
 
+  test("left and right also select a lone question's option, with no review page", async () => {
+    const lone = { ...question, questions: [{ ...question.questions[0], allow_free_text: false }] };
+    const app = await view(snapshot({ questions: [lone] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-b");
+    await app.keyboard.press("right");
+    expect(app.shows("text:Review answers")).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(String(post.body ?? "")).toContain('"selected":["b"]');
+  });
+
+  test("ticking a multi-select keeps the highlight, and Enter sends every tick", async () => {
+    const multi = { ...question, questions: [{
+      id: "q1", question: "Which checks?", multiple: true, allow_free_text: false,
+      options: [{ id: "a", label: "unit" }, { id: "b", label: "e2e" }, { id: "c", label: "perf" }],
+    }] };
+    const app = await view(snapshot({ questions: [multi] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-a");
+    // Tick unit, e2e and perf in turn. Ticking e2e must not pull the cursor back to unit.
+    await app.keyboard.press("space");
+    await app.keyboard.press("down");
+    await app.keyboard.press("space");
+    await app.keyboard.press("down");
+    // The cursor reached perf after e2e was ticked, so this ticks perf rather than toggling e2e.
+    await app.keyboard.press("space");
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(JSON.parse(String(post.body ?? "{}")).answers[0].selected).toEqual(["a", "b", "c"]);
+  });
+
+  test("Enter on an unticked multi-select ticks the highlight and stays", async () => {
+    const multi = { ...question, questions: [{
+      id: "q1", question: "Which checks?", multiple: true, allow_free_text: false,
+      options: [{ id: "a", label: "unit" }, { id: "b", label: "e2e" }],
+    }] };
+    const app = await view(snapshot({ questions: [multi] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-b");
+    await app.keyboard.press("down");
+    await app.keyboard.press("enter");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(JSON.parse(String(post.body ?? "{}")).answers[0].selected).toEqual(["b"]);
+  });
+
+  test("number keys tick multi-select options without sending", async () => {
+    const multi = { ...question, questions: [{
+      id: "q1", question: "Which checks?", multiple: true, allow_free_text: false,
+      options: [{ id: "a", label: "unit" }, { id: "b", label: "e2e" }, { id: "c", label: "perf" }],
+    }] };
+    const app = await view(snapshot({ questions: [multi] }), { "POST */api/session/ses_1/question/*": { body: {} } });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:choice-mark-a");
+    await app.keyboard.press("1");
+    await app.keyboard.press("3");
+    expect(app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1"))).toBe(false);
+    await app.keyboard.press("enter");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.includes("/question/qst_1")));
+    const post = app.requests().find((r) => r.method === "POST" && r.url.includes("/question/qst_1"))!;
+    expect(JSON.parse(String(post.body ?? "{}")).answers[0].selected).toEqual(["a", "c"]);
+  });
+
   test("long questions, option labels and previews remain in the scrollable card", async () => {
     const app = await open("./App.tsx", { network: network({}, snapshot({ questions: [readability] })), width: 1024, height: 480, platform: "web" });
     await app.waitFor("text:Refactor loader");

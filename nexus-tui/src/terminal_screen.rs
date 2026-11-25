@@ -143,6 +143,11 @@ impl TerminalScreen {
                 }
             }
         }
+        self.cursor_position(area)
+    }
+
+    pub fn cursor_position(&self, area: Rect) -> Option<(u16, u16)> {
+        let screen = self.parser.screen();
         let (y, x) = screen.cursor_position();
         (!screen.hide_cursor() && screen.scrollback() == 0 && y < area.height && x < area.width)
             .then_some((area.x + x, area.y + y))
@@ -161,6 +166,25 @@ fn color(value: vt100::Color) -> Color {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cursor_tracks_output_visibility_and_screen_bounds() {
+        let mut screen = TerminalScreen::new(4, 20);
+        let area = Rect::new(10, 5, 20, 4);
+        screen
+            .apply(&json!({"version":1,"seq":1,"type":"output","data":STANDARD.encode("hello")}))
+            .unwrap();
+        assert_eq!(screen.cursor_position(area), Some((15, 5)));
+        assert_eq!(screen.cursor_position(Rect::new(10, 5, 5, 4)), None);
+        screen
+            .apply(&json!({"version":1,"seq":2,"type":"output","data":STANDARD.encode(b"\x1b[?25l")}))
+            .unwrap();
+        assert_eq!(screen.cursor_position(area), None);
+        screen
+            .apply(&json!({"version":1,"seq":3,"type":"output","data":STANDARD.encode(b"\x1b[?25h")}))
+            .unwrap();
+        assert_eq!(screen.cursor_position(area), Some((15, 5)));
+    }
 
     #[test]
     fn split_utf8_colors_alternate_and_paste() {

@@ -2503,9 +2503,8 @@ fn free_text_goes_through_the_card_and_several_questions_send_once() {
     let notes = r#"{"id":"notes","question":"Anything else?"}"#;
     let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
     let mut app = asking(&format!("[{DB},{multi},{notes}]"), (120, 36));
+    // A digit chooses the single option and moves straight to the multi-select.
     press(&mut app, &["alt+w", "1"]);
-    // single-select: Enter locks the answer and moves to the next question
-    press(&mut app, &["enter"]);
     let all = joined(&draw(&mut app, 120, 36).1);
     assert!(
         all.contains("Which tags?") && all.contains("question 2 of 3"),
@@ -2663,13 +2662,16 @@ fn typed_text_for_an_option_question_is_its_custom_answer() {
 #[test]
 fn a_selected_option_and_custom_context_are_sent_together() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
+    // Space marks PostgreSQL; Down moves the answer to SQLite (the arrow selects),
+    // and the second Down focuses the line. The text is added to SQLite.
     press(&mut app, &["space", "down", "down"]);
-    // The line is focused: the digit is text, not another option pick.
     typing(&mut app, "2nd choice");
     press(&mut app, &["enter"]);
     assert_eq!(
         answers_sent(&app),
-        vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": "2nd choice"}])]
+        vec![
+            serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": "2nd choice"}])
+        ]
     );
 }
 

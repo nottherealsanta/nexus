@@ -797,18 +797,22 @@ and previews wrap fully, and Page Up/Page Down scroll the card. **A question rep
 composer** (plan 47): the card and the composer's input are one dock under one rail, and the
 composer's input line is the answer's "add context" line (`Add context…`, or `Type your
 answer…` when the question has no options), with its own text per question. The options have
-the keys first: Up/Down move, Space selects (a multi-select ticks), and Enter goes on. A
-number key (1-9, 0 for the tenth) or a click chooses an option and goes on at once. Typing,
-or Down from the last option, moves into the line; Up from its first line, or Esc, returns
-to the options (the text stays; Esc on the options keeps its normal meaning). A question
-with no options starts in the line. **With exactly one question**, Enter (or a choice by
-digit or click) sends the answer at once; a multi-select question needs its Enter to say
-"done", and also sends without a review page. **Two or more questions** keep the
-step-through: Enter locks the answer and moves to the next question, the last leads to a
-review page whose rail is `text.primary` (white in the dark theme), and Enter there sends
-the reply. `Alt+Left`/`Alt+Right` move between the questions and review, while Left/Right
-move the caret in the line (or page when the options have the keys). A multi-select
-question uses the violet `interactive.multi` rail and ticks. The reply is sent once, as a
+the keys first: Up/Down move, and a single-choice answer follows the highlight; Space
+selects and Enter goes on. A multi-select draws checkboxes and `Select all that apply`: arrows
+move, Space ticks, and Enter with nothing ticked ticks the highlight and stays (the next Enter
+goes on). Left/Right also move a lone question's options. A number key (1-9, 0 for the tenth)
+or a click chooses a single option and goes on at once (on a multi-select it ticks). Typing, or
+Down from the last option, moves into the line; Up from its first line, or Esc, returns to the
+options (the text stays; Esc on the options keeps its normal meaning). A question with no
+options starts in the line. **With
+exactly one question**, Enter sends a ready answer at once (a multi-select with nothing ticked
+ticks the highlight first) and never shows a review page. **Two or more questions** keep the
+step-through: Enter locks the answer
+and moves to the next question, the last leads to a review page whose rail is `text.primary`
+(white in the dark theme), and Enter there sends the reply. `Alt+Left`/`Alt+Right` move between
+the questions and review, while Left/Right page when the options have the keys and move the
+caret in the line. A multi-select question uses the violet `interactive.multi` rail and
+ticks. The reply is sent once, as a
 keyed `POST …/question/{id}` (`Ctrl+Enter` submits from any page). While a question is
 pending in the viewed session the composer is the question: no send, steer, queue or
 slash command, and the draft already there is kept untouched and returns when the question

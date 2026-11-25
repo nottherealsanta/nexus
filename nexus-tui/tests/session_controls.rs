@@ -480,6 +480,31 @@ fn a_digit_or_click_chooses_and_goes_on() {
 }
 
 #[test]
+fn arrows_select_a_single_choice_and_a_lone_question_has_no_review_page() {
+    let mut app = app();
+    ask(&mut app, scenario_question());
+    // Down selects the second option, not just the highlight.
+    press(&mut app, &["down"]);
+    let c = app.ask_current().unwrap();
+    assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![1]));
+    // Right on a lone question is another arrow: it never opens a review page.
+    press(&mut app, &["right"]);
+    assert_eq!(app.ask_current().unwrap().page, 0);
+    // Left goes back and selects the first option.
+    press(&mut app, &["left"]);
+    let c = app.ask_current().unwrap();
+    assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![0]));
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("(\u{2022}) 1 Conservative"), "{all}");
+    assert!(all.contains("( ) 2 Direct"), "{all}");
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([{"question_id": "approach", "selected": ["safe"], "text": null}])]
+    );
+}
+
+#[test]
 fn one_multi_select_question_submits_once_without_a_review() {
     let mut app = app();
     ask(
@@ -502,6 +527,40 @@ fn one_multi_select_question_submits_once_without_a_review() {
     );
     let all = joined(&draw(&mut app, 120, 36).1);
     assert!(!all.contains("enter submit"), "{all}");
+}
+
+#[test]
+fn enter_ticks_a_multi_select_before_it_sends() {
+    let mut app = app();
+    ask(
+        &mut app,
+        serde_json::json!([{
+            "id": "tags", "question": "Which tags?", "multiple": true,
+            "allow_free_text": false,
+            "options": [
+                {"id": "a", "label": "alpha"},
+                {"id": "b", "label": "beta"}
+            ]
+        }]),
+    );
+    press(&mut app, &["down"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("Select all that apply"), "{all}");
+    assert!(all.contains("enter tick"), "{all}");
+    // Enter with nothing ticked ticks the highlight and stays; it does not error.
+    press(&mut app, &["enter"]);
+    let c = app.ask_current().unwrap();
+    assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![1]));
+    assert!(sent_answers(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("1 ticked"), "{all}");
+    assert!(all.contains("enter send"), "{all}");
+    // The next Enter sends.
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        sent_answers(&app),
+        vec![serde_json::json!([{"question_id": "tags", "selected": ["b"], "text": null}])]
+    );
 }
 
 #[test]
@@ -881,6 +940,24 @@ fn screenshots() {
         .set_text(scenario["draft"].as_str().unwrap());
     ask(&mut question, scenario_question());
     shot("tui-question-lock-120x36-dark", &mut question, (120, 36));
+
+    let mut multi = app();
+    ask(
+        &mut multi,
+        serde_json::json!([{
+            "id": "tags",
+            "question": "Which checks should run before the release?",
+            "multiple": true,
+            "allow_free_text": false,
+            "options": [
+                {"id": "unit", "label": "Unit tests", "preview": "The fast suite that runs on every save."},
+                {"id": "e2e", "label": "End-to-end tests", "preview": "The slower browser and terminal suites."},
+                {"id": "perf", "label": "Performance benchmark"}
+            ]
+        }]),
+    );
+    press(&mut multi, &["space", "down"]);
+    shot("tui-question-multi-120x36-dark", &mut multi, (120, 36));
 
     let mut queued = pending_app();
     scenario_worktree(&mut queued);

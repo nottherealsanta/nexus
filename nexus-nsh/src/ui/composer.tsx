@@ -1124,6 +1124,7 @@ function dockedQuestion(): Question | null {
 /** One choice: a multi-select toggles; a single choice is the answer. A click or digit goes on (a lone question sends, another page moves on); Space only selects. */
 function chooseAnswer(q: Question, qq: QuestionItem, option: string, advance = true) {
   const id = `${q.id}:${qq.id}`;
+  waitError.set(null);
   if (qq.multiple) {
     answers.update((all) => {
       const a = all[id] ?? { selected: [], text: "" };
@@ -1136,6 +1137,18 @@ function chooseAnswer(q: Question, qq: QuestionItem, option: string, advance = t
   if (!advance) return;
   if (q.questions.length === 1) void submitQuestion(q, { itemId: qq.id, answer });
   else confirmQuestion(q);
+}
+
+/** Move the highlight: a single choice's answer follows it (a radio group), while a multi-select
+ *  only moves and ticks with Space or Enter. */
+function highlightAnswer(q: Question, qq: QuestionItem, i: number) {
+  const option = qq.options[Math.min(Math.max(0, i), qq.options.length - 1)];
+  if (!option) return;
+  waitError.set(null);
+  choice.set(Math.min(Math.max(0, i), qq.options.length - 1));
+  if (qq.multiple) return;
+  const id = `${q.id}:${qq.id}`;
+  answers.update((all) => ({ ...all, [id]: { selected: [option.id], text: all[id]?.text ?? "" } }));
 }
 
 /** How the review shows one answer: selected labels in order, then the quoted free text. */
@@ -1151,7 +1164,7 @@ function answerProblem(qq: QuestionItem, a: { selected: string[]; text: string }
   const selected = (qq.options ?? []).filter((o) => a.selected.includes(o.id)).length;
   const text = (a.text ?? "").trim().length > 0;
   if (!qq.options.length) return text ? null : "Type your answer in the question card";
-  if (qq.multiple) return selected || text ? null : "Pick at least one option, or type an answer";
+  if (qq.multiple) return selected || text ? null : "Pick at least one option (space or enter), or type an answer";
   if (selected > 1) return "This question takes one option";
   return selected || text ? null : "Pick an option or type an answer";
 }
@@ -1172,6 +1185,13 @@ function confirmQuestion(q: Question) {
   if (!qq.multiple && !a.selected.length && !a.text.trim() && qq.options.length) {
     const o = qq.options[Math.min(choice(), qq.options.length - 1)];
     answers.update((all) => ({ ...all, [id]: { ...a, selected: [o.id] } }));
+  }
+  // Enter never strands a multi-select on an error: with nothing ticked it
+  // ticks the highlighted option, and the next Enter goes on.
+  if (qq.multiple && !a.selected.length && !a.text.trim() && qq.options.length) {
+    chooseAnswer(q, qq, qq.options[Math.min(choice(), qq.options.length - 1)].id, false);
+    waitError.set(null);
+    return;
   }
   if (total === 1) { submitAllQuestions(q); return; }
   const problem = answerProblem(qq, answers()[id] ?? blankAnswer());
@@ -1282,7 +1302,13 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   // The modified keys of the card, bound while it shows. Enter belongs to the focused choice, never a global binding.
   // Only a different wait resets the highlight: `p.w()` re-reads on every model change, and the card remounts while
   // the session's history loads; neither may move the user's highlight back to the first option.
-  effect(() => { const id = p.w().id; if (id === shownWait) return; shownWait = id; choice.set(0); waitError.set(null); });
+  effect(() => {
+    const id = p.w().id;
+    if (id === shownWait) return;
+    shownWait = id;
+    choice.set(0);
+    waitError.set(null);
+  });
   effect(() => {
     const k = (id: string) => { const key = byId.get(id)?.keys?.nsh; return key ? toKeystroke(key) : null; };
     const map: Record<string, () => void> = {};
@@ -1302,20 +1328,29 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
       map["enter"] = () => { if (!(draft()[draftKey()] ?? "").length) approvalChoices(a)[choice()]?.run?.(); };
     }
     if (q && live()) bind("waiting.submit_answers", () => submitAllQuestions(q));
-    // Up/down move the highlighted option of the page in view; Enter confirms it (the free-text field keeps its own Enter).
+    // Arrows move the highlighted option of the page in view; Enter confirms it (the free-text field keeps its own Enter).
     const askPage = q ? askPageOf(q.id) : 0;
     const shown = q && askPage < q.questions.length ? q.questions[askPage] : undefined;
+    // The context line keeps the arrows while it has the caret; options get them otherwise.
+    const lineFocused = !phone && !!q && !!shown?.options.length && questionLine();
+    const fieldFocused = phone ? questionFieldFocused() : lineFocused;
     if (q && live() && !submitted().has(q.id)) {
-      if (shown?.options.length) {
+      if (shown?.options.length && !fieldFocused) {
         const last = shown.options.length - 1;
+        const move = (d: number) => highlightAnswer(q, shown, Math.min(Math.max(choice() + d, 0), last));
         // Down from the last option goes into the context line; Up from its first line comes back (desktop: the line is the composer's input).
-        map["down"] = () => { if (!phone && choice() >= last) questionLineFocus.fn(true); else choice.set(Math.min(choice() + 1, last)); };
-        map["up"] = () => choice.set(Math.max(choice() - 1, 0));
+        map["down"] = () => { if (!phone && choice() >= last) questionLineFocus.fn(true); else move(1); };
+        map["up"] = () => move(-1);
+        // A lone question has no pages, so Left/Right are just more arrows for its options.
+        // With several questions they stay unbound; NSH pages with Back/Next (the TUI uses Left/Right).
+        if (q.questions.length === 1) {
+          map["left"] = () => move(-1);
+          map["right"] = () => move(1);
+        }
       }
       map["enter"] = () => { if (!questionFieldFocused()) confirmQuestion(q); };
     }
     // The line has the caret (it has options): Up on its first line, and Esc, hand the keys back to the options.
-    const lineFocused = !phone && !!q && !!shown?.options.length && questionLine();
     if (lineFocused) {
       const answer = answers()[`${q!.id}:${shown!.id}`]?.text ?? "";
       map["up"] = () => { if (!answer.includes("\n")) questionLineFocus.leave(); };
@@ -1329,7 +1364,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     // Typing moves the caret into the context line (desktop), the character included.
     if (!phone && q && one && one.options.length && live() && !submitted().has(q.id) && !lineFocused) {
       for (const key of PRINTABLE_KEYS) {
-        if (/^[1-9]$/.test(key) && !one.multiple) continue; // digits choose an option
+        if (/^[0-9]$/.test(key)) continue; // digits act on the numbered option
         try { offs.push(keymap.bind(key, (e: { keystroke: string }) => {
           const typed = printableOf(e.keystroke);
           if (typed === null) return;
@@ -1339,7 +1374,12 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
         }, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ }
       }
     }
-    if (q && one && !one.multiple && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => { choice.set(i); chooseAnswer(q, one, o.id); }));
+    // A number picks a single choice and goes on; on a multi-select it ticks without leaving.
+    // 0 is the tenth option, as in the TUI.
+    if (q && one && live()) one.options.slice(0, 9).forEach((o, i) => letter(String(i + 1), () => { choice.set(i); chooseAnswer(q, one, o.id); }));
+    if (q && one && live() && one.options.length === 10) {
+      letter("0", () => { choice.set(9); chooseAnswer(q, one, one.options[9].id); });
+    }
     // Space selects (or, multi-select, ticks) the highlighted option and stays on the page; Enter goes on.
     if (q && one && one.options.length && live()) letter("space", () => { const o = one.options[Math.min(choice(), one.options.length - 1)]; chooseAnswer(q, one, o.id, false); });
     const off = bindOpenKeys(map);
@@ -1459,7 +1499,11 @@ function QuestionHints(p: { q: Question; page: number }) {
   const total = p.q.questions.length;
   const one = () => p.q.questions[Math.min(p.page, total - 1)];
   const line = () => !!one().options.length && questionLine();
-  const enter = () => (total === 1 ? "send" : p.page + 1 < total ? "next" : "review");
+  const answer = () => answers()[`${p.q.id}:${one().id}`] ?? blankAnswer();
+  const ticked = () => one().options.filter((o) => answer().selected.includes(o.id)).length;
+  const enter = () => one().multiple && one().options.length && !ticked() && !answer().text.trim()
+    ? "tick"
+    : total === 1 ? "send" : p.page + 1 < total ? "next" : "review";
   const hint = (key: string, label: string) => <Text class={T.meta}><Text class="font-medium text-foreground-secondary">{key}</Text>{` ${label}`}</Text>;
   return (
     <View class="flex-row flex-wrap items-center gap-x-3.5 gap-y-0.5" testID="question-hints">
@@ -1497,6 +1541,7 @@ function QuestionBody(p: { q: Question }) {
   const reviewing = () => !single && page() >= total;
   const current = () => q.questions[Math.min(page(), total - 1)];
   const answerOf = (qq: QuestionItem) => answers()[`${q.id}:${qq.id}`] ?? blankAnswer();
+  const ticked = () => current().options.filter((o) => (answerOf(current()).selected ?? []).includes(o.id)).length;
   const done = () => submitted().has(q.id);
   let freeRef: any;
   // Each page's string question takes focus when it appears, including after Enter advances.
@@ -1509,11 +1554,13 @@ function QuestionBody(p: { q: Question }) {
     }, 0);
     return () => clearTimeout(timer);
   });
-  // The highlight starts on the page's first picked option, else the first one.
+  // The highlight starts on the page's first picked option, else the first one. The answer is read
+  // untracked: ticking a multi-select must not pull the cursor back to the first ticked row.
   effect(() => {
     const cur = current();
     if (reviewing()) return;
-    const first = cur.options.findIndex((o) => (answers()[`${q.id}:${cur.id}`]?.selected ?? []).includes(o.id));
+    const picked = untracked(() => answers()[`${q.id}:${cur.id}`]?.selected ?? []);
+    const first = cur.options.findIndex((o) => picked.includes(o.id));
     choice.set(Math.max(0, first));
   });
   const go = (to: number) => { waitError.set(null); setAskPage(q.id, to); };
@@ -1536,6 +1583,11 @@ function QuestionBody(p: { q: Question }) {
       <If when={reviewing()} else={
         <View class="gap-1.5">
           <Text class="text-[16px] leading-6 font-medium text-foreground">{current().question}</Text>
+          <If when={current().multiple && current().options.length > 0}>
+            <Text class={`${T.meta} text-muted-foreground`} testID="question-multi-note">
+              {ticked() ? `Select all that apply · ${ticked()} ticked` : "Select all that apply"}
+            </Text>
+          </If>
           <Each of={current().options} key={(o) => o.id}>
             {(o, n) => {
               const sel = () => (answerOf(current()).selected ?? []).includes(o().id);
@@ -1544,7 +1596,10 @@ function QuestionBody(p: { q: Question }) {
                   accessibilityLabel={`${current().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
                   onPress={() => { choice.set(n()); chooseAnswer(q, current(), o().id); }}
                   class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${(phone ? sel() : n() === choice()) ? "bg-selection" : ""} ${FOCUS}`}>
-                  <If when={current().multiple} else={<Text testID={`choice-mark-${o().id}`} class={`shrink-0 w-3.5 text-center text-[16px] leading-6 ${sel() ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>}><CheckMark on={sel()} testID={`choice-mark-${o().id}`} /></If>
+                  <Text class={`shrink-0 w-5 text-center text-[14px] leading-6 tabular-nums ${sel() ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>
+                  <If when={current().multiple} else={<RadioMark on={sel()} testID={`choice-mark-${o().id}`} />}>
+                    <CheckMark on={sel()} testID={`choice-mark-${o().id}`} />
+                  </If>
                   <View class="flex-1 min-w-0 py-1">
                     <Text class={`text-[16px] leading-6 ${sel() ? "font-semibold text-foreground" : "text-foreground"}`}>{o().label}</Text>
                     <If when={o().preview}><Text class={`${T.sec} text-muted-foreground`}>{o().preview}</Text></If>

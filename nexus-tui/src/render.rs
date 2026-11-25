@@ -858,6 +858,18 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
             m.body.y,
         ));
     }
+    if app.terminal_focused {
+        if !app.terminal_controlled {
+            return None;
+        }
+        let body = g.terminal?;
+        let screen = crate::terminal_panel::screen_area(body, false, app.terminal_panel.screen.gap);
+        return app
+            .terminal_panel
+            .screen
+            .cursor_position(screen)
+            .map(|(x, y)| Position::new(x, y));
+    }
     if app.ui.focus == Focus::Waiting {
         return ask_input_cursor(app, g);
     }
@@ -5038,6 +5050,8 @@ enum WRow {
     Diff(Vec<ratatui::text::Span<'static>>),
     DiffNote(String),
     Ask(String),
+    /// A muted line under a question (its selection rule or ticked count).
+    Note(String),
     /// A review row's answer and whether the question was answered.
     Answer(String, bool),
     Opt(usize, String, bool, bool),
@@ -5201,6 +5215,14 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                             .into_iter()
                             .map(WRow::Ask),
                     );
+                    if c.multiple() && !c.options().is_empty() {
+                        let ticked = c.pick().map_or(0, |p| p.chosen.len());
+                        rows.push(WRow::Note(if ticked == 0 {
+                            "Select all that apply".into()
+                        } else {
+                            format!("Select all that apply \u{00b7} {ticked} ticked")
+                        }));
+                    }
                     for (i, option) in c.options().iter().enumerate() {
                         let label = json_str(&option["label"]);
                         for (n, line) in ask_lines(&label, inner.saturating_sub(6), ell)
@@ -5571,6 +5593,9 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     inner_w,
                 );
             }
+            WRow::Note(note) => {
+                put(buf, x, y, note, cx.st(MUTED, PANEL), inner_w);
+            }
             WRow::Answer(text, answered) => {
                 let st = if *answered {
                     cx.st(SECONDARY, PANEL)
@@ -5597,22 +5622,32 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             WRow::Opt(i, text, first, preview) => {
                 let Some(c) = a.ask_current() else { continue };
                 let on = c.pick().is_some_and(|p| p.chosen.contains(i));
-                let tick = if c.multiple() {
+                let mark = if c.multiple() {
                     if on {
                         "[x] "
                     } else {
                         "[ ] "
                     }
+                } else if on {
+                    if cx.t.opts.ascii {
+                        "(*) "
+                    } else {
+                        "(\u{2022}) "
+                    }
                 } else {
-                    ""
+                    "( ) "
                 };
                 let line = if *first {
-                    format!("{tick}{} {text}", (i + 1) % 10)
+                    format!("{mark}{} {text}", (i + 1) % 10)
                 } else {
                     format!("      {text}")
                 };
-                let mut st = if c.multiple() && on {
-                    cx.st(MULTI, PANEL)
+                let mut st = if on {
+                    if c.multiple() {
+                        cx.st(MULTI, PANEL)
+                    } else {
+                        cx.st(PRIMARY, PANEL)
+                    }
                 } else {
                     cx.st(SECONDARY, PANEL)
                 };
@@ -5621,7 +5656,10 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         band_row(buf, y, PRIMARY);
                     }
                     if !preview {
-                        st = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD);
+                        // Keep a ticked multi-select violet under the focus band;
+                        // the cursor must never hide the answer it is on.
+                        let look = if on && c.multiple() { MULTI } else { PRIMARY };
+                        st = cx.st(look, PANEL).add_modifier(Modifier::BOLD);
                     }
                 }
                 if *preview {
@@ -5860,6 +5898,13 @@ fn ask_hint_list(
     }
     let field = c.field();
     let options = !c.options().is_empty();
+    let ticked = c.pick().map_or(0, |p| {
+        p.chosen.iter().filter(|i| **i < c.options().len()).count()
+    });
+    let typed = c
+        .pick()
+        .is_some_and(|p| !p.input.expanded_text().trim().is_empty());
+    let enter_tick = c.multiple() && options && ticked == 0 && !typed;
     if options && !field {
         hints.push((updown(cx).to_owned(), "move".into()));
         hints.push((
@@ -5876,7 +5921,9 @@ fn ask_hint_list(
     submit = None;
     hints.push((
         "enter".into(),
-        if c.total == 1 {
+        if enter_tick {
+            "tick"
+        } else if c.total == 1 {
             "send"
         } else if c.page + 1 < c.total {
             "next"
@@ -11005,6 +11052,28 @@ mod tests {
     use crate::state::{AppState, ConnectionState};
     use crate::sync::SyncMsg;
     use crate::theme::{Mode, Options, Theme, Tier};
+
+    #[test]
+    fn focused_terminal_uses_its_screen_cursor() {
+        let options = Options {
+            mode: Mode::Dark,
+            tier: Tier::TrueColor,
+            ascii: false,
+            reduced_motion: true,
+        };
+        let mut app = App::new(AppState::new(), Theme::new(options), (120, 36));
+        app.terminal_focused = true;
+        app.terminal_controlled = true;
+        let mut regions = app.regions.clone();
+        regions.terminal = Some(Rect::new(10, 8, 30, 8));
+        let screen = crate::terminal_panel::screen_area(regions.terminal.unwrap(), false, false);
+        assert_eq!(
+            cursor_position(&app, &regions),
+            Some(Position::new(screen.x, screen.y))
+        );
+        app.terminal_controlled = false;
+        assert_eq!(cursor_position(&app, &regions), None);
+    }
 
     #[test]
     fn the_file_modal_hides_the_composer_caret() {

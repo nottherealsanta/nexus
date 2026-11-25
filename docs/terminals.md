@@ -39,7 +39,8 @@ restored layout. An exit frame immediately marks its tab ended and disables inpu
 older successful control request is still completing.
 
 The screen receives input only while focused and while this attachment holds
-control. Taking control never steals it from another attachment. A failed control
+control. The focused screen shows the terminal application's cursor at its current
+position, unless the application hides it or the screen is scrolled back. Taking control never steals it from another attachment. A failed control
 request is visible; reconnecting creates a new attachment and must reacquire
 control before typing. Input is serialized and acknowledged before the next input; an
 indeterminate input is reported, not replayed on a new attachment. A gap resets
