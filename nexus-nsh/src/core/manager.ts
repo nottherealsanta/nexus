@@ -64,6 +64,15 @@ export function toggleManagerDropdown() {
   if (dropdownOpen()) { if (fieldText() === null) fieldText.set(""); begin({ orb: true }); }
   if (voiceEnabled() && !audioRequested()) void start(true);
 }
+/**
+ * The phone's Manager tab shows the panel only (user, 2026-11-24): no orb loop, no call and no voice until the user
+ * types, presses Connect or talks.
+ */
+export function showManagerPanel() {
+  if (dropdownOpen()) return;
+  dropdownOpen.set(true); dropdownInteractive.set(true); minimised.set(false);
+  if (fieldText() === null) fieldText.set("");
+}
 export function closeManagerDropdown() {
   dropdownOpen.set(false); dropdownInteractive.set(false); minimised.set(true);
   if (!call() && !connecting()) { orbOn.set(false); exchange.set(false); stopLoop(); }

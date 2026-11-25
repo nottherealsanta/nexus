@@ -27,7 +27,7 @@ function saveRecent(list: RecentCore[]) { recent.set(list); try { void Storage.s
 function Step(p: { n: number; title: string; children?: any }) {
   return (
     <View class="flex-row gap-3" testID={`connect-step-${p.n}`}>
-      <View class="size-7 items-center justify-center rounded-full bg-primary" accessible={false}><Text class="font-(family-name:--font-ui) text-[14px] leading-5 font-semibold text-on-accent">{String(p.n)}</Text></View>
+      <View class="size-7 items-center justify-center rounded-full bg-phone-control" accessible={false}><Text class="font-(family-name:--font-ui) text-[14px] leading-5 font-semibold text-foreground">{String(p.n)}</Text></View>
       <View class="flex-1 min-w-0 gap-1 pt-0.5">
         <Text class={`${TS.body} font-medium text-foreground`}>{p.title}</Text>
         {p.children}
@@ -63,9 +63,9 @@ export function PhoneConnect(p: { onDone: () => void; canCancel: boolean }) {
       <Scroll class="flex-1" testID="connect" contentStyle={{ paddingTop: safeArea().top + 20, paddingBottom: safeArea().bottom + 24 + keyboardFrame().height }}>
         <View class="px-5 gap-6">
           <View class="gap-2">
-            <Text class="font-mono text-[28px] leading-9 font-bold text-primary" accessible={false}>_/</Text>
-            <Text class="font-(family-name:--font-ui) text-[26px] leading-8 font-semibold text-foreground">Connect to Nexus</Text>
-            <Text class={`${TS.body} text-muted-foreground`}>Nexus runs on your computer. This phone connects to it over your Wi-Fi or Tailscale.</Text>
+            <Text class="font-mono text-[20px] leading-7 font-medium text-foreground-secondary" accessible={false}>nexus</Text>
+            <Text class="font-(family-name:--font-ui) text-[34px] leading-[41px] font-bold tracking-[-0.4px] text-foreground">Connect to Nexus</Text>
+            <Text class={`${TS.body} text-foreground-secondary`}>Nexus runs on your computer. This phone talks to it over Wi-Fi or Tailscale. No account, no relay.</Text>
           </View>
 
           <If when={!!problem()}>
@@ -78,28 +78,26 @@ export function PhoneConnect(p: { onDone: () => void; canCancel: boolean }) {
             </View>
           </If>
 
-          <View class="rounded-2xl bg-raised p-4 gap-4" testID="connect-steps">
-            <Step n={1} title="Install and start Nexus on your computer">
-              <Text class={`${T.mono} text-[13px] leading-5`}>nexus daemon start</Text>
+          <View class="gap-4" testID="connect-steps">
+            <Step n={1} title="Start Nexus on your computer">
+              <View class="self-start rounded-[10px] bg-phone-card border border-border px-2.5 py-1"><Text class="font-mono text-[14px] leading-5 text-foreground">nexus daemon start</Text></View>
             </Step>
             <Step n={2} title="Run the pairing command">
-              <Text class={`${T.mono} text-[13px] leading-5`}>nexus pair</Text>
-              <Text class={T.meta}>It prints the address and a QR code. No account or relay is involved.</Text>
+              <View class="self-start rounded-[10px] bg-phone-card border border-border px-2.5 py-1"><Text class="font-mono text-[14px] leading-5 text-foreground">nexus pair</Text></View>
             </Step>
-            <Step n={3} title="Scan the QR code or paste the link">
-              <Text class={T.meta}>Scan the code with the Camera or any QR reader, copy the link it shows, and paste it here.</Text>
+            <Step n={3} title="Copy the link it prints">
+              <Text class={T.meta}>Then paste it here.</Text>
             </Step>
           </View>
 
-          <View class="gap-2">
-            <Text class={`${T.section}`}>Pairing link</Text>
+          <View class="gap-2.5">
+            <Btn label="Paste pairing link" kind="primary" busy={busy()} onPress={() => void paste()} testID="connect-paste" class="min-h-[52px]" />
             <View class="flex-row items-center gap-2">
               <Input value={link()} onChange={({ value }) => { problem.set(null); link.set(value); }} onSubmit={() => void go(link())} submitBehavior="submit"
                 placeholder="nexus://pair?url=…" autoCapitalize="none" autoCorrect={false} accessibilityLabel="Pairing link" testID="connect-link"
-                class={`h-12 flex-1 min-w-0 rounded-xl bg-raised px-3 ${TS.body} text-foreground placeholder:text-muted-foreground ${FOCUS}`} />
-              <Btn label="Paste" onPress={() => void paste()} testID="connect-paste" class="min-h-12" />
+                class={`h-12 flex-1 min-w-0 rounded-full bg-phone-control px-4 ${TS.body} text-foreground placeholder:text-muted-foreground ${FOCUS}`} />
+              <Btn label="Connect" disabled={!link().trim()} onPress={() => void go(link())} testID="connect-submit" class="min-h-12" />
             </View>
-            <Btn label="Connect" kind="primary" busy={busy()} disabled={!link().trim()} onPress={() => void go(link())} testID="connect-submit" class="min-h-12" />
           </View>
 
           <View class="gap-2">
@@ -112,7 +110,7 @@ export function PhoneConnect(p: { onDone: () => void; canCancel: boolean }) {
               <View class="flex-row items-center gap-2">
                 <Input value={manual()} onChange={({ value }) => { problem.set(null); manual.set(value); }} onSubmit={() => void go(manual())} submitBehavior="submit"
                   placeholder="192.168.1.20:4747" autoCapitalize="none" autoCorrect={false} accessibilityLabel="Core address" testID="connect-address"
-                  class={`h-12 flex-1 min-w-0 rounded-xl bg-raised px-3 ${TS.body} text-foreground placeholder:text-muted-foreground ${FOCUS}`} />
+                  class={`h-12 flex-1 min-w-0 rounded-full bg-phone-control px-4 ${TS.body} text-foreground placeholder:text-muted-foreground ${FOCUS}`} />
                 <Btn label="Connect" onPress={() => void go(manual())} disabled={!manual().trim()} testID="connect-address-submit" class="min-h-12" />
               </View>
             </If>
@@ -120,17 +118,17 @@ export function PhoneConnect(p: { onDone: () => void; canCancel: boolean }) {
 
           <If when={recent().length > 0}>
             <View class="gap-2" testID="connect-recent">
-              <Text class={T.section}>Recent Cores</Text>
-              <View class="rounded-2xl bg-raised overflow-hidden">
+              <Text class="font-(family-name:--font-ui) text-[13px] leading-[18px] font-semibold tracking-[0.5px] text-muted-foreground">RECENT</Text>
+              <View class="rounded-[20px] bg-phone-card border border-border overflow-hidden">
                 <Each of={recent()} key={(c) => c.url}>
                   {(c) => (
                     <Button onPress={() => void go(c().url, c().name)} testID={`recent-${c().url}`} accessibilityLabel={`Connect to ${c().name || hostLabel(c().url)}`}
-                      class={`flex-row items-center gap-3 px-4 min-h-14 active:bg-selection ${FOCUS}`}>
+                      class={`flex-row items-center gap-3 px-4 min-h-14 active:bg-phone-control ${FOCUS}`}>
                       <View class="flex-1 min-w-0">
                         <Text style={{ numberOfLines: 1 }} class={`${TS.body} text-foreground`}>{c().name || hostLabel(c().url)}</Text>
                         <Text style={{ numberOfLines: 1 }} class={T.meta}>{c().url}</Text>
                       </View>
-                      <View class="rounded-full bg-muted px-2.5 min-h-6 justify-center"><Text class="font-(family-name:--font-ui) text-[12px] leading-5 text-foreground-secondary">{transportOf(c().url)}</Text></View>
+                      <View class="rounded-full bg-phone-control px-2.5 min-h-6 justify-center"><Text class="font-(family-name:--font-ui) text-[12px] leading-5 text-foreground-secondary">{transportOf(c().url)}</Text></View>
                     </Button>
                   )}
                 </Each>

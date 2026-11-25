@@ -98,6 +98,7 @@ impl Notify {
 /// Commands this shell implements against an existing Core API. Everything
 /// else is shown disabled with a reason, never as a control that appears to work.
 pub const WIRED: &[&str] = &[
+    "tools.configure",
     "skills.configure",
     "mcp.configure",
     "terminal.open",
@@ -975,7 +976,13 @@ pub struct Ui {
     /// Last `/api/search/service` response, its error, and a start in flight.
     pub search_service: Option<Value>,
     pub search_service_error: Option<String>,
+    /// Why the last start failed; kept across status polls until the next start or a running answer.
+    pub search_start_error: Option<String>,
     pub search_starting: bool,
+    /// The tour's search step asked Core to start it once for this visit.
+    pub onboarding_search_asked: bool,
+    /// When the search service was last polled (Settings or the tour's search step).
+    pub search_polled: Option<Instant>,
     /// Last `/api/browser` response and its error (Settings › Browser).
     pub browser_status: Option<Value>,
     pub browser_status_error: Option<String>,
@@ -1456,7 +1463,10 @@ impl App {
                 voice_status_loading: false,
                 search_service: None,
                 search_service_error: None,
+                search_start_error: None,
                 search_starting: false,
+                onboarding_search_asked: false,
+                search_polled: None,
                 browser_status: None,
                 browser_status_error: None,
                 edit: None,
@@ -1647,6 +1657,16 @@ impl App {
     /// Session switches in their visible order: ordinary tools, then skills,
     /// then MCP servers. The same list drives both context renderers and keys.
     pub fn context_items(&self) -> Vec<crate::paint::CtxItem> {
+        self.collect_context_items(
+            self.ui.context_switch
+                && matches!(
+                    self.ui.overlay.as_ref().map(|o| &o.kind),
+                    Some(OverlayKind::ContextEntries { title, .. }) if title == "Tools"
+                ),
+        )
+    }
+
+    fn collect_context_items(&self, live_tools: bool) -> Vec<crate::paint::CtxItem> {
         let session = self.viewed();
         let disabled = session
             .map(|s| disabled_tools(Some(s)))
@@ -1722,6 +1742,20 @@ impl App {
                     }
                 }
             }
+        }
+        if live_tools {
+            if let Some(list) = session
+                .and_then(|s| s.extra.get("tools"))
+                .and_then(Value::as_array)
+            {
+                for name in list.iter().filter_map(Value::as_str) {
+                    if !tools.iter().any(|tool| tool == name) {
+                        tools.push(name.to_owned());
+                    }
+                }
+            }
+        }
+        if session.is_none() || live_tools {
             for name in disabled.iter().filter(|name| !name.contains(':')) {
                 if !tools.contains(name) {
                     tools.push(name.clone());
@@ -1994,9 +2028,21 @@ impl App {
     /// The modal behind a context heading: Markdown for the prompt and the
     /// instruction file; a list of entries for tools, skills and servers.
     fn open_context_section(&mut self, section: &str, focus: Option<usize>, text: Option<String>) {
-        self.ui.context_switch = false;
+        self.open_context_section_with_switches(section, focus, text, false);
+    }
+
+    fn open_context_section_with_switches(
+        &mut self,
+        section: &str,
+        focus: Option<usize>,
+        text: Option<String>,
+        live: bool,
+    ) {
         if matches!(section, "Tools" | "Skills" | "MCP") {
-            let items = self.context_items_for(section);
+            let items = Self::filter_context_items(
+                self.collect_context_items(live && section == "Tools"),
+                section,
+            );
             let entries: Vec<crate::ui::ContextEntry> =
                 items.iter().map(|item| self.context_entry(item)).collect();
             let open = focus.and_then(|index| items.iter().position(|item| item.index == index));
@@ -2007,11 +2053,13 @@ impl App {
                 open: None,
                 top: 0,
             });
+            self.ui.context_switch = live;
             if let Some(i) = open {
                 self.context_entry_toggle(i);
             }
             return;
         }
+        self.ui.context_switch = false;
         if let Some(text) = text {
             self.open_overlay(OverlayKind::ContextDoc {
                 title: section.to_owned(),
@@ -2359,7 +2407,18 @@ impl App {
     }
 
     pub fn context_items_for(&self, section: &str) -> Vec<crate::paint::CtxItem> {
-        self.context_items()
+        Self::filter_context_items(self.context_items(), section)
+    }
+
+    pub fn context_header_tools(&self) -> Vec<crate::paint::CtxItem> {
+        Self::filter_context_items(self.collect_context_items(false), "Tools")
+    }
+
+    fn filter_context_items(
+        items: Vec<crate::paint::CtxItem>,
+        section: &str,
+    ) -> Vec<crate::paint::CtxItem> {
+        items
             .into_iter()
             .filter(|item| match section {
                 "Tools" => !item.key.contains(':'),
@@ -5444,7 +5503,7 @@ impl App {
         self.voice_action_reason(command)
     }
 
-    fn refresh_search_service(&mut self) {
+    pub(crate) fn refresh_search_service(&mut self) {
         self.api(ApiCall::SearchServiceStatus);
     }
 
@@ -5500,6 +5559,7 @@ impl App {
         let status = self.ui.search_service.as_ref()?;
         match status["state"].as_str() {
             Some("running") => Some("The search service is already running.".into()),
+            Some("starting") => Some("The search service is starting.".into()),
             Some("unavailable") => Some(
                 status["detail"]
                     .as_str()
@@ -5510,31 +5570,48 @@ impl App {
         }
     }
 
-    /// Lines for the search status row: state, address, detail, runtime.
+    /// Lines for the search status row: state, address, detail, runtime. NSH's `searchStatusLines` says the same.
     pub fn search_status_lines(&self) -> Vec<String> {
         let Some(status) = self.ui.search_service.as_ref() else {
-            return vec![if self.ui.search_service_error.is_some() {
-                "status unavailable".into()
+            let mut lines = vec![if self.ui.search_service_error.is_some() {
+                self.manifest.ui_text("web_search.no_status", &[])
             } else {
-                "loading status…".into()
+                self.manifest.ui_text("web_search.loading", &[])
             }];
+            if let Some(error) = &self.ui.search_start_error {
+                lines.push(error.clone());
+            }
+            return lines;
         };
-        let url = status["url"].as_str().unwrap_or("").to_owned();
         if self.ui.search_starting {
-            return vec!["starting…".into(), url];
+            let mut lines = vec![self.manifest.ui_text("web_search.state.starting", &[])];
+            if let Some(url) = status["url"].as_str().filter(|u| !u.is_empty()) {
+                lines.push(url.to_owned());
+            }
+            return lines;
         }
-        let label = match status["state"].as_str() {
-            Some("running") => "running",
-            Some("stopped") => "stopped",
-            Some("absent") => "not set up",
-            _ => "unavailable",
+        let state_key = match status["state"].as_str() {
+            Some("running") => "web_search.state.running",
+            Some("starting") => "web_search.state.starting",
+            Some("stopped") => "web_search.state.stopped",
+            Some("absent") => "web_search.state.absent",
+            _ => "web_search.state.unavailable",
         };
-        let mut lines = vec![label.to_owned(), url];
-        if let Some(detail) = status["detail"].as_str() {
+        let mut lines = vec![self.manifest.ui_text(state_key, &[])];
+        if let Some(url) = status["url"].as_str().filter(|u| !u.is_empty()) {
+            lines.push(url.to_owned());
+        }
+        if let Some(detail) = status["detail"].as_str().filter(|d| !d.is_empty()) {
             lines.push(detail.to_owned());
         }
-        if let Some(runtime) = status["runtime"].as_str() {
-            lines.push(format!("runtime {runtime}"));
+        if let Some(runtime) = status["runtime"].as_str().filter(|r| !r.is_empty()) {
+            lines.push(
+                self.manifest
+                    .ui_text("web_search.runtime", &[("runtime", runtime)]),
+            );
+        }
+        if let Some(error) = &self.ui.search_start_error {
+            lines.push(error.clone());
         }
         lines
     }
@@ -5543,26 +5620,51 @@ impl App {
         let starting = call == ApiCall::SearchServiceStart;
         if starting {
             self.ui.search_starting = false;
+            self.ui.search_start_error = None;
         }
         match result {
             Ok(done) => {
                 self.ui.search_service = done.search_service;
                 self.ui.search_service_error = None;
                 if starting {
-                    self.toast(Level::Success, "Web search is running");
+                    // Core may start it in the background and answer before it is ready: report progress and let the
+                    // poll below follow it to running or an error.
+                    let state = self
+                        .ui
+                        .search_service
+                        .as_ref()
+                        .and_then(|s| s["state"].as_str());
+                    if state == Some("running") {
+                        self.toast(
+                            Level::Success,
+                            self.manifest.ui_text("web_search.running", &[]),
+                        );
+                    } else {
+                        self.toast(
+                            Level::Info,
+                            self.manifest.ui_text("web_search.starting", &[]),
+                        );
+                        self.refresh_search_service();
+                    }
                 }
+                self.maybe_start_onboarding_search();
             }
             Err(error) => {
                 self.ui.search_service_error = Some(error.clone());
                 if starting {
-                    self.toast(Level::Error, format!("Web search did not start: {error}"));
+                    self.ui.search_start_error = Some(error.clone());
+                    self.toast(
+                        Level::Error,
+                        self.manifest
+                            .ui_text("web_search.failed", &[("error", &error)]),
+                    );
                     self.refresh_search_service();
                 }
             }
         }
     }
 
-    fn start_search_service(&mut self) {
+    pub(crate) fn start_search_service(&mut self) {
         if let Some(reason) = self.search_start_reason() {
             self.toast(Level::Warning, reason);
             return;
@@ -7023,15 +7125,19 @@ impl App {
                 Level::Info,
                 "Type /learn followed by owner/repo, a GitHub URL or ./folder",
             ),
-            // The only way to switch a started session's skills or servers (plan 48).
-            "skills.configure" | "mcp.configure" => {
-                let section = if id == "skills.configure" {
-                    "Skills"
-                } else {
-                    "MCP"
+            // The starting context is fixed; slash commands switch the live inventory.
+            "tools.configure" | "skills.configure" | "mcp.configure" => {
+                let section = match id {
+                    "tools.configure" => "Tools",
+                    "skills.configure" => "Skills",
+                    _ => "MCP",
                 };
-                self.open_context_section(section, None, None);
-                self.ui.context_switch = true;
+                self.open_context_section_with_switches(
+                    section,
+                    None,
+                    None,
+                    self.pending_first_prompt().is_none(),
+                );
             }
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
             "composer.history_search" => self.open_palette(PaletteMode::History),
@@ -10454,6 +10560,26 @@ impl App {
             self.effects.push(Effect::Sync(SyncCommand::Resources));
         }
         self.inspector_poll(now);
+        // The tour's search step and Settings follow a background start until it runs or reports an error.
+        let watching_search = self.ui.view == View::Settings
+            || (self.ui.view == View::Onboarding
+                && crate::onboarding::Tour::of(&self.manifest).is_search(&self.ui.onboarding));
+        let search_running = self
+            .ui
+            .search_service
+            .as_ref()
+            .is_some_and(|s| s["state"].as_str() == Some("running"));
+        if watching_search
+            && !search_running
+            && !self.ui.search_starting
+            && self
+                .ui
+                .search_polled
+                .is_none_or(|at| now.duration_since(at) >= std::time::Duration::from_secs(2))
+        {
+            self.ui.search_polled = Some(now);
+            self.refresh_search_service();
+        }
         if !self.theme.opts.reduced_motion {
             changed |= self.ui.dictation.settle_tick();
         }
@@ -11764,6 +11890,7 @@ impl App {
             kind:
                 OverlayKind::ContextEntries {
                     title,
+                    entries,
                     cursor,
                     open,
                     ..
@@ -11771,12 +11898,16 @@ impl App {
             ..
         }) = &self.ui.overlay
         {
-            if (title == "Skills" || title == "MCP") && open.is_none() {
+            if matches!(title.as_str(), "Tools" | "Skills" | "MCP") && open.is_none() {
                 let cursor = *cursor;
                 let section = title.clone();
                 match name {
                     "space" => {
-                        if let Some(item) = self.context_items_for(&section).get(cursor) {
+                        if let Some(item) = entries.get(cursor).and_then(|entry| {
+                            self.context_items_for(&section).into_iter().find(|item| {
+                                item.key.rsplit(':').next() == Some(entry.name.as_str())
+                            })
+                        }) {
                             let index = item.index;
                             if !item.locked {
                                 self.toggle_context_item(index);
@@ -12626,16 +12757,28 @@ impl App {
         if self.context_fixed() || !self.context_keyboard_active() {
             return false;
         }
-        // The worktree switch follows the last inventory switch.
-        let count = self.context_items().len() + self.draft_worktree_offer().is_some() as usize;
-        if count == 0 {
+        let items = self.context_items();
+        let indices: Vec<_> = items
+            .iter()
+            .filter(|item| item.key.contains(':'))
+            .map(|item| item.index)
+            .chain(self.draft_worktree_offer().map(|_| items.len()))
+            .collect();
+        if indices.is_empty() {
             return false;
         }
-        let last = count - 1;
+        let current = indices
+            .iter()
+            .position(|&index| index == self.ui.context_cursor);
         match name {
-            "up" | "k" => self.ui.context_cursor = self.ui.context_cursor.saturating_sub(1),
-            "down" | "j" => self.ui.context_cursor = (self.ui.context_cursor + 1).min(last),
-            "enter" | "space" => self.toggle_context_item(self.ui.context_cursor),
+            "up" | "k" => {
+                self.ui.context_cursor = indices[current.map_or(0, |i| i.saturating_sub(1))]
+            }
+            "down" | "j" => {
+                self.ui.context_cursor =
+                    indices[current.map_or(0, |i| (i + 1).min(indices.len() - 1))]
+            }
+            "enter" | "space" => self.toggle_context_item(indices[current.unwrap_or(0)]),
             _ => return false,
         }
         self.reveal_context_cursor();
@@ -12649,12 +12792,14 @@ impl App {
         let Some(item) = items.get(self.ui.context_cursor) else {
             return;
         };
+        let tool_count = items
+            .iter()
+            .take_while(|item| !item.key.contains(':'))
+            .count();
         let row = if item.key.starts_with("skill:") {
-            7 + item.index
-        } else if item.key.starts_with("mcp:") {
-            9 + item.index
+            7 + item.index - tool_count
         } else {
-            5 + item.index
+            9 + item.index - tool_count
         };
         let offset =
             self.state
@@ -12704,11 +12849,19 @@ impl App {
         let Some(item) = items.get(index).cloned() else {
             return;
         };
+        if !item.key.contains(':')
+            && !matches!(self.ui.overlay.as_ref().map(|o| &o.kind),
+            Some(OverlayKind::ContextEntries { title, .. }) if title == "Tools")
+        {
+            return;
+        }
         if !self.context_switchable() {
             let command = if item.key.starts_with("mcp:") {
                 "/mcp"
-            } else {
+            } else if item.key.starts_with("skill:") {
                 "/skills"
+            } else {
+                "/tools"
             };
             self.toast(
                 Level::Info,

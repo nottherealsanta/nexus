@@ -1,5 +1,5 @@
 import { describe, expect, test } from "nsh/test";
-import { PHONE_TABS, activityCountsText, compactApproval, connectProblem, desktopOnly, healthSummary, mobileSettings, parsePairing, phoneActivityStatus, phoneRow, phoneStatus, mobileClient, projectDot, pushSample, rememberCore, sessionSections, traceBars, transportOf, phoneSessionGroups } from "./src/mobile";
+import { PHONE_TABS, activityCountsText, compactApproval, connectProblem, desktopOnly, healthSummary, mobileSettings, parsePairing, phoneActivityStatus, phoneRow, phoneShellBottomInset, phoneStatus, phoneTabBarVisible, mobileClient, projectDot, pushSample, rememberCore, sessionSections, traceBars, transportOf, phoneSessionGroups } from "./src/mobile";
 import { manifest } from "./src/gen/manifest";
 
 describe("mobile client rules", () => {
@@ -15,6 +15,16 @@ describe("mobile client rules", () => {
     const sections = mobileSettings(manifest.settings.section as any);
     expect(sections.map((s: any) => s.id)).toEqual(["appearance", "providers", "dictation", "manager", "notifications", "about"]);
     expect(sections.flatMap((s: any) => (s.row ?? []).map((r: any) => r.id))).not.toContain("appearance.editor");
+  });
+  test("hides the root tab bar in a conversation and gives the home-indicator inset to the shell", () => {
+    for (const page of ["sessions", "manager", "settings"] as const) expect(phoneTabBarVisible(page)).toBe(true);
+    expect(phoneTabBarVisible("conversation")).toBe(false);
+    // Outside a conversation the tab bar carries the safe-area inset itself.
+    expect(phoneShellBottomInset("sessions", 0, 34)).toBe(0);
+    expect(phoneShellBottomInset("settings", 0, 34)).toBe(0);
+    // In a conversation the tab bar is gone: the safe area is the shell's, and the keyboard replaces it when open.
+    expect(phoneShellBottomInset("conversation", 0, 34)).toBe(34);
+    expect(phoneShellBottomInset("conversation", 291, 34)).toBe(291);
   });
   test("hides desktop surfaces but retains session interactions", () => {
     for (const id of ["terminal.open", "inspector.open", "file.open", "session.resources", "project.overview", "palette.open", "layout.split_right", "layout.tab_close", "layout.group_menu"]) expect(desktopOnly(id)).toBe(true);

@@ -76,7 +76,7 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "sessions.auto_archive_idle_seconds": {"type": "integer", "minimum": 0, "maximum": 315360000,
                                            "description": "archive a whole root session tree after it has been idle this long; "
                                            "0 turns automatic archiving off"},
-    "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search (nexus-search/)"},
+    "web.search_url": {"type": "string", "description": "SearXNG /search endpoint for web_search"},
     "web.fetch_timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
     "browser.use_my_chrome": {"type": "boolean", "description": "off: browser_exec and browser_screenshot use browser-use's own "
                               "Chromium on a temporary profile; on: they drive your own Chrome (its tabs and sign-ins) when "

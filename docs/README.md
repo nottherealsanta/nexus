@@ -43,6 +43,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Message and part types, `raw` and `origin` | [stream-events.md](stream-events.md) |
 | JSON encoding of messages and events | [stream-events.md](stream-events.md) |
 | A tool's parameters, limits or path rules | [tools.md](tools.md) |
+| Web search (the local SearXNG container) or the `firecrawl` binary's install and release source | [tools.md](tools.md#web_search), [tools.md](tools.md#firecrawl), [config.md](config.md#web), [development.md](development.md) |
 | Skills (`SKILL.md`, the `skill` tool, notices) | [tools.md](tools.md#skills-and-the-skill-tool) |
 | Command hooks (`[[hooks.<Event>]]`) | [hooks.md](hooks.md) |
 | MCP servers, `mcp_tool_search`/`mcp_call`, untrusted-data fencing | [mcp.md](mcp.md) |

@@ -399,7 +399,9 @@ the reusable prefix; [reports/fork-cache](../reports/fork-cache/README.md)). The
 Claude provider was not checked.
 
 Use `nexus run|chat --disable bash,write` to save switches on a session;
-`--disable ''` clears them. In chat, `/tools` shows available and disabled tools.
+`--disable ''` clears them. In the TUI and NSH, the context header summarizes tools by count
+and token estimate. Open **Tools** in a draft header or run `/tools` for the individual switches.
+Once the session starts, the header's details are read-only; `/tools` switches the live session.
 A switch applies to subsequent calls; an already-running call keeps the
 configuration it started with. Disabling a tool removes it from the next request's
 schemas, from the nested functions inside code cells, and from the stored tool

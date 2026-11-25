@@ -11,6 +11,7 @@ import more from "./icons/more.svg";
 import x from "./icons/x.svg";
 import diamond from "./icons/diamond.svg";
 import chevron_right from "./icons/chevron-right.svg";
+import chevron_left from "./icons/chevron-left.svg";
 import chevron_down from "./icons/chevron-down.svg";
 import chevron_up from "./icons/chevron-up.svg";
 import arrow_up from "./icons/arrow-up.svg";
@@ -54,6 +55,7 @@ export const icons = {
   "more": more,
   "x": x,
   "chevron-right": chevron_right,
+  "chevron-left": chevron_left,
   "chevron-down": chevron_down,
   "chevron-up": chevron_up,
   "arrow-up": arrow_up,

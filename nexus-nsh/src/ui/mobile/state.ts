@@ -4,7 +4,7 @@ import { signal } from "nsh";
 import { ApiError, apiBase, newKey, request } from "../../core/transport";
 import { pushSample } from "../../mobile";
 import { archive } from "../../commands";
-import { currentProject, loadComposerData, model, phonePage, scopeAll, sync, toast } from "../../store";
+import { currentProject, loadComposerData, model, phonePage, scopeAll, selectSession, sync, toast, viewed } from "../../store";
 import { m } from "../../store";
 
 /** The session drawer over an open conversation. */
@@ -20,6 +20,28 @@ export function openDrawer() { rowSheet.set(null); projectSheet.set(false); phon
 export function closeDrawer() { phoneDrawer.set(false); }
 /** A session picked in the drawer opens (the store closes nothing on a phone), and the drawer goes. */
 export function leaveDrawer() { phoneDrawer.set(false); }
+/** The conversation's back control returns to the Sessions tab; the draft and the viewed session stay put. */
+export function backToSessions() {
+  closeDrawer();
+  rowSheet.set(null);
+  projectSheet.set(false);
+  phonePage.set("sessions");
+}
+
+/** The parent conversation of the viewed subagent, or null at a root (user, 2026-11-24). */
+export function phoneParent(): { id: string; title: string } | null {
+  m();
+  const pid = viewed()?.parent_id;
+  if (!pid) return null;
+  const p = model.sessions.get(pid);
+  return { id: pid, title: p?.title || "parent session" };
+}
+/** Back from a conversation: a subagent returns to its parent conversation, a root session to the Sessions tab. */
+export function goBack() {
+  const parent = phoneParent();
+  if (parent) { rowSheet.set(null); void selectSession(parent.id); phonePage.set("conversation"); return; }
+  backToSessions();
+}
 
 /** The project switcher both filters the list and sets the project for new sessions (user, 2026-11-11). */
 export function chooseProject(id: string | null) {

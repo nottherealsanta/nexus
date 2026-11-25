@@ -1065,6 +1065,106 @@ async def test_project_order_status_and_snapshot_share_one_saved_order(setup):
     assert [p["status"] for p in (await client.get("/api/project")).json()] == ["current", "passive", "inactive"]
 
 
+async def test_posting_an_inactive_project_path_restores_it_in_place(setup):
+    rt, client, _provider, workspace = setup
+    made = []
+    for name in ("one", "two", "three"):
+        path = workspace.parent / name
+        path.mkdir()
+        made.append((await client.post("/api/project", json={"path": str(path)})).json())
+    target = made[1]
+    session = (await client.post("/api/session", json={"project": target["id"]})).json()
+    inactive = (await client.patch(f"/api/project/{target['id']}", json={"status": "inactive"})).json()
+    assert inactive["status"] == "inactive" and inactive["revision"] > target["revision"]
+    # The store's lookup alone leaves the row untouched.
+    looked_up, created = rt.store.project_for_path(target["path"])
+    assert not created and looked_up.status == "inactive" and looked_up.revision == inactive["revision"]
+    head = rt.store.log_head()
+    restored = await client.post("/api/project", json={"path": target["path"]})
+    assert restored.status_code == 200, restored.text
+    body = restored.json()
+    assert (body["id"], body["status"], body["position"], body["name"]) == (
+        target["id"], "current", target["position"], target["name"])
+    assert body["revision"] == inactive["revision"] + 1
+    assert [p["id"] for p in (await client.get("/api/project")).json()] == [p["id"] for p in made]
+    assert [s["id"] for s in (await client.get(f"/api/session?project={target['id']}")).json()] == [session["id"]]
+    events = rt.store.replay(head, rt.store.log_head(), 100)
+    assert [(e["type"], e["data"]["id"], e["data"]["status"], e["data"]["revision"]) for e in events] == [
+        ("project.updated", target["id"], "current", body["revision"])]
+    assert events[0]["session_id"] is None
+
+
+async def test_concurrent_posts_restore_an_inactive_project_once(setup):
+    rt, client, _provider, workspace = setup
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    inactive = (await client.patch(f"/api/project/{project['id']}", json={"status": "inactive"})).json()
+    head = rt.store.log_head()
+    replies = await asyncio.gather(
+        client.post("/api/project", json={"path": project["path"]}),
+        client.post("/api/project", json={"path": project["path"]}),
+    )
+    assert [reply.status_code for reply in replies] == [200, 200]
+    assert {(reply.json()["id"], reply.json()["status"]) for reply in replies} == {(project["id"], "current")}
+    final = (await client.get(f"/api/project/{project['id']}")).json()
+    assert (final["status"], final["position"], final["revision"]) == (
+        "current", project["position"], inactive["revision"] + 1)
+    events = rt.store.replay(head, rt.store.log_head(), 100)
+    assert [event["type"] for event in events] == ["project.updated"]
+
+
+async def test_posting_a_current_passive_or_restored_path_changes_nothing(setup):
+    rt, client, _provider, workspace = setup
+    projects = []
+    for name, status in (("one", None), ("two", "passive"), ("three", "inactive")):
+        path = workspace.parent / name
+        path.mkdir()
+        project = (await client.post("/api/project", json={"path": str(path)})).json()
+        if status:
+            project = (await client.patch(f"/api/project/{project['id']}", json={"status": status})).json()
+        projects.append(project)
+    head = rt.store.log_head()
+    # Current and passive projects come back exactly as they were, with no event.
+    for project in projects[:2]:
+        assert (await client.post("/api/project", json={"path": project["path"]})).json() == project
+    assert rt.store.replay(head, rt.store.log_head(), 100) == []
+    # Restoring an inactive one happens once; repeating the POST is a no-op.
+    first = await client.post("/api/project", json={"path": projects[2]["path"]})
+    head = rt.store.log_head()
+    assert (await client.post("/api/project", json={"path": projects[2]["path"]})).json() == first.json()
+    assert first.json()["status"] == "current"
+    assert rt.store.replay(head, rt.store.log_head(), 100) == []
+    events = rt.store.replay(0, rt.store.log_head(), 1000)
+    assert [(e["type"], e["data"]["status"]) for e in events if e["type"].startswith("project.")] == [
+        ("project.created", "current"), ("project.created", "current"), ("project.updated", "passive"),
+        ("project.created", "current"), ("project.updated", "inactive"), ("project.updated", "current")]
+
+
+async def test_directory_lookups_do_not_restore_an_inactive_project(setup):
+    rt, client, _provider, workspace = setup
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    inactive = (await client.patch(f"/api/project/{project['id']}", json={"status": "inactive"})).json()
+    head = rt.store.log_head()
+    assert (await client.get("/api/agent", params={"directory": str(workspace)})).status_code == 200
+    assert (await client.get("/api/session", params={"directory": str(workspace)})).status_code == 200
+    # The ordinary runtime path (no `restore`) and the lookups leave the row as it was.
+    assert rt.open_project(str(workspace)).status == "inactive"
+    assert (await client.get(f"/api/project/{project['id']}")).json() == inactive
+    assert rt.store.replay(head, rt.store.log_head(), 100) == []
+
+
+async def test_a_hidden_project_is_never_restored_by_a_path_post(setup):
+    rt, client, _provider, workspace = setup
+    manager_path = workspace.parent / "manager"
+    manager_path.mkdir()
+    manager, _ = rt.store.project_for_path(str(manager_path), "Manager", hidden=True)
+    rt.store.update_project(manager.id, status="inactive")
+    head = rt.store.log_head()
+    reply = await client.post("/api/project", json={"path": str(manager_path)})
+    assert reply.json()["id"] == manager.id and reply.json()["status"] == "inactive"
+    assert rt.store.project(manager.id).status == "inactive"
+    assert rt.store.replay(head, rt.store.log_head(), 100) == []
+
+
 async def test_project_move_replay_does_not_overwrite_a_later_move(setup):
     rt, client, _provider, workspace = setup
     ids = []

@@ -18,6 +18,8 @@ pub struct Tour {
     pub quest_provider: String,
     pub hints_info: String,
     pub hints_rows: String,
+    pub hints_search: String,
+    pub search_retry: String,
     #[serde(default)]
     pub step: Vec<Step>,
     #[serde(default)]
@@ -76,9 +78,15 @@ impl Tour {
         matches!(self.current(state).kind.as_str(), "provider" | "agents")
     }
 
+    pub fn is_search(&self, state: &Onboarding) -> bool {
+        self.current(state).kind == "search"
+    }
+
     pub fn hints(&self, state: &Onboarding) -> &str {
         if self.has_rows(state) {
             &self.hints_rows
+        } else if self.is_search(state) {
+            &self.hints_search
         } else {
             &self.hints_info
         }
@@ -194,6 +202,7 @@ impl App {
     pub fn open_onboarding(&mut self) {
         self.ui.onboarding_offered = true;
         self.ui.onboarding = Onboarding::default();
+        self.ui.onboarding_search_asked = false;
         self.ui.view = View::Onboarding;
         self.ui.focus = Focus::Timeline;
         self.ui.overlay = None;
@@ -231,6 +240,46 @@ impl App {
         self.ui.onboarding.step = step;
         self.ui.onboarding.row = 0;
         self.ui.pool_pick = None;
+        if self.ui.view == View::Onboarding && Tour::of(&self.manifest).is_search(&self.ui.onboarding)
+        {
+            self.search_step_entered();
+        }
+    }
+
+    /// Entering the search step starts SearXNG in the background: ask Core for its state, then start it unless it is
+    /// already running or Core says it cannot. A retry after going back and forward starts it again (Core is idempotent).
+    fn search_step_entered(&mut self) {
+        self.refresh_search_service();
+    }
+
+    /// The first status answer for the search step decides whether a start is needed. Never called while another start
+    /// is in flight; polling keeps the step live afterwards.
+    pub fn maybe_start_onboarding_search(&mut self) {
+        if self.ui.onboarding_search_asked
+            || self.ui.view != View::Onboarding
+            || !Tour::of(&self.manifest).is_search(&self.ui.onboarding)
+        {
+            return;
+        }
+        let Some(status) = self.ui.search_service.as_ref() else {
+            return;
+        };
+        if matches!(status["state"].as_str(), Some("running" | "unavailable")) {
+            return;
+        }
+        if self.ui.search_starting {
+            return;
+        }
+        self.ui.onboarding_search_asked = true;
+        if status["state"].as_str() != Some("starting") {
+            self.start_search_service();
+        }
+    }
+
+    /// The search step's Retry: start it again, or say why it cannot start.
+    pub fn retry_onboarding_search(&mut self) {
+        self.ui.onboarding_search_asked = true;
+        self.start_search_service();
     }
 
     /// Enter on the selected row: a provider opens its connection modal, an agent row picks a model or cycles the default agent.
@@ -299,7 +348,9 @@ impl App {
             "up" if rows > 0 => self.ui.onboarding.row = self.ui.onboarding.row.saturating_sub(1),
             "down" if rows > 0 => self.ui.onboarding.row = (self.ui.onboarding.row + 1).min(last),
             "enter" => {
-                if rows > 0 {
+                if tour.is_search(&self.ui.onboarding) {
+                    self.retry_onboarding_search();
+                } else if rows > 0 {
                     self.onboarding_activate();
                 } else if tour.is_last(&self.ui.onboarding) {
                     self.close_onboarding(true);
@@ -335,6 +386,7 @@ impl App {
                 self.ui.onboarding.row = i;
                 self.onboarding_activate();
             }
+            T::Retry => self.retry_onboarding_search(),
         }
     }
 }
@@ -357,6 +409,13 @@ mod tests {
         assert_eq!(t.step.last().unwrap().kind, "done");
         assert!(t.step.iter().any(|s| s.kind == "provider"));
         assert!(t.step.iter().any(|s| s.kind == "agents"));
+        let kinds: Vec<&str> = t.step.iter().map(|s| s.kind.as_str()).collect();
+        let search = kinds.iter().position(|k| *k == "search").expect("a search step");
+        assert_eq!(search, kinds.iter().position(|k| *k == "agents").unwrap() + 1);
+        assert!(t.step[search].lines.iter().any(|l| l.contains("Core")));
+        assert!(t.step[search].lines.iter().any(|l| l.contains("image")));
+        assert!(!t.hints_search.is_empty());
+        assert!(!t.search_retry.is_empty());
     }
 
     #[test]

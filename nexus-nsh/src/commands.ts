@@ -455,7 +455,7 @@ export function toggleDraftInventory(kind: InventoryKind, name: string, locked =
   }));
 }
 
-/** Switch one skill or MCP server in a running session using its optimistic revision. */
+/** Switch one tool, skill or MCP server in a session using its optimistic revision. */
 export async function toggleSessionInventory(kind: InventoryKind, name: string, locked = false) {
   if (locked) { toast("info", "Available in a new session."); return; }
   const session = viewed();
@@ -843,7 +843,8 @@ on("files.delete", async () => {
 on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("skills.learn", () => toast("info", "Type /learn followed by owner/repo, a GitHub URL or ./folder"), true);
-// The only way to switch a started session's skills or servers: its context header is fixed (plan 48).
+// The starting context is fixed; slash commands switch the live inventory.
+on("tools.configure", () => contextDetail.set({ title: "Tools", detail: "", live: "tools" }), true);
 on("skills.configure", () => contextDetail.set({ title: "Skills", detail: "", live: "skills" }), true);
 on("mcp.configure", () => contextDetail.set({ title: "MCP", detail: "", live: "mcp" }), true);
 on("session.archive", () => archive(), true);

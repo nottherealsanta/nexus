@@ -190,6 +190,7 @@ pub(super) fn draw_onboarding(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut 
     match step.kind.as_str() {
         "provider" => y = draw_providers(cx, buf, hits, x, y, w, limit),
         "agents" => y = draw_agents(cx, buf, hits, x, y, w, limit),
+        "search" => y = draw_search(cx, buf, hits, x, y, w, limit),
         _ => {}
     }
     if step.kind == "done" && a.current_project().is_none() {
@@ -223,6 +224,82 @@ fn row_style(cx: &Cx, buf: &mut Buffer, x: u16, y: u16, w: u16, selected: bool) 
         return row_band(cx, buf, Rect::new(x, y, w, 1), PRIMARY, true);
     }
     cx.st(PRIMARY, CANVAS)
+}
+
+/// The search step: SearXNG's state from Core (starting, running, stopped, an error), then Retry. Core starts it in
+/// the background; the tour never waits, and Next continues without it.
+fn draw_search(
+    cx: &Cx,
+    buf: &mut Buffer,
+    hits: &mut HitMap,
+    x: u16,
+    mut y: u16,
+    w: u16,
+    limit: u16,
+) -> u16 {
+    let a = cx.app;
+    let tour = Tour::of(&a.manifest);
+    let state = if a.ui.search_starting {
+        "starting"
+    } else {
+        a.ui.search_service
+            .as_ref()
+            .and_then(|s| s["state"].as_str())
+            .unwrap_or(if a.ui.search_service_error.is_some() {
+                "unavailable"
+            } else {
+                "loading"
+            })
+    };
+    let (glyph, token) = match state {
+        "running" => (cx.t.status("done").0, "status.success"),
+        "starting" => (cx.t.status("running").0, ACCENT),
+        "unavailable" => (cx.t.status("error").0, "status.error"),
+        _ => ("\u{25cb}", MUTED),
+    };
+    for (i, line) in a.search_status_lines().iter().enumerate() {
+        if y >= limit {
+            return y;
+        }
+        if i == 0 {
+            put(
+                buf,
+                x,
+                y,
+                &format!("{glyph} {line}"),
+                cx.st(token, CANVAS),
+                w,
+            );
+        } else {
+            let style = cx.st(if i == 1 { SECONDARY } else { MUTED }, CANVAS);
+            put(
+                buf,
+                x + 2,
+                y,
+                &truncate(line, w.saturating_sub(2) as usize, cx.ell()),
+                style,
+                w.saturating_sub(2),
+            );
+        }
+        y += 1;
+    }
+    y += 1;
+    if y < limit {
+        let enabled = a.search_start_reason().is_none();
+        button(
+            cx,
+            buf,
+            hits,
+            x,
+            y,
+            &tour.search_retry,
+            if enabled { ACCENT } else { MUTED },
+            enabled,
+            T::Retry,
+        );
+        y += 1;
+    }
+    y
 }
 
 fn draw_providers(

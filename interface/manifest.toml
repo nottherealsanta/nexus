@@ -445,7 +445,7 @@ label = "Web search service"
 kind = "info"
 scope = "core"
 clients = "both"
-note = "The local SearXNG behind web_search: running, stopped, not set up, or unavailable (GET /api/search/service)."
+note = "The local SearXNG behind web_search, running in a container on Core's host (Apple container or Docker). GET /api/search/service reports running, starting, stopped, not set up or unavailable, with the last error."
 
 [[settings.section.row]]
 id = "tools.search_start"
@@ -454,6 +454,7 @@ kind = "action"
 scope = "core"
 clients = "both"
 command = "search.start"
+note = "Starts SearXNG in the background. The first start downloads its container image, which can take a few minutes."
 
 [[settings.section]]
 id = "workers"
@@ -735,7 +736,8 @@ command = "app.onboarding"
 # --- Onboarding ---------------------------------------------------------------
 # The first-run tour (plans/52). Both clients draw these steps, in this order, with this wording; only the
 # medium differs. `{key:<command id>}` is filled with that command's key in the client's own syntax.
-# `kind`: info (text only), provider (the provider list), agents (the `[[onboarding.agent]]` rows), done.
+# `kind`: info (text only), provider (the provider list), agents (the `[[onboarding.agent]]` rows), search (the
+# web search service, started in the background), done.
 
 [onboarding]
 finish_no_project = "You have no project yet, so Finish opens Add project."
@@ -743,6 +745,8 @@ no_provider = "No provider is connected yet. Connect one first, then choose mode
 quest_provider = "Connect a provider"
 hints_info = "enter next · ← back · esc back · s skip"
 hints_rows = "↑↓ choose · enter change · → next · ← back · esc back · s skip"
+hints_search = "enter retry · → next · ← back · esc back · s skip"
+search_retry = "Retry"
 
 [[onboarding.step]]
 id = "welcome"
@@ -805,6 +809,17 @@ name = "build"
 kind = "model"
 role = "Writes and edits the code"
 hint = "Your best coding model."
+
+[[onboarding.step]]
+id = "search"
+kind = "search"
+title = "Web search"
+lines = [
+  "Nexus can search the web for you through SearXNG, a small search server that runs in a container on the machine running Nexus Core. Nothing runs on this device.",
+  "Nexus starts it now, in the background. The first start downloads its container image, which can take a few minutes, so the tour does not wait for it.",
+  "If it does not start, retry here or later in Settings > Tools. You can continue without it.",
+]
+tip = "Core starts the container with Apple container or Docker, whichever is installed on its host. Nexus does not install or configure either."
 
 [[onboarding.step]]
 id = "timeline"
@@ -891,6 +906,17 @@ lines = [
 "layout.unsaved.cancel" = "Cancel"
 "layout.terminal.split" = "New terminal"
 "layout.drop.cancelled" = "Drag cancelled."
+"web_search.running" = "Web search is running."
+"web_search.starting" = "Web search is starting. The first start downloads its container image."
+"web_search.failed" = "Web search did not start: {error}"
+"web_search.state.running" = "running"
+"web_search.state.starting" = "starting…"
+"web_search.state.stopped" = "stopped"
+"web_search.state.absent" = "not set up"
+"web_search.state.unavailable" = "unavailable"
+"web_search.loading" = "loading status…"
+"web_search.no_status" = "status unavailable"
+"web_search.runtime" = "runtime {runtime}"
 
 # --- Commands -----------------------------------------------------------------
 # `leader` is the Ctrl+X leader sequence old Nexus bound in the TUI. NSH's keymap
@@ -2485,7 +2511,7 @@ category = "tools"
 when = ["always"]
 unavailable_reason = "The search service is managed by Core."
 placement = ["palette"]
-note = "POST /api/search/service/start: starts the local SearXNG (Apple container or Docker) and waits until it answers."
+note = "POST /api/search/service/start: starts the local SearXNG container in the background; GET /api/search/service reports progress and the last error."
 
 [[command]]
 id = "voice.download_stt"

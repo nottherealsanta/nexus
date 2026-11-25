@@ -1,22 +1,46 @@
 # Compatibility overlay: NSH now uses interface/theme.toml's palette, like the Rust TUI.
 # Only the NSH user-band alias remains; its colours match surface.raised.
+# The phone's neutral surfaces (plans/05 5.5): a card that stands off the canvas (white in light) and the quiet fill of
+# a control on that card (pills, secondary buttons, the search field), and the user message bubble, a clear step off
+# the canvas so the user's turns stand out.
 [dark.surface]
 band = "#242424"
+phone_card = "#1c1c1c"
+phone_control = "#2a2a2a"
+phone_user = "#2e2f31"
 
 [light.surface]
 band = "#ffffff"
+phone_card = "#ffffff"
+phone_control = "#efefec"
+phone_user = "#e6e6e1"
 
 [fallback256.dark]
 "surface.band" = 235
+"surface.phone_card" = 234
+"surface.phone_control" = 235
+"surface.phone_user" = 236
 
 [fallback256.light]
 "surface.band" = 255
+"surface.phone_card" = 255
+"surface.phone_control" = 255
+"surface.phone_user" = 254
 
 [fallback16.dark]
 "surface.band" = "default"
+"surface.phone_card" = "default"
+"surface.phone_control" = "default"
+"surface.phone_user" = "default"
 
 [fallback16.light]
 "surface.band" = "default"
+"surface.phone_card" = "default"
+"surface.phone_control" = "default"
+"surface.phone_user" = "default"
 
 [monochrome.tokens]
 "surface.band" = []
+"surface.phone_card" = []
+"surface.phone_control" = []
+"surface.phone_user" = []

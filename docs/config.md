@@ -83,7 +83,9 @@ rather than opening a separate screen.
   with the tools it actually governs (`bash`, `web_search`, `web_fetch`, `firecrawl`;
   read-only and file tools never ask), and one grid of the tools available to a
   new session. The TUI highlights one chip and ←/→ choose, Enter toggles; NSH
-  toggles each chip directly. Both write `tools.disabled`.
+  toggles each chip directly. Both write `tools.disabled`. Below the grid, both
+  clients show the web search service's state and a **Start web search** row
+  (below).
 
 `GET /api/config` returns `{revision, values, defaults, schema, errors}`.
 `PATCH /api/config` accepts `{expected_revision, set: {"defaults.effort":
@@ -100,10 +102,20 @@ model picker's favorites, which both pickers list first, even while filtering. C
 and skipped, and the others still apply.
 
 `[web]` configures the web tools: `search_url` (default
-`http://127.0.0.1:18765/search`, the `nexus-search/` SearXNG; any http(s)
+`http://127.0.0.1:18765/search`, the local SearXNG; any http(s)
 SearXNG `/search` endpoint works) and `fetch_timeout_s` (default 15, 1 to 60;
 a call may ask for less, never more than 20). The web tools read these on each
-call. Neither client has a Settings row for them yet.
+call. Neither client has a Settings row for these two values yet; the Tools
+section's search row starts the service but does not edit `[web]`.
+
+Core manages the local SearXNG behind `search_url`: Settings › Tools shows its state and a Start row in both clients,
+and the first-run tour's Web search step starts it in the background (TUI today; the NSH step is not wired yet).
+`nexus search status` and `nexus search start` do the same from a shell. Core uses Apple `container` when installed,
+else Docker, with a pinned image published on loopback only. The packaged `nexus/search/settings.yml` is copied once
+to `$NEXUS10_HOME/search/searxng/settings.yml` (later edits are kept); a generated `SEARXNG_SECRET` lives in a 0600
+`.env` beside it, where `SEARXNG_IMAGE` overrides the image. A non-loopback `search_url`, a loopback URL without a port,
+a missing packaged settings file or no container runtime is reported as unavailable instead of started. Core never
+starts it on its own. The `nexus-search/` folder remains the manual Docker Compose or Apple `container` setup.
 
 `nexus mcp add|list|remove|login|logout|restart` manages servers through the running daemon ([mcp.md](mcp.md#managing-servers)).
 `nexus config import-mcp <path>` imports `servers`, `mcpServers`, `mcp` and
@@ -182,9 +194,10 @@ this use are not verified; Settings › External workers says so.
 
 `search_url` is the SearXNG endpoint `web_search` calls (default
 `http://127.0.0.1:18765/search`). Settings → Tools shows whether it answers and can
-start the local service from `nexus-search/` when the URL is a local address
-(`GET /api/search/service`, `POST /api/search/service/start`). Core never starts it
-on its own.
+start the local container when the URL is a local address
+(`GET /api/search/service`, `POST /api/search/service/start`; see
+[tools.md](tools.md#web_search) for the packaged settings and supported runtimes).
+Core never starts it on its own.
 
 ## `[browser]`
 

@@ -24,16 +24,32 @@ import { END_SLOP, followsAfterScroll, mayFollowQueued } from "../scroll-follow"
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import { Modal, ModalTitle, modalBodyHeight } from "./modal";
-import { PhoneActivityRow } from "./mobile/activity";
+import { PhoneActivityRow, PhoneChildRow } from "./mobile/activity";
 import "../../fonts/MonaspaceArgon-Regular.otf";
 import "../../fonts/MonaspaceArgon-Medium.otf";
 import "../../fonts/MonaspaceArgon-Bold.otf";
 
 type Tone = "info" | "accent" | "warning" | "error";
-/** Every timeline text is 14 px, whatever size the shared kit styles carry. */
+/** Desktop timeline text is 14 px; phone prose uses its own Google Sans scale below. */
 const size16 = (c: string) => c.replaceAll("font-(family-name:--font-ui)", "font-(family-name:--font-code)").replace(/text-\[\d+(?:\.\d+)?px\]/g, "text-[14px]").replace(/leading-[45]\b/g, "leading-6");
 const sized = <O extends Record<string, string>>(o: O) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, size16(v)])) as O;
 const T = sized(KitT), TS = sized(KitTS), PROSE = sized(KitPROSE);
+/** Phone prose reads in the bundled Google Sans at its own scale; code and commands keep the mono face. */
+const PHONE_PROSE = {
+  root: "font-(family-name:--font-ui) text-[16px] leading-[23px] text-foreground gap-1.5",
+  paragraph: "font-(family-name:--font-ui) text-[16px] leading-[23px]",
+  heading1: "font-(family-name:--font-ui) text-[18px] leading-[24px] font-semibold",
+  heading2: "font-(family-name:--font-ui) text-[18px] leading-[24px] font-semibold",
+  heading3: "font-(family-name:--font-ui) text-[17px] leading-[23px] font-semibold",
+  heading4: "font-(family-name:--font-ui) text-[16px] leading-[22px] font-semibold",
+  heading5: "font-(family-name:--font-ui) text-[16px] leading-[22px] font-semibold text-foreground-secondary",
+  heading6: "font-(family-name:--font-ui) text-[16px] leading-[22px] font-semibold text-foreground-secondary",
+  listMarker: "font-(family-name:--font-ui) text-[16px] leading-[23px] text-foreground-secondary",
+  tableCell: "font-(family-name:--font-ui) text-[14px] leading-[20px]",
+  tableHeaderCell: "font-(family-name:--font-ui) text-[14px] leading-[20px] text-foreground font-semibold",
+  tableHead: "bg-card",
+  code: "font-(family-name:--font-code) text-[13px] leading-[19px] rounded-[4px] bg-card text-foreground",
+};
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
 type Diff = { add: number; del: number };
 /** The timeline reads in the monospace face, like the TUI. */
@@ -144,6 +160,8 @@ const heightKey = (sid: string, key: string) => `${sid}\u0000${key}`;
 const scrollOf = (sid: string) => scrollY()[sid] ?? 0;
 const setScroll = (sid: string, y: number) => scrollY.update((all) => all[sid] === y ? all : { ...all, [sid]: y });
 const focusedBand = signal<string | null>(null);
+/** A phone's user message whose time, number, copy and fold controls a long press revealed. */
+const revealedBand = signal<string | null>(null);
 const LIST_PAD = 12; // the list's `py-3`
 const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
 // The timeline's own scroll bar (Settings › Scroll bar): a quiet thumb shown
@@ -980,7 +998,9 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
   const r = p.r;
   return (
     <TimelineColumn class="items-center" testID="timeline-row" onLayout={(b: any) => reportHeight(r(), p.sid, b.bounds?.size?.height ?? b.size?.height ?? 72)}>
-      <View class={`w-full ${r().inherited ? "pl-3 ml-1 border-l border-border-strong" : ""}`} testID={r().inherited ? "fork-inherited-row" : undefined}>
+      {/* The phone's session page keeps one 28 px left gutter for every row (user, 2026-11-24): text starts at its edge,
+          and status icons (tool groups, subagents, the pending turn) sit inside it. */}
+      <View class={`w-full ${phone ? "pl-7" : ""} ${r().inherited ? "pl-3 ml-1 border-l border-border-strong" : ""}`} testID={r().inherited ? "fork-inherited-row" : undefined}>
         <If when={r().kind === "context"}>
           {() => {
             const c = r() as Extract<Row, { kind: "context" }>;
@@ -989,7 +1009,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
           }}
         </If>
         <If when={r().kind === "user"}>
-          <View class="pt-4 pb-2"><UserBand r={r as () => Extract<Row, { kind: "user" }>} /></View>
+          <View class={phone ? "pt-2.5 pb-1" : "pt-4 pb-2"}><UserBand r={r as () => Extract<Row, { kind: "user" }>} /></View>
         </If>
         <If when={r().kind === "footer"}>
           {() => {
@@ -1018,7 +1038,7 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
           </If>
         </If>
         <If when={r().kind === "assistant"}>
-          <View class={phone ? "py-3 px-1" : `py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
+          <View class={phone ? "py-2.5 pr-1" : `py-2 pr-4 ${TURN_INSET}`} testID="msg-assistant">
             <TextView
               selectable onLinkPress={({ url }) => openMarkdownLink(url)} markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
               renderCodeBlock={(block) => {
@@ -1027,8 +1047,8 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
                   ? <MermaidFence block={block} />
                   : <CodeFence block={block} />;
               }}
-              classes={PROSE}
-              styles={{ root: { fontFamily: "Monaspace Argon", fontSize: 14, lineHeight: 24 } }}
+              classes={phone ? PHONE_PROSE : PROSE}
+              styles={{ root: phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 23 } : { fontFamily: "Monaspace Argon", fontSize: 14, lineHeight: 24 } }}
             />
           </View>
         </If>
@@ -1056,6 +1076,11 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
         <If when={r().kind === "child"}>
           {() => {
             const c = r() as Extract<Row, { kind: "child" }>;
+            if (phone) {
+              const cr = () => r() as Extract<Row, { kind: "child" }>;
+              return <PhoneChildRow agent={() => cr().agent} title={() => cr().title} state={() => cr().state} outcome={() => cr().outcome ?? ""}
+                meta={() => cr().meta ?? ""} background={() => !!cr().background} childId={() => cr().childId} onOpen={() => { const id = cr().childId; if (id) void selectSession(id); }} />;
+            }
             return (
               <View class={TURN_INSET}><Button onPress={() => c.childId && void selectSession(c.childId)} disabled={!c.childId} testID="child-card" accessibilityLabel={`${c.agent} ${c.title}`}
                 class={`items-start rounded-(--radius) -ml-1 pl-1 pr-4 py-0.5 hover:bg-accent ${FOCUS}`}>
@@ -1075,8 +1100,8 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
           }}
         </If>
         <If when={r().kind === "pending"}>
-          <View class={`flex-row items-center gap-2 py-1.5 ${TURN_INSET}`} testID="pending-turn" accessible accessibilityLabel={(r() as Extract<Row, { kind: "pending" }>).text}>
-            <Status kind="running" />
+          <View class={`flex-row items-center gap-2 py-1.5 ${phone ? "" : TURN_INSET}`} testID="pending-turn" accessible accessibilityLabel={(r() as Extract<Row, { kind: "pending" }>).text}>
+            <If when={phone} else={<Status kind="running" />}><View class="w-7 -ml-7 -mr-2 items-center"><Status kind="running" /></View></If>
             <Text style={{ numberOfLines: 1 }} class={T.secondary} testID="pending-turn-text">{(r() as Extract<Row, { kind: "pending" }>).text}</Text>
           </View>
         </If>
@@ -1312,8 +1337,12 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
   return (
     <If when={r().folded} else={
       <View>
-      <View class={`group/band w-full bg-band py-3 relative ${phone ? "rounded-2xl px-4" : USER_BAND_INSET}`} testID="msg-user"
-        onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
+      <View class={`group/band w-full relative ${phone ? "bg-phone-user rounded-[18px] px-4 py-2.5" : `bg-band py-3 ${USER_BAND_INSET}`}`} testID="msg-user"
+        onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}
+        onLongPress={phone ? () => revealedBand.update((key) => key === r().key ? null : r().key) : undefined}
+        accessible={phone ? revealedBand() !== r().key : undefined}
+        accessibilityLabel={phone ? `${r().text || (r().pastes ?? []).map((p) => p.marker).join(" ")}. ${meta()}` : undefined}
+        accessibilityHint={phone ? (revealedBand() === r().key ? "Long press again to hide message details" : "Long press for message time, copy and fold") : undefined}>
         {/* The TUI's band rail stays visible; focus only changes its colour. */}
         <If when={!phone}><View class={`absolute left-0 top-0 bottom-0 w-0.5 ${focusedBand() === r().key ? "bg-primary" : "bg-border-strong"}`} /></If>
         <If when={!!r().images?.length}>
@@ -1343,9 +1372,18 @@ function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
         </If>
         <View class="flex-row items-start gap-3">
           <View class="flex-1 min-w-0">
-            <Text style={{ userSelect: "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...UI_FONT }} class="text-[14px] leading-6 text-foreground">{body()}</Text>
-            {/* A phone or tablet has no hover, so the icons and the stamp move below the text. */}
-            <If when={touch}>
+            <Text testID={`user-text-${r().n}`} style={{ userSelect: phone ? "none" : "text", ...(big() && !full() ? { numberOfLines: 6 } : {}), ...(phone ? { fontFamily: "Google Sans", fontSize: 16, lineHeight: 22, fontWeight: 500 } : UI_FONT) }} class={phone ? "text-[16px] leading-[22px] font-medium text-foreground" : "text-[14px] leading-6 text-foreground"}>{body()}</Text>
+            {/* A phone hides the stamp and actions behind a long press; a tablet keeps them visible. */}
+            <If when={phone}>
+              <If when={revealedBand() === r().key}>
+                <View class="flex-row items-center justify-end gap-1 pt-1" testID={`user-details-${r().n}`}>
+                  <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
+                  <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
+                  <Text style={UI_FONT} class="font-(family-name:--font-ui) text-[12px] leading-4 text-muted-foreground tabular-nums pt-[3px]">{meta()}</Text>
+                </View>
+              </If>
+            </If>
+            <If when={touch && !phone}>
               <View class="flex-row items-center justify-end gap-1 pt-1">
                 <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
                 <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
@@ -1871,10 +1909,12 @@ export function Timeline() {
           return <View testID="timeline-scrollbar" accessible={false} class="absolute right-0 w-1 bg-scrollbar" style={{ top: b.top, height: b.height, pointerEvents: "none", opacity: scrollBarFading() ? 0.35 : 1 }} />;
         }}
       </If>
-      <StickyBar rows={rows} firstVisible={firstVisible} scrollTo={(key) => {
-        const index = rows().findIndex((row) => row.key === key);
-        if (index >= 0) try { ref?.scrollToIndex({ index, animated: false }); } catch {}
-      }} />
+      <If when={!phone}>
+        <StickyBar rows={rows} firstVisible={firstVisible} scrollTo={(key) => {
+          const index = rows().findIndex((row) => row.key === key);
+          if (index >= 0) try { ref?.scrollToIndex({ index, animated: false }); } catch {}
+        }} />
+      </If>
       <If when={scrolledUp()}>
         <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
           <TimelineColumn>
@@ -1942,9 +1982,9 @@ export function PeerTimeline(p: { sid: string; onFocus: () => void }) {
 function EmptyTimeline() {
   return (
     <View class="flex-1 items-center justify-center gap-1 p-6">
-      <If when={viewed() && model.selected?.loaded} else={<Text class={T.sec}>{viewed() ? "Loading session…" : "Select a session"}</Text>}>
-        <Text class={`${TS.body} font-medium text-foreground`}>No messages yet</Text>
-        <Text class={T.sec}>Send a message below to start this session.</Text>
+      <If when={viewed() && model.selected?.loaded} else={<Text class={phone ? "font-(family-name:--font-ui) text-[16px] leading-[22px] text-foreground-secondary" : T.sec}>{viewed() ? "Loading session…" : "Select a session"}</Text>}>
+        <Text class={phone ? "font-(family-name:--font-ui) text-[16px] leading-[22px] font-medium text-foreground" : `${TS.body} font-medium text-foreground`}>No messages yet</Text>
+        <Text class={phone ? "font-(family-name:--font-ui) text-[16px] leading-[22px] text-foreground-secondary" : T.sec}>Send a message below to start this session.</Text>
       </If>
     </View>
   );

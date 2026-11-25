@@ -12,7 +12,7 @@ import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 import { voiceInfoLines, voiceActionReason } from "../voice-settings";
 import { voiceStatus } from "../voice-state";
-import { searchStartReason, searchStatusLines } from "../search-service";
+import { refreshSearchService, searchService, searchStartReason, searchStatusLines } from "../search-service";
 import { browserStatusLines, refreshBrowserStatus } from "../browser-status";
 import { MANAGER_ROWS, managerControl } from "./manager/settings";
 import { McpPage, loadMcp, mcpDetail, mcpServers } from "./mcp-settings";
@@ -599,6 +599,12 @@ export function SettingsView(p: { inline?: boolean }) {
   loadSettingsData();
   let seen = settingsReload();
   effect(() => { const n = settingsReload(); if (n !== seen) { seen = n; loadSettingsData(); } });
+  // The container start is asynchronous: follow it while Settings is open until SearXNG runs.
+  effect(() => {
+    void refreshSearchService();
+    const timer = setInterval(() => { if (searchService()?.state !== "running") void refreshSearchService(); }, 2000);
+    return () => clearInterval(timer);
+  });
   const query = () => settingsQuery().trim().toLowerCase();
   const pageTerms = (s: Section): string[] => {
     if (s.id === "providers") return (data().providers ?? []).flatMap((p: any) => [p.id ?? "", p.label ?? ""]);

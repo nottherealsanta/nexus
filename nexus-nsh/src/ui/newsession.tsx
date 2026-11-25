@@ -7,7 +7,7 @@ import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, PROSE, T, TS } from "./kit";
 import { run, toggleDraftInventory, toggleDraftWorktree, toggleSessionInventory } from "../commands";
 import {
-  type ContextEntry, contextDetail, agentCatalog, currentProject, draftLastAnswer, draftWorktreeOffer, info, pendingFirstPrompt, phone, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome, viewed,
+  type ContextEntry, contextDetail, agentCatalog, currentProject, draftLastAnswer, draftLastToolNames, draftWorktreeOffer, info, pendingFirstPrompt, phone, rememberedModel, draftPlanContext, loadComposerData, loadDraftContext, loadStartingInventory, m, model, modelCatalog, sessionDraft, userHome, viewed,
 } from "../store";
 import { request } from "../core/transport";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
@@ -22,11 +22,10 @@ import "../../fonts/MonaspaceArgon-Bold.otf";
 
 // --- the shared section model -----------------------------------------------------------------
 export type CtxBody =
-  | { kind: "grid"; items: { name: string; on: boolean }[] }
   | { kind: "inventory"; items: InventoryRow[] }
   | { kind: "note"; text: string }
   | { kind: "none" };
-export interface CtxSection { key: string; title: string; tokens?: number; count?: number; meta: string; body: CtxBody; detail: string; markdown?: boolean; entries?: ContextEntry[] }
+export interface CtxSection { key: string; title: string; tokens?: number; count?: number; meta: string; body: CtxBody; detail: string; markdown?: boolean; entries?: ContextEntry[]; toolOff?: string[] }
 
 /** `17580` reads `17,580`. */
 export function thousands(n: number): string {
@@ -52,15 +51,15 @@ export const PROMPT_BASE_TOKENS = 900;
 
 /** The sections the next session will start with, estimated on the client. */
 export function previewSections(i: {
-  agent: string; prompt: string; off?: string[];
+  agent: string; prompt: string; toolNames?: string[];
   disabled_tools?: string[];
   file?: { path: string; bytes: number; line: string } | null;
   /** Core's answer for this draft: its counts replace the estimates. */
   core?: { used: number; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: SkillEntry[]; mcp: McpEntry[] } | null;
 }): { sections: CtxSection[]; total: number } {
   // The lists are Core's plan for this draft, never a client guess: empty until it answers.
-  const tools = [...(i.core?.tools ?? [])];
-  const off = i.off ?? [];
+  const off = i.disabled_tools ?? [];
+  const tools = toolNames(i.toolNames ?? i.core?.tools ?? [], off);
   const fileTokens = i.core?.parts.instruction_file ?? (i.file ? Math.ceil(i.file.bytes / 4) : 0);
   const promptTokens = i.core?.parts.instructions ?? PROMPT_BASE_TOKENS + Math.ceil(Array.from(i.prompt).length / 4) + fileTokens;
   const toolTokens = i.core?.parts.tools;
@@ -71,12 +70,13 @@ export function previewSections(i: {
       : { key: "instructions", title: "AGENTS.md", meta: "unavailable or not read", body: { kind: "none" }, detail: "The project instruction file is not available in this preview; the starting context will be known when the session starts." },
     {
       key: "tools", title: "Tools", tokens: toolTokens, count: tools.length, meta: tools.some((t) => off.includes(t)) ? `${tools.filter((t) => off.includes(t)).length} off` : "",
+      toolOff: off,
       entries: tools.map((t) => ({ key: t, name: t, description: "", full: "The schema is recorded when the session starts." })),
-      body: { kind: "grid", items: tools.map((t) => ({ name: t, on: !off.includes(t) })) }, detail: `Estimated tool inventory; schemas are available after the session starts.\n\n${tools.map((t) => `${t}${off.includes(t) ? " (off)" : ""}`).join("\n")}`,
+      body: { kind: "none" }, detail: "Nothing here.",
     },
   ];
   sections.push(...inventorySections(
-    sessionInventoryRows(i.core?.skills ?? [], i.core?.mcp ?? [], i.disabled_tools ?? i.off ?? []),
+    sessionInventoryRows(i.core?.skills ?? [], i.core?.mcp ?? [], off),
     i.core ? undefined : "loading…",
   ));
   // The instruction file is part of the system prompt: the total counts the prompt and the tool schemas.
@@ -188,12 +188,9 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
     },
     {
       key: "tools", title: "Tools", tokens: toolTokens || undefined, count: names.length, meta: names.some((n) => off.includes(n)) ? `${names.filter((n) => off.includes(n)).length} off` : "",
-      entries: names.map((n) => ({
-        key: n, name: n,
-        description: typeof schemas[n]?.description === "string" ? firstPromptLine(schemas[n].description) : "",
-        full: schemas[n] ? JSON.stringify(schemas[n], null, 2) : "No schema was recorded for this tool.",
-      })),
-      body: { kind: "grid", items: names.map((n) => ({ name: n, on: !off.includes(n) })) }, detail: schemaText ? `Stored tool definitions (definitions may change during a session):\n\n${JSON.stringify(schemas, null, 2)}` : names.join("\n") || "No tool definitions were recorded.",
+      toolOff: off,
+      entries: recordedToolEntries(names, schemas),
+      body: { kind: "none" }, detail: "Nothing here.",
     },
   ];
   sections.push(...inventorySections(sessionInventoryRows(inventory?.skills ?? s.skills ?? [], inventory?.mcp ?? s.mcp ?? [], off)));
@@ -239,8 +236,7 @@ function Cell(p: { name: string; on: boolean; locked?: boolean; status?: string;
 function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: () => void; onItem: (name: string) => void; onInventoryToggle?: (kind: InventoryKind, name: string, locked: boolean) => void }) {
   const s = p.s;
   const offNote = /\boff$/.test(s.meta);
-  // Tools take up to four columns and skills and servers two, as many as fit.
-  const names = () => s.body.kind === "grid" ? s.body.items.map((item) => item.name) : s.body.kind === "inventory" ? s.body.items.map((item) => [item.name, item.meta, item.tools == null ? "" : `${item.tools} tools`, item.locked ? "new session" : ""].filter(Boolean).join(" · ")) : [];
+  const names = () => s.body.kind === "inventory" ? s.body.items.map((item) => [item.name, item.meta, item.tools == null ? "" : `${item.tools} tools`, item.locked ? "new session" : ""].filter(Boolean).join(" · ")) : [];
   const grid = (most: number) => contextGrid(names(), p.width, most);
   const shownMeta = !offNote && !!s.meta && s.tokens === undefined;
   const note = () => s.body.kind === "note" ? s.body.text : "";
@@ -256,20 +252,6 @@ function Section(p: { s: CtxSection; estimated: boolean; width: number; onOpen: 
         <If when={shownMeta}><Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class={`shrink min-w-0 ml-1 ${HEAD} text-muted-foreground`}>{s.meta}</Text></If>
       </Button>
       <If when={!!note()}><Text style={{ userSelect: "text" }} class={`${HEAD} text-muted-foreground`} testID={`ctx-${s.key}-note`}>{note()}</Text></If>
-      <If when={s.body.kind === "grid"}>
-        <View class="flex-row pl-1" testID={`ctx-${s.key}-grid`}>
-          <Each of={inColumns((s.body as { items: { name: string; on: boolean }[] }).items, grid(4).columns)} key={(_, i) => `${i}`}>
-            {(column) => (
-              <View class="min-w-0 shrink-0" style={{ width: grid(4).cell }}>
-                <Each of={column()} key={(c) => c.name}>
-                  {(c) => <Cell name={c().name} on={c().on} label={`${c().name} ${c().on ? "on" : "off"}`} testID={`ctx-chip-${c().name}`}
-                    onToggle={p.onInventoryToggle ? () => p.onInventoryToggle?.("tool", c().name, false) : undefined} onInfo={() => p.onItem(c().name)} />}
-                </Each>
-              </View>
-            )}
-          </Each>
-        </View>
-      </If>
       <If when={s.body.kind === "inventory" && !(s.key === "skills" && (s.count ?? 0) > 12)}>
         <View class="flex-row pl-1" testID={`ctx-${s.key}-inventory`}>
           <Each of={inColumns((s.body as { items: InventoryRow[] }).items, grid(2).columns)} key={(_, i) => `${i}`}>
@@ -376,7 +358,32 @@ function SkillPicker(p: { entries: ContextEntry[]; rows: InventoryRow[]; focus?:
   </>;
 }
 
-/** A single detail dialog remains mounted even when the context section is folded. */
+function toolNames(names: string[], disabled: string[]) {
+  return [...new Set([...names, ...disabled.filter((name) => !name.includes(":"))])];
+}
+
+function recordedToolEntries(names: string[], schemas: Record<string, any>): ContextEntry[] {
+  return names.map((name) => ({
+    key: name, name,
+    description: typeof schemas[name]?.description === "string" ? firstPromptLine(schemas[name].description) : "",
+    full: schemas[name] ? JSON.stringify(schemas[name], null, 2) : "No schema was recorded for this tool.",
+  }));
+}
+
+/** In a draft the two entry points open the same modal; a started header shows recorded details. */
+function toolDetail() {
+  const session = viewed();
+  const project = currentProject();
+  const snapshot = session ? model.selected?.starting : null;
+  const off = session ? disabledOf(session) : sessionDraft().disabled_tools ?? [];
+  const names = toolNames(session ? [...(Array.isArray(snapshot?.tools) ? snapshot.tools : []), ...(session.tools ?? [])] : (project ? draftLastToolNames(project) : []), off);
+  const entries = session
+    ? recordedToolEntries(names, snapshot?.tool_definitions ?? {})
+    : names.map((name) => ({ key: name, name, description: "", full: "The schema is recorded when the session starts." }));
+  const canToggle = !!session || !pendingFirstPrompt();
+  return { off, entries, toggle: canToggle ? (name: string) => session ? void toggleSessionInventory("tool", name) : toggleDraftInventory("tool", name) : undefined };
+}
+
 /** `/skills` or `/mcp`: the current session's (or the draft's) switches, live, switching it (plan 48). */
 function liveDetail(kind: "skills" | "mcp") {
   const session = viewed();
@@ -404,20 +411,35 @@ function McpSwitchRow(p: { entry: () => ContextEntry; row: () => InventoryRow | 
   </View>;
 }
 
+function ToolSwitchRow(p: { entry: () => ContextEntry; on: () => boolean; toggle: (name: string) => void; switchable: () => boolean }) {
+  const label = () => `${p.entry().name} ${p.on() ? "on" : "off"}`;
+  const marker = () => <Text class="text-[10px] leading-5 text-muted-foreground">{p.on() ? "●" : "○"}</Text>;
+  const id = p.entry().key.replace(/[^A-Za-z0-9_-]/g, "-");
+  return <View class="flex-row items-start gap-1">
+    <If when={p.switchable()} else={<View accessibilityLabel={label()} class="shrink-0 w-6 h-6 items-center justify-center">{marker()}</View>}>
+      <Button role="switch" selected={p.on()} onPress={() => p.toggle(p.entry().key)} accessibilityLabel={label()} testID={`tool-toggle-${id}`} class={`shrink-0 w-6 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+        {marker()}
+      </Button>
+    </If>
+    <View class="flex-1 min-w-0"><EntryRow entry={p.entry} focus={false} /></View>
+  </View>;
+}
+
 export function ContextDetailModal() {
   const detail = contextDetail;
-  const live = () => { const d = detail(); return d?.live ? liveDetail(d.live) : null; };
+  const tools = () => detail()?.live === "tools" ? toolDetail() : null;
+  const live = () => { const kind = detail()?.live; return kind && kind !== "tools" ? liveDetail(kind) : null; };
   const body = () => {
     const d = detail()!;
+    if (d.title === "Tools") return { ...d, entries: tools()?.entries ?? d.entries, detail: "Nothing here." };
     const l = live();
     if (!l) return d;
     return { ...d, entries: l.entries, detail: l.detail, skillRows: d.live === "skills" ? { rows: l.items, toggle: l.toggle } : undefined };
   };
   const hints = () => {
     const d = body();
-    const command = d.title === "MCP" ? "/mcp" : "/skills";
-    if (d.fixed && (d.title === "Skills" || d.title === "MCP")) return `esc close · ${command} switches`;
-    return d.skillRows || detail()?.live === "mcp" ? "tab focus · enter activate · esc close" : "esc close";
+    if (d.fixed && ["Tools", "Skills", "MCP"].includes(d.title)) return `esc close · /${d.title.toLowerCase()} switches`;
+    return d.skillRows || detail()?.live === "mcp" || tools()?.toggle ? "tab focus · enter activate · esc close" : "esc close";
   };
   return <If when={detail()}>{() => <Modal size="large" label={`${detail()!.title} details`} testID="context-detail" onCancel={() => detail.set(null)} onOpenChange={(open) => { if (!open) detail.set(null); }}>
     <View class="gap-3">
@@ -430,8 +452,10 @@ export function ContextDetailModal() {
         }>
           <If when={body().skillRows} else={<View class="gap-0.5">
             <If when={(body().entries ?? []).length === 0}><Text class={T.sec}>{body().detail}</Text></If>
-            <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <If when={detail()?.live === "mcp"} else={<EntryRow entry={entry} focus={body().focus === entry().key} />}>
+            <Each of={body().entries ?? []} key={(entry) => entry.key}>{(entry) => <If when={body().title === "Tools"} else={<If when={detail()?.live === "mcp"} else={<EntryRow entry={entry} focus={body().focus === entry().key} />}>
               <McpSwitchRow entry={entry} row={() => live()?.items.find((item) => item.name === entry().key)} toggle={live()!.toggle} />
+            </If>}>
+              <ToolSwitchRow entry={entry} on={() => !(tools()?.off ?? body().toolOff ?? []).includes(entry().key)} toggle={(name) => tools()?.toggle?.(name)} switchable={() => !!tools()?.toggle} />
             </If>}</Each>
           </View>}>
             <SkillPicker entries={body().entries ?? []} rows={body().skillRows!.rows} toggle={body().skillRows!.toggle} focus={body().focus} />
@@ -475,7 +499,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
       onLayout={(b: any) => cardWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
       <If when={!!p.reconstructed}><Text class={`${TS.base} text-warning`}>reconstructed</Text></If>
       <Each of={p.sections} key={(s) => `${s.key}|${s.meta}|${s.count ?? ""}|${s.tokens ?? ""}|${JSON.stringify(s.body)}`}>{(s) => {
-        const open = (name?: string) => detail.set({ ...s(), focus: name, fixed: p.fixed, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.fixed ? undefined : p.onInventoryToggle } : undefined });
+        const open = (name?: string) => detail.set({ ...s(), focus: name, fixed: p.fixed, live: s().key === "tools" && !p.fixed ? "tools" : undefined, skillRows: s().key === "skills" && s().body.kind === "inventory" ? { rows: (s().body as { items: InventoryRow[] }).items, toggle: p.fixed ? undefined : p.onInventoryToggle } : undefined });
         return <Section s={s()} estimated={p.estimated} width={cardWidth()} onOpen={() => open()} onItem={open} onInventoryToggle={p.fixed ? undefined : p.onInventoryToggle} />;
       }}</Each>
       <View class="flex-row items-center gap-2" testID="context-total">
@@ -562,6 +586,7 @@ export function NewSessionView() {
     const p = project()!;
     return previewSections({
       core: draftPlanContext(p.id),
+      toolNames: draftLastToolNames(p.id),
       agent: agentName(), prompt: prompts()[`${p.id}|${agentName()}`] ?? "",
       disabled_tools: sessionDraft().disabled_tools,
       file: files()[p.id] ? { path: `${fullPath().replace(/\/$/, "")}/AGENTS.md`, ...files()[p.id]! } : null,

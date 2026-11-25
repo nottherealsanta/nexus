@@ -2164,7 +2164,7 @@ impl Builder<'_> {
             title: "Tools".into(),
             tokens: (tool_tokens > 0).then_some(tool_tokens),
             meta: String::new(),
-            body: CtxBody::Inventory(self.app.context_items_for("Tools")),
+            body: CtxBody::Inventory(self.app.context_header_tools()),
         });
         for title in ["Skills", "MCP"] {
             sections.push(CtxSection {

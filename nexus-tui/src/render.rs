@@ -10534,18 +10534,18 @@ fn draw_context_entries(
         .map(|entry| context_entry_body(cx.t, entry, inner))
         .unwrap_or_default();
     // Each entry is its name, its description when it has one, then its open body.
-    let mut rows: Vec<(Option<usize>, Vec<Span<'static>>)> = Vec::new();
+    let mut rows: Vec<(Option<usize>, Option<usize>, Vec<Span<'static>>)> = Vec::new();
     let mut cursor_row = 0;
     let quiet = cx.st(MUTED, RAISED);
-    // `/mcp` lists the servers with their switch; elsewhere the state is in the description.
-    let servers = (title == "MCP").then(|| cx.app.context_items_for("MCP"));
+    let items = cx.app.context_items_for(title);
     for (i, entry) in entries.iter().enumerate() {
         if i == cursor {
             cursor_row = rows.len();
         }
-        let marker = servers
-            .as_ref()
-            .and_then(|items| items.get(i))
+        let item = items
+            .iter()
+            .find(|item| item.key.rsplit(':').next() == Some(entry.name.as_str()));
+        let marker = item
             .map(|item| match (item.locked, item.on) {
                 (true, _) => "  ",
                 (false, true) => "\u{25cf} ",
@@ -10557,16 +10557,22 @@ fn draw_context_entries(
         } else {
             cx.st(PRIMARY, RAISED)
         };
+        let fold = cx.t.fold(open == Some(i));
+        let label = if title == "Tools" {
+            format!("{marker}{fold} {}", entry.name)
+        } else {
+            format!("{fold} {marker}{}", entry.name)
+        };
         rows.push((
             Some(i),
-            vec![Span::styled(
-                format!("{} {marker}{}", cx.t.fold(open == Some(i)), entry.name),
-                style,
-            )],
+            item.filter(|item| title == "Tools" && !item.locked && cx.app.context_switchable())
+                .map(|item| item.index),
+            vec![Span::styled(label, style)],
         ));
         if !entry.description.is_empty() {
             rows.push((
                 Some(i),
+                None,
                 vec![Span::styled(
                     format!("  {}", truncate(&entry.description, inner, cx.ell())),
                     quiet,
@@ -10578,12 +10584,12 @@ fn draw_context_entries(
             for row in body.iter().skip(top) {
                 let mut spans = vec![Span::styled(format!("  {rail} "), quiet)];
                 spans.extend(row.iter().cloned());
-                rows.push((None, spans));
+                rows.push((None, None, spans));
             }
         }
     }
     if entries.is_empty() {
-        rows.push((None, vec![Span::styled("Nothing here.", quiet)]));
+        rows.push((None, None, vec![Span::styled("Nothing here.", quiet)]));
     }
     let b = modal_box(area, wide, (rows.len() + 6).clamp(10, 40) as u16);
     let m = modal(cx, buf, area, b, title, hits);
@@ -10591,19 +10597,22 @@ fn draw_context_entries(
     let first = (cursor_row + 1)
         .saturating_sub(h.saturating_sub(1).max(1))
         .min(cursor_row);
-    for (i, (entry, row)) in rows.iter().skip(first).take(h).enumerate() {
+    for (i, (entry, toggle, row)) in rows.iter().skip(first).take(h).enumerate() {
         let y = m.body.y + i as u16;
         draw_spans(cx, buf, m.x, y, row, m.w);
         if let Some(entry) = entry {
             hits.add(Rect::new(m.x, y, m.w, 1), Target::ContextEntry(*entry));
         }
+        if let Some(index) = toggle {
+            hits.add(Rect::new(m.x, y, 2, 1), Target::ContextToggle(*index));
+        }
     }
     let mut hints = vec![(updown(cx), "move"), ("enter", "details")];
-    if title == "MCP" {
+    if matches!(title, "Tools" | "MCP") {
         hints.push(if cx.app.context_switchable() {
             ("space", "toggle")
         } else {
-            ("/mcp", "switches")
+            (if title == "Tools" { "/tools" } else { "/mcp" }, "switches")
         });
     }
     hints.push(("esc", "close"));

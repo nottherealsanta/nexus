@@ -32,12 +32,14 @@ are in docs/api.md.
 | GET | /api/search/service | state of the local SearXNG behind `web_search` |
 | GET | /api/browser | what the browser tools need here: `uvx`, a browser, and the mode (`[browser] use_my_chrome`) |
 | POST | /api/search/service/start | start it and wait until it answers |
+| GET | /api/services | local services: the container runtime and each service's state (`search` today) |
+| POST | /api/services/{id}/start | start `search` in the background → 202 `starting`; poll `GET /api/services` |
 | POST | /api/voice/transcribe | mono 16 kHz PCM16 WAV → `{text}`; `?partial=1` never queues |
 | POST | /api/voice/stt/download | consented, pinned STT model download |
 | POST | /api/voice/speak | `{session_id}` → streamed WAV; final answer only |
 | POST | /api/voice/speak/stop | stop the active speech stream |
 | GET | /api/project | all projects |
-| POST | /api/project | `{path, name?}` → the project at that path (created if new) |
+| POST | /api/project | `{path, name?}` → the project at that path (created if new; an existing inactive one restored to `current` in place) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
 | GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
 | GET | /api/project/{id}/worktree/review | `?worktree=`, `?base=`: what integrating the worktree's branch into its base would do (commits, files, conflicts, blockers) |
@@ -1028,6 +1030,20 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         except RuntimeError as exc:
             return JSONResponse({"error": str(exc), "code": "search_start_failed"}, status_code=422)
 
+    async def services_status(request: Request) -> Response:
+        from . import searchservice
+        return JSONResponse(await asyncio.to_thread(searchservice.services))
+
+    async def services_start(request: Request) -> Response:
+        from . import searchservice
+        if p(request, "id") != searchservice.SERVICE_ID:
+            raise NotFound(f"no service {p(request, 'id')}")
+        try:
+            found = await asyncio.to_thread(searchservice.start_async)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc), "code": "search_start_failed"}, status_code=422)
+        return JSONResponse({**found, **searchservice.service_row(found)}, status_code=202)
+
     async def mcp_list(request: Request) -> Response:
         return JSONResponse({"servers": runtime.mcp.status()})
 
@@ -1299,7 +1315,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def projects(request: Request) -> Response:
         if request.method == "POST":
             body = await _body(request)
-            return JSONResponse(project_json(runtime.open_project(body["path"], body.get("name"))))
+            return JSONResponse(project_json(
+                runtime.open_project(body["path"], body.get("name"), restore=True)))
         return JSONResponse(await runtime.read(lambda: [project_json(x) for x in runtime.store.projects()]))
 
     async def project(request: Request) -> Response:
@@ -2235,6 +2252,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/search/service", route(search_service_status)),
         Route("/api/browser", route(browser_status)),
         Route("/api/search/service/start", route(search_service_start), methods=["POST"]),
+        Route("/api/services", route(services_status)),
+        Route("/api/services/{id}/start", route(services_start), methods=["POST"]),
         Route("/api/mcp", route(mcp_list)),
         Route("/api/mcp", route(mcp_add), methods=["POST"]),
         Route("/api/mcp/{name}/login", route(mcp_login), methods=["GET", "POST", "DELETE"]),

@@ -231,7 +231,7 @@ async def test_search_service_problems_are_actionable(search_at, ctx, tmp_path):
         s.routes["/search"] = (200, {}, b"<html>nope</html>")
         with pytest.raises(ToolError, match="not SearXNG JSON"):
             await search({"query": "q"}, ctx)
-    with pytest.raises(ToolError, match="not reachable.*Do not start it yourself.*web_fetch.*nexus-search"):  # gone now
+    with pytest.raises(ToolError, match="not reachable.*Do not start it yourself.*web_fetch.*nexus search start"):
         await search({"query": "q"}, ctx)
 
 

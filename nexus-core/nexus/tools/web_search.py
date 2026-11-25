@@ -1,11 +1,11 @@
-"""`web_search`: results from the local SearXNG in `nexus-search/`.
+"""`web_search`: results from the local SearXNG service.
 
 Adapted from old Nexus nexus/tools/builtin/websearch.py and nexus/net/local_search.py.
 The endpoint is `[web] search_url` (default `http://127.0.0.1:18765/search`). Core
 never starts a container: when the service is down the error says how to start
 it. Results are untrusted data, fenced like `web_fetch` content, and result links
 are never fetched here. Only JSON is read (SearXNG's `json` format must be
-enabled, as `nexus-search/searxng/settings.yml` does).
+enabled, as the packaged settings do).
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ async def _get(url: str, params: dict[str, Any]) -> bytes:
             raise ToolError("web_search: the search service is rate limited (HTTP 429); try again later")
         if response.status_code == 403:
             raise ToolError("web_search: the search service refused JSON output (HTTP 403); enable the "
-                            "`json` format in nexus-search/searxng/settings.yml")
+                            "`json` format in the searched service's settings.yml")
         if response.status_code != 200:
             raise ToolError(f"web_search: the search service returned HTTP {response.status_code}")
         body = bytearray()
@@ -127,8 +127,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         # names the user's options and steers the model to web_fetch instead of retrying.
         raise ToolError(f"web_search: the search service at {url} is not reachable, so web_search will keep failing "
                         "until the user starts it. Do not start it yourself or retry; use web_fetch on a URL you know, "
-                        "or tell the user. (The user can start it in Settings › Tools › Start web search, from "
-                        "nexus-search/ with `docker compose up -d`, or set [web] search_url.)") from exc
+                        "or tell the user. (The user can start it in Settings › Tools, with `nexus search start`, "
+                        "or set [web] search_url.)") from exc
     except httpx.HTTPError as exc:
         raise ToolError("web_search: the search request failed") from exc
     try:

@@ -27,8 +27,8 @@ guard and whether the result is model-visible.
 | --- | --- |
 | `tools/base.py` | `Tool`, `ToolContext`, `ToolError`, `resolve()`, `clip()` |
 | `tools/read.py`, `bash.py`, `edit.py`, `patch.py`, `write.py` | Workspace tools |
-| `tools/web_search.py`, `web_fetch.py`, `_html_markdown.py`, `net.py` | Web tools, the HTML-to-Markdown converter and the public-only HTTP client |
-| `tools/firecrawl.py`, `firecrawl.py` | The `firecrawl` tool, and the install, process and HTTP client of the local Firecrawl |
+| `tools/web_search.py`, `web_fetch.py`, `_html_markdown.py`, `net.py`; `searchservice.py` | Web tools, the HTML-to-Markdown converter, the public-only HTTP client, and the status and start of the local SearXNG |
+| `tools/firecrawl.py`, `firecrawl.py` | The `firecrawl` tool, and the process and HTTP client of the local Firecrawl binary installed from its own release |
 | `tools/grep.py`, `glob.py`, `ls.py`, `walk.py`, `_grep_scan.py` | Search and listing tools, the shared walk and the fallback scan worker |
 | `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
@@ -428,14 +428,22 @@ workspace). At most 1000 entries, then a clip notice. An empty directory returns
 ## web_search
 
 `web_search {query, limit?, page?}` queries the SearXNG at `[web] search_url`
-([config.md](config.md)), the service in `nexus-search/` (Docker Compose or Apple
-`container`; see its README). Core never starts a container. When the service is
-down, the error tells the model that it will keep failing until the user starts it,
-not to start it or retry, and to use `web_fetch` on a known URL or tell the user. The
-user's options (Settings › Tools › Start web search, `docker compose up -d`, or `[web]
-search_url`) follow in parentheses. Before 2026-11-12 it led with the start command,
-an invitation for an agent to run Docker itself. Only JSON is read (`json` must be an
-enabled format in SearXNG's `settings.yml`, which the shipped one does).
+([config.md](config.md#web)). Core packages the SearXNG configuration
+(`nexus/search/settings.yml`) and can start the service as a container on Core's host: Apple `container` when it is
+installed, else Docker. It uses a pinned image, publishes the port on loopback only, and copies the packaged
+`settings.yml` once to `$NEXUS10_HOME/search/searxng/settings.yml` (later edits are kept), so an installed wheel needs no
+checkout. A generated secret lives in a 0600 `.env` beside it, and `SEARXNG_IMAGE` there overrides the image. Settings ›
+Tools shows the state and a Start row in both clients; `nexus search status` and `nexus search start` do the same from a
+shell, and the first-run tour's Web search step starts it in the background (TUI today; the NSH step is not wired yet).
+Core never starts it unasked. A non-loopback URL, a loopback URL without a port, a missing packaged settings file or no
+container runtime is reported as unavailable instead of started. The `nexus-search/` folder remains a manual Docker
+Compose or Apple `container` setup, and any http(s) SearXNG `/search` endpoint can be set instead.
+
+When the service is down, the error tells the model that it will keep failing until the user starts it, not to start it
+or retry, and to use `web_fetch` on a known URL or tell the user. The user's options (Settings › Tools › Start web search,
+`nexus search start`, or `[web] search_url`) follow in parentheses. Before 2026-11-12 it led with the start command, an
+invitation for an agent to run Docker itself. Only JSON is read (`json` must be an enabled format in SearXNG's
+`settings.yml`, which the packaged one does).
 `query` is at most 1000 characters, `limit` 1 to 10, `page` 1 or 2, the response
 at most 512,000 bytes, the call 15 s.
 
@@ -505,16 +513,22 @@ whole with `scrape`, and pages that do not fit at all are listed by URL. Content
 `<<< BEGIN/END UNTRUSTED WEB CONTENT >>>` markers as `web_fetch`, with the same defusing of forged markers, and links are
 never followed by the tool. A page that answers 4xx or 5xx is an error.
 
-**Install and process** (`nexus/firecrawl.py`). **A Nexus release ships the binary**: the release workflow builds the
-version pinned as `VERSION` in `nexus/firecrawl.py` from crates.io on each platform (`firecrawl-local-<os>-<arch>`, next to
-the TUI binaries, covered by `SHA256SUMS`, with `THIRD-PARTY/firecrawl-local.md` attached), and `install.sh` puts it in
-`$PREFIX/bin` (default `~/.local/bin`). Users build nothing. A checkout install (`./install.sh`) builds it with cargo at the
-pinned version, which that path already needs cargo for, and skips the build when that version is installed. Core looks for
-`$NEXUS10_HOME/firecrawl/bin/`, then `$PREFIX/bin`, then `PATH`. `nexus firecrawl init` is only the fallback for a platform
-or release with no binary: it runs `cargo install firecrawl-local --version <VERSION> --locked` into
-`$NEXUS10_HOME/firecrawl/` (needs Rust and a C compiler). `nexus firecrawl status` and `nexus doctor` report it, and warn
-when the installed version is not the pinned one (it is still used). Core never installs it, and when it is missing the
-error tells the model not to install it or retry and to use `web_fetch` or tell the user (as `web_search` does). The first `firecrawl` call starts `firecrawl-local serve` on a free `127.0.0.1` port with a random
+**Install and process** (`nexus/firecrawl.py`). **Nexus does not build or serve the binary.** `install.sh`, for a release
+or a checkout install, downloads the native binary pinned at **0.1.1**, `firecrawl-local-<os>-<arch>`, from the public
+[nottherealsanta/firecrawl-local-builds](https://github.com/nottherealsanta/firecrawl-local-builds) release `v0.1.1`
+together with that release's `SHA256SUMS`, verifies the checksum, and installs it in `$PREFIX/bin` (default
+`~/.local/bin`). `THIRD-PARTY/firecrawl-local.md` records the licence, version and source. A missing release, a platform
+with no asset or a failed download warns and leaves Nexus installed without the tool; a checksum mismatch stops the
+install before anything is installed. Nexus's own release assets and `SHA256SUMS` no longer contain it, and its CI no longer
+builds it (`NEXUS_FIRECRAWL_BASE` points the download at a mirror when needed). Users build nothing.
+
+Core looks for `$NEXUS10_HOME/firecrawl/bin/`, then `$PREFIX/bin`, then `PATH`. `nexus firecrawl init` is only the fallback
+for a platform or release with no binary: it builds the version pinned as `VERSION` in `nexus/firecrawl.py` (also 0.1.1)
+from crates.io with `cargo install firecrawl-local --version <VERSION> --locked` into `$NEXUS10_HOME/firecrawl/` (needs Rust
+and a C compiler). `nexus firecrawl status` and `nexus doctor` report it, and warn when the installed version is not the
+pinned one (it is still used). Core never installs it, and when it is missing the error tells the model not to install it
+or retry and to use `web_fetch` or tell the user (as `web_search` does). The first `firecrawl` call starts
+`firecrawl-local serve` on a free `127.0.0.1` port with a random
 bearer token and keeps it for the daemon's life; a call after it died starts it again; daemon shutdown stops it. Its log is
 `~/.nexus/logs/firecrawl.log`. A startup failure reports the child PID and either its exit code or the last health probe
 result. Nothing runs until a call.

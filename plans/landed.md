@@ -2,6 +2,22 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **Firecrawl from its own release; SearXNG managed by Core (11-24).** `install.sh` downloads pinned `firecrawl-local` 0.1.1
+  from the public `nottherealsanta/firecrawl-local-builds` release, verifies that release's `SHA256SUMS`, warns and
+  installs Nexus without the tool when the release or platform asset is missing, and stops on a mismatch; Nexus CI no
+  longer builds or serves it. `web_search`'s SearXNG starts on request as a container (Apple `container`, else Docker)
+  with a pinned image, packaged settings copied into `<home>/search/`, a generated 0600 secret and a loopback-only port;
+  Settings, `nexus search status|start` and the TUI onboarding Web search step use it, and `/api/services` reports it.
+  The offline installer test passes; the focused search-service tests are 39 passed and one failed (a container published
+  on another port is expected to be recreated; the current work-in-progress does not check the published port), and the
+  seven search/services API tests pass. **Not verified:** the external `v0.1.1` release (the public repo had no releases on
+  11-24), a live container start, and NSH's onboarding search step (not wired yet). See [plans/51](51-firecrawl.md),
+  [plans/52](52-onboarding.md).
+
+- **Reopening an inactive project (11-24).** An explicit `POST /api/project` on an inactive project's path restores it to `current` in place, keeping its id, position and sessions; it bumps the revision and publishes `project.updated`, so the TUI and NSH rails show it. Current and passive projects, a repeated POST and incidental `?directory=` lookups change nothing. Core tests cover the event, revision, position, existing session, current/passive/idempotency and directory lookups; the shared reducers already handled `project.updated`, so there is no client change or new screenshot.
+
+- **Tools summary and modal.** Both clients show tool counts and token estimate in the context header; individual switches are in the draft Tools modal and `/tools` ([plan 48](48-context-header-modes.md)).
+
 - **Phone tool-group summaries.** The phone conversation keeps tool groups in order as compact, always-collapsed, non-expandable rows with working/waiting/done status, counts from every member and the diff, and no tool detail; approvals stay usable and desktop is unchanged ([plan 05](05-mobile-and-design.md)).
 
 - **Antigravity ACP defaults to Auto.** Nexus declines remaining permission requests without prompting; `ask` still shows cards; resumed `default` children move to Auto under `allow`. Verified offline ([plan 06](06-zmx.md)).
@@ -290,9 +306,17 @@ Records before 2026-11-06 are in [docs/archive/PLAN-2026-11-06.md](../docs/archi
 - **Plan 39 landed (2026-11-16).** A linked worktree header shows only when two or more root sessions of it are listed (archived filter and scope applied, recounted on change), in the TUI and NSH (NSH gained the header and the TUI order: main checkout, then worktrees by path). Captures in `reports/39-worktree-header/`. Also: the NSH project MCP panel is mounted in the new-session view again.
 - **Plan 37 landed in part (2026-11-16).** Pending working row, phases, queue-while-disconnected, refusal strip, Retry after 10 s in both clients and mobile; `/prompt` shares it; Core existence check. Timing runs still to record. `reports/37-continue-feedback/`.
 - **0.13.0 released (2026-11-16)** as is, at the user's request: `v0.13.0` published, assets verified; NSH full web suite stopped, plans 34/37 open items carried over ([validation](../reports/release-0.13.0-validation.md)).
+# 2026-11-24: Neutral iOS redesign
+
+The phone client follows the approved neutral redesign ([plans/05 5.5](05-mobile-and-design.md)): no orange accent,
+phone-card surfaces, a floating composer with neutral pills, three-pill approvals with the note in the composer, quick
+Allow once from Sessions, a waiting badge and pill, a back swipe instead of the drawer, and a Manager tab that starts
+nothing on open. Subagents show as cards in the parent timeline that open the child, with Back to the parent and a
+count on the Sessions row. Installed on the iPhone.
+
 # 2026-11-23: Phone conversation navigation
 
-The Sessions, Manager and Settings tabs remain visible in a phone conversation; headless phone tests pass, physical-device verification remains open (plan 05).
+A phone conversation now hides the root tab bar and starts its header with an icon-only back chevron (accessible name "Back to Sessions"); Back keeps the session and its draft, and a tap on its row reopens it. The session drawer and its left-edge swipe are unchanged. The header shows the project and live `Working · Ns` beneath the title, with no phone bottom Working row or activity bar. The composer is two compact rows: a full-width input above agent/model selectors and mic/send. Phone prose and user messages use Google Sans at 16/23 and 16/22 while code keeps Monospace. A phone user message now shows only its text; a long press reveals its time, turn number, Copy and Fold controls, and the phone no longer draws the sticky user bar. A synchronous per-draft send guard drops repeated in-flight taps, preserves the draft on failure, and releases for later sends; it does not claim to fix the unproven freeze cause. Headless phone and desktop composer/timeline tests and type checks pass; 390 px screenshots checked, physical-device verification remains open (plan 05).
 
 # 2026-11-24: `nexus update` installs
 

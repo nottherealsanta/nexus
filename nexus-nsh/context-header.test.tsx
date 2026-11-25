@@ -19,13 +19,14 @@ describe("starting context presentation", () => {
     expect(result.sections[1].detail).toBe("Instructions");
   });
 
-  test("tool counts and disabled states remain visible without truncating the list", () => {
+  test("tool counts and disabled states stay in the header; every entry is available in the modal", () => {
     const tools = Array.from({ length: 15 }, (_, i) => `tool${i}`);
     const result = startingSections({ tools, system_prompt: "Prompt" }, ["tool2"]);
     const section = result.sections[2];
     expect(section.count).toBe(15);
     expect(section.meta).toBe("1 off");
-    expect(section.body.kind === "grid" && section.body.items.length).toBe(15);
+    expect(section.body.kind).toBe("none");
+    expect(section.entries?.length).toBe(15);
     expect(inventorySections([])[0].meta).toBe("none");
     expect(contextTokens(1502)).toBe("1.5K");
     expect(contextTokens(829)).toBe("829");

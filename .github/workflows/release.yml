@@ -71,7 +71,6 @@ jobs:
       - name: Attach installer, checksums and artifacts to the release
         run: |
           cp install.sh dist/
-          cp THIRD-PARTY/firecrawl-local.md dist/firecrawl-local-NOTICE.md
           (cd dist && sha256sum * > SHA256SUMS)
           gh release upload "$TAG" dist/* --clobber
         env:

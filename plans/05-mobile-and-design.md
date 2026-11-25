@@ -18,7 +18,7 @@ Decision (user, 2026-11-12): **the iPad shows the desktop/web client, not the ph
 
 Implemented in the working tree for iPhone: three tabs, reduced timeline with tool-group summary rows, compact waiting cards and mobile-scoped Settings. Four pure rule tests and NSH type check pass. Runtime phone screenshots remain unverified: no simulator devices are installed, and the discovered physical iPhone is unavailable.
 
-- [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; define the Manager
+- [~] **Navigation:** implemented; native runtime verification remains open. A three-tab bar (Sessions, Manager, Settings) replaces the current phone pages; a conversation hides it and returns through Back (5.2, user 2026-11-23). Define the Manager
   tab (the header indicator and dropdown become a full tab: caption, cards, typed input, voice; plus the read-only
   backend-session view only if the user wants it).
 - [~] **Session view:** filtering and compact cards implemented; verified headless and at 390 px in a browser (2026-11-11), simulator open. Status, user messages, agent replies, composer. **Mobile can approve and answer everything a
@@ -61,7 +61,8 @@ one to one or copy text. Nexus keeps its own design language (`interface/design-
 
 The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
 
-- [x] **Session drawer (swipe from the left edge).** In an open session, an edge swipe (and a header button) reveals
+- [x] **Session drawer (swipe from the left edge).** In an open session, an edge swipe (and, until the 2026-11-23 Back
+  control replaced it, a header button) reveals
   the session list over the conversation, which slides aside and dims. Tapping a row opens that session and closes the
   drawer. Rows show the title, a project colour dot, the status (spinner while busy, a `Needs your input` line for a
   pending approval or question) and a relative time. The top of the drawer has the **project switcher** (current
@@ -89,9 +90,13 @@ The three tabs stay: **Sessions, Manager, Settings**. New on top of 5.1:
   the five most recent Cores (`rememberCore`, `ui/mobile/connect.tsx`, `nexus.recent-cores`). **Still not implemented:**
   the in-app QR scanner and the `nexus://` URL-scheme handler (the link is pasted); both need a device (carried over).
 
-Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device.
+Polish 2026-11-12 (user: "make mobile design better"): the phone reads in Google Sans through a `--font-ui` token (`TS`/`T` roles in `kit.tsx`; code and mono text keep Monaspace), rounded surfaces (2xl/3xl cards, composer and user messages; xl buttons; round icon buttons and send), assistant replies as full-width prose at 16/25, a short composer placeholder (`Message`, `Steer or queue a message…`), the Working row left-aligned under the composer. Screenshots: [reports/mobile-2026-11-12](../reports/mobile-2026-11-12/). Not verified on a device. The 2026-11-23 pass below supersedes the phone's 16/25 prose and the below-composer Working row.
 
-Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims; 2026-11-12 the conversation now slides aside by the drawer width, headless tests pass, not seen on a device). On 2026-11-23 the bottom tabs were kept visible in conversations so the three sections remain reachable; device verification remains open. Search is the always-visible field in the list and drawer rather than a separate button.
+Built 2026-11-11 in `nexus-nsh/src/ui/mobile/` (headless tests and 390 px browser screenshots; simulator and device unverified; no in-app QR scanner or `nexus://` URL-scheme handler yet, so the link is pasted; the drawer dims; 2026-11-12 the conversation now slides aside by the drawer width, headless tests pass, not seen on a device). Search is the always-visible field in the list and drawer rather than a separate button.
+
+Conversation navigation (user, 2026-11-23, superseding the same day's decision to keep the tabs visible): the root tabs stay **Sessions, Manager and Settings**; a conversation hides the tab bar and its header starts with an icon-only iOS-style back chevron whose accessible name is **Back to Sessions**. Back keeps the viewed session and its draft, returns to the full Sessions list, and a tap reopens the session; Manager and Settings are then one tap away. The session drawer and its left-edge swipe stay as they were (the drawer no longer has a header button). While the bar is hidden the shell carries the home-indicator inset, and the open keyboard replaces it. Implemented in `shell.tsx` and `state.ts`; pure rules `phoneTabBarVisible` and `phoneShellBottomInset` in `src/mobile.ts`. Tests: `phone-redesign` (tab order, hidden bar, Back, draft kept, safe area) and `mobile.test.ts`; 390 px screenshots checked ([reports/mobile-2026-11-23](../reports/mobile-2026-11-23/)), no device.
+
+Phone conversation polish (user, 2026-11-23): the header is a 17/22 title with the project and live status beneath it. While a turn runs that line says `Working · 11s` and the seconds tick every second from the latest user message's start; waiting keeps its warning state. The bottom Working row and the activity bar are removed on the phone only. The composer is two compact rows: a full-width input (16/22) above a control row with the agent/model selectors on the left (13/20, truncating long names) and mic/send on the right (44 pt hit targets, smaller 32 pt visible circles), with tightened card padding; pending messages, dictation, approval, queue/steer, long-press send and drafts are unchanged. Assistant prose and user messages use the bundled Google Sans at 16/23 and 16/22 with tighter paragraph and bubble spacing; fenced code, inline code, commands and tool arguments remain Monospace. A phone user message shows only its text by default; a long press reveals its delivery tag, turn number, time, Copy and Fold controls (`revealedBand`, `ui/timeline.tsx`), while its accessible label keeps the full text and detail and its hint names the gesture. Long messages keep the Show full control, and the sticky user-message bar no longer renders on the phone. The phone's tool summary rows are slightly shorter but keep their labels, counts, diff and accessible description. Tests: `phone-redesign` (compact composer, no bottom status, live header seconds, prose/code scale, long names, rapid-send guard, hidden/revealed message details and actions, full long message, no sticky phone bar, approval plus safe area) plus `phone-session-controls`; desktop tests `timeline-layout`, `void-second-pass` and `session-controls` pass unchanged, while `timeline-scroll` has the same pre-existing `switching away and back restores where the reader was` failure at `HEAD` (13 of 14 pass). 390 px idle, waiting/busy, focused, revealed user details and drawer captures are in the same report; no device.
 
 Tool summaries (user, 2026-11-23): the phone timeline keeps tool groups in their original order as one raised rounded
 row each, always collapsed and non-expandable: a status badge (spinner while working, `◆` waiting, `✓` done), the
@@ -139,6 +144,59 @@ card).
   panel, sidebar and raised surfaces, while focused Settings rows keep the neutral gray band; no client difference.
   NSH 1024 light Settings and palette, and TUI 120×40 / 160×48 light Settings, completion and text frames, are in
   `reports/nsh-look-2026-11/` (`*-light-selection-*`, `tui-*-light-*-after`).
+
+## 5.5 Neutral iOS redesign (user, 2026-11-24)
+
+The user asked to "design the iOS app well", then: light and dark, **no orange accent, keep it neutral**, the composer
+should look good, and the Manager's wave smaller. The canvas is the private design artifact
+[Nexus iOS Redesign](https://claude.ai/artifact/8Dix7oEjGeN6YPw2bGRzj3) (Sessions, composer states, waiting on you,
+working, Manager, Settings, Connect; dark and light rows). The user approved it as drawn ("apply this"), leaving the
+QR scanner out. Phone only; desktop and web are unchanged.
+
+- [x] **Neutral palette.** The phone's primary action is the text colour (`bg-foreground` / `text-background`); colour
+  is kept for status (amber waiting, blue working, red deny and errors, green diffs). Two NSH-only tokens in
+  `nexus-nsh/theme-void.toml`: `surface.phone_card` (dark `#1c1c1c`, light `#ffffff`) and `surface.phone_control`
+  (dark `#2a2a2a`, light `#efefec`), as `bg-phone-card` / `bg-phone-control`. `Btn` on a phone: primary is a neutral
+  pill, default a quiet fill.
+- [x] **Shell:** large 34 pt titles on the canvas colour (no chrome band or hairline), an iOS chevron back
+  (`chevron-left`), the status mark in the header subtitle (the status ring is gone), a neutral tab bar with a
+  waiting-count badge on Sessions.
+- [x] **Sessions:** a "Sessions" large title (the wordmark is gone) over a plain project switcher and a 38 pt search
+  field; uppercase muted section labels; rows on the phone card. A Needs-you row says `Wants to run <tool>`, shows the
+  compact command and offers **Open** and **Allow once** (approved). The project name shows only in All projects. No
+  last-reply line: Core sends no reply preview for the list.
+- [x] **Waiting on you:** the card on the phone card, `Run this command?` for bash (`Allow <tool>?` otherwise) with the
+  tool name; no timer; Deny, Always allow and Allow once as three pills. The separate note field is gone: the
+  composer is "what to do instead" (approved).
+- [x] **Composer:** see `nexus-nsh/README.md`: neutral pills, round send that fills when there is a draft, Stop while
+  running with an empty draft. Effort is left off the phone's control row.
+- [x] **Other session waiting** is a pill (◆ text ›) instead of the info strip; a tap goes there (approved).
+- [x] **Manager tab:** canvas colour, a 22/30 caption, the card on the phone card, and a composer-style input row with
+  round Mute / Talk / Connect. The wave stays the small one in the title. **Opening the tab shows the panel only**
+  (`showManagerPanel`): it does not start the orb loop, a call or the voice (user, 2026-11-24).
+- [x] **Settings:** a simpler connection card (host, address · transport, Core version, Connected, a small neutral
+  trace and latency, a Change Core row); uppercase group labels; 50 pt rows on the phone card.
+- [x] **Connect:** neutral; a mono `nexus` mark, three steps, a primary **Paste pairing link**, the link field with
+  Connect, manual entry and recent Cores. No QR scanner (user: leave it).
+- [x] **Navigation (user, 2026-11-24):** in a conversation a left-edge swipe goes straight back to Sessions; the
+  session drawer is removed from the conversation. This supersedes 5.2's drawer.
+- [x] **Subagents (user, 2026-11-24: "have subagents also be visible in the app").** A subagent call is one card in the
+  parent's timeline, in order (`PhoneChildRow` in `ui/mobile/activity.tsx`; `phoneRow` keeps `child` rows): the
+  agent in small caps, the task title, a status badge and word (Working with a spinner, Needs you, Failed, Done), the
+  model and running time, `background` for a background start, and a chevron. Tapping opens the child session. The
+  child's header says `Subagent of <parent>` in place of the project; Back and the left-edge swipe return to the parent
+  conversation (`goBack`, `phoneParent` in `ui/mobile/state.ts`), and from a root to Sessions. A root's Sessions row
+  adds `N subagents · M running` (`subagentsText`); children are never root rows, and a child's approval already
+  raises its root to Needs you. No tool detail from inside the child is shown on the parent. Tests: two in
+  `phone-redesign.test.tsx` (card, open, header, back and swipe to the parent, the row count).
+- [x] **Session page layout (user, 2026-11-24):** every row on the phone's session page shares a 28 px left gutter;
+  text starts at its edge and status icons sit inside it. Tool groups and subagents have no card or border: a status
+  badge in the gutter, the words on the text edge. The user message is more prominent: a filled bubble on the new
+  `surface.phone_user` token (dark `#2e2f31`, light `#e6e6e1`), 18 px radius, medium-weight text. Composer pills shrink
+  and truncate before the mic (the agent pill keeps its width up to 132 px). Checked in 390 px web captures.
+- Tests: `phone-redesign.test.tsx` (31) and `phone-session-controls.test.tsx` (7) pass headless, including quick allow
+  from the list, deny through the composer, Stop while running, the back swipe and the Manager tab making no Manager
+  request. Installed on the paired iPhone with the `nexus-ios-device` recipe and checked in a device screenshot.
 
 ## 5.4 Redesign pass: web, macOS and phone (user, 2026-11-12)
 

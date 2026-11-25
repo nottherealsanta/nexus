@@ -1257,6 +1257,8 @@ def main(argv: list[str] | None = None) -> int:
     voice.add_argument("action", choices=["init", "status"], help="init installs the voice runtime; status shows the models")
     fire = sub.add_parser("firecrawl", help="the optional local Firecrawl behind the firecrawl tool")
     fire.add_argument("action", choices=["init", "status"], help="init builds and installs firecrawl-local with cargo; status shows whether it is installed")
+    search = sub.add_parser("search", help="the local SearXNG behind web_search")
+    search.add_argument("action", choices=["status", "start"])
     pair = sub.add_parser("pair", help="print the address, token and a QR code a phone uses to connect to this Core")
     pair.add_argument("--no-qr", action="store_true", help="print the link without the QR code")
     pair.add_argument("--json", action="store_true", help="print the addresses and links as JSON")
@@ -1377,6 +1379,31 @@ def main(argv: list[str] | None = None) -> int:
                 return firecrawl.init()
             found = firecrawl.status()
             print(f"firecrawl-local: {found['state']}" + (f" ({found['version']} at {found['path']})" if found["state"] == "ready" else f" - {found['detail']}"))
+        elif args.command == "search":
+            from . import searchservice
+            if args.action == "status":
+                found = searchservice.services()
+                runtime = found["runtime"]
+                row = found["services"][0]
+                print(f"search: {row['state']} at {row['url']}" + (f" - {row['detail']}" if row["detail"] else ""))
+                print(f"runtime: {runtime['kind'] or 'none'} ({runtime['state']})"
+                      + (f" - {runtime['detail']}" if runtime["detail"] else ""))
+            else:
+                try:
+                    row = searchservice.start_async()
+                except RuntimeError as exc:
+                    print(f"search: {exc}", file=sys.stderr)
+                    return 1
+                step = None
+                while row["state"] == "starting":
+                    if row["detail"] != step:
+                        step = row["detail"]
+                        print(f"search: starting - {step}", flush=True)
+                    time.sleep(1)
+                    row = searchservice.status()
+                print(f"search: {row['state']} at {row['url']}" + (f" - {row['detail']}" if row["detail"] else ""))
+                if row["state"] != "running":
+                    return 1
         elif args.command == "doctor":
             return _doctor(args.json)
         elif args.command == "perf":

@@ -499,7 +499,8 @@ class Runtime:
 
     # -- projects ------------------------------------------------------------
 
-    def open_project(self, path: str, name: str | None = None) -> Project:
+    def open_project(self, path: str, name: str | None = None, *, restore: bool = False) -> Project:
+        """The project at `path`, created if new. `restore` reopens an inactive one for an explicit user action."""
         self._check_removing_worktree(Path(path).expanduser())
         project, created = self.store.project_for_path(path, name)
         if created:
@@ -507,6 +508,18 @@ class Runtime:
             # A restored project brings its sessions back; a new one has none.
             for session in self.store.sessions(project.id):
                 self.bus.publish("session.created", self.session_json(session), session_id=session.id)
+            return project
+        if restore and not project.hidden and project.status == "inactive":
+            # Only an explicit open (`POST /api/project`) reopens an inactive project; an incidental
+            # `?directory=` lookup leaves it inactive. Compare-and-set so a concurrent remove or status change
+            # is not undone; update_project bumps the revision and publishes project.updated.
+            while True:
+                try:
+                    return self.update_project(project.id, status="current", expected_revision=project.revision)
+                except RevisionConflict:
+                    project = self.project(project.id)
+                    if project.hidden or project.status != "inactive":
+                        return project
         return project
 
     def project(self, project_id: str) -> Project:

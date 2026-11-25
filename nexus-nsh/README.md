@@ -64,8 +64,7 @@ inline field focused and filled, and `/search` without text clears it. Phone seg
 toggles use 44 px touch targets; mobile navigation remains unchanged.
 The mobile Sessions list groups waiting sessions under Needs you, followed by Running and Recent;
 waiting takes priority over running, and rows show an attention or running indicator and relative time.
-In a phone conversation, Sessions opens a drawer with that list and the project selector; choosing a
-session closes the drawer, while All sessions returns to the full Sessions tab. The phone project
+In a phone conversation, a left-edge swipe or Back returns to the full Sessions tab (there is no drawer). The phone project
 picker offers All projects as well as individual projects; an individual selection sets the new-session project.
 Phone approval cards use a compact command preview and larger two-column choices while retaining allow once,
 allow for the session, deny, and deny with a note.
@@ -144,27 +143,46 @@ drafts). The same note stays in the sent context and model input. Empty or
 cancelled dictation does not mark a draft; OS keyboard dictation cannot be
 identified automatically. See [Voice](../docs/voice.md#transcript-provenance).
 
-On iOS and native phones, Sessions, Manager and Settings are bottom tabs (`src/ui/mobile/`, phone only; desktop
-and web are unchanged):
+On iOS and native phones, Sessions, Manager and Settings are the three root tabs, in that order (`src/ui/mobile/`,
+phone only; desktop and web are unchanged). A conversation is one page: it hides the tab bar and leads with an
+icon-only back chevron whose accessible name is "Back to Sessions", as a messaging app does.
 
 - **Sessions** is the project switcher as the title (name and a chevron: a sheet of projects and "All projects"; the choice
   both filters the list and is the project new sessions go to), a search field and sections *Needs you* (with a count),
   *Running* and *Recent*. A row has a project colour dot, the title, a relative time and either `Needs your input`,
   `Working` with a spinner, or the project. Long press opens the row menu (Rename, Archive or Unarchive); pull down to
   refresh. Pinned sessions, a catch-up digest and a "Used N tools" line do not exist on mobile (decided 2026-11-11).
-- **A conversation** has a compact header (a sessions button, the title, the project and status as a subtitle, a status
-  ring, and an overflow menu with Rename and Archive), the user's messages and the agent's replies. A tool group is one
+- **A conversation** has a compact header (the back chevron, the title, the project and live status as a subtitle with
+  its status mark, and an overflow menu with Rename and Archive). While running, the subtitle carries `Working` and the
+  elapsed seconds (`Working · 11s`); the timer ticks in place, and waiting status keeps its own warning state. A tool
+  group is one
   compact, always-collapsed summary row in timeline order: `1 thought, 2 commands` with a running, waiting or done
-  status and its `+N −M`; it never expands, so a command, path, output or diff is not shown. The **session
-  drawer** (`EdgeDrawer`) slides over the conversation from the header button or a rightward drag from a 20 px strip on
-  the left edge (it claims only a mostly horizontal move, so scrolling and a code block's own horizontal scroll are
-  untouched; the app has no navigation stack, so there is no iOS back-swipe to fight). It is the Sessions list with the
-  same search and project switcher; a row opens that session and closes it. The bottom tabs remain visible in a
-  conversation: Sessions returns to the list, and Manager and Settings open directly.
+  status and its `+N −M`; it never expands, so a command, path, output or diff is not shown. A rightward drag on a
+  20 px strip at the left edge goes **back to Sessions**, as iOS's back-swipe does (it claims only a mostly horizontal
+  move, so scrolling and a code block's own horizontal scroll are untouched); there is no session drawer (user,
+  2026-11-24). A **subagent** is a card in the parent's timeline (agent, task, live status, model and time) that opens
+  the child session; there the subtitle reads `Subagent of <parent>`, and Back or the swipe return to the parent.
+  A root's Sessions row counts its subagents (`2 subagents · 1 running`). Every row on the session page shares a
+  28 px left gutter: text starts at its edge, and the status icons of tool groups, subagents and the pending turn sit
+  inside it, with no card or border. The user's message is a filled bubble (`phone-user`) in medium-weight text. Back and the swipe keep the viewed session and its draft, where a tap reopens it and Manager and
+  Settings are one tap away.
+- **Composer:** one floating rounded card (26 px radius, `phone-card` surface) at the bottom: a full-width input (16/22)
+  above a control row with the agent and model as neutral pills on the left and a plain mic and a round send on the
+  right. Send fills with the text colour only when there is something to send; with an empty draft in a running turn it
+  is Stop. Controls keep 44 px hit targets and draw 36 px circles; long selector names truncate. While an approval is
+  in view the placeholder is "Or tell it what to do instead…": sending denies with that text as the note, and Deny
+  takes any text there along. Pending messages, approvals, dictation, queue/steer and long-press send are
+  unchanged. The phone has no bottom `Working` row or activity bar.
+- **User messages:** a phone message shows only its text by default. A long press reveals its delivery tag, turn
+  number, time, Copy and Fold controls; the message's accessible label carries its full text and that detail, with a
+  hint for the gesture. Long messages keep their Show full control. The phone has no sticky user-message bar.
+- **Reading:** assistant prose and the user's messages use the bundled Google Sans (16/23 and 16/22, tighter paragraph
+  and bubble spacing). Fenced code, inline code, commands, tool arguments and output stay Monospace.
 - **Approvals** show the command in a compact block, `Allow once` and `Always allow` (this session) as two big
   buttons, then "Tell it what to do instead" with `Deny` (the text goes to the model with the refusal). All targets are
-  at least 44 px; the shell pads by `keyboardFrame()` so the keyboard never covers the card or composer, and the bars
-  pad by `safeArea()`. Questions keep the compact card with 44 px choices.
+  at least 44 px; the shell pads by `keyboardFrame()` so the keyboard never covers the card or composer, carries the
+  home-indicator inset itself while the tab bar is hidden, and the bars pad by `safeArea()`. Questions keep the compact
+  card with 44 px choices.
 - **Settings** starts with a connection card (the Core's host and address, LAN / Tailscale / This device from the
   address, a live latency figure probed every 5 s and a small trace of the last 30 probes, failures in red, and
   Change), then a grouped list (Appearance, Notifications, Voice, Manager, Providers, About) whose rows push a page
@@ -176,7 +194,7 @@ and web are unchanged):
   address. Opening a `nexus://` link straight from the Camera app is not wired (no URL-scheme handler yet), and the
   app has no in-app QR scanner; the link is pasted.
 
-The phone's look differs from desktop in rendering only: Google Sans for interface text and prose (`--font-ui`), rounded cards, composer and buttons.
+The phone's look differs from desktop in rendering only: Google Sans for interface text and prose (`--font-ui`), rounded cards, composer and buttons, iOS-style large root titles, an accent-tinted selected tab and an icon-only back chevron in the conversation bar.
 
 Desktop workspace surfaces are unavailable on phones. The Manager tab supports typed interaction; native voice
 capture remains unverified. The search field is dismissed before opening a session.
@@ -419,12 +437,13 @@ The focused `session-controls.test.tsx` browser scenarios cover the queue and de
 
 The starting-context section lists the prompt, tools, instructions, skills and MCP
 servers with estimates and the catalog window share. Its text uses a consistent
-16 px size, compact section counts, gray status dots and a three-column list of
-all tools. Disabled entries remain marked and counted. The system prompt row omits the agent name, and the instruction file
-has no inline preview (its detail remains available by clicking its title). In a draft, skills,
-servers and tools switch from the header, and a `Worktree` switch (`context-worktree`, Git checkouts
+16 px size and compact section counts. **Tools** shows only its counts and token estimate.
+Open **Tools** in the draft header or type `/tools` for individual switches and schema details in the modal.
+The system prompt row omits the agent name, and the instruction file
+has no inline preview (its detail remains available by clicking its title). In a draft, skills and
+servers switch from the header, and a `Worktree` switch (`context-worktree`, Git checkouts
 only) follows `total`. From the first send the header is fixed (plan 48): `context-sections-fixed`
-has no `bg-card`, markers are state, dialogs are read-only, and `/skills` and `/mcp` open live
+has no `bg-card`, markers are state, header dialogs are read-only, and `/tools`, `/skills` and `/mcp` open live
 switches for the session (or the draft). Test: `context-modes.test.tsx`. Skills remain inline at 12 or fewer; above 12 only the clickable
 `Skills [N]` heading remains. At any count the heading opens a scrollable two-column
 card picker with description excerpts and separate enable/disable switches. A card name
@@ -617,7 +636,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics (live, or from summaries), the floor row, footers, and the sticky user bar. |
 | `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
 | `src/ui/connect.tsx` | The native Connect screen: the Core address, saved in NSH Storage (and reopened from the header's Core button). A phone shows `ui/mobile/connect.tsx` instead. |
-| `src/ui/mobile/` | The phone client's UI: `shell.tsx` (tabs, conversation header, edge swipe, drawer), `sessions.tsx` (sections, rows), `sheets.tsx`/`sheet.tsx` (row menu, project switcher), `approval.tsx`, `settings.tsx` (connection card, grouped list), `connect.tsx` (pairing), `state.ts`. Pure rules (sections, transport, pairing links, health) are in `src/mobile.ts`. |
+| `src/ui/mobile/` | The phone client's UI: `shell.tsx` (root tabs, conversation header with Back to Sessions, the back edge swipe), `sessions.tsx` (sections, rows), `sheets.tsx`/`sheet.tsx` (row menu, project switcher), `approval.tsx`, `settings.tsx` (connection card, grouped list), `connect.tsx` (pairing), `state.ts`. Pure rules (sections, transport, pairing links, health, tab visibility and the bottom inset) are in `src/mobile.ts`. |
 | `src/ui/splash.tsx` | The launch splash: logo, five milestone stages, 30-segment bar and the fade into the first live frame. |
 | `src/layout.ts`, `src/layout-state.ts` | The layout tree (pure: splits, groups, tabs, ratios, minimum 200 × 120 px, focus by geometry, join, move, restore, serialisation) and its live state: signals, persistence in `Storage` per project and worktree (`nexus.layout.<project>.<worktree>`), reconciliation with sessions, files and terminals, every action. Tests: `layout.test.ts`, `layout-ui.test.tsx`. |
 | `src/ui/groups.tsx` | The tab area: group boxes with strips and bodies, the terminal layer, dividers, the group menu, drag and drop zones. |
@@ -908,7 +927,7 @@ estimate.
 
 ## Onboarding
 
-While Core's `ui.onboarded` is false, desktop and web NSH open a full-window tour once the splash is gone (`src/onboarding.ts`, `src/ui/onboarding.tsx`, mounted in `App.tsx`; the phone never shows it). It matches the TUI step for step: welcome, connect a provider (the same connection modal as Settings), choose models for agents (a picker of connected providers' models writes `agents.models`; the default agent button cycles `defaults.agent`), then lessons. Enter, ←/→, ↑↓, `s` and the buttons work; Finish and Skip write `ui.onboarded`. `/onboarding`, the palette and Settings > About replay it. Wording is `[onboarding]` in `interface/manifest.toml`. Test: `onboarding.test.tsx`.
+While Core's `ui.onboarded` is false, desktop and web NSH open a full-window tour once the splash is gone (`src/onboarding.ts`, `src/ui/onboarding.tsx`, mounted in `App.tsx`; the phone never shows it). It matches the TUI step for step: welcome, connect a provider (the same connection modal as Settings), choose models for agents (a picker of connected providers' models writes `agents.models`; the default agent button cycles `defaults.agent`), start web search, then lessons. On the search step (`search-service.ts`) NSH asks for SearXNG's state and starts it in the background unless it already runs or cannot start, then polls until it runs; the step shows the state, address, runtime, detail and last error, and its Retry button starts it again. Next never waits for the container. Enter, ←/→, ↑↓, `s` and the buttons work; Finish and Skip write `ui.onboarded`. `/onboarding`, the palette and Settings > About replay it. Settings → Tools shows the same search status and follows a background start. Wording is `[onboarding]` in `interface/manifest.toml`. Test: `onboarding.test.tsx`, including the shared `interface/scenarios/web-search.json`.
 
 ## The Manager
 

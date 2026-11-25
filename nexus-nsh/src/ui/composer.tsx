@@ -33,7 +33,8 @@ import { PhoneApprovalChoices } from "./mobile/approval";
 import { fileCandidates, fileMenu } from "../file-completion";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
-// the Working row on the line below it while busy, the completion layer floating over the timeline from its top edge and the project strip below.
+// the completion layer floating over the timeline from its top edge and the project strip below. On a phone the card
+// is two compact rows (input, then selectors and mic/send), with the Working status in the conversation header.
 declare const navigator: any;
 const focused = signal(false);
 const pendingSelection = signal<{ session: string; id: string } | null>(null);
@@ -42,6 +43,8 @@ const selected = signal(0);
 const dismissed = signal<string | null>(null);
 const atListing = signal<{ scope: string; cache: { prefix: string; paths: string[] }[]; pool: string[] | null }>({ scope: "", cache: [], pool: null });
 const atAsking = new Set<string>();
+/** One submission at a time per draft (session, or a project's new-session screen): repeated taps share the first request. */
+const sendingDrafts = new Set<string>();
 const MENU_LIMIT = 8;
 
 type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string; file?: { name: string; dir: string; folder: boolean } };
@@ -91,7 +94,7 @@ function EditableComposer() {
   blurComposer.fn = () => { try { ref?.blur(); } catch {} };
   questionLineFocus.fn = (end) => { try { ref?.focus(); if (end) setTimeout(() => { const n = (qAnswer()?.text ?? "").length; try { ref?.setSelection(n, n); } catch {} }, 0); } catch {} };
   questionLineFocus.leave = () => { try { ref?.blur(); } catch {} };
-  const h = signal(phone ? 28 : 22);
+  const h = signal(phone ? 24 : 22);
   // The dock's own width, measured rather than taken from the window: the provider label leaves
   // when the controls would overprint, which the window width alone cannot say.
   const dockWidth = signal(0);
@@ -203,19 +206,28 @@ function EditableComposer() {
       return;
     }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
+    // On a phone with an approval in view, the composer's text is "what to do instead": sending denies with it.
+    const ask = phoneApproval();
+    if (ask && t && !images().length) { denyFromComposer(ask); return; }
     if (ses()?.archived && !resumed) {
       resumeArchived(ses()!.id, () => send(mode, true));
       return;
     }
     const target = key();
+    if (sendingDrafts.has(target)) return;
     const sent = images();
-    const ok = await sendPrompt(t, sent, mode);
-    if (ok && ses()) void loadInputs(ses()!.id).catch(() => {});
-    if (ok) { const p = currentProject(); if (p) void loadPromptHistory(p).catch(() => {}); }
-    if (ok) {
-      draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
-      imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
-      prunePastes(target, draft()[target] ?? "");
+    sendingDrafts.add(target);
+    try {
+      const ok = await sendPrompt(t, sent, mode);
+      if (ok && ses()) void loadInputs(ses()!.id).catch(() => {});
+      if (ok) { const p = currentProject(); if (p) void loadPromptHistory(p).catch(() => {}); }
+      if (ok) {
+        draft.update((d) => ({ ...d, [target]: (d[target] ?? "").trim() === t ? "" : d[target] ?? "" }));
+        imageDrafts.update((d) => ({ ...d, [target]: (d[target] ?? []).filter((i) => !sent.includes(i)) }));
+        prunePastes(target, draft()[target] ?? "");
+      }
+    } finally {
+      sendingDrafts.delete(target);
     }
   };
   const interrupted = () => term("session.interrupted");
@@ -443,9 +455,9 @@ function EditableComposer() {
   });
 
   const agentName = () => capitalize(agent());
-  /** Dictation and send/stop. Desktop puts them at the end of the control row (30px, round); the phone keeps them beside the input. */
+  /** Dictation and send/stop, at the end of the control row; the phone draws a smaller circle inside the 44 pt target. */
   const actions = () => (
-    <View class={`shrink-0 flex-row items-center ${phone ? "gap-3 pb-1" : "gap-1 ml-2"}`}>
+    <View class={`shrink-0 flex-row items-center ${phone ? "gap-2" : "gap-1 ml-2"}`}>
       <If when={dictationPhase() === "recording" || dictationPhase() === "stopping"}>
         <IconButton icon="stop" label={dictationPhase() === "recording" ? "Stop and insert transcript" : "Finishing transcription"}
           testID="dictation-stop" disabled={dictationPhase() !== "recording"} onPress={() => void run("voice.dictate")}
@@ -459,9 +471,22 @@ function EditableComposer() {
       <If when={dictationPhase() !== "idle" && dictationPhase() !== "recording" && dictationPhase() !== "stopping"}>
         <Btn label="Cancel dictation" kind="ghost" onPress={cancelDictation} testID="dictation-cancel-pending" />
       </If>
-      <If when={!phone && busy() && !canSend() && dictationPhase() === "idle"}
+      <If when={busy() && !canSend() && dictationPhase() === "idle"}
         else={<RoundButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} filled={canSend()} onPress={() => void send()} onLongPress={() => { if (phone && busy() && canSend()) sendChoice.set({ choose: (mode) => void send(mode) }); }} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />}>
         <RoundButton icon="stop" label="Interrupt" testID="stop" filled square onPress={() => void run("session.interrupt")} />
+      </If>
+    </View>
+  );
+  /** Agent and model (and Continue), on the control row with the phone's mic/send controls. */
+  const selectors = () => (
+    <View class={`flex-1 min-w-0 flex-row items-center ${phone ? "gap-1.5 overflow-hidden" : "gap-1"}`}>
+      <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart fixed={phone} cap={phone ? 132 : undefined} />
+      <If when={!phone}><Text class={T.meta}>·</Text></If>
+      <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
+      <If when={!phone}><Text class={T.meta}>·</Text></If>
+      <If when={!phone}><Selector command="model.effort" label={effort()} testID="composer-effort" fixed /></If>
+      <If when={!busy() && interrupted()}>
+        <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
       </If>
     </View>
   );
@@ -471,7 +496,7 @@ function EditableComposer() {
       onLayout={(b: any) => dockHeight.set(b.bounds?.size?.height ?? b.size?.height ?? 0)}>
     <TimelineColumn class="items-center">
         <View
-          class={`w-full ${qMode() ? "pt-0" : "pt-3"} pb-1`}
+          class={`w-full ${qMode() ? "pt-0" : phone ? "pt-1" : "pt-3"} pb-1`}
           accessibilityLabel="Composer" testID="composer-panel"
           onLayout={(b: any) => dockWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}
         >
@@ -555,11 +580,11 @@ function EditableComposer() {
               );
             }}
           </If>
-          <View class={`w-full ${qMode() ? "bg-raised rounded-b-(--radius-card) px-4 pb-2" : `bg-card ${phone ? "rounded-3xl px-4 pb-2" : "rounded-[14px] px-5 pb-2"}`} ${qMode() ? "" : `border ${open() ? "border-border" : "border-transparent"}`}`} testID="composer-surface">
+          <View class={`w-full ${qMode() ? "bg-raised rounded-b-(--radius-card) px-4 pb-2" : phone ? `bg-phone-card rounded-[26px] border ${focused() ? "border-border-strong" : "border-border"} pl-4 pr-1.5 pt-1.5 pb-0.5` : `bg-card rounded-[14px] px-5 pb-2 border ${open() ? "border-border" : "border-transparent"}`}`} testID="composer-surface">
           <If when={qMode()}><StatusRail color={dq()?.questions.some((x) => x.multiple) ? "bg-multi" : "bg-primary"} join="top" testID="question-dock-rail" /></If>
           <RetryNotices />
-          <View class={qMode() ? "h-1" : phone ? "h-2" : "h-5"} testID="composer-top-padding" />
-          <View class="w-full flex-row items-end gap-3" testID="composer-input-row">
+          <View class={qMode() ? "h-1" : phone ? "h-3" : "h-5"} testID="composer-top-padding" />
+          <View class={`w-full flex-row ${phone ? "items-center gap-3" : "items-end gap-3"}`} testID="composer-input-row">
           <Input
             onPaste={(e) => {
               const files = (e.files ?? []).filter((f) => f.type.startsWith("image/"));
@@ -568,7 +593,7 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={shown()} testID="composer-input" accessibilityLabel={qMode() ? "Add context to the answer" : "Message"}
-            placeholder={qMode() ? (qItem()?.options.length ? "Add context…" : "Type your answer…") : reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (busy() ? "Steer or queue a message…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
+            placeholder={qMode() ? (qItem()?.options.length ? "Add context…" : "Type your answer…") : reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (phoneApproval() ? "Or tell it what to do instead…" : busy() ? "Steer or queue…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
             readonly={!live() || (qMode() ? !qItem() || submitted().has(dq()!.id) : questionPending())}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
@@ -606,33 +631,23 @@ function EditableComposer() {
               const c = completion();
               if (open() && c) dismissed.set(c.kind === "file" ? `@${c.query}` : c.prefix);
             }}
-            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(phone ? 28 : 22, Math.ceil(s.size?.height ?? (s as any).height ?? 22) + (phone ? 4 : 0))))}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(phone ? 24 : 22, Math.ceil(s.size?.height ?? (s as any).height ?? 22))))}
             style={{ height: h(), ...UI_FONT }}
-            class={`flex-1 min-w-0 px-0 py-0 ${phone ? T.body : T.body.replace("text-[14px]", "text-[16px]").replace("leading-6", "leading-[22px]")} placeholder:text-muted-foreground`}
+            class={`flex-1 min-w-0 px-0 py-0 ${phone ? "font-(family-name:--font-ui) text-[16px] leading-[22px] text-foreground" : T.body.replace("text-[14px]", "text-[16px]").replace("leading-6", "leading-[22px]")} placeholder:text-muted-foreground`}
           />
-          <If when={phone}>{actions()}</If>
           </View>
-          <View class={phone ? "h-2" : "h-2.5"} />
-          <View class={`flex-row items-center gap-1 min-w-0 ${phone ? "min-h-8" : "min-h-[30px]"}`}>
-            <View class="flex-1 min-w-0 flex-row items-center gap-1">
-              <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart />
-              <Text class={T.meta}>·</Text>
-              <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
-              <If when={!phone}>
-                <Text class={T.meta}>·</Text>
-                <Selector command="model.effort" label={effort()} testID="composer-effort" fixed />
-              </If>
-              <If when={!busy() && interrupted()}>
-                <Btn label="Continue" icon="play" kind="ghost" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
-              </If>
-            </View>
+          <View class={qMode() ? "h-1" : phone ? "h-0.5" : "h-2.5"} />
+          <View class={`flex-row items-center gap-1 min-w-0 ${phone ? "min-h-10" : "min-h-[30px]"}`} testID={phone ? "phone-composer-meta" : undefined}>
+            {selectors()}
             <If when={!!usageLabel() && !phone}><View class="shrink-0 flex-row items-center gap-1" testID="composer-meter"><Text style={{ numberOfLines: 1, fontSize: 15, lineHeight: 22 }} class={T.meta} testID="composer-usage">{usageLabel()}</Text></View></If>
-            <If when={!phone && !qMode()}>{actions()}</If>
+            <If when={!qMode() || phone}>{actions()}</If>
           </View>
           </View>
         </View>
-        <LocationStrip working={working()} />
-        <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
+        <If when={!phone}>
+          <LocationStrip working={working()} />
+          <ActivityBar busy={busy()} fraction={usage()?.pct == null ? 0 : meterPct() / 100} slot={agentSlot(agent())} />
+        </If>
     </TimelineColumn>
     </View>
     </View>
@@ -705,25 +720,33 @@ function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.sl
 
 /** The composer's 30px round control: mic (bare), send (disabled: dim fill, enabled: foreground fill) and stop (filled square). */
 function RoundButton(p: { icon: "mic" | "arrow-up" | "stop"; label: string; onPress?: () => void; onLongPress?: () => void; disabled?: boolean; filled?: boolean; square?: boolean; testID?: string; reason?: string }) {
-  const size = isNarrow() ? "size-11" : "size-[30px]";
-  const skin = p.filled ? "bg-foreground hover:bg-foreground" : p.icon === "arrow-up" ? "bg-raised" : "hover:bg-accent";
-  const tint = p.filled ? "tint-background" : p.icon === "arrow-up" ? "tint-muted-foreground" : "tint-foreground-secondary";
-  const face = p.square ? <View class="size-2.5 rounded-sm bg-background" /> : <Icon name={p.icon} size={p.icon === "mic" ? 16 : 15} class={tint} />;
+  const size = isNarrow() ? (phone ? "size-10" : "size-11") : "size-[30px]";
+  const phoneSend = phone && p.icon === "arrow-up";
+  const micPhone = phone && p.icon === "mic";
+  // The phone is neutral (plans/05 5.5): a plain mic, and a send that fills with the text colour only when there is
+  // something to send.
+  const skin = micPhone ? "" : p.filled ? "bg-foreground hover:bg-foreground" : p.icon === "arrow-up" ? (phone ? "bg-phone-control" : "bg-raised") : "hover:bg-accent";
+  const tint = micPhone ? "tint-foreground-secondary" : p.filled ? "tint-background" : p.icon === "arrow-up" ? "tint-muted-foreground" : "tint-foreground-secondary";
+  const face = p.square ? <View class={`${phone ? "size-3 rounded-[3px]" : "size-2.5 rounded-sm"} bg-background`} /> : <Icon name={p.icon} size={phone ? (micPhone ? 21 : 18) : p.icon === "mic" ? 16 : 15} class={tint} />;
+  void phoneSend;
+  // A phone keeps the 44 pt hit target and shows a smaller 36 pt circle inside it.
+  const visual = phone ? <View class={`items-center justify-center rounded-full size-9 ${skin}`}>{face}</View> : face;
+  const outerSkin = phone ? "" : skin;
   if (p.onLongPress) {
     return (
       <View role="button" focusable onPress={() => { if (!p.disabled) p.onPress?.(); }} onLongPress={() => { if (!p.disabled) p.onLongPress?.(); }}
-        accessibilityLabel={p.label} testID={p.testID} class={`items-center justify-center rounded-full ${size} ${skin} active:bg-selection ${FOCUS}`}>{face}</View>
+        accessibilityLabel={p.label} testID={p.testID} class={`items-center justify-center rounded-full ${size} ${outerSkin} active:bg-selection ${FOCUS}`}>{visual}</View>
     );
   }
   return (
     <Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
       tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
-      class={`items-center justify-center rounded-full ${size} ${skin} ${p.icon === "mic" && p.disabled ? "opacity-50" : ""} ${FOCUS}`}>{face}</Button>
+      class={`items-center justify-center rounded-full ${size} ${outerSkin} ${p.icon === "mic" && p.disabled ? "opacity-50" : ""} ${FOCUS}`}>{visual}</Button>
   );
 }
 
 /** A selector on the control row, with an optional muted sub-label. */
-function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean; fixed?: boolean }) {
+function Selector(p: { command: string; label: string; labelClass?: string; sub?: string; testID: string; alignStart?: boolean; fixed?: boolean; cap?: number }) {
   const c = byId.get(p.command);
   const state = () => c ? availability(c) : { ok: false, reason: "Command is unavailable." };
   const disabled = () => !state().ok;
@@ -733,10 +756,19 @@ function Selector(p: { command: string; label: string; labelClass?: string; sub?
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-11" : "h-7"} ${p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      style={p.cap ? { maxWidth: p.cap } : undefined}
+      class={`flex-row items-center gap-1.5 ${p.fixed ? "shrink-0" : "min-w-0 shrink"} ${phone ? "min-h-11" : "h-7"} ${phone ? "" : p.alignStart ? "pl-0 pr-2" : "px-2"} rounded-(--radius) ${phone ? "" : "hover:bg-accent"} disabled:opacity-50 ${FOCUS}`}
     >
-      <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ? `font-medium ${p.labelClass}` : ""}`}>{p.label}</Text>
-      <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      {/* The phone draws a neutral pill (plans/05 5.5) inside the 44 pt target: name and a chevron. */}
+      <If when={phone} else={<>
+        <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink ${T.sec} ${p.labelClass ? `font-medium ${p.labelClass}` : ""}`}>{p.label}</Text>
+        <If when={!!p.sub}><Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 15, lineHeight: 22 }} class={`min-w-0 shrink-[2] ${T.sec}`}>{p.sub!}</Text></If>
+      </>}>
+        <View class="flex-row items-center gap-1 h-8 min-w-0 shrink overflow-hidden rounded-full bg-phone-control pl-3 pr-2.5">
+          <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 14, lineHeight: 20 }} class="min-w-0 shrink font-medium text-foreground-secondary">{p.label}</Text>
+          <Icon name="chevron-down" size={12} class="tint-muted-foreground" />
+        </View>
+      </If>
     </Button>
   );
 }
@@ -1047,7 +1079,7 @@ const setAskPage = (id: string, page: number) => askPages.update((all) => ({ ...
 const blankAnswer = () => ({ selected: [] as string[], text: "" });
 
 /** `session` also grants the same call for the rest of the session (allow only); `note` goes to the model with a refusal (deny only). */
-async function reply(a: Approval, allow: boolean, extra: { session?: boolean; note?: string } = {}) {
+export async function reply(a: Approval, allow: boolean, extra: { session?: boolean; note?: string } = {}) {
   busyWait.set(true); waitError.set(null);
   const body: Record<string, unknown> = { reply: allow ? "allow" : "deny" };
   if (allow && extra.session) body.scope = "session";
@@ -1055,6 +1087,22 @@ async function reply(a: Approval, allow: boolean, extra: { session?: boolean; no
   try { await request("POST", `/api/session/${a.session_id}/permission/${a.id}`, { body, key: newKey() }); }
   catch (e) { waitError.set(e instanceof ApiError ? e.message : String(e)); }
   busyWait.set(false);
+}
+/** The phone's Deny: the composer's text, when there is some, goes with it as the note (plans/05 5.5). */
+export function denyFromComposer(a: Approval) {
+  const k = draftKey();
+  const note = (draft()[k] ?? "").trim();
+  if (note) draft.update((d) => ({ ...d, [k]: "" }));
+  void reply(a, false, note ? { note } : {});
+}
+/** The approval the phone's composer answers: its text is "what to do instead", and sending it denies (plans/05 5.5). */
+export function phoneApproval(): Approval | undefined {
+  if (!phone) return undefined;
+  m();
+  const l = waitItems();
+  if (!l.length) return undefined;
+  const w = l[waitIndex() % l.length];
+  return w.kind === "approval" ? model.approvals.get(w.id) : undefined;
 }
 /** The note is the composer's text, as an answer to a question is. */
 function denyWithNote(a: Approval) {
@@ -1301,18 +1349,18 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   /** On desktop a question and the composer's context line are one dock: no gap, one rail. */
   const docked = () => !phone && !!question();
   return (
-    <View class={`relative w-full ${docked() ? "" : "mb-2"} ${phone ? "bg-muted rounded-[22px] overflow-hidden" : docked() ? "bg-raised rounded-t-(--radius-card)" : "bg-raised rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+    <View class={`relative w-full ${docked() ? "" : "mb-2"} ${phone ? "bg-phone-card rounded-[26px] border border-border overflow-hidden" : docked() ? "bg-raised rounded-t-(--radius-card)" : "bg-raised rounded-(--radius-card)"}`} testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
       <If when={!phone}><StatusRail color={multi() ? "bg-multi" : "bg-primary"} join={docked() ? "bottom" : undefined} testID="waiting-rail" /></If>
       <If when={question()}><View testID="waiting-reading-hint" class="shrink-0 pl-4 pr-4 pt-2 pb-2" style={{ minHeight: 40 }}><Text class={T.meta}>Scroll or Page Up/Down to read questions and choices</Text></View></If>
       <Scroll focusable ref={(n: any) => { focusWaiting.fn = () => { try { n?.focus(); } catch { /* not focusable here */ } }; }} testID="waiting-scroll" style={{ maxHeight: Math.round(windowSize().height * 0.6) }}>
         <View class={phone ? "p-4 gap-2.5" : "pl-4 pr-4 py-3 gap-2.5"}>
           <View>
           <View class="flex-row items-center gap-2 min-h-6">
-            <Text class={`${phone ? "text-[11px] leading-6" : "text-[16px] leading-6"} ${multi() ? "text-multi" : "text-primary"}`}>◆</Text>
+            <Text class={`${phone ? "text-[11px] leading-6" : "text-[16px] leading-6"} ${multi() ? "text-multi" : phone ? "text-warning" : "text-primary"}`}>◆</Text>
             <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${phone ? "text-[17px]" : "text-[16px]"} leading-6 font-semibold text-foreground ${"font-(family-name:--font-ui)"}`} testID="waiting-title">
-              {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
+              {approval() ? (phone && approval()!.tool === "bash" ? "Run this command?" : `Allow ${approval()!.tool}?`) : "Nexus asks"}
             </Text>
-            <If when={phone}><Text class="text-[13px] leading-5 text-muted-foreground tabular-nums" testID="waiting-timer">{clock(elapsed())}</Text></If>
+            <If when={phone && !!approval()}><Text class="font-(family-name:--font-ui) text-[13px] leading-5 text-muted-foreground" testID="waiting-tool">{approval()?.tool ?? ""}</Text></If>
             <If when={p.count > 1}>
               <Button onPress={() => run("waiting.next")} accessibilityLabel="Next waiting item" testID="waiting-next" class={`flex-row items-center gap-1.5 rounded-(--radius) px-1.5 hover:bg-accent ${FOCUS}`}>
                 <Text class={T.meta}>{`${(waitIndex() % p.count) + 1} of ${p.count} ·`}</Text>
@@ -1361,7 +1409,7 @@ function ApprovalBody(p: { a: Approval }) {
       <If when={phone}>
         <PhoneApprovalChoices id={a.id} command={compactApproval(a)} busy={busyWait()} live={live()}
           onAllowOnce={() => void reply(a, true)} onAllowSession={() => void reply(a, true, { session: true })}
-          onDeny={(note) => void reply(a, false, note ? { note } : {})} />
+          onDeny={() => denyFromComposer(a)} />
       </If>
       <If when={!phone && parts().table.length > 0}>
         <View class="rounded-(--radius) bg-background px-3 py-2 gap-0.5" testID="waiting-table">

@@ -28,7 +28,7 @@ export const model = new Model();
 export type ContextEntry = { key: string; name: string; description: string; full?: string; load?: () => Promise<string>; markdown?: boolean };
 /** `live`: opened by `/skills` or `/mcp`, so its rows follow the session or draft and switch it (plan 48). */
 /** `fixed`: opened from a started session's header, so it shows state and names the command that switches it. */
-export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows; live?: "skills" | "mcp"; fixed?: boolean } | null>(null);
+export const contextDetail = signal<{ title: string; detail: string; markdown?: boolean; entries?: ContextEntry[]; focus?: string; skillRows?: InventorySkillRows; live?: "tools" | "skills" | "mcp"; fixed?: boolean; toolOff?: string[] } | null>(null);
 /** The `Subagent done` modal: the exact model text and the facts Core attached to it. */
 export const subagentDone = signal<{ text: string; notice: SubagentNotice } | null>(null);
 type InventorySkillRows = { rows: import("./skills-mcp").InventoryRow[]; toggle?: (kind: import("./skills-mcp").InventoryKind, name: string, locked: boolean) => void };
@@ -330,6 +330,15 @@ export function draftLastAnswer(project: string) {
   const answer = draftContext();
   if (!answer) return null;
   try { return JSON.parse(answer.key)[0] === project ? answer.data : null; } catch { return null; }
+}
+/** Keep an off tool in the modal while Core replans after it is switched back on. */
+export function draftLastToolNames(project: string): string[] {
+  const answer = draftContext();
+  if (!answer) return [];
+  const [id, agent, model, effort, off] = JSON.parse(answer.planKey);
+  const draft = sessionDraft();
+  if (id !== project || agent !== (draft.agent ?? null) || model !== (draft.model ?? null) || effort !== (draft.effort ?? null)) return [];
+  return [...answer.data.tools ?? [], ...((off ?? []) as string[]).filter((name) => !name.includes(":"))];
 }
 /** The project's worktree switch, from Core's last draft answer for it; null outside Git or before Core answers. */
 export function draftWorktreeOffer(project: string): WorktreeOffer | null {

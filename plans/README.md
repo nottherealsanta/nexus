@@ -33,8 +33,8 @@ Re-audited 2026-11-11. New requests from the user on 2026-11-11 are marked **new
 
 | # | File | State | Next step |
 | --- | --- | --- | --- |
-| 51 | [Firecrawl Local: scrape, documents, map, crawl](51-firecrawl.md) | **landed 2026-11-23** in Core and both clients; live run of the real binary done | JavaScript-page and Linux checks; NSH tests and paired screenshots; see the file |
-| 52 | [First-run onboarding](52-onboarding.md) | **landed 2026-11-23** | User tries it on a fresh home; real sign-in from the tour unverified |
+| 51 | [Firecrawl Local: scrape, documents, map, crawl](51-firecrawl.md) | **landed 2026-11-23** in Core and both clients; **release source changed 2026-11-24** to the pinned 0.1.1 public build release (SHA256SUMS-verified; Nexus CI no longer builds or serves it) | Verify the external `v0.1.1` assets (none published when checked 11-24), then a real install and live scrape; JavaScript-page and Linux checks; NSH tests and paired screenshots |
+| 52 | [First-run onboarding](52-onboarding.md) | **landed 2026-11-23**; Web search step added to desktop onboarding 2026-11-24 (TUI implemented, NSH pending) | Wire NSH's search step; user tries it on a fresh home; real sign-in from the tour unverified |
 | 50 | [Core performance: Python first, Rust for proven hot spots](50-rust-core.md) | **new 2026-11-17**; trivial routes waited up to 1.3 s on Core's event loop; five workstreams (A–E) in worktrees | Merge workstreams; user restarts the daemon and collects a week of `nexus perf` |
 | 49 | [Markdown links](49-markdown-links.md) | **partial 2026-11-17** | Extend link clicks beyond assistant timeline Markdown; verify both clients |
 | 48 | [Context header: draft, then fixed](48-context-header-modes.md) | **landed 2026-11-17** except screenshots | Paired TUI/NSH screenshots in `reports/48-context-header-modes/`; try a real session with the switch on |

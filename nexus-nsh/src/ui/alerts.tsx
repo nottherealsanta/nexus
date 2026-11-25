@@ -3,7 +3,7 @@ import { Button } from "nsh/base";
 import { Btn, Icon, IconButton, Spinner, T, FOCUS } from "./kit";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { run, availability, byId, copyText, escape, otherWaits } from "../commands";
-import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
+import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, phone, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
 import { statusGlyphs } from "../gen/theme";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
@@ -66,9 +66,21 @@ export function currentAlerts(): Alert[] {
 export function Banners() {
   const all = () => currentAlerts();
   const top = () => all()[0];
+  // The phone shows "other sessions waiting" as a quiet pill over the conversation's top (plans/05 5.5); a tap goes there.
+  const pill = () => phone && top()?.key === "other-waits";
   return (
     <If when={top()}>
       {(a) => (
+        <If when={!pill()} else={
+          <View class="shrink-0 items-center pt-2 pb-1" testID="banner" role="alert" accessibilityLabel={a().text}>
+            <Button onPress={() => void run("waiting.go_to")} testID="banner-waits-pill" accessibilityLabel={`${a().text}. Go there`}
+              class={`flex-row items-center gap-2 min-h-9 px-3.5 rounded-full bg-phone-card border border-border active:bg-phone-control ${FOCUS}`}>
+              <Text class="text-[10px] leading-5 text-warning" accessible={false}>◆</Text>
+              <Text style={{ numberOfLines: 1 }} class="font-(family-name:--font-ui) text-[14px] leading-5 text-foreground">{a().text}</Text>
+              <Icon name="chevron-right" size={13} class="tint-muted-foreground" />
+            </Button>
+          </View>
+        }>
         <View class="shrink-0 border-b border-border bg-card" role="alert" testID="banner" accessibilityLabel={`${GLYPH[a().level].word}: ${a().text}${a().sub ? `. ${a().sub}` : ""}`}>
           <TimelineColumn>
             <View class={`${TEXT_INSET} ${isNarrow() ? "py-2 gap-2" : "min-h-10 flex-row items-center gap-2.5 py-1"}`}>
@@ -92,6 +104,7 @@ export function Banners() {
             </View>
           </TimelineColumn>
         </View>
+        </If>
       )}
     </If>
   );

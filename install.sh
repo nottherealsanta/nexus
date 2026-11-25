@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install Nexus 0.10: the Core `nexus` command (a uv tool), the TUI binary, `firecrawl-local` (the scraper behind the
-# `firecrawl` tool) and, when the release has one, the web bundle.
+# Install Nexus 0.10: the Core `nexus` command (a uv tool), the TUI binary, `firecrawl-local` (downloaded from its own
+# public release, checksum-verified) and, when the release has one, the web bundle.
 #
 #   curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh | sh
 #   ./install.sh                  from a checkout: build everything here (needs uv, cargo, npm and nsh)
@@ -12,14 +12,20 @@
 # With no checkout beside this file the default is the latest GitHub release: the files are downloaded, checked against the
 # release's SHA256SUMS, and installed. PREFIX (default ~/.local) holds bin/nexus-tui, bin/firecrawl-local and share/nexus/web.
 # NEXUS_RELEASE_BASE overrides https://github.com/nottherealsanta/nexus/releases (a mirror, or file:// for tests).
+# NEXUS_FIRECRAWL_BASE overrides the download base of
+# https://github.com/nottherealsanta/firecrawl-local-builds/releases (the pinned firecrawl-local binaries).
 set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin"
 WEB="$PREFIX/share/nexus/web"
 BASE="${NEXUS_RELEASE_BASE:-https://github.com/nottherealsanta/nexus/releases}"
+# Pinned where the binaries are published, outside this repository; Core pins the same version for the protocol it speaks.
+FC_VERSION=0.1.1
+FC_BASE="${NEXUS_FIRECRAWL_BASE:-https://github.com/nottherealsanta/firecrawl-local-builds/releases/download}"
 
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'install: warning: %s\n' "$*" >&2; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH${2:+ ($2)}"; }
 step() { printf '› %s\n' "$*"; }
 
@@ -44,7 +50,7 @@ while [ $# -gt 0 ]; do
     --source) MODE=source ;;
     --release) MODE=release
       case "${2:-}" in v[0-9]*) TAG="$2"; shift ;; esac ;;
-    -h|--help) sed -n '2,13p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (try --help)" ;;
   esac
   shift
@@ -87,6 +93,10 @@ install_source() {
     [ -x /usr/bin/env ] || die "the Monty kernel launcher requires /usr/bin/env"
   fi
 
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT INT TERM
+  download_firecrawl
+
   step "Core (uv tool)"
   uv tool install --quiet --force --reinstall --no-binary-package claude-agent-sdk "$ROOT/nexus-core"
 
@@ -94,15 +104,9 @@ install_source() {
   (cd "$ROOT/nexus-tui" && cargo build --release)
   mkdir -p "$BIN"
   install -m 755 "$ROOT/nexus-tui/target/release/nexus-tui" "$BIN/nexus-tui"
-
-  # firecrawl-local, at the version Core pins. Built from crates.io (a few minutes) unless that version is already here.
-  fc="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' "$ROOT/nexus-core/nexus/firecrawl.py")"
-  [ -n "$fc" ] || die "no firecrawl-local VERSION in nexus-core/nexus/firecrawl.py"
-  if [ -x "$BIN/firecrawl-local" ] && "$BIN/firecrawl-local" --version 2>/dev/null | grep -qF "$fc"; then
-    step "firecrawl-local $fc (already installed)"
-  else
-    step "firecrawl-local $fc (building from crates.io)"
-    cargo install firecrawl-local --version "$fc" --locked --root "$PREFIX" --force
+  if [ -n "$FC_ASSET" ]; then
+    step "firecrawl-local $FC_VERSION"
+    install -m 755 "$WORK/$FC_ASSET" "$BIN/firecrawl-local"
   fi
 
   step "NSH web bundle"
@@ -123,18 +127,23 @@ release_url() { # file
   if [ -n "$TAG" ]; then printf '%s/download/%s/%s' "$BASE" "$TAG" "$1"; else printf '%s/latest/download/%s' "$BASE" "$1"; fi
 }
 
-fetch() { # file, into WORK, [failure message]
+fetch_url() { # url, destination, label
   # GitHub's asset edge answers 504 under load. curl retries those transient codes on its own; the
   # outer loop covers the rest (a reset mid-transfer, a connection refused), so one bad minute does
   # not sink an install.
   attempts=0
   while :; do
     attempts=$((attempts + 1))
-    curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 2 "$(release_url "$1")" -o "$WORK/$1" && return 0
-    [ "$attempts" -lt 3 ] || die "${2:-could not download $1 from $(release_url "$1") after 3 attempts}"
-    printf 'install: download of %s failed; retrying (%d/3)\n' "$1" "$((attempts + 1))" >&2
+    curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 2 "$1" -o "$2" && return 0
+    [ "$attempts" -lt 3 ] || return 1
+    printf 'install: download of %s failed; retrying (%d/3)\n' "$3" "$((attempts + 1))" >&2
     sleep 3
   done
+}
+
+fetch() { # file, [failure message]
+  fetch_url "$(release_url "$1")" "$WORK/$1" "$1" \
+    || die "${2:-could not download $1 from $(release_url "$1") after 3 attempts}"
 }
 
 verify() { # file
@@ -145,6 +154,47 @@ verify() { # file
 
 listed() { awk -v f="$1" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' "$WORK/SHA256SUMS"; }
 
+fc_platform() { # sets fc_os and fc_arch for this machine, or fails on an unsupported one
+  fc_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$fc_os" in darwin|linux) ;; *) return 1 ;; esac
+  case "$(uname -m)" in
+    arm64|aarch64) fc_arch=arm64 ;;
+    x86_64|amd64) fc_arch=amd64 ;;
+    *) return 1 ;;
+  esac
+}
+
+# firecrawl-local is built and published outside this repository, so fetch the pinned binary for this machine and
+# check it against that release's own SHA256SUMS. A missing release or platform leaves Nexus without the firecrawl
+# tool (a warning, not a failed install); a checksum mismatch stops before anything is written.
+FC_ASSET=""
+download_firecrawl() {
+  FC_ASSET=""
+  command -v curl >/dev/null 2>&1 || { warn "curl is not on PATH; firecrawl-local is not installed"; return 0; }
+  if ! fc_platform; then
+    warn "no firecrawl-local $FC_VERSION build for $(uname -s) $(uname -m); the firecrawl tool will be unavailable"
+    return 0
+  fi
+  fc="firecrawl-local-$fc_os-$fc_arch"
+  sums="$WORK/firecrawl-SHA256SUMS"
+  if ! fetch_url "$FC_BASE/v$FC_VERSION/SHA256SUMS" "$sums" "firecrawl-local $FC_VERSION SHA256SUMS"; then
+    warn "could not download the firecrawl-local $FC_VERSION checksums; the firecrawl tool will be unavailable"
+    return 0
+  fi
+  if ! awk -v f="$fc" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' "$sums"; then
+    warn "firecrawl-local $FC_VERSION has no build for $fc_os-$fc_arch; the firecrawl tool will be unavailable"
+    return 0
+  fi
+  if ! fetch_url "$FC_BASE/v$FC_VERSION/$fc" "$WORK/$fc" "$fc"; then
+    warn "could not download $fc; the firecrawl tool will be unavailable"
+    return 0
+  fi
+  want="$(awk -v f="$fc" '$2 == f || $2 == "*" f { print $1 }' "$sums")"
+  [ "$(sha256_of "$WORK/$fc")" = "$want" ] \
+    || die "the checksum of $fc does not match firecrawl-local-builds' SHA256SUMS; nothing was installed"
+  FC_ASSET="$fc"
+}
+
 install_release() {
   need curl
   need uv "https://docs.astral.sh/uv/"
@@ -154,7 +204,6 @@ install_release() {
     die "musl (Alpine) is not supported; use a glibc distribution"
   fi
   tui="nexus-tui-$os-$(uname -m)"
-  fc="firecrawl-local-$os-$(uname -m)"
 
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -175,21 +224,18 @@ install_release() {
   step "Download and verify"
   fetch "$wheel"; verify "$wheel"
   fetch "$tui"; verify "$tui"
-  firecrawl=""
-  if listed "$fc"; then firecrawl="$fc"; fetch "$fc"; verify "$fc"; fi
   web=""
   if listed nexus-web.tar.gz; then web=nexus-web.tar.gz; fetch "$web"; verify "$web"; fi
+  download_firecrawl
 
   step "Core (uv tool)"
   uv tool install --quiet --force --reinstall --no-binary-package claude-agent-sdk "$WORK/$wheel"
   step "TUI"
   mkdir -p "$BIN"
   install -m 755 "$WORK/$tui" "$BIN/nexus-tui"
-  if [ -n "$firecrawl" ]; then
-    step "firecrawl-local"
-    install -m 755 "$WORK/$firecrawl" "$BIN/firecrawl-local"
-  else
-    printf 'This release has no firecrawl-local for %s; the `firecrawl` tool needs `nexus firecrawl init`.\n' "$os $(uname -m)"
+  if [ -n "$FC_ASSET" ]; then
+    step "firecrawl-local $FC_VERSION"
+    install -m 755 "$WORK/$FC_ASSET" "$BIN/firecrawl-local"
   fi
   if [ -n "$web" ]; then
     step "Web bundle"

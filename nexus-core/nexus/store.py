@@ -1101,7 +1101,10 @@ class Store:
     # -- projects ------------------------------------------------------------
 
     def project_for_path(self, path: str, name: str | None = None, *, hidden: bool = False) -> tuple[Project, bool]:
-        """The project at `path`, created if missing. Returns (project, created)."""
+        """The project at `path`, created if missing. Returns (project, created).
+
+        An existing row is returned unchanged, including a project whose status is `inactive`.
+        """
         resolved = str(Path(path).expanduser().resolve())
         if not Path(resolved).is_dir():
             raise ValueError(f"{resolved} is not a directory")

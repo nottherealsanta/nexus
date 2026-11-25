@@ -58,7 +58,7 @@ def check_strings(m: dict, path: Path, err) -> None:
         err(f"strings.{key}: defined but no client uses it")
 
 
-STEP_KINDS = {"info", "provider", "agents", "done"}
+STEP_KINDS = {"info", "provider", "agents", "search", "done"}
 KEY_REF_RE = re.compile(r"\{key:([a-z][a-z0-9_.]*)\}")
 
 
@@ -86,9 +86,11 @@ def check_onboarding(m: dict, ids: dict, err) -> None:
     kinds = [s.get("kind") for s in steps]
     if kinds[0] != "info" or kinds[-1] != "done" or kinds.count("done") != 1:
         err("onboarding: steps must start with an info step and end with exactly one done step")
-    for kind in ("provider", "agents"):
+    for kind in ("provider", "agents", "search"):
         if kinds.count(kind) != 1:
             err(f"onboarding: exactly one {kind} step is required")
+    if kinds.index("agents") + 1 != kinds.index("search"):
+        err("onboarding: the search step must come directly after the agents step")
     agents = ob.get("agent", [])
     if not agents:
         err("onboarding: no [[onboarding.agent]] rows")
@@ -105,7 +107,7 @@ def check_onboarding(m: dict, ids: dict, err) -> None:
                 err(f"onboarding.agent {name}: missing {req}")
         if a.get("kind") == "root" and len(a.get("options", [])) < 2:
             err(f"onboarding.agent {name}: a root row needs at least two options")
-    for req in ("finish_no_project", "no_provider", "quest_provider", "hints_info", "hints_rows"):
+    for req in ("finish_no_project", "no_provider", "quest_provider", "hints_info", "hints_rows", "hints_search", "search_retry"):
         if not ob.get(req):
             err(f"onboarding: missing {req}")
 

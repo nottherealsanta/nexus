@@ -113,7 +113,9 @@ nexus/
   files.py           project file browse, search and editor writes
   artifacts.py       stored media from tool results
   net.py             public-internet-only GET for web_fetch
-  firecrawl.py       install, process and client of the local Firecrawl behind the firecrawl tool
+  firecrawl.py       process and client of the local Firecrawl behind the firecrawl tool
+  searchservice.py   status and start of the local SearXNG behind web_search (Apple container or Docker)
+  search/            packaged SearXNG settings.yml, copied into the Nexus home on first start
   provider_usage.py  every connected provider's usage; plan windows where reported
   doctor.py          `nexus doctor` and the release check
   kernels.py         daemon-owned persistent Monty kernels
@@ -253,12 +255,22 @@ Then, from any directory:
 | `nexus fmt` | `cargo fmt` for the TUI and Mermaid crates, and regenerate the shared NSH files |
 | `nexus doctor` | Versions and paths, then Core's `nexus doctor` rows |
 | `nexus update` | Updates an installed Nexus. A release install runs the latest release's `install.sh`, pinned to that tag and verified against its `SHA256SUMS` (the installer then verifies every asset); a checkout install fast-forwards its upstream branch and runs the checkout's `./install.sh --source`. It refuses a dirty checkout (untracked files included), local commits, a detached HEAD, a missing upstream and an install it cannot classify, and never discards changes. A checkout is rebuilt even if already up to date, so an earlier pull or failed build can be installed. Either path restarts a running Core daemon and interrupts active turns. The installer uses `$PREFIX` (default `~/.local`); set it to the original prefix for a custom installation. `--check` and `--json` report only; `--yes` skips the confirmation for automation |
-| `./install.sh` | In a checkout, builds and installs the `nexus` uv tool (Claude's SDK built from source, so no bundled CLI), `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`); `--release [vX.Y.Z]` installs a GitHub release instead; `--uninstall` removes them and never touches `$NEXUS10_HOME`. Without a checkout (`curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh \| sh`) it installs the latest release: it downloads the Core wheel, the TUI binary for this platform and the web bundle if the release has one, checks each against the release's `SHA256SUMS`, then installs. Downloads retry (curl retries GitHub's `5xx`/timeout answers, then the script retries the whole file) because the release asset edge sometimes answers `504`; a released asset stays checksummed, so a retried download is either verified or refused. Either way, a Core daemon that is running is then restarted with the new `nexus` (a stopped one stays stopped), so it never keeps serving the old code. It is POSIX `sh`; Alpine/musl is refused. `NEXUS_RELEASE_BASE` points it at a mirror or a `file://` directory, which is how `scripts/test-install.sh` (run by `nexus test`, `nexus check` and CI, with a stub `curl` that answers `504` twice) exercises it offline. On Linux it warns when `libasound.so.2` is missing, since the TUI links it |
+| `./install.sh` | In a checkout, builds and installs the `nexus` uv tool (Claude's SDK built from source, so no bundled CLI), `nexus-tui` and the NSH bundle under `$PREFIX` (default `~/.local`), and downloads `firecrawl-local` from its own release (below); `--release [vX.Y.Z]` installs a GitHub release instead; `--uninstall` removes them and never touches `$NEXUS10_HOME`. Without a checkout (`curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh \| sh`) it installs the latest release: it downloads the Core wheel, the TUI binary for this platform and the web bundle if the release has one, checks each against the release's `SHA256SUMS`, then installs. Downloads retry (curl retries GitHub's `5xx`/timeout answers, then the script retries the whole file) because the release asset edge sometimes answers `504`; a released asset stays checksummed, so a retried download is either verified or refused. Either way, a Core daemon that is running is then restarted with the new `nexus` (a stopped one stays stopped), so it never keeps serving the old code. It is POSIX `sh`; Alpine/musl is refused. `NEXUS_RELEASE_BASE` points it at a mirror or a `file://` directory, which is how `scripts/test-install.sh` (run by `nexus test`, `nexus check` and CI, with a stub `curl` that answers `504` twice) exercises it offline. On Linux it warns when `libasound.so.2` is missing, since the TUI links it |
 | `nexus core <args>` | Core CLI explicitly |
 
 The installer runs uv quietly instead of listing every package, while retaining errors. Its completion message suggests
 `nexus voice init` for the optional speech-to-text and text-to-speech runtime and both models.
-A release also installs `firecrawl-local` (`$PREFIX/bin`) for the `firecrawl` tool; a checkout install builds it at the version pinned in `nexus/firecrawl.py`, and `nexus firecrawl init` is the fallback when a release has no binary for the platform ([tools.md](tools.md#firecrawl)).
+Both install paths download `firecrawl-local` for the `firecrawl` tool: `install.sh` fetches the pinned **0.1.1**
+`firecrawl-local-<os>-<arch>` and `SHA256SUMS` from the public
+[nottherealsanta/firecrawl-local-builds](https://github.com/nottherealsanta/firecrawl-local-builds) release and verifies the
+checksum before installing it in `$PREFIX/bin`. A missing release, platform asset or download warns and installs Nexus
+without the tool; a mismatch stops the install. `NEXUS_FIRECRAWL_BASE` overrides the download base (a mirror, or
+`file://` for tests). `nexus firecrawl init` remains the cargo fallback for a release with no binary ([tools.md](tools.md#firecrawl)).
+
+Nexus CI no longer builds or serves `firecrawl-local`: `build-artifacts.yml` has no firecrawl job and `release.yml` no
+longer attaches the binary or its notice to a Nexus release. The separate public build repository is the source.
+`scripts/test-install.sh` covers an external download, ignoring a legacy Nexus asset, a missing release (warn and continue)
+and a checksum mismatch (stop) offline.
 
 For a release with `nexus-web.tar.gz`, the installer puts the NSH web client and its same-origin host in
 `$PREFIX/share/nexus/web`. With Node 22 or newer and `nexus` on `PATH`, start the host and open `http://127.0.0.1:4820`:

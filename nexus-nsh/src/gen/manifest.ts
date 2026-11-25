@@ -601,7 +601,7 @@ export const manifest = {
       "kind": "info",
       "scope": "core",
       "clients": "both",
-      "note": "The local SearXNG behind web_search: running, stopped, not set up, or unavailable (GET /api/search/service)."
+      "note": "The local SearXNG behind web_search, running in a container on Core's host (Apple container or Docker). GET /api/search/service reports running, starting, stopped, not set up or unavailable, with the last error."
      },
      {
       "id": "tools.search_start",
@@ -609,7 +609,8 @@ export const manifest = {
       "kind": "action",
       "scope": "core",
       "clients": "both",
-      "command": "search.start"
+      "command": "search.start",
+      "note": "Starts SearXNG in the background. The first start downloads its container image, which can take a few minutes."
      }
     ]
    },
@@ -933,6 +934,8 @@ export const manifest = {
   "quest_provider": "Connect a provider",
   "hints_info": "enter next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
   "hints_rows": "\u2191\u2193 choose \u00b7 enter change \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "hints_search": "enter retry \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "search_retry": "Retry",
   "step": [
    {
     "id": "welcome",
@@ -964,6 +967,17 @@ export const manifest = {
      "Leave a row unset and the agent uses the model of the session that starts it. Settings > Agents has more: several models, fallbacks, effort."
     ],
     "tip": "Type part of a name in the picker to filter it."
+   },
+   {
+    "id": "search",
+    "kind": "search",
+    "title": "Web search",
+    "lines": [
+     "Nexus can search the web for you through SearXNG, a small search server that runs in a container on the machine running Nexus Core. Nothing runs on this device.",
+     "Nexus starts it now, in the background. The first start downloads its container image, which can take a few minutes, so the tour does not wait for it.",
+     "If it does not start, retry here or later in Settings > Tools. You can continue without it."
+    ],
+    "tip": "Core starts the container with Apple container or Docker, whichever is installed on its host. Nexus does not install or configure either."
    },
    {
     "id": "timeline",
@@ -1082,7 +1096,18 @@ export const manifest = {
   "layout.unsaved.discard": "Discard",
   "layout.unsaved.cancel": "Cancel",
   "layout.terminal.split": "New terminal",
-  "layout.drop.cancelled": "Drag cancelled."
+  "layout.drop.cancelled": "Drag cancelled.",
+  "web_search.running": "Web search is running.",
+  "web_search.starting": "Web search is starting. The first start downloads its container image.",
+  "web_search.failed": "Web search did not start: {error}",
+  "web_search.state.running": "running",
+  "web_search.state.starting": "starting\u2026",
+  "web_search.state.stopped": "stopped",
+  "web_search.state.absent": "not set up",
+  "web_search.state.unavailable": "unavailable",
+  "web_search.loading": "loading status\u2026",
+  "web_search.no_status": "status unavailable",
+  "web_search.runtime": "runtime {runtime}"
  },
  "command": [
   {
@@ -3731,7 +3756,7 @@ export const manifest = {
    "placement": [
     "palette"
    ],
-   "note": "POST /api/search/service/start: starts the local SearXNG (Apple container or Docker) and waits until it answers."
+   "note": "POST /api/search/service/start: starts the local SearXNG container in the background; GET /api/search/service reports progress and the last error."
   },
   {
    "id": "voice.download_stt",

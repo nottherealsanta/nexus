@@ -5,6 +5,7 @@ import { Btn, Icon, T, TS } from "./kit";
 import { ProviderDetailModal, loadSettingsData, openProviderDetail, providerStatus, settingsData } from "./settings";
 import { byId, keyLabel, run } from "../commands";
 import { centre, config, confirmDialog, currentProject, live, patchConfig, picker, providerDetail, providerLogins, settingsReload } from "../store";
+import { ensureSearchStarted, refreshSearchService, searchService, searchServiceError, searchStartError, searchStartReason, searchStarting, searchStatusLines, startSearchService } from "../search-service";
 import {
   ONBOARDING, agentModelLine, agentModelsPatch, closeOnboarding, currentStep, fillKeys, lastStep, nextStep, onboardingOpen, onboardingStep,
   onboardingSteps, previousStep, rootAgent,
@@ -75,6 +76,21 @@ function AgentsStep() {
   </View>;
 }
 
+/** SearXNG's state from Core, then Retry. Core starts it in the background; the tour never waits for it. */
+function SearchStep() {
+  const state = () => searchStarting() ? "starting" : searchService()?.state ?? (searchServiceError() || searchStartError() ? "unavailable" : "loading");
+  const tone = () => state() === "running" ? "text-success" : state() === "starting" ? "text-warning" : state() === "unavailable" ? "text-error" : "text-foreground-secondary";
+  const reason = () => !live() ? "Core is not connected: the view is read-only." : searchStartReason();
+  return <View class="gap-2" testID="onboarding-search">
+    <View class="gap-1" testID="onboarding-search-status">
+      <Each of={searchStatusLines()} key={(line: string) => line}>{(line, i) => <Text style={{ userSelect: "text" }} class={`${TS.base} ${i() === 0 ? tone() : "text-foreground-secondary"}`}>{line()}</Text>}</Each>
+    </View>
+    <View class="flex-row">
+      <Btn ref={rowRef(0)} label={ONBOARDING.search_retry} disabled={!live() || !!reason()} reason={reason()} onPress={() => void startSearchService()} testID="onboarding-search-retry" />
+    </View>
+  </View>;
+}
+
 function Dots() {
   return <View class="flex-row items-center gap-1.5" accessibilityLabel={`Step ${onboardingStep() + 1} of ${onboardingSteps.length}`} testID="onboarding-dots">
     <Each of={onboardingSteps} key={(s) => s.id}>{(s) => <View class={`h-2 rounded-full ${onboardingSteps.indexOf(s()) === onboardingStep() ? "w-5 bg-primary" : onboardingSteps.indexOf(s()) < onboardingStep() ? "w-2 bg-primary/60" : "w-2 bg-border"}`} />}</Each>
@@ -95,8 +111,16 @@ function OnboardingBody() {
   let primary: { focus: () => void } | null = null;
   let at = 0;
   const free = () => onboardingOpen() && !picker() && !providerDetail() && !confirmDialog() && centre() !== "settings";
-  const rowStep = () => step().kind === "provider" || step().kind === "agents";
+  const rowStep = () => step().kind === "provider" || step().kind === "agents" || step().kind === "search";
   effect(() => { onboardingStep(); at = 0; queueMicrotask(() => { if (!free()) return; if (rowStep() && rows[0]) rows[0].focus(); else primary?.focus(); }); });
+  // The search step starts SearXNG in the background on entry and follows it until it runs; leaving stops the poll.
+  effect(() => {
+    const kind = step().kind;
+    if (!onboardingOpen() || kind !== "search") return;
+    void ensureSearchStarted();
+    const timer = setInterval(() => { if (onboardingOpen() && searchService()?.state !== "running") void refreshSearchService(); }, 2000);
+    return () => clearInterval(timer);
+  });
   effect(() => {
     const move = (by: number) => { if (!free() || !rowStep() || !rows.length) return; at = Math.max(0, Math.min(rows.length - 1, at + by)); rows[at]?.focus(); };
     const offs = [
@@ -122,13 +146,14 @@ function OnboardingBody() {
           <Each of={step().lines} key={(line: string) => line}>{(line) => <Text class={T.sec} style={{ userSelect: "text" }}>{keyText(line())}</Text>}</Each>
           <If when={step().kind === "provider"}><ProviderStep /></If>
           <If when={step().kind === "agents"}><AgentsStep /></If>
+          <If when={step().kind === "search"}><SearchStep /></If>
           <If when={step().tip}><View class="flex-row items-start gap-2 pt-1"><Icon name="info" size={14} class="tint-muted-foreground" /><Text class={`flex-1 ${T.meta}`}>{keyText(step().tip!)}</Text></View></If>
           <If when={step().kind === "done" && !currentProject()}><Text class={`${TS.base} text-warning`}>{ONBOARDING.finish_no_project}</Text></If>
         </View>
       </Scroll>
       <View class="flex-row items-center justify-between gap-3 px-6 py-4">
         <Btn label="Back" kind="ghost" disabled={onboardingStep() === 0} onPress={previousStep} testID="onboarding-back" />
-        <Text class={T.meta} testID="onboarding-hints">{step().kind === "provider" || step().kind === "agents" ? ONBOARDING.hints_rows : ONBOARDING.hints_info}</Text>
+        <Text class={T.meta} testID="onboarding-hints">{step().kind === "provider" || step().kind === "agents" ? ONBOARDING.hints_rows : step().kind === "search" ? ONBOARDING.hints_search : ONBOARDING.hints_info}</Text>
         <If when={!lastStep()} else={<Btn ref={(n) => { primary = n; }} label="Finish" kind="primary" onPress={() => void finish(true)} testID="onboarding-finish" />}>
           <Btn ref={(n) => { primary = n; }} label="Next" kind="primary" onPress={nextStep} testID="onboarding-next" />
         </If>

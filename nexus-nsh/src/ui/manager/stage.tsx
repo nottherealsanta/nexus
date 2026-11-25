@@ -149,13 +149,23 @@ export function ManagerPanel(p: { full?: boolean }) {
         <Scroll ref={(node: any) => { scroll = node; }} onScroll={(event) => { offset = event.offset.y; limit = Math.max(0, event.contentSize.height - event.size.height); }} class={p.full ? "flex-1 min-h-0" : ""} style={p.full ? {} : { maxHeight: Math.max(100, windowSize().height - 230) }}>
           <View class="gap-3">
             {/* The Manager's model context is not shown here: it is the debug session view (Open Manager session). */}
-            <Text class={T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : liveVoice() && micMuted() ? WORDS.muted : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
-            <If when={card() != null}>{() => <View testID="manager-card" class="gap-3"><Text class={T.section}>{cardTitle(card()!)}</Text><CardBody card={() => card()!} interactive maxHeight={Math.max(100, windowSize().height - 320)} /></View>}</If>
+            <Text class={phone && p.full ? "font-(family-name:--font-ui) text-[22px] leading-[30px] font-medium text-foreground pt-2" : T.body} style={{ userSelect: "text" }} testID="manager-caption">{connecting() ? "Connecting…" : caption()?.text ?? (speaking() ? "Speaking" : liveVoice() && micMuted() ? WORDS.muted : listening() ? "Listening" : phase() !== "idle" ? "Thinking" : "Ready")}</Text>
+            <If when={card() != null}>{() => <View testID="manager-card" class={phone && p.full ? "gap-3 rounded-[22px] bg-phone-card border border-border p-4" : "gap-3"}><Text class={T.section}>{cardTitle(card()!)}</Text><CardBody card={() => card()!} interactive maxHeight={Math.max(100, windowSize().height - 320)} /></View>}</If>
           </View>
         </Scroll>
-        <Input value={fieldText() ?? ""} autoFocus={!phone && dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
-          onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
-        <VoiceButtons />
+        <If when={phone && p.full} else={<>
+          <Input value={fieldText() ?? ""} autoFocus={!phone && dropdownInteractive()} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
+            onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit" class={`h-12 w-full bg-card px-3 ${TS.body} text-popover-foreground`} />
+          <VoiceButtons />
+        </>}>
+          {/* The phone's Manager input reads as the composer (plans/05 5.5): one rounded card, the field, then round mute and voice controls. */}
+          <View class="flex-row items-center gap-1 rounded-[26px] bg-phone-card border border-border pl-4 pr-1.5 py-1" testID="manager-input-row">
+            <Input value={fieldText() ?? ""} placeholder={WORDS.placeholder} accessibilityLabel="Tell the Manager" testID="manager-field"
+              onFocus={() => dropdownInteractive.set(true)} onChange={({ value }) => fieldText.set(value)} onSubmit={submitField} submitBehavior="submit"
+              class="h-11 flex-1 min-w-0 bg-transparent px-0 font-(family-name:--font-ui) text-[16px] text-foreground placeholder:text-muted-foreground" />
+            <PhoneVoiceButtons />
+          </View>
+        </If>
   </>;
 }
 
@@ -175,9 +185,26 @@ function VoiceButtons() {
   </View>;
 }
 
+/** The phone's round voice controls: mute, then talk (when connected but not live) and connect/disconnect. */
+function PhoneVoiceButtons() {
+  const round = (p: { id: string; label: string; icon: any; command: string; filled?: boolean; disabled?: boolean }) =>
+    <Button onPress={() => void run(p.command)} disabled={p.disabled} testID={p.id} accessibilityLabel={p.label}
+      class={`size-11 items-center justify-center rounded-full disabled:opacity-40 ${FOCUS}`}>
+      <View class={`size-9 items-center justify-center rounded-full ${p.filled ? "bg-foreground" : "bg-phone-control"}`}>
+        <Icon name={p.icon} size={17} class={p.filled ? "tint-background" : "tint-foreground"} />
+      </View>
+    </Button>;
+  const talk = () => voiceConnected() && !liveVoice();
+  return <View class="flex-row items-center">
+    {round({ id: "manager-voice-mute", label: micMuted() ? "Unmute" : "Mute", icon: micMuted() ? "mic-off" : "mic", command: "manager.mute_toggle", disabled: !liveVoice() })}
+    <If when={talk()}>{() => round({ id: "manager-talk", label: talkLabel(), icon: listening() ? "arrow-up" : "mic", command: "manager.talk", filled: true })}</If>
+    {round({ id: "manager-voice-connect", label: voiceConnected() ? "Disconnect" : "Connect", icon: voiceConnected() ? "x" : "play", command: "manager.audio_toggle", filled: !talk() })}
+  </View>;
+}
+
 /** The phone's Manager tab (AGENTS.md: mobile talks and types to the Manager here; there is no header indicator). */
 export function ManagerTab() {
-  return <View class="flex-1 min-h-0 bg-popover p-4 gap-3" testID="manager-tab"><ManagerPanel full /></View>;
+  return <View class="flex-1 min-h-0 bg-background px-4 pt-1 pb-3 gap-3" testID="manager-tab"><ManagerPanel full /></View>;
 }
 
 /** The scrim of an open panel: the whole window except the header indicator's box, so the wave is never dimmed. */

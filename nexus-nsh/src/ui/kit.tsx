@@ -50,7 +50,7 @@ export const iconGlyphs: Record<IconName, string> = {
   projects: sidebarGlyphs.tab_projects.unicode, settings: controlGlyphs.settings.unicode,
   plus: controlGlyphs.plus.unicode, search: controlGlyphs.search.unicode,
   more: controlGlyphs.more.unicode, x: structure.close.unicode,
-  "chevron-right": fold.closed.unicode, "chevron-down": fold.open.unicode,
+  "chevron-right": fold.closed.unicode, "chevron-left": "◂", "chevron-down": fold.open.unicode,
   "chevron-up": controlGlyphs.up.unicode, "arrow-up": controlGlyphs.up.unicode,
   "arrow-down": "↓",
   "arrow-left": controlGlyphs.back.unicode, stop: controlGlyphs.stop.unicode,
@@ -100,14 +100,15 @@ export function IconButton(p: Parameters<typeof IconButtonBase>[0]) {
 export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName; class?: string; ref?: (node: any) => void }) {
   const k = p.kind ?? "default";
   // Secondary buttons carry a hairline so they read as buttons on every surface, light or dark.
-  const skin = k === "primary" ? "bg-primary border border-transparent" : k === "ghost" ? "hover:bg-accent border border-transparent" : "bg-secondary hover:bg-accent border border-border";
-  const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
+  // The phone is neutral (plans/05 5.5): its primary action is the text colour, a secondary one a quiet fill.
+  const skin = k === "primary" ? (phone ? "bg-foreground border border-transparent" : "bg-primary border border-transparent") : k === "ghost" ? "hover:bg-accent border border-transparent" : phone ? "bg-phone-control border border-transparent" : "bg-secondary hover:bg-accent border border-border";
+  const fg = k === "primary" ? (phone ? "text-background" : "text-on-accent") : k === "danger" ? "text-error" : "text-foreground";
   return (
     <View role="button" focusable ref={p.ref}
       onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-xl" : "rounded-(--radius)"} px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? "active:bg-primary" : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-full px-4" : "rounded-(--radius) px-3"} ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? (phone ? "active:opacity-80" : "active:bg-primary") : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
-      <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
+      <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? (phone ? "tint-background" : "tint-on-accent") : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`${TS.base} font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
     </View>
   );

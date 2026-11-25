@@ -377,7 +377,7 @@ export function ProjectSelector() {
 }
 
 export function NewSessionButton() {
-  return <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-raised" : ""} onPress={() => { dismissSessionSearch(); if (phone) { closeDrawer(); phonePage.set("conversation"); } void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />;
+  return <IconButton icon="plus" label="New session" testID="new-session" class={phone ? "bg-phone-card" : ""} onPress={() => { dismissSessionSearch(); if (phone) { closeDrawer(); phonePage.set("conversation"); } void run("session.new"); }} disabled={!availability(byId.get("session.new")!).ok} reason={availability(byId.get("session.new")!).ok ? hint("session.new") ?? undefined : availability(byId.get("session.new")!).reason} />;
 }
 
 /** The phone's session list (Sessions tab, and the conversation's drawer): sectioned, shares the search field and its Core search. */

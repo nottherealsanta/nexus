@@ -144,13 +144,15 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/voice/tts/download` | empty | 202 `{state: "downloading"}`; consented download of `[speech] tts_model`; progress is `voice.progress` with `target: "tts"` and the state shows in `GET /api/voice` |
 | DELETE | `/api/voice/{stt or tts}` | | removes the configured model repo from the HF cache; 409 while downloading or playing; `{repo, freed, ...status}` |
 | GET | `/api/browser` | | `{ok, mode, uvx, browser, chrome, package, problems, note}`: what `browser_exec` and `browser_screenshot` need on Core's machine. `ok` is false when a browser call would fail to start (no `uvx`, or no Chrome, Chromium, Edge or `browser-use install` Chromium); `mode` is `own` or `chrome` (`[browser] use_my_chrome`); `browser` / `chrome` are `{name, path}` or null; each `problems` entry names a gap and its fix. Reads files only, starts nothing |
-| GET | `/api/search/service` | | `{state, url, runtime, detail}` for the local SearXNG behind `web_search`; `state` is `running`, `stopped`, `absent` or `unavailable` |
-| POST | `/api/search/service/start` | empty | starts it (Apple `container`, else Docker; creates `nexus-search/.env` once) and waits up to 30 s; concurrent starts are serialized, and an existing Apple container is rechecked after starting its system; the status, or 422 `search_start_failed` |
+| GET | `/api/search/service` | | `{state, url, runtime, detail}` for the local SearXNG behind `web_search`; `state` is `running`, `starting`, `stopped` (set up but not answering), `absent` (never set up) or `unavailable`, and `detail` explains an unavailable service or a failed start |
+| POST | `/api/search/service/start` | empty | starts it (Apple `container`, else Docker; pinned image; copies the packaged settings to `<home>/search/`) and waits until it answers, so a first start can take minutes; concurrent starts are serialized, and an existing Apple container is rechecked after starting its system; the status, or 422 `search_start_failed` |
+| GET | `/api/services` | | `{runtime: {kind, state, detail}, services: [{id, label, state, url, detail}]}` for Core's managed local services (`search` today); reads only, starts nothing |
+| POST | `/api/services/{id}/start` | empty | 202 with the service row (`starting`, or its current state when already running or starting); starts `search` in the background, so poll `GET /api/services`; 404 for an unknown id, 422 `search_start_failed` when it cannot start here |
 | POST | `/api/voice/speak` | `{session_id}` | streams the latest completed answer as `audio/wav` ([voice.md](voice.md#speech)) |
 | POST | `/api/voice/speak/stop` | empty | `{stopped}` |
 | GET | `/api/agent/{name}` | `?project=` or `?directory=` | `Agent` with `prompt` |
 | GET | `/api/project` | | `[Project]`, most recently used first |
-| POST | `/api/project` | `{path, name?}` | the project at `path`, created if new |
+| POST | `/api/project` | `{path, name?}` | the project at `path`, created if new; an existing inactive project is restored to `current` in place |
 | GET | `/api/project/{id}` | | `Project` |
 | PATCH | `/api/project/{id}` | `{name?, status?, expected_revision?}` or `If-Match`; at least one of `name`, `status` | `Project`; a stale revision is 409; `status` is `current`, `passive` or `inactive` (see [Project rail](#project-rail-order-status-and-removal)) |
 | POST | `/api/project/{id}/move` | exactly one of `{before: id\|null}` or `{after: id\|null}` | `{projects}`: every visible project in the new order. `before: null` is the end, `after: null` the start |
@@ -653,7 +655,7 @@ durable reconciliation for a lost HTTP response.
 
 | Route | Keyed | Revision | Crash / replay behavior |
 | --- | --- | --- | --- |
-| `POST /api/project` | yes | — | A replayed create returns the same project id; deletion later does not recreate it |
+| `POST /api/project` | yes | — | A replayed request returns the original project; an inactive path is restored in place on the first request; deletion later does not recreate it |
 | `PATCH /api/project/{id}` | yes | `If-Match` / `expected_revision` | Replay returns the original project; stale revision 409 |
 | `DELETE /api/project/{id}` | yes | — | Replay is 204 even though the project and sessions are gone |
 | `POST /api/project/{id}/move` | yes | — | Applied against Core's current order (not a client's list); replay returns the original list; an unknown id is 400 |
@@ -1059,8 +1061,12 @@ then `project.deleted` with `removed: true`.
   projects atomically and publishes `project.reordered`; `/api/snapshot` and `GET /api/project` list projects
   in this order. Clients keep initials assigned in creation order, independent of display order.
 - `status`: `current` (normal, in the rail), `passive` (in the rail, dimmed) or `inactive` (not in the rail, listed
-  by the API and restored by setting `current`). The names were confirmed by the user (2026-11-06); they
-  live in one constant per codebase. Changing status is `PATCH` and bumps `revision`.
+  by the API and restored by setting `current`, or by posting its path to `POST /api/project`). The names were
+  confirmed by the user (2026-11-06); they live in one constant per codebase. Changing status is `PATCH` and bumps
+  `revision`. An explicit `POST /api/project` on an inactive project's path restores it to `current` in place: its
+  id, position and sessions stay, `revision` is bumped and `project.updated` is published. A `current` or `passive`
+  project is returned unchanged, so repeating the POST after the restore changes nothing. Incidental directory
+  lookups (`GET /api/session?directory=`, `GET /api/agent?directory=`) never restore one.
 
 Older Cores omit both fields; clients then fall back to creation order and `current`.
 

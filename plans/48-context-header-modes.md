@@ -17,7 +17,10 @@ Decisions (user, 2026-11-17):
 - **Outside Git, the worktree row is hidden.** It is not shown as disabled.
 - **Switching stays possible, but only through slash commands.** A fixed header and its detail dialogs are read-only.
   `/skills` and `/mcp` are the only way to switch a started session's skills or servers. They keep today's PATCH and
-  the visible JSON notice in the timeline.
+   the visible JSON notice in the timeline.
+
+Follow-up (2026-11-24): the Tools header is a summary, not a tool grid. Open Tools in a draft to switch individual
+tools. Its fixed header dialog is read-only; `/tools` opens the live switches, like `/skills` and `/mcp`.
 
 Desktop/web, TUI and NSH in the same change ([parity skill](../.agents/skills/nexus-ui-parity/SKILL.md)). Mobile has no
 context header, so only the slash commands reach it (mobile already gets every command, approved 2026-11-09).

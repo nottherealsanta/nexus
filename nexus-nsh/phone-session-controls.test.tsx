@@ -71,27 +71,16 @@ async function openConversation(app: any) {
 }
 
 describe("phone routes (plans 29 and 30)", () => {
-  test("opens the sessions drawer and switches conversations", async () => {
-    const app = await openPhone();
-    await openConversation(app);
-    await app.press("id:phone-drawer-button");
-    await app.waitFor("id:phone-drawer");
-    await app.press("id:session-ses_2");
-    await app.waitFor("id:phone-drawer", { state: "gone" });
-    expect(app.shows("id:composer-input")).toBe(true);
-  });
-  test("leaving a conversation through the drawer keeps its draft", async () => {
+  test("a left-edge swipe goes back to Sessions and keeps the draft (user, 2026-11-24)", async () => {
     const app = await openPhone();
     await openConversation(app);
     await app.type("id:composer-input", "unfinished message");
-    await app.press("id:phone-drawer-button");
-    await app.waitFor("id:phone-drawer");
-    await app.press("id:session-ses_2");
-    await app.waitFor("id:phone-drawer", { state: "gone" });
-    await app.press("id:phone-drawer-button");
-    await app.waitFor("id:phone-drawer");
+    await app.drag("id:phone-edge-swipe", { x: 120, y: 0 });
+    await app.waitFor("id:phone-sessions");
+    expect(app.shows("id:phone-drawer")).toBe(false);
+    expect(app.shows("id:phone-tabs")).toBe(true);
     await app.press("id:session-ses_1");
-    await app.waitFor("id:phone-drawer", { state: "gone" });
+    await app.waitFor("id:composer-input");
     expect(app.value("id:composer-input")).toBe("unfinished message");
   });
   test("the project switcher changes scope without leaving the Sessions tab", async () => {
@@ -173,7 +162,8 @@ describe("phone routes (plans 29 and 30)", () => {
     await openConversation(app);
     await app.waitFor("id:waiting-compact");
     expect(app.texts().includes("pytest -q")).toBe(true);
-    for (const id of ["allow-once", "allow-session", "deny", "deny-note"]) expect(app.shows(`id:${id}`)).toBe(true);
+    for (const id of ["allow-once", "allow-session", "deny", "composer-input"]) expect(app.shows(`id:${id}`)).toBe(true);
+    expect(app.shows("id:deny-note")).toBe(false);
     expect(app.shows("id:waiting-table")).toBe(false);
   });
 });

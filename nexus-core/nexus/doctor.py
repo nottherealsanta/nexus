@@ -84,13 +84,21 @@ def check_config() -> Row:
     return _row("config", "ok", str(ConfigFile().path))
 
 
+def check_containers() -> Row:
+    from . import searchservice
+    found = searchservice.runtime_status()
+    kind = found["kind"] or "no container runtime"
+    return _row("containers", "ok" if found["state"] == "ready" else "warn",
+                f"{kind}: {found['state']}" + (f"; {found['detail']}" if found["detail"] else ""))
+
+
 def check_search() -> Row:
-    url = ConfigFile().read()["values"]["web"]["search_url"]
-    try:
-        response = httpx.get(url, params={"q": "nexus", "format": "json"}, timeout=3)
-    except httpx.HTTPError:
-        return _row("search", "warn", f"nothing answers at {url} (web_search is off; see nexus-search/README.md)")
-    return _row("search", "ok" if response.status_code == 200 else "warn", f"{url} HTTP {response.status_code}")
+    from . import searchservice
+    found = searchservice.status()
+    if found["state"] == "running":
+        return _row("search", "ok", found["url"])
+    return _row("search", "warn", f"{found['state']} at {found['url']}"
+                + (f": {found['detail']}" if found["detail"] else " (web_search is off until the user starts it)"))
 
 
 def check_firecrawl() -> Row:
@@ -210,7 +218,7 @@ def check_rust_builds() -> list[Row]:
 
 def run() -> list[Row]:
     found = daemon.discover()
-    return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_search(),
+    return [check_daemon(found), check_sign_ins(), check_catalog(), check_config(), check_containers(), check_search(),
             check_firecrawl(), check_browser(), check_mcp(found), *check_voice(), check_rg(), *check_zmx(), *check_rust_builds()]
 
 

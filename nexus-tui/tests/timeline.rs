@@ -1304,7 +1304,7 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
 }
 
 #[test]
-fn session_tool_grid_is_fixed_after_a_message_and_names_open_details() {
+fn session_tools_summary_opens_read_only_details() {
     let mut a = app();
     a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
     a.ui.scroll.follow = false;
@@ -1312,24 +1312,24 @@ fn session_tool_grid_is_fixed_after_a_message_and_names_open_details() {
     let (_, lines) = draw(&mut a, 120, 36);
     let y = lines
         .iter()
-        .position(|line| line.contains("read") && line.contains("bash"))
-        .expect("tools share a row");
-    let line = &lines[y];
-    let bash = nexus_tui::text::width(&line[..line.find("bash").unwrap()]);
-    // Plan 48: the marker switches nothing once the session has started.
+        .position(|line| line.contains("Tools [3]"))
+        .expect("tools summary");
+    assert!(!lines
+        .iter()
+        .any(|line| line.contains("read") && line.contains("bash")));
+    let tools = nexus_tui::text::width(&lines[y][..lines[y].find("Tools").unwrap()]);
+    click(&mut a, tools as u16, y as u16);
+    assert!(matches!(
+        a.ui.overlay.as_ref().map(|o| &o.kind),
+        Some(nexus_tui::ui::OverlayKind::ContextEntries { title, .. }) if title == "Tools"
+    ));
     a.effects.clear();
-    click(&mut a, (bash - 2) as u16, y as u16);
+    press(&mut a, &["space"]);
     assert!(!a.effects.iter().any(|e| matches!(
         e,
         nexus_tui::app::Effect::Api(nexus_tui::actions::ApiCall::SetDisabledTools { .. })
     )));
-    let (_, lines) = draw(&mut a, 120, 36);
-    let y = lines
-        .iter()
-        .position(|line| line.contains("read") && line.contains("bash"))
-        .unwrap();
-    let bash = nexus_tui::text::width(&lines[y][..lines[y].find("bash").unwrap()]);
-    click(&mut a, bash as u16, y as u16);
+    press(&mut a, &["enter"]);
     assert!(matches!(
         a.ui.overlay.as_ref().map(|o| &o.kind),
         Some(nexus_tui::ui::OverlayKind::ContextEntries { open: Some(_), .. })
@@ -1352,7 +1352,7 @@ fn the_context_section_without_an_instruction_file_says_so() {
 }
 
 #[test]
-fn a_disabled_tool_is_struck_through_in_the_tools_grid() {
+fn a_disabled_tool_is_counted_in_the_tools_summary() {
     let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     a.open_session(SESSION);
     a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());

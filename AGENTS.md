@@ -30,7 +30,13 @@ for deliberate changes from old Nexus.
   anything to mobile beyond this list needs the user's approval. Approved (2026-11-09): mobile
   gets all slash commands (for example `/btw`). Approved (2026-11-12): long-press Send offers Queue / Interrupt and send;
   the iPad runs the desktop/web client, not this one (no iPad app). Approved (2026-11-23): the phone
-  shows tool groups as summary rows, which replaces the earlier "no tool groups" rule.
+  shows tool groups as summary rows, which replaces the earlier "no tool groups" rule. Approved (2026-11-24, the neutral
+  iOS redesign, plans/05 5.5): a Needs-you row in Sessions shows the asked command with Open and Allow once; the
+  Sessions tab carries a waiting count; another session waiting shows as a pill in the conversation; the approval's
+  "what to do instead" is the composer; a left-edge swipe in a conversation goes back to Sessions (no drawer); opening
+  the Manager tab does not start the Manager or its voice. Approved (2026-11-24): subagents are visible on the phone: a
+  subagent is a card in the parent's timeline (agent, task, status, model and time) that opens the child session,
+  whose header names its parent and whose Back returns there; a root's Sessions row counts its subagents.
 - One timeline: the "timeline" (or "context line"), which is what the user sees
   as a session in the UIs, reflects the agent's context. Everything the model
   receives is shown in order, and the UI shows nothing the model does not have.

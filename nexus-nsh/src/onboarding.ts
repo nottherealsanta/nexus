@@ -2,12 +2,13 @@
 // TUI draws the same tour (nexus-tui/src/onboarding.rs). This file is the state and the rules, with no UI in it.
 import { signal } from "nsh";
 import { manifest } from "./gen/manifest";
+import { searchOnboardingAsked } from "./search-service";
 
-export interface OnboardingStep { id: string; kind: "info" | "provider" | "agents" | "done"; title: string; lines: readonly string[]; tip?: string }
+export interface OnboardingStep { id: string; kind: "info" | "provider" | "agents" | "search" | "done"; title: string; lines: readonly string[]; tip?: string }
 export interface OnboardingAgent { name: string; kind: "model" | "root"; role: string; hint: string; options?: readonly string[] }
 
 export const ONBOARDING = manifest.onboarding as unknown as {
-  finish_no_project: string; no_provider: string; quest_provider: string; hints_info: string; hints_rows: string;
+  finish_no_project: string; no_provider: string; quest_provider: string; hints_info: string; hints_rows: string; hints_search: string; search_retry: string;
   step: readonly OnboardingStep[]; agent: readonly OnboardingAgent[];
 };
 export const onboardingSteps = ONBOARDING.step;
@@ -26,6 +27,7 @@ export function shouldOfferOnboarding(config: any, phone: boolean, offered: bool
 export function openOnboarding() {
   onboardingOffered.set(true);
   onboardingStep.set(0);
+  searchOnboardingAsked.set(false);
   onboardingOpen.set(true);
 }
 export function closeOnboarding() { onboardingOpen.set(false); }

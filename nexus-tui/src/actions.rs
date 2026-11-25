@@ -1371,8 +1371,22 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             done.mcp = Some(reply.body);
         }
         ApiCall::SearchServiceStart => {
-            done.search_service = Some(
-                api.http
+            // The async start returns at once with `starting`; an older Core keeps only the blocking route.
+            let reply = match api
+                .http
+                .call(
+                    reqwest::Method::POST,
+                    "/api/services/search/start",
+                    &[],
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            {
+                Ok(reply) => reply,
+                Err(error) if error.api().is_some_and(|a| a.status == 404 || a.status == 405) => api
+                    .http
                     .call(
                         reqwest::Method::POST,
                         "/api/search/service/start",
@@ -1382,9 +1396,10 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                         None,
                     )
                     .await
-                    .map_err(e)?
-                    .body,
-            );
+                    .map_err(e)?,
+                Err(error) => return Err(e(error)),
+            };
+            done.search_service = Some(reply.body);
         }
         ApiCall::VoiceDownload { .. } => {
             done.voice = Some(

@@ -171,14 +171,15 @@ activity group), medium (each tool on a collapsed line, the default) and high
 Turn footer token counts use `K` for thousands and `M` for millions.
 The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::context_rows`, one
 renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools, Skills,
-MCP and Child agents or Workspace tools when present. Tool, skill and MCP rows show their
-on/off state. In a draft, click a row or focus the timeline and use ↑/↓ then Enter/Space to switch
+MCP and Child agents or Workspace tools when present. Tools shows only its counts and token estimate.
+Open **Tools** in the draft header or type `/tools` to switch individual tools in the modal
+(↑/↓ to move, Space to switch, Enter for schema details). Skill and MCP rows show their
+on/off state inline. In a draft, click a row or focus the timeline and use ↑/↓ then Enter/Space to switch
 it; the `Worktree` row under `total` (Git checkouts only; the switch index after the last inventory row is the last
 cursor stop) asks the agent to start in a new worktree. From the first send the header is fixed
-(plan 48): no `PANEL` background, no `ContextToggle` targets, read-only dialogs, and `/skills` /
-`/mcp` switch the started session. Tests: `behaviour.rs` `draft_worktree_*`,
+(plan 48): no `PANEL` background, no inline switches, and read-only header dialogs.
+Use `/tools`, `/skills` or `/mcp` to switch the started session. Tests: `behaviour.rs` `draft_worktree_*`,
 `the_header_is_fixed_from_the_first_send`, `started_header_is_fixed_and_slash_skills_switches_the_session`.
-Tools use up to four columns as space allows, both before and after a message.
 Skills stay inline through 12 entries; above 12 only the clickable `Skills [N]` heading remains.
 The heading opens a scrollable two-column card picker at any count. Names open a separate
 Markdown detail view. Cards are borderless dark gray, with a lighter focused card.
@@ -682,7 +683,9 @@ Settings → **Tools** lists `firecrawl` in the grid of tools (the local Firecra
 `web_search`: running, stopped, not set up or unavailable, with its address and
 runtime) and a **Start web search** row, also in the palette as `search.start`.
 Starting calls `POST /api/search/service/start` (Apple `container`, else Docker)
-and waits until it answers. The status refreshes when Settings opens.
+and Core answers before the container is ready, so the TUI polls
+`GET /api/search/service` every two seconds while Settings is open, following
+`starting` to running or to the last error, which the status row shows.
 
 Settings → **Voice and speech** reads both model statuses from Core, including
 the state, Hugging Face repository, human-readable size, cache path and any
@@ -820,7 +823,7 @@ modal using old Nexus's panel geometry and a searchable root/drill list. Press
 before closing the panel. Existing Core-backed controls retain their own focus
 and keyboard handling.
 
-**Onboarding.** While Core's `ui.onboarded` is false the TUI opens a full-window tour (`View::Onboarding`, `onboarding.rs`, `render/onboarding_ui.rs`): welcome, connect a provider, choose models for agents (scout and quick are advised small, fast models), then lessons on the timeline, subagents, permissions and navigation. ↑↓ choose a row, Enter changes it (a provider opens its connection modal, an agent opens the model picker, the default agent cycles), →/← or Next/Back move, `s` or Skip finishes it. Finish and Skip both write `ui.onboarded`. `/onboarding` or Settings > About replays it. Wording is `[onboarding]` in `interface/manifest.toml`. Tests: `tests/onboarding.rs`.
+**Onboarding.** While Core's `ui.onboarded` is false the TUI opens a full-window tour (`View::Onboarding`, `onboarding.rs`, `render/onboarding_ui.rs`): welcome, connect a provider, choose models for agents (scout and quick are advised small, fast models), start web search, then lessons on the timeline, subagents, permissions and navigation. ↑↓ choose a row, Enter changes it (a provider opens its connection modal, an agent opens the model picker, the default agent cycles), →/← or Next/Back move, `s` or Skip finishes it. On the search step Core is asked for SearXNG's state and, unless it already runs or cannot start, the TUI starts it in the background and keeps polling while the step is open; the state, address, runtime and last error are shown, Enter on Retry starts it again, and Next never waits for the container. Finish and Skip both write `ui.onboarded`. `/onboarding` or Settings > About replays it. Wording is `[onboarding]` in `interface/manifest.toml`. Tests: `tests/onboarding.rs` (the shared `interface/scenarios/web-search.json` included).
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
 key). `Shift+Tab` cycles the composer's eligible agents (primary agents, or subagents

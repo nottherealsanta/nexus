@@ -15,6 +15,11 @@ no controller identity survives restart, including on already-exited resources.
 Background bash jobs are pipe processes, separate from terminals: they keep their
 ordinary tool-output path and never create a terminal resource.
 
+Core also owns the start and status of the local SearXNG behind `web_search` (`nexus/searchservice.py`): on request it
+starts a container with Apple `container` when installed, else Docker, using a pinned image, packaged settings in
+`$NEXUS10_HOME/search/` and a loopback-only port. It never starts one on its own; Settings › Tools, `nexus search start`
+and the first-run tour ask it to.
+
 The daemon also keeps the latest provider-usage snapshot in its database, refreshing it every 10 minutes by default
 while running. `[usage] refresh_minutes` changes the interval (1–1440); clients can request an immediate refresh.
 
@@ -31,6 +36,7 @@ is made. Subagent selections do not change this memory.
 | `nexus daemon start` | Starts it in the background if none answers, then waits until it does (15 s at most). It does not spawn a second daemon while one is registered and still starting, and names the process when an unregistered one already holds the port. |
 | `nexus daemon stop` | Sends SIGTERM to the pid in `daemon.json`, even when the daemon no longer answers; SIGKILL follows it if a live event stream holds the process past the grace period. |
 | `nexus daemon status` | Prints the URL, pid and log path. |
+| `nexus search status\|start` | Prints the local SearXNG's state and container runtime, or starts it (`--wait` waits until it answers). The first start pulls its image. |
 | `nexus pair` | Prints how a phone connects to the running Core: its Tailscale and LAN addresses, the token (none when Core serves the network anonymously), the `nexus://pair?url=…&token=…&name=…` link and a terminal QR code of the best address (`--no-qr`, `--json`). No relay service; it refuses a loopback-only Core and says to restart with `NEXUS_HOST=0.0.0.0`. |
 
 `nexus run`, `chat`, `project` and `session` start the daemon automatically.
@@ -39,8 +45,9 @@ is made. Subagent selections do not change this memory.
 FAIL` row each for: the daemon (reachable, and its `code` fingerprint from
 `/api/info` equals the hash of the checkout's `nexus/**/*.py`, so a daemon
 started before a code change fails), sign-ins (fails with none), the models.dev
-cache age (warns past 7 days), config errors (fails), the `[web] search_url`
-container, `firecrawl-local` (warns when it is not installed), the browser tools (warns when `uvx` or a Chrome, Chromium or Edge is missing, or
+cache age (warns past 7 days), config errors (fails), the container runtime and
+the SearXNG service behind `[web] search_url` (warns when either is unavailable),
+`firecrawl-local` (warns when it is not installed), the browser tools (warns when `uvx` or a Chrome, Chromium or Edge is missing, or
 Google Chrome is with `[browser] use_my_chrome` on; `browser.requirements`), MCP servers (fails on `failed`/`invalid`), voice STT/TTS and their
 Hugging Face cache, and `rg`. It exits 1 on any FAIL and never starts the daemon,
 loads a model or downloads. `nexus update --check` compares the running version with
@@ -78,7 +85,9 @@ metadata, so release and development versions follow the package version.
 
 - **Project.** A directory, unique by its resolved absolute path.
   `POST /api/project {path}` returns the existing project or creates one, named
-  after the folder by default.
+  after the folder by default. If that project is `inactive`, the POST restores it to `current` in place: its id,
+  position and sessions stay, its revision is bumped and `project.updated` is published. `current` and `passive`
+  projects are returned unchanged, and incidental `?directory=` lookups never restore one.
 - **Rail order and status.** Each project has a `position` (user-defined order) and a `status` (`current`, `passive`,
   `inactive`; names confirmed by the user, 2026-11-06). Both are plain columns added in place to the
   existing 0.10 database (`Store._migrate_manager_columns`, schema version unchanged): an old store reads fine, and

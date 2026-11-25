@@ -694,6 +694,7 @@ pub enum OnboardingTarget {
     Back,
     Next,
     Row(usize),
+    Retry,
 }
 
 /// Everything the mouse can hit. Registered by the renderer as it draws.

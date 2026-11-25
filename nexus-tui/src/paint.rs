@@ -548,13 +548,11 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
             );
         }
         if let CtxBody::Inventory(items) = &section.body {
-            if section.title == "Skills" && items.len() > 12 {
+            if section.title == "Tools" || (section.title == "Skills" && items.len() > 12) {
                 continue;
             }
             if layout.columns {
-                // Tools take up to four columns; skills and servers two.
-                let most = if section.title == "Tools" { 4 } else { 2 };
-                grid_rows(items, layout, most, &mut rows);
+                grid_rows(items, layout, 2, &mut rows);
                 continue;
             }
             for item in items {
@@ -820,7 +818,7 @@ mod ctx_tests {
     }
 
     #[test]
-    fn tool_grid_adapts_to_width_and_preserves_switch_indices() {
+    fn skill_grid_adapts_to_width_and_preserves_switch_indices() {
         let items = ["read", "grep", "glob", "bash"]
             .iter()
             .enumerate()
@@ -833,7 +831,7 @@ mod ctx_tests {
             })
             .collect();
         let section = CtxSection {
-            title: "Tools".into(),
+            title: "Skills".into(),
             tokens: None,
             meta: String::new(),
             body: CtxBody::Inventory(items),
@@ -846,10 +844,11 @@ mod ctx_tests {
                 .iter()
                 .filter(|(_, role)| matches!(role, CtxRole::ToggleOn(_) | CtxRole::ToggleOff(_)))
                 .count(),
-            4
+            2
         );
-        assert!(rows[1]
+        assert!(rows
             .iter()
+            .flatten()
             .any(|(_, role)| *role == CtxRole::ToggleOff(1)));
         let mut narrow = layout(12);
         narrow.columns = true;
@@ -881,7 +880,7 @@ mod ctx_tests {
         let rows = context_rows(&[s], 100, &layout(60));
         let t = text(&rows);
         assert!(t.iter().any(|l| l.contains("Tools [1] ~100")), "{t:?}");
-        assert!(t.iter().any(|l| l.contains("\u{25cf} read")), "{t:?}");
+        assert!(!t.iter().any(|l| l.contains("read")), "{t:?}");
     }
 
     #[test]

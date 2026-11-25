@@ -1,0 +1,5 @@
+{
+  "tools": ["scenario_read", "scenario_write"],
+  "heading": "Tools [2]",
+  "toggle": "scenario_write"
+}

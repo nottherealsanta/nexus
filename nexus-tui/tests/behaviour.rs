@@ -471,6 +471,35 @@ fn started_header_is_fixed_and_slash_skills_switches_the_session() {
 }
 
 #[test]
+fn tools_header_is_a_summary_and_the_draft_modal_switches_each_tool() {
+    let scenario: serde_json::Value =
+        serde_json::from_str(include_str!("../../interface/scenarios/tools-modal.json")).unwrap();
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let request = a.draft_request().unwrap();
+    a.state.apply(nexus_tui::sync::SyncMsg::DraftContext {
+        request,
+        data: Ok(scenario.clone()),
+    });
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    assert!(screen.contains(scenario["heading"].as_str().unwrap()));
+    for name in scenario["tools"].as_array().unwrap() {
+        assert!(!screen.contains(name.as_str().unwrap()));
+    }
+    a.click(Target::ContextSection("Tools".into()));
+    let screen = draw(&mut a, 120, 36).1.join("\n");
+    for name in scenario["tools"].as_array().unwrap() {
+        assert!(screen.contains(name.as_str().unwrap()));
+    }
+    press(&mut a, &["down", "space"]);
+    assert_eq!(
+        a.ui.draft.fields()["disabled_tools"],
+        serde_json::json!([scenario["toggle"]])
+    );
+    press(&mut a, &["space"]);
+    assert!(a.ui.draft.disabled_tools.is_empty());
+}
+
+#[test]
 fn draft_context_switches_are_sent_with_new_session_fields() {
     let mut a = nexus_tui::app::App::new(
         nexus_tui::state::AppState::new(),

@@ -1,10 +1,29 @@
 import { describe, expect, open, test } from "nsh/test";
 import { worktreeStatus } from "./src/ui/newsession";
+import toolsScenario from "../interface/scenarios/tools-modal.json";
 
 const network = { "GET */api/*": { body: {} } };
 const opts = { network, width: 1200, height: 900, platform: "web" as const };
 
 describe("context header modes (plan 48)", () => {
+  test("the Tools header is a summary; tool switches live in its modal", async () => {
+    const app = await open("./ContextModesFixture.tsx", opts);
+    await app.waitFor("id:ctx-tools-open");
+    expect(app.texts().join(" ")).toContain(toolsScenario.heading);
+    for (const name of toolsScenario.tools) expect(app.texts()).not.toContain(name);
+    await app.press("id:ctx-tools-open");
+    for (const name of toolsScenario.tools) await app.waitFor(`id:tool-toggle-${name}`);
+    await app.press(`id:tool-toggle-${toolsScenario.toggle}`);
+    await app.waitFor(`label:${toolsScenario.toggle} off`);
+    await app.press(`id:tool-toggle-${toolsScenario.toggle}`);
+    await app.waitFor(`label:${toolsScenario.toggle} on`);
+    await app.keyboard.press("escape");
+    await app.press("id:fix");
+    await app.press("id:ctx-tools-open");
+    await app.waitFor(`id:context-entry-${toolsScenario.toggle}`);
+    expect(app.count(`id:tool-toggle-${toolsScenario.toggle}`)).toBe(0);
+  });
+
   test("a draft switches, and its worktree row follows the total and switches the draft", async () => {
     const app = await open("./ContextModesFixture.tsx", opts);
     await app.waitFor("id:context-sections");

@@ -20,6 +20,20 @@ export const PHONE_TABS = [
 export type PhoneTab = (typeof PHONE_TABS)[number]["id"];
 export type PhonePage = PhoneTab | "conversation";
 
+/** The root tabs belong to the three sections, not to a conversation: one page at a time, as on iOS. */
+export function phoneTabBarVisible(page: PhonePage): boolean {
+  return page !== "conversation";
+}
+
+/**
+ * The shell's bottom inset. Outside a conversation the tab bar carries the home-indicator inset; inside one the tab
+ * bar is gone, so the shell does, unless the software keyboard already covers that area.
+ */
+export function phoneShellBottomInset(page: PhonePage, keyboard: number, safeBottom: number): number {
+  if (page !== "conversation") return 0;
+  return keyboard > 0 ? keyboard : safeBottom;
+}
+
 /** Partition an already recent-first session list without losing its order. */
 export function phoneSessionGroups<S>(sessions: readonly S[], status: (session: S) => { waiting: boolean; running: boolean }): { title: string; sessions: S[] }[] {
   const groups: { title: string; sessions: S[] }[] = [
@@ -62,13 +76,13 @@ export function desktopOnly(id: string): boolean {
 
 /**
  * The rows a phone session view keeps: the user's messages, the agent's replies (live ones too), the control that
- * loads older history, a fork's inherited block, failures, which are the session's status, and a tool group as one
- * compact summary row (user, 2026-11-23). Context, individual tools and thoughts, children, handoffs, turn footers and
- * other notices stay on the desktop.
+ * loads older history, a fork's inherited block, failures, which are the session's status, a tool group as one
+ * compact summary row (user, 2026-11-23) and a subagent as a row that opens its session (user, 2026-11-24). Context,
+ * individual tools and thoughts, handoffs, turn footers and other notices stay on the desktop.
  */
 export function phoneRow(row: { kind: string; tone?: string; toolCount?: number }): boolean {
   // A fork's inherited block stays, folded with the desktop's wording; open, its messages are filtered like any other.
-  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork" || row.kind === "pending") return true;
+  if (row.kind === "user" || row.kind === "assistant" || row.kind === "older" || row.kind === "fork" || row.kind === "pending" || row.kind === "child") return true;
   // A group of only thoughts is no group (the timeline keeps each thought as its own row), so a group row always has
   // at least one tool; the count is checked so a future caller cannot show an empty summary.
   if (row.kind === "activity") return (row.toolCount ?? 0) > 0;
@@ -76,6 +90,21 @@ export function phoneRow(row: { kind: string; tone?: string; toolCount?: number 
 }
 
 export interface GroupCount { noun: string; count: number }
+
+/** A subagent row's status on a phone, from the timeline's child row: waiting and failure outrank running. */
+export function phoneChildStatus(c: { state: "running" | "done" | "idle"; outcome: string }): { status: "waiting" | "running" | "failed" | "done" | "idle"; word: string } {
+  if (c.outcome === "waiting for input") return { status: "waiting", word: "Needs you" };
+  if (c.outcome.startsWith("failed")) return { status: "failed", word: "Failed" };
+  if (c.state === "running") return { status: "running", word: "Working" };
+  if (c.state === "done") return { status: "done", word: "Done" };
+  return { status: "idle", word: "Idle" };
+}
+
+/** `2 subagents · 1 running`: a root session's children for its Sessions row, or "" when it has none. */
+export function subagentsText(total: number, running: number): string {
+  if (total <= 0) return "";
+  return `${total} subagent${total === 1 ? "" : "s"}${running > 0 ? ` · ${running} running` : ""}`;
+}
 
 /** `3 commands, 1 read`: a tool group's members, from every item even when a running group shows only its last five. */
 export function activityCountsText(counts: readonly GroupCount[]): string {

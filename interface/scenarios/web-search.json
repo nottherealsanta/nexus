@@ -1,0 +1,17 @@
+{
+  "service": {
+    "state": "running",
+    "url": "http://127.0.0.1:8080",
+    "runtime": "container",
+    "detail": null
+  },
+  "expect": ["Web search", "SearXNG", "running", "http://127.0.0.1:8080", "runtime container"],
+  "absent": ["status unavailable", "loading status…"],
+  "error_service": {
+    "state": "unavailable",
+    "url": "",
+    "runtime": "none",
+    "detail": "No container runtime found."
+  },
+  "error_expect": ["unavailable", "No container runtime found.", "runtime none"]
+}
