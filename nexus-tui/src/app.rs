@@ -871,6 +871,18 @@ pub struct PendingFirstPrompt {
     pub choices: Draft,
 }
 
+/// A Settings row being edited in place. `options` is empty for the tools grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsEdit {
+    pub row: String,
+    pub options: Vec<String>,
+    pub draft: usize,
+    /// The draft of a numeric row (stepped with Left/Right, applied with Enter).
+    pub number: Option<i64>,
+    /// The tools grid: Left/Right move its cursor, Enter toggles the tool.
+    pub tools: bool,
+}
+
 pub struct Ui {
     /// Sessions opened as tabs, in the order they were opened. Where each
     /// tab sits is `groups` (plan 45).
@@ -947,6 +959,8 @@ pub struct Ui {
     /// The Settings section shown in the right pane, and whether the left rail has focus.
     pub settings_section: String,
     pub settings_nav_focus: bool,
+    /// The row being edited in place (an enum choice or the tools grid); `None` while browsing.
+    pub settings_edit: Option<SettingsEdit>,
     /// The tool chip highlighted by the Tools row's left/right keys.
     pub tool_cursor: usize,
     /// The Agents detail page drilled into (`agents/<name>`) and its selected item.
@@ -1115,6 +1129,9 @@ pub struct App {
     pub timeline_builds: std::cell::Cell<u64>,
     /// Terminal image protocol and the decoded states behind timeline previews.
     pub image_viewer: std::cell::RefCell<crate::images::Viewer>,
+    /// Rows the sticky user band took at the top of the timeline in the last
+    /// frame; toasts are placed below it.
+    pub sticky_rows: std::cell::Cell<u16>,
     /// The terminal's copy of the drawing modal's picture and strokes.
     pub annotate_live: std::cell::RefCell<crate::annotate::Live>,
     bindings: HashMap<(String, String), String>,
@@ -1448,6 +1465,7 @@ impl App {
                 settings_search: Composer::new(),
                 settings_section: "appearance".into(),
                 settings_nav_focus: true,
+                settings_edit: None,
                 tool_cursor: 0,
                 settings_page: None,
                 settings_page_row: 0,
@@ -1542,6 +1560,7 @@ impl App {
             preview_builds: std::cell::Cell::new(0),
             timeline_builds: std::cell::Cell::new(0),
             image_viewer: std::cell::RefCell::new(crate::images::Viewer::default()),
+            sticky_rows: std::cell::Cell::new(0),
             annotate_live: std::cell::RefCell::new(crate::annotate::Live::default()),
             bindings,
             shortcut_leader: None,
@@ -5413,15 +5432,37 @@ impl App {
             .and_then(|a| a["model"].as_str())
             .filter(|m| !m.is_empty())
             .map_or_else(
-                || {
-                    if session.is_none() {
-                        self.state.last_model.clone()
-                    } else {
-                        String::new()
-                    }
+                || match session {
+                    None => self.state.last_model.clone(),
+                    // A session stored without a model still ran on one: name it.
+                    Some(s) => self.request_model_ref(&s.id),
                 },
                 str::to_owned,
             )
+    }
+
+    /// The `provider/model` ref of a session's newest request, resolved against the
+    /// catalog when the request only carries a bare id; empty when unknown.
+    fn request_model_ref(&self, session_id: &str) -> String {
+        let Some(used) = self
+            .state
+            .model
+            .selected
+            .as_ref()
+            .filter(|v| v.session_id == session_id)
+            .and_then(|v| v.latest_request_model())
+        else {
+            return String::new();
+        };
+        if used.contains('/') {
+            return used;
+        }
+        self.state
+            .models
+            .iter()
+            .filter_map(|m| m["ref"].as_str())
+            .find(|r| r.rsplit('/').next() == Some(used.as_str()))
+            .map_or(String::new(), str::to_owned)
     }
 
     /// Open a picker and ask the supervisor for fresh catalog data.
@@ -7062,6 +7103,7 @@ impl App {
                     self.ui.view = View::Settings;
                     self.ui.settings_search = Composer::new();
                     self.ui.settings_row = 0;
+                    self.ui.settings_edit = None;
                     self.ui.settings_page = None;
                     self.ui.provider_detail = None;
                     self.ui.mcp_detail = None;
@@ -8636,6 +8678,11 @@ impl App {
             {
                 self.ui.detail = detail;
             }
+            crate::timeline::set_time_format(
+                config["values"]["ui"]["time_format"]
+                    .as_str()
+                    .unwrap_or("24h"),
+            );
             if let Some(reduced) = config["values"]["ui"]["reduced_motion"].as_bool() {
                 let mut options = self.theme.opts;
                 options.reduced_motion = reduced;
@@ -13935,6 +13982,7 @@ impl App {
     pub fn select_settings_section(&mut self, index: usize) {
         if let Some(section) = self.settings_sections().get(index) {
             self.ui.settings_section = section.id.clone();
+            self.ui.settings_edit = None;
             self.ui.settings_page = None;
             self.ui.settings_page_row = 0;
             self.ui.settings_row = 0;
@@ -13952,9 +14000,12 @@ impl App {
             .collect()
     }
 
-    /// Keys while the settings modal is open. Tab moves between the section
-    /// rail and the right pane; typing filters both. Esc clears the search,
-    /// steps back to the rail, then closes. Returns false for keys the shell
+    /// Keys while the settings modal is open. Two panes: the section rail and
+    /// the section's rows. Enter/Right (rail) go into the rows; Esc/Left/Tab
+    /// (rows) go back; navigation never changes a value. Enter/Space change
+    /// one: a switch flips, an enum edits in place (←→ choose, Enter sets, Esc
+    /// cancels). Typing filters both. Esc clears the search, steps back to the
+    /// rail, then closes. Returns false for keys the shell
     /// should still handle (palette, quit).
     fn settings_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
         if self.ui.provider_detail.is_some() {
@@ -13970,13 +14021,10 @@ impl App {
             return true;
         }
         if !self.ui.settings_nav_focus
+            && self.settings_open_page().is_some()
             && name == self.manifest.settings.navigation.previous_value_key
         {
-            if self.settings_open_page().is_some() {
-                return self.settings_page_key("left", code);
-            }
-            self.settings_change(self.ui.settings_row, -1);
-            return true;
+            return self.settings_page_key("left", code);
         }
         if !self.ui.settings_nav_focus && self.settings_open_page().is_some() {
             return self.settings_page_key(name, code);
@@ -14027,6 +14075,9 @@ impl App {
             }
             return true;
         }
+        if self.ui.settings_edit.is_some() {
+            return self.settings_edit_key(name, code);
+        }
         let rows = self.settings_rows();
         let last = rows.len().saturating_sub(1);
         let sel = self.ui.settings_row.min(last);
@@ -14041,22 +14092,15 @@ impl App {
             }
             "up" => self.ui.settings_row = sel.saturating_sub(1),
             "down" => self.ui.settings_row = (sel + 1).min(last),
-            "tab" | "shift+tab" => self.ui.settings_nav_focus = true,
+            "tab" | "shift+tab" | "left" => self.ui.settings_nav_focus = true,
+            // Navigation never changes a value: Right on a row does nothing.
+            "right" => {}
             "pageup" => self.ui.settings_row = sel.saturating_sub(8),
             "pagedown" => self.ui.settings_row = (sel + 8).min(last),
             "home" => self.ui.settings_row = 0,
             "end" => self.ui.settings_row = last,
-            "left" => {
-                if self.settings_selected_has_value(sel) {
-                    self.settings_change(sel, -1);
-                }
-            }
-            "right" => {
-                if self.settings_selected_has_value(sel) {
-                    self.settings_change(sel, 1);
-                }
-            }
-            "enter" => self.settings_activate(sel),
+            "enter" => self.settings_change_begin(sel),
+            "space" if self.ui.settings_search.text().is_empty() => self.settings_change_begin(sel),
             "backspace" => {
                 self.ui.settings_search.backspace();
                 self.ui.settings_row = 0;
@@ -14070,6 +14114,161 @@ impl App {
             },
         }
         true
+    }
+
+    /// Enter or Space on a row. A switch flips at once; an enum or the tools
+    /// grid enters an edit state; everything else keeps its Enter behaviour.
+    fn settings_change_begin(&mut self, index: usize) {
+        let Some(row) = self.settings_row_at(index) else {
+            return;
+        };
+        if let Some((options, current)) = self.settings_segments(&row) {
+            let mut sorted = options.clone();
+            sorted.sort_unstable();
+            if sorted == ["off", "on"] {
+                self.settings_change_row(row, 1);
+            } else if options.len() > 1 {
+                let draft = options.iter().position(|o| *o == current).unwrap_or(0);
+                self.ui.settings_edit = Some(SettingsEdit {
+                    row: row.id.clone(),
+                    options: options.iter().map(|o| (*o).to_owned()).collect(),
+                    draft,
+                    number: None,
+                    tools: false,
+                });
+            }
+            return;
+        }
+        if row.id == "tools.defaults" {
+            self.ui.settings_edit = Some(SettingsEdit {
+                row: row.id.clone(),
+                options: Vec::new(),
+                draft: 0,
+                number: None,
+                tools: true,
+            });
+            return;
+        }
+        if let Some((_, _, current, _, _, _)) = self.number_spec(&row.id) {
+            self.ui.settings_edit = Some(SettingsEdit {
+                row: row.id.clone(),
+                options: Vec::new(),
+                draft: 0,
+                number: Some(current),
+                tools: false,
+            });
+            return;
+        }
+        self.settings_activate_row(row);
+    }
+
+    /// A numeric row: (config path, section, current, step, min, max).
+    fn number_spec(&self, id: &str) -> Option<(&'static str, &'static str, i64, i64, i64, i64)> {
+        let (path, section, key, default, step, min, max) = match id {
+            "context.usage_refresh_minutes" => (
+                "usage.refresh_minutes",
+                "usage",
+                "refresh_minutes",
+                10,
+                1,
+                1,
+                1440,
+            ),
+            "context.handoff_percent" => (
+                "context.handoff_percent",
+                "context",
+                "handoff_percent",
+                80,
+                5,
+                0,
+                100,
+            ),
+            "mcp.max_listed_tools" => (
+                "mcp.max_listed_tools",
+                "mcp",
+                "max_listed_tools",
+                25,
+                1,
+                1,
+                1000,
+            ),
+            _ => return None,
+        };
+        let current = self
+            .state
+            .config
+            .as_ref()
+            .and_then(|c| c["values"][section][key].as_i64())
+            .unwrap_or(default);
+        Some((path, section, current, step, min, max))
+    }
+
+    /// Keys while a row is being edited: Left/Right choose, Enter confirms,
+    /// Esc cancels. The draft is applied only on Enter, so Esc leaves the
+    /// previous value untouched.
+    fn settings_edit_key(&mut self, name: &str, code: KeyCode) -> bool {
+        let Some(edit) = self.ui.settings_edit.clone() else {
+            return false;
+        };
+        let tools = edit.tools;
+        match name {
+            "esc" => self.ui.settings_edit = None,
+            "left" | "right" => {
+                let by: isize = if name == "left" { -1 } else { 1 };
+                if let Some(n) = edit.number {
+                    if let Some((_, _, _, step, min, max)) = self.number_spec(&edit.row) {
+                        if let Some(e) = self.ui.settings_edit.as_mut() {
+                            e.number = Some((n + step * by as i64).clamp(min, max));
+                        }
+                    }
+                } else if tools {
+                    self.ui.tool_cursor = (self.ui.tool_cursor as isize + by)
+                        .rem_euclid(TOOLS.len() as isize)
+                        as usize;
+                } else if let Some(e) = self.ui.settings_edit.as_mut() {
+                    e.draft = (e.draft as isize + by).rem_euclid(e.options.len() as isize) as usize;
+                }
+            }
+            "enter" => {
+                if tools {
+                    self.toggle_default_tool();
+                } else if let Some(n) = edit.number {
+                    self.ui.settings_edit = None;
+                    if let Some((path, _, current, ..)) = self.number_spec(&edit.row) {
+                        if n != current {
+                            self.patch_config_value(path, json!(n));
+                        }
+                    }
+                } else {
+                    self.ui.settings_edit = None;
+                    let current = self.settings_row_by_id(&edit.row);
+                    if let (Some(row), Some(chosen)) = (current, edit.options.get(edit.draft)) {
+                        let same = self
+                            .settings_segments(&row)
+                            .is_some_and(|(_, now)| now == *chosen);
+                        if !same {
+                            self.settings_apply_row(&row, chosen);
+                        }
+                    }
+                }
+            }
+            "up" | "down" | "tab" | "shift+tab" => {}
+            _ => {
+                if !matches!(code, KeyCode::Char(_)) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// The manifest row with this id, from the open section.
+    fn settings_row_by_id(&self, id: &str) -> Option<crate::manifest::Row> {
+        self.manifest
+            .settings_for_tui()
+            .into_iter()
+            .flat_map(|s| s.row)
+            .find(|r| r.id == id)
     }
 
     pub fn settings_wired(id: &str) -> bool {
@@ -14094,6 +14293,7 @@ impl App {
                 | "appearance.sidebar"
                 | "appearance.details"
                 | "appearance.timeline_detail"
+                | "appearance.time_format"
                 | "appearance.scrollbar"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
@@ -14186,6 +14386,14 @@ impl App {
             "appearance.timeline_detail" => pair(
                 &["low", "medium", "high"],
                 self.ui.detail.label().to_owned(),
+            ),
+            "appearance.time_format" => pair(
+                &["24h", "12h", "system"],
+                values
+                    .and_then(|v| v["ui"]["time_format"].as_str())
+                    .filter(|v| matches!(*v, "12h" | "system"))
+                    .unwrap_or("24h")
+                    .to_owned(),
             ),
             "appearance.scrollbar" => pair(&["off", "on"], on_off(self.ui.scrollbar)),
             "notifications.sound" => pair(&["off", "on"], on_off(self.ui.sound)),
@@ -14335,6 +14543,10 @@ impl App {
                     self.set_detail(detail);
                 }
             }
+            "appearance.time_format" => {
+                self.patch_config_value("ui.time_format", json!(chosen));
+                crate::timeline::set_time_format(chosen);
+            }
             "appearance.scrollbar" => {
                 self.ui.scrollbar = chosen == "on";
                 if !self.ui.scrollbar {
@@ -14459,36 +14671,6 @@ impl App {
             }
             _ => vec![row.note.clone()],
         }
-    }
-
-    /// Left/right: step a choice or flip a toggle.
-    fn settings_change(&mut self, index: usize, step: isize) {
-        let Some(row) = self.settings_row_at(index) else {
-            return;
-        };
-        self.settings_change_row(row, step);
-    }
-
-    /// Whether the selected row has a value the arrow keys can move (a segment
-    /// or a stepper). Actions and information rows ignore Left/Right.
-    fn settings_selected_has_value(&self, index: usize) -> bool {
-        let items = self.settings_items();
-        let Some(at) = self.settings_rows().get(index).copied() else {
-            return false;
-        };
-        let Some(SettingsItem::Row { row, .. }) = items.get(at) else {
-            return false;
-        };
-        self.settings_segments(row).is_some()
-            || matches!(
-                row.id.as_str(),
-                "agents.default_effort"
-                    | "agents.default_root"
-                    | "tools.defaults"
-                    | "context.usage_refresh_minutes"
-                    | "context.handoff_percent"
-                    | "mcp.max_listed_tools"
-            )
     }
 
     fn settings_change_row(&mut self, row: crate::manifest::Row, step: isize) {
@@ -14789,6 +14971,7 @@ impl App {
             | "notifications.sound"
             | "notifications.terminal"
             | "appearance.timeline_detail"
+            | "appearance.time_format"
             | "appearance.scrollbar" => self.settings_change_row(row, 1),
             "mcp.full_definitions"
             | "browser.use_my_chrome"
@@ -15108,9 +15291,9 @@ impl App {
             } else {
                 "Enter asks for the address of a remote MCP server (https://\u{2026}).".into()
             }),
-            PageAction::McpOpen(_) => {
-                Some("Enter opens this server: sign in, headers, switch off, restart, remove.".into())
-            }
+            PageAction::McpOpen(_) => Some(
+                "Enter opens this server: sign in, headers, switch off, restart, remove.".into(),
+            ),
             PageAction::OpenUrl(_) => Some("Enter opens the link in your browser.".into()),
             PageAction::CopyCode(_) => Some("Enter copies the code to the clipboard.".into()),
             PageAction::Connect { method, .. } => Some(

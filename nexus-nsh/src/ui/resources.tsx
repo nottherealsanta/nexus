@@ -120,7 +120,7 @@ function JobRow(p: { job: any; selected: boolean; onSelect: () => void }) {
   const dropped = () => (typeof j().dropped_chars === "number" ? j().dropped_chars : 0);
   return (
     <Button onPress={p.onSelect} selected={p.selected} accessibilityLabel={`Shell ${j().id}, ${j().status}`} testID={`resource-job-${j().id}`}
-      class={`rounded-(--radius) px-3 py-2 gap-1 items-stretch ${p.selected ? "bg-selection" : "bg-card hover:bg-accent"} ${FOCUS}`}>
+      class={`rounded-(--radius) px-3 py-2 gap-1 items-stretch ${p.selected ? "bg-row-selected" : "bg-card hover:bg-accent"} ${FOCUS}`}>
       <View class="flex-row items-center gap-2 min-w-0">
         <Text style={{ numberOfLines: 1 }} class="text-[13px] leading-5 font-(family-name:--font-ui) text-foreground">{j().id}</Text>
         <Text class={`text-[12px] leading-4 font-(family-name:--font-ui) ${statusClass(String(j().status))}`}>{j().status}</Text>

@@ -2,7 +2,7 @@ import { fileWatchStatus } from "../file-watch";
 import type { JSX } from "nsh";
 import { List, PanResponder, Scroll, Text, View, effect, safeArea, signal } from "nsh";
 import { Button, ContextMenu, Menu, MenuItem, Tab, Tabs, Input, Tooltip } from "nsh/base";
-import { Btn, Empty, FocusEdge, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
+import { Btn, Empty, CursorMark, Icon, IconButton, Status, AttentionMark, T, TS, FOCUS, relTime, abbrev, midTruncate, shortPath } from "./kit";
 import { manifest, uiText } from "../gen/manifest";
 import { desktopOnly, phoneSessionGroups } from "../mobile";
 import { availability, byId, commands, keyLabel, moveProject, newSession, run, setProjectStatus, toggleLeft } from "../commands";
@@ -41,7 +41,7 @@ export function SidebarTabs(p: { labels?: boolean }) {
           <View tooltip={<Tooltip delay={200}><Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text></Tooltip>}><Tab
             selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
             onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); if (t().id === "git") void loadGitPage(); savePrefs(); }}
-            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent active:bg-selection ${p.labels ? "px-2 min-h-11" : "size-8"} ${leftTab() === t().id ? (p.labels ? "bg-background" : "bg-selection") : ""} ${FOCUS}`}
+            class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) hover:bg-accent active:bg-row-selected ${p.labels ? "px-2 min-h-11" : "size-8"} ${leftTab() === t().id ? (p.labels ? "bg-background" : "bg-row-selected") : ""} ${FOCUS}`}
           >
             <Icon name={(t().id === "git" ? "branch" : t().id) as IconName} size={16} class={leftTab() === t().id ? "tint-foreground" : "tint-muted-foreground"} />
             <If when={!!p.labels}><Text class={`${TS.base} ${leftTab() === t().id ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{t().label}</Text></If>
@@ -205,8 +205,8 @@ export function SessionRail() {
                   </View>
                 </Tooltip>}
                 style={{ width: RAIL_PX }}
-                class={`relative items-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id || keyed() ? "bg-active hover:bg-active" : ""} ${dragging() ? "opacity-40" : ""} ${target() ? "bg-accent" : ""} ${FOCUS}`}>
-                <If when={keyed()} else={<If when={currentProject() === p().id}><ActiveBar testID={`rail-active-${p().id}`} /></If>}><FocusEdge testID={`rail-cursor-${p().id}`} /></If>
+                class={`relative items-center rounded-(--radius) hover:bg-accent ${currentProject() === p().id || keyed() ? "bg-row-selected hover:bg-row-selected" : ""} ${dragging() ? "opacity-40" : ""} ${target() ? "bg-accent" : ""} ${FOCUS}`}>
+                <If when={keyed()} else={<If when={currentProject() === p().id}><CursorMark testID={`rail-active-${p().id}`} /></If>}><CursorMark testID={`rail-cursor-${p().id}`} /></If>
                 <View class="w-full flex-row justify-between px-1">
                   <Each of={CORNERS.slice(0, 2)} key={(c) => c.kind}>{(c) => <Text testID={counts(p().id)[c().at] > 0 ? `rail-count-${p().id}-${c().kind}` : undefined} class={`text-center text-[10px] leading-3 tabular-nums ${tones[c().at]}`}>{counts(p().id)[c().at] > 0 ? railCount(counts(p().id)[c().at]) : " "}</Text>}</Each>
                 </View>
@@ -230,7 +230,7 @@ export function SessionRail() {
       <View class="w-full items-center" style={{ paddingBottom: safeArea().bottom }}>
         {/* 39 px: the rail's 40 px width less its 1 px border. */}
         <IconButton icon="plus" label="Add project" testID="rail-add-project" class="w-[39px] h-[39px]" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} />
-        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={`w-[39px] h-[39px] ${centre() === "settings" ? "bg-selection" : ""}`} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
+        <IconButton icon="settings" label="Settings" testID="rail-settings" selected={centre() === "settings"} class={`w-[39px] h-[39px] ${centre() === "settings" ? "bg-row-selected" : ""}`} onPress={() => run("app.settings")} reason={hint("app.settings") ?? undefined} />
       </View>
     </View>
   );
@@ -426,7 +426,7 @@ export function SessionsTab() {
       <View class="flex-1 min-h-0">
       <If when={rowItems().length > 0} else={
         <If when={(m(), model.projects.size === 0)} else={<Empty title={sessionQuery().trim() ? "No matching sessions" : archivedFilter() ? "No archived sessions" : "No sessions yet"} body={archivedFilter() ? "Archive a session to find it here." : "Start one with the + button or the New session command."} />}>
-          <Empty title="No projects yet" body="Add a project directory to start a session." action={<Btn label="Add project" icon="plus" onPress={() => run("project.add")} kind="primary" />} />
+          <View class="p-4" testID="sidebar-empty-projects"><Text class={T.sec}>No sessions yet.</Text></View>
         </If>
       }>
         <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingLeft: phone ? 16 : 0, paddingRight: phone ? 16 : 8, paddingBottom: 8, gap: 2 }} testID="session-list">
@@ -440,7 +440,7 @@ export function SessionsTab() {
 
 function Chip(p: { label: string; on: boolean; onPress: () => void }) {
   return (
-    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 ${phone ? "min-h-10" : "min-h-6"} justify-center hover:bg-accent ${p.on ? "bg-selection" : ""} ${FOCUS}`}>
+    <Button onPress={p.onPress} selected={p.on} accessibilityLabel={p.label} testID={`chip-${p.label.toLowerCase().replace(/ /g, "-")}`} class={`rounded-(--radius) px-2 ${phone ? "min-h-10" : "min-h-6"} justify-center hover:bg-accent ${p.on ? "bg-row-selected" : ""} ${FOCUS}`}>
       <Text class={`${TS.base} ${p.on ? "text-foreground font-medium" : "text-muted-foreground"}`}>{p.label}</Text>
     </Button>
   );
@@ -500,11 +500,11 @@ function SessionRow(p: { s: () => Session }) {
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={(e: any) => { dismissSessionSearch(); focusedSidebarRow.set(ref()); if (phone) drawer.set(null); if (!phone && sideClick(e)) openSessionTab(s().id, true); else void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${att() ? "needs your input" : sessionRunning(s()) ? "running" : "idle"}`}
-          class={`group/row relative px-2 hover:bg-accent ${phone ? "rounded-(--radius-card)" : "rounded-(--radius)"} ${sel() ? "bg-active hover:bg-active" : flowCursor() ? "bg-selection" : ""} ${phone ? "min-h-[76px] px-3 py-3 pr-14" : isNarrow() ? "min-h-[64px] py-2" : "h-16 py-2"} ${FOCUS}`}
+          class={`group/row relative px-2 hover:bg-accent ${phone ? "rounded-(--radius-card)" : "rounded-(--radius)"} ${sel() || flowCursor() ? "bg-row-selected hover:bg-row-selected" : ""} ${phone ? "min-h-[76px] px-3 py-3 pr-14" : isNarrow() ? "min-h-[64px] py-2" : "h-16 py-2"} ${FOCUS}`}
         >
-          <If when={sel() && !phone}><ActiveBar testID={`session-active-${s().id}`} /></If>
-          <If when={flowCursor()}><FocusEdge testID={`session-cursor-${s().id}`} /></If>
-          <View class={`flex-row items-center gap-2 h-6 ${phone ? "" : "pr-7"}`}>
+          <If when={sel() && !phone}><CursorMark testID={`session-active-${s().id}`} /></If>
+          <If when={flowCursor()}><CursorMark testID={`session-cursor-${s().id}`} /></If>
+          <View class={`flex-row items-center gap-2 h-6 ${phone ? "" : "group-hover/row:pr-7"}`}>
             <If when={!phone}><View class="w-4 items-center justify-center">
               <If when={att()}><AttentionMark kind="waiting" /></If>
               <If when={!att() && sessionRunning(s())}><Status kind="running" /></If>
@@ -513,19 +513,14 @@ function SessionRow(p: { s: () => Session }) {
             <If when={phone && !!att()}><AttentionMark kind="waiting" /></If>
             <If when={phone && !att() && sessionRunning(s())}><Status kind="running" /></If>
             <Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`flex-1 min-w-0 ${phone ? "text-[16px] leading-6 font-medium" : TS.base} ${sel() ? "text-highlight font-medium" : "text-foreground"}`}>{s().title || "Untitled"}</Text>
-            <If when={!phone}>
-              <View class="flex-row items-center gap-1">
-                <Text class={`${T.meta} ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
-              </View>
-            </If>
           </View>
-            <View class={`flex-row items-center gap-1 h-6 ${phone ? "" : "pl-6 pr-7"}`} testID={`session-line-${s().id}`}>
+            <View class={`flex-row items-center gap-1 h-6 ${phone ? "" : "pl-6"}`} testID={`session-line-${s().id}`}>
               <If when={phone}><Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`text-[13px] leading-5 min-w-0 ${att() ? "text-warning" : "text-muted-foreground"}`}>{att() ? "Needs your input" : projectName(s().project_id)}</Text></If>
               <If when={!phone && place()}><Text style={{ numberOfLines: 1 }} testID={`session-place-${s().id}`} class={`${T.meta} min-w-0`}>{place()}</Text></If>
               <If when={phone}><Text style={{ fontFamily: "Google Sans" }} class="text-[13px] leading-5 text-muted-foreground">{` · ${relTime(s().updated, (tick(), Date.now()))}`}</Text></If>
               <If when={snippetOf(s().id)}>{(t) => <Text style={{ numberOfLines: 1 }} testID={`session-snippet-${s().id}`} class={`${T.meta} flex-1 min-w-0`}>{`· ${t()}`}</Text>}</If>
               <View class="flex-1" />
-              <If when={!phone && n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
+              <If when={!phone}><Text class={`${T.meta} shrink-0 ${touch ? "opacity-0" : "group-hover/row:opacity-0"}`} testID={`session-meta-${s().id}`}>{`${relTime(s().updated, (tick(), Date.now()))}${n() > 0 ? ` · ${n()} ↳` : ""}`}</Text></If>
             </View>
           <If when={!phone && !s().archived}><Button onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id).then(() => run("session.archive")); }}
             accessibilityLabel={`Archive ${s().title || "Untitled"}`} testID={`row-archive-${s().id}`}
@@ -553,10 +548,6 @@ function SessionRow(p: { s: () => Session }) {
       <RowMenuItems row={ref} />
     </ContextMenu>
   );
-}
-/** The active sidebar block's left bar (`interactive.active_bar`), drawn over the row so it never shifts layout. */
-function ActiveBar(p: { testID: string }) {
-  return <View testID={p.testID} accessible={false} class="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-active-bar" style={{ pointerEvents: "none" }} />;
 }
 function RowMenuItems(p: { row: () => SidebarRowTarget }) {
   const items = () => commands.filter((c) => c.placement.includes("row_menu") && c.id.startsWith(`${p.row().kind}.`) && (!phone || !desktopOnly(c.id)));
@@ -609,7 +600,7 @@ function FilesTab() {
           <View style={{ paddingLeft: 8 + row().depth * 16 }} {...trackMods} onFocus={() => selectedFileEntry.set({ path: row().path, kind: row().kind })}>
           <ContextMenu onOpenChange={({ open }) => { if (open) selectedFileEntry.set({ path: row().path, kind: row().kind }); }} popupClass="min-w-[188px] rounded-(--radius-card) bg-popover p-1 shadow-lg" trigger={<Button onPress={() => { const r = row(); selectedFileEntry.set({ path: r.path, kind: r.kind }); if (r.kind === "directory") toggleFileDir(r.path); else if (r.kind === "file") openFileTab(r.path, sideClick()); }}
             accessibilityLabel={row().name} testID={`file-entry-${row().path}`}
-            class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-selection" : ""} ${FOCUS}`}>
+            class={`flex-row items-center gap-1.5 h-7 rounded-(--radius) pr-2 hover:bg-accent ${isOpen(row().path) ? "bg-row-selected" : ""} ${FOCUS}`}>
             <View class="w-3.5 shrink-0 items-center justify-center">
               <If when={row().kind === "directory"}><Text class={`${TS.base} text-muted-foreground`}>{row().expanded ? fold.open.unicode : fold.closed.unicode}</Text></If>
               <If when={row().kind === "error"}><Text class={`${TS.base} text-error`}>✕</Text></If>

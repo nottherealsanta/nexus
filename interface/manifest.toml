@@ -283,6 +283,11 @@ shows_unread_count = true
 # Rows that cannot be changed are left out of this file rather than shipped
 # disabled: the manifest is the product, not a roadmap.
 
+# Navigation never changes a value. Section rail: up/down choose a section, enter or right
+# enter its settings, esc closes. Settings: left, esc, tab or shift+tab return to the rail; enter
+# or space change a value (a switch flips; an enum edits in place with left/right, enter sets,
+# esc cancels). `section_key` returns to the rail; `value_key` and `previous_value_key` only
+# step a model's effort on an Agents detail page.
 [settings.navigation]
 section_key = "left"
 value_key = "right"
@@ -354,6 +359,16 @@ default = "medium"
 options = ["low", "medium", "high"]
 command = "timeline.detail_cycle"
 note = "Low groups activity into one line, medium lists each tool collapsed, high expands every tool."
+
+[[settings.section.row]]
+id = "appearance.time_format"
+label = "Time format"
+kind = "choice"
+scope = "core"
+clients = "both"
+default = "24h"
+options = ["24h", "12h", "system"]
+note = "How clock times show: 18:03, 6:03 PM, or whatever the system uses. Ages such as 3h are unchanged."
 
 [[settings.section.row]]
 id = "appearance.scrollbar"
@@ -743,10 +758,10 @@ command = "app.onboarding"
 finish_no_project = "You have no project yet, so Finish opens Add project."
 no_provider = "No provider is connected yet. Connect one first, then choose models."
 quest_provider = "Connect a provider"
-hints_info = "enter next · ← back · esc back · s skip"
-hints_rows = "↑↓ choose · enter change · → next · ← back · esc back · s skip"
-hints_agents = "↑↓ choose · enter change · e effort · → next · ← back · esc back · s skip"
-hints_search = "enter retry · → next · ← back · esc back · s skip"
+hints_info = "enter next · ←/esc back"
+hints_rows = "↑↓ choose · enter change · ←/esc back"
+hints_agents = "↑↓ choose · enter change · e effort · ←/esc back"
+hints_search = "enter retry · ←/esc back"
 search_retry = "Retry"
 
 [[onboarding.step]]

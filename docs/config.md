@@ -95,8 +95,8 @@ rather than opening a separate screen.
 serialized, preserve comments, and replace the file atomically using a private
 temporary file. `config.changed` announces writes and outside edits detected
 by the daemon's two-second poll. Both clients reload Settings on that event.
-Shared `ui.detail` (`low`, `medium`, `high`) and `ui.reduced_motion` are
-read and written by both clients. `ui.onboarded` (boolean, default `false`) says the first-run tour ([plan 52](../plans/52-onboarding.md)) was finished or skipped: both desktop clients open it while it is `false` and write `true`, so it runs once per Nexus home. `ui.favorite_models` (list of `provider/model`) holds the
+Shared `ui.detail` (`low`, `medium`, `high`), `ui.time_format` and `ui.reduced_motion` are
+read and written by both clients. `ui.time_format` (`24h` default, `12h`, `system`) sets how both clients show clock times (`18:03` or `6:03 PM`); `system` follows the OS (macOS `AppleICUForce12HourTime`, NSH's `Intl` hour cycle) and falls back to 24h when unknown. Ages such as `3h` are unchanged. `ui.onboarded` (boolean, default `false`) says the first-run tour ([plan 52](../plans/52-onboarding.md)) was finished or skipped: both desktop clients open it while it is `false` and write `true`, so it runs once per Nexus home. `ui.favorite_models` (list of `provider/model`) holds the
 model picker's favorites, which both pickers list first, even while filtering. Client layout preferences remain local.
 
 `[tools.permission]` holds permission rules, `"bash(git push*)" = "deny"`; see

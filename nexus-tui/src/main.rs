@@ -840,6 +840,19 @@ impl Drop for DumpTerminal {
 
 /// Run the app's effects and apply Core's replies for `limit`, as the
 /// interactive loop does between key presses.
+/// The viewed session is selected but its history has not arrived (the
+/// condition behind the timeline's "Loading session…" row).
+fn session_loading(app: &App) -> bool {
+    app.pending_first_prompt().is_none()
+        && app.viewed().is_some()
+        && app
+            .state
+            .model
+            .selected
+            .as_ref()
+            .is_some_and(|v| !v.loaded && v.messages.is_empty() && v.starting.is_none())
+}
+
 async fn pump(
     handle: &mut sync::SyncHandle,
     app: &mut App,
@@ -1040,6 +1053,25 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
             KEY_SETTLE * 2,
         )
         .await;
+        // A session opened by the keys may still be loading (its history is a
+        // separate read from Core): wait for it, bounded, so a capture never
+        // shows "Loading session…".
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while session_loading(&app) && Instant::now() < deadline {
+            pump(
+                &mut handle,
+                &mut app,
+                &home,
+                &done_tx,
+                &mut done_rx,
+                &mut terminal,
+                Duration::from_millis(100),
+            )
+            .await;
+        }
+        if session_loading(&app) {
+            eprintln!("nexus-tui: the opened session did not finish loading");
+        }
     }
     for (w, h) in &args.dump {
         app.set_size(*w, *h);

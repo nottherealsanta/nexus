@@ -109,7 +109,7 @@ rectangle on the cell grid; the TUI has no rounded corners, and only circular st
 meters are round. The project rail is five cells wide and always there, from 70 columns, whether
 the sidebar is open or not; a border separates it from the open sidebar.
 Projects keep creation order with uppercase initials; collisions use the next
-available consonant, then a numeric suffix; the first character stays centred. The rail shows projects in Core's saved order without inactive ones. Drag a tile to reorder (the target tile is highlighted; Esc or dropping outside the rail cancels; a click without a drag still selects), or press `alt+up` / `alt+down` on a project; passive projects are dimmed, and the project picker (`project.switch`) lists inactive ones and restores the chosen one. Removing a project (confirmed) only unregisters it: Core keeps its sessions and files stay. The rail has one empty row above its projects. The selected project tile draws a lighter block (`interactive.active`) with a left `▏` bar (`interactive.active_bar`); the selected session row in the sidebar gets the same block and bar across both of its lines, with its title in `text.highlight` (white in dark mode) and not bold. Running or recently active projects
+available consonant, then a numeric suffix; the first character stays centred. The rail shows projects in Core's saved order without inactive ones. Drag a tile to reorder (the target tile is highlighted; Esc or dropping outside the rail cancels; a click without a drag still selects), or press `alt+up` / `alt+down` on a project; passive projects are dimmed, and the project picker (`project.switch`) lists inactive ones and restores the chosen one. Removing a project (confirmed) only unregisters it: Core keeps its sessions and files stay. The rail has one empty row above its projects. The selected project tile draws the gray selected fill (`interactive.row_selected`, no bar); the selected session row in the sidebar gets the same fill across both of its lines, with its title in `text.highlight` (white in dark mode) and not bold. Running or recently active projects
 (within one hour) are lighter gray. Each tile has a counter in each corner:
 attention (purple) and unread (blue) on top, running (green) and idle (white) below,
 counting root sessions, with archived sessions left out and subagents counted under
@@ -220,7 +220,7 @@ time based on the last available message is prefixed `~`.
 
 **Keyboard flow from an empty composer (PLAN 15.4).** Only when the composer is empty (with text, Left moves the
 cursor as always): Left opens the session sidebar and focuses it; Left again focuses the **project rail** (the Projects
-sidebar tab is gone): the focused tile gets the accent left bar and its popup opens beside it with the full project
+sidebar tab is gone): the focused tile gets the gray selected fill and its popup opens beside it with the full project
 name and the four session counts, Up/Down move between projects, Enter opens the project and returns to its session
 list. Esc or Right steps back out: the rail returns to the session list, then the composer takes the keys. The
 projects overview is reached only by the palette command `project.overview`. The overview is a modal listing the projects in their saved order; under each a `├`/`└`
@@ -240,13 +240,18 @@ redirect), Add a header (`Name: value`, masked), Switch off/on, Restart and Remo
 full-definitions switch and the 1–1000 name-listing limit. Code: `src/app/mcp.rs`, `draw_mcp_detail` in `render.rs`;
 tests `shell.rs` `the_mcp_page_…`. NSH: `src/ui/mcp-settings.tsx`.
 
+Settings keys: two panes, the section list and the section's settings. Enter or Right on a section enters its
+settings; Left, Esc or Tab returns (Esc on the sections closes). Moving never changes a value. Enter or Space on a row
+flips a switch, or edits an enum, number or the tools grid in place (←/→ choose, Enter sets, Esc cancels); the footer
+shows the keys of the current mode. Tests: `behaviour.rs` `an_enum_edits_in_place_…`, `shell.rs` `settings_segments_…`.
+
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
 square modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
 a borderless `surface.raised` block, 2 cells of padding left and right and 1 row top and
 bottom, within 2 cells of the frame edge and at most 70% of its height. NSH draws the same
 square recipe and the same two-pane Settings, with no rounded corners. The title is the
 first row inside, key hints (including Esc) the last row, the selected row is on
-the selection band with the `▌` focus bar. Confirms default to `[ Cancel ]`; `[ Delete ]`
+the gray selected fill (`interactive.row_selected`, no left bar). Confirms default to `[ Cancel ]`; `[ Delete ]`
 is in `status.error`. The `.` row menu stays an unscrimmed popover beside its row.
 
 Modal widths use three classes: small 60, medium 72 and large 88 cells, clamped to
@@ -607,14 +612,13 @@ measures it without a Core or PTY (results in
 
 Session rows in the left sidebar (D03) have two lines. Line 1 has a mark slot
 (waiting `◆`, error `✕`, running spinner, unread `●`, in that order of
-precedence), a space, the title (bold when open, ending in `…` when clipped) and the
-time of last activity right-aligned (`now`, `3m`, `4d`). Line 2 is the agent in its
-colour, `·` and `⌥ branch` muted, with the descendant-session count (`2 ↳`) right-aligned. The
-open session has the selection band on both lines; focus draws `▌` at x=0 on both.
-The title or branch is truncated first, and on a very narrow sidebar the time or
-count is dropped. Hovering a session shows an archive box at the upper right and an
+precedence), a space, the title (bold when open, ending in `…` when clipped), which has the whole line. Line 2 is
+`⌥ branch` muted, with the time of last activity and the descendant-session count right-aligned
+(`now`, `3m · 2 ↳`); the time is always there, so the line is never empty and rows keep one height. The
+open session has the gray selected fill on both lines; the focused row has the same fill (no bar).
+The title or branch is truncated first. Hovering a session shows an archive box at the upper right and an
 actions menu below it; archived sessions show only the menu. The `.`/`m` row menu is a raised popover beside the row (Delete in
-red, going to the usual confirmation); the rail's open item has the selection band.
+red, going to the usual confirmation); the rail's open item has the gray selected fill.
 The Git rows are `M path  +2 −3` (`M` warning, `A` and `?` success, `D` error); a
 side that is 0 is left out. Set `NEXUS_PORT` and `NEXUS_PORT_EMPTY` to run the shots
 on other ports than 4799/4798.
@@ -846,7 +850,7 @@ title`, `/continue`, `/new`, `/settings`...); an unknown `/word` is sent as text
 
 As-you-type completion: a borderless popup of up to ten rows, exactly as wide as
 the composer card and flush with its top edge, sits above it on the raised
-surface (the selected row has the selection band and focus bar; the last row
+surface (the selected row has the gray selected fill, no bar; the last row
 holds the key hints and `n of N`). Typing `/word` as the draft's first word ranks the manifest's
 slash commands locally (prefix, then subsequence, then typo, then the rest, so
 the height stays steady), each with its title as muted help and the reason when
@@ -1011,7 +1015,7 @@ Working labels use the shared travelling shimmer: one pass every 1.5 seconds,
 with a brighter highlight over secondary text. Reduced motion keeps the label static.
 
 Settings sections have no gaps between rows. Selected sections and setting rows use a
-neutral gray highlight across the entire row, including its value. A white left bar marks the focused pane (dark in the light theme);
+neutral gray highlight (`interactive.row_selected`) across the entire row, including its value; no left bar marks the focused pane;
 ←/→ move the focused segment; Tab returns focus to the section heading without
 changing the setting. Shift+Right steps a value backward; Right advances it.
 

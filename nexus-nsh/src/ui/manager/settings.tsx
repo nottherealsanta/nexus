@@ -32,12 +32,12 @@ function ModelRef() {
 export function managerControl(id: string, label: string, options?: string[]): JSX.Element | null {
   switch (id) {
     case "manager.enabled":
-      return <Seg label={label} options={["off", "on"]} value={values().enabled ? "on" : "off"} onPick={(v) => void patchConfig("manager.enabled", v === "on")} />;
+      return <Seg id={id} label={label} options={["off", "on"]} value={values().enabled ? "on" : "off"} onPick={(v) => void patchConfig("manager.enabled", v === "on")} />;
     case "manager.mode":
-      return <Seg label={label} options={options ?? ["pipeline", "live"]} value={String(values().mode ?? "pipeline")} onPick={(v) => void patchConfig("manager.mode", v)} />;
+      return <Seg id={id} label={label} options={options ?? ["pipeline", "live"]} value={String(values().mode ?? "pipeline")} onPick={(v) => void patchConfig("manager.mode", v)} />;
     case "manager.model": return <ModelRef />;
     case "manager.proactive":
-      return <Seg label={label} options={options ?? ["off", "attention", "all"]} value={String(values().proactive ?? "attention")} onPick={(v) => void patchConfig("manager.proactive", v)} />;
+      return <Seg id={id} label={label} options={options ?? ["off", "attention", "all"]} value={String(values().proactive ?? "attention")} onPick={(v) => void patchConfig("manager.proactive", v)} />;
     case "manager.privacy": return <Text class="hidden" />;
     default: return null;
   }

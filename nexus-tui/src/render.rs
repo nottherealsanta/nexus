@@ -34,7 +34,8 @@ const ACCENT: &str = "interactive.accent";
 const MULTI: &str = "interactive.multi";
 /// The active sidebar block (selected project tile, selected session row) and its left bar.
 const ACTIVE: &str = "interactive.active";
-const ACTIVE_BAR: &str = "interactive.active_bar";
+/// The one selected/focused fill: a neutral gray across the whole row, button or option.
+const SELECTED: &str = "interactive.row_selected";
 const HIGHLIGHT: &str = "text.highlight";
 
 struct Cx<'a> {
@@ -1097,30 +1098,24 @@ fn toggle_glyph(cx: &Cx, side: Side) -> String {
 fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let base = cx.st(SECONDARY, SIDEBAR);
     clear(buf, g.header, base);
-    let focus_bar = cx.t.structure("focus_bar");
     for (side, rect, focus) in [
         (Side::Left, g.toggle_left, Focus::ToggleLeft),
         (Side::Right, g.toggle_right, Focus::ToggleRight),
     ] {
         let focused = cx.app.ui.focus == focus;
-        let style = cx.st(SECONDARY, SIDEBAR);
+        // Keyboard focus fills the whole toggle with the gray selected fill.
+        let style = if focused {
+            cx.st(PRIMARY, SELECTED)
+        } else {
+            cx.st(SECONDARY, SIDEBAR)
+        };
+        if focused {
+            clear(buf, rect, style);
+        }
         let glyph = toggle_glyph(cx, side);
         let gw = width(&glyph) as u16;
-        // leading toggle: bar, glyph; trailing toggle: glyph, bar (so the glyph
-        // sits at the very edge)
         match side {
             Side::Left => {
-                if focused {
-                    put(
-                        buf,
-                        rect.x,
-                        rect.y,
-                        focus_bar,
-                        cx.st("interactive.focus", SIDEBAR)
-                            .add_modifier(Modifier::BOLD),
-                        2,
-                    );
-                }
                 let x = if g.rail.is_some() {
                     rect.x + rect.width.saturating_sub(gw) / 2
                 } else {
@@ -1138,17 +1133,6 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             Side::Right => {
                 let gx = rect.x + rect.width.saturating_sub(gw + 1);
                 put(buf, gx, rect.y, &glyph, style, gw);
-                if focused {
-                    put(
-                        buf,
-                        gx + gw,
-                        rect.y,
-                        focus_bar,
-                        cx.st("interactive.focus", SIDEBAR)
-                            .add_modifier(Modifier::BOLD),
-                        1,
-                    );
-                }
             }
         }
         hits.add(
@@ -1575,7 +1559,8 @@ fn draw_toasts(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let w = paint::toast_width(longest, g.centre.width);
     let x = g.centre.right().saturating_sub(w + 1);
     let bottom = g.timeline.bottom();
-    let mut y = g.timeline.y;
+    // Below the sticky user band, never over it.
+    let mut y = g.timeline.y + cx.app.sticky_rows.get();
     let mut shown = 0;
     for (t, (title, body)) in toasts.iter().zip(&parts) {
         let h = if body.is_empty() { 1 } else { 2 };
@@ -1984,11 +1969,18 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 } else {
                     MUTED
                 };
-                let lifted = selected || hovered || focused;
-                let bg = if lifted { ACTIVE } else { SIDEBAR };
+                let chosen = selected || focused;
+                let lifted = chosen || hovered;
+                let bg = if chosen {
+                    SELECTED
+                } else if lifted {
+                    ACTIVE
+                } else {
+                    SIDEBAR
+                };
                 let tile = Rect::new(band.x, band.y, inner, 3).intersection(r);
                 if lifted {
-                    clear(buf, tile, cx.st(PRIMARY, ACTIVE));
+                    clear(buf, tile, cx.st(PRIMARY, bg));
                 }
                 let mut style = cx.st(token, bg);
                 if token == MUTED || passive || is_source {
@@ -2000,36 +1992,13 @@ fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                         .add_modifier(Modifier::BOLD);
                 }
                 if selected {
-                    style = cx.st(PRIMARY, ACTIVE).add_modifier(Modifier::BOLD);
+                    style = cx.st(PRIMARY, bg).add_modifier(Modifier::BOLD);
                 }
                 let label = labels.get(&p.id).cloned().unwrap_or_default();
                 let label = &label;
                 let label_width = width(label) as u16;
                 let label_x = tile.x + tile.width.saturating_sub(label_width) / 2;
                 put(buf, label_x, band.y + 1, label, style, label_width);
-                if focused {
-                    for y in tile.y..tile.bottom() {
-                        put(
-                            buf,
-                            band.x,
-                            y,
-                            if cx.t.opts.ascii { "|" } else { "▌" },
-                            cx.st("interactive.focus", bg).add_modifier(Modifier::BOLD),
-                            1,
-                        );
-                    }
-                } else if selected {
-                    for y in tile.y..tile.bottom() {
-                        put(
-                            buf,
-                            band.x,
-                            y,
-                            if cx.t.opts.ascii { "|" } else { "▏" },
-                            cx.st(ACTIVE_BAR, bg),
-                            1,
-                        );
-                    }
-                }
                 let counts = rail_counts(a, &p.id);
                 if counts.iter().all(|n| *n == 0) {
                     let glyph = if cx.t.opts.ascii { "-" } else { "─" };
@@ -2380,16 +2349,6 @@ fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitM
             }
         }
         clear(buf, row, style);
-        if selected {
-            put(
-                buf,
-                r.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", SIDEBAR),
-                1,
-            );
-        }
         let indent = 1 + entry.depth * 2;
         // One `│` guide per ancestor level, under that folder's marker.
         for level in 0..entry.depth {
@@ -2701,19 +2660,21 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
                     }
                     let x = r.x + 1 + image.column as u16;
                     let w = (image.width as u16).min(r.right().saturating_sub(x + 1));
-                    let y0 = top + image.start.saturating_sub(scroll) as u16;
-                    let y1 = (top as usize + (image.start + image.rows).saturating_sub(scroll))
-                        .min(bottom as usize) as u16;
+                    let virtual_top = top as i64 + image.start as i64 - scroll as i64;
+                    let y0 = virtual_top.max(top as i64) as u16;
+                    let y1 = (virtual_top + image.rows as i64).min(bottom as i64) as u16;
                     if w == 0 || y1 <= y0 {
                         continue;
                     }
                     let rect = Rect::new(x, y0, w, y1 - y0);
                     if let Some(state) = viewer.protocol(&image.key, &image.data_url) {
-                        let widget = ratatui_image::StatefulImage::<
-                            ratatui_image::protocol::StatefulProtocol,
-                        >::new()
-                        .resize(ratatui_image::Resize::Fit(None));
-                        ratatui::widgets::StatefulWidget::render(widget, rect, buf, state);
+                        draw_image_clipped(
+                            buf,
+                            state,
+                            Rect::new(x, 0, w, image.rows as u16),
+                            virtual_top,
+                            rect,
+                        );
                     }
                     hits.add(
                         rect,
@@ -3022,8 +2983,21 @@ fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect, back: bool, hits: &mut Hit
     }
 }
 
+/// Only the selected fill of a style: its background and (in monochrome) its reverse
+/// modifier, no foreground, so it patches under any text style.
+fn selected_fill(cx: &Cx) -> Style {
+    let s = cx.st(PRIMARY, SELECTED);
+    Style {
+        bg: s.bg,
+        add_modifier: s.add_modifier & Modifier::REVERSED,
+        ..Style::default()
+    }
+}
+
 fn row_style(cx: &Cx, selected: bool, hover: bool) -> Style {
-    if selected || hover {
+    if selected {
+        cx.st(PRIMARY, SELECTED)
+    } else if hover {
         cx.st(PRIMARY, SIDEBAR)
     } else {
         cx.st(SECONDARY, SIDEBAR)
@@ -3195,7 +3169,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     let entries = a.side_entries();
     if entries.is_empty() {
         let msg = if a.state.model.projects.is_empty() {
-            "No project yet. Add one with the + on the project rail."
+            "No sessions yet."
         } else if a.ui.show_archived {
             "No sessions here. Type in the composer to start one."
         } else {
@@ -3311,36 +3285,14 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                 };
                 let first = matches!(v, SRow::Title(_));
                 let selected = viewed == Some(s.id.as_str());
-                // The selected session takes the project rail's active treatment: the
-                // lighter block and the left bar (`interactive.active`, `active_bar`).
-                let bg = if selected {
-                    Style::default().bg(cx.st(PRIMARY, ACTIVE).bg.unwrap_or_default())
+                // The selected session and the keyboard cursor take the one gray fill
+                // (`interactive.row_selected`) across both lines of the row, no bar.
+                let bg = if selected || (focused && i == cursor) {
+                    selected_fill(cx)
                 } else {
                     Style::default()
                 };
                 clear(buf, rr, cx.st(SECONDARY, SIDEBAR).patch(bg));
-                if selected {
-                    put(
-                        buf,
-                        rr.x,
-                        y,
-                        if cx.t.opts.ascii { "|" } else { "▏" },
-                        cx.st(ACTIVE_BAR, SIDEBAR).patch(bg),
-                        1,
-                    );
-                }
-                if focused && i == cursor {
-                    put(
-                        buf,
-                        rr.x,
-                        y,
-                        cx.t.structure("focus_bar"),
-                        cx.st("interactive.focus", SIDEBAR)
-                            .patch(bg)
-                            .add_modifier(Modifier::BOLD),
-                        1,
-                    );
-                }
                 let mut close_hit: Option<(Rect, String)> = None;
                 if first {
                     if let Some((glyph, token)) = session_mark(cx, &s.id) {
@@ -3356,29 +3308,19 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                         SECONDARY
                     };
                     let style = cx.st(token, SIDEBAR).patch(bg);
-                    let age = text::age(now_secs(), s.updated);
-                    let aw = width(&age) as u16;
                     // Hovering the session exposes the archive control above its menu.
                     let close = (!s.archived && cx.hovered(Rect::new(rr.x, y, rr.width, 2)))
                         .then(|| Rect::new(inner_right.saturating_sub(2), y, 3, 1));
                     let inner = rr.width.saturating_sub(4);
-                    // The time yields when the title would be squeezed too far.
-                    let show_age = inner >= aw + 1 + 6;
+                    // The title has the whole line; the time lives on the meta line.
                     let room = if close.is_some() {
                         inner.saturating_sub(3)
-                    } else if show_age {
-                        inner - aw - 1
                     } else {
                         inner
                     };
                     draw_session_title(cx, buf, (rr.x + 3, y), room, s, style, bg);
                     if let Some(x) = close {
                         let hot = cx.hovered(x);
-                        clear(
-                            buf,
-                            Rect::new(inner_right - aw.max(1), y, aw.max(1), 1),
-                            cx.st(MUTED, SIDEBAR).patch(bg),
-                        );
                         put(
                             buf,
                             x.x,
@@ -3388,15 +3330,17 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
                             1,
                         );
                         close_hit = Some((x, s.id.clone()));
-                    } else if show_age {
-                        put(buf, inner_right - aw, y, &age, muted.patch(bg), aw);
                     }
                 } else {
                     let (left, meta) = session_detail(cx, s, a.descendants(&s.id));
                     let inner = rr.width.saturating_sub(4) as usize;
                     let mw = width(&meta);
-                    let show_meta = mw > 0 && inner >= mw + 1 + 6;
-                    let room = if show_meta { inner - mw - 1 } else { inner };
+                    let show_meta = mw > 0 && inner >= mw;
+                    let room = if show_meta {
+                        inner.saturating_sub(mw + 1)
+                    } else {
+                        inner
+                    };
                     let mut x = rr.x + 3;
                     let end = rr.x + 3 + room as u16;
                     let mut budget = room;
@@ -3454,7 +3398,7 @@ fn session_mark<'t>(cx: &Cx<'t>, id: &str) -> Option<(String, &'t str)> {
     }
 }
 
-/// Line 2 of a session row: `⌥ branch` and the child count (`2 ↳`).
+/// Line 2 of a session row: `⌥ branch`, then the time and child count (`2m · 2 ↳`).
 fn session_detail(
     cx: &Cx,
     s: &crate::api::Session,
@@ -3471,10 +3415,15 @@ fn session_detail(
         let mark = if cx.t.opts.ascii { "~" } else { "⌥" };
         left.push((format!("{mark} {branch}"), muted));
     }
+    // The time is always known, so the meta line is never empty.
+    let age = text::age(now_secs(), s.updated);
     let meta = if children == 0 {
-        String::new()
+        age
     } else {
-        format!("{children} {}", if cx.t.opts.ascii { ">" } else { "↳" })
+        format!(
+            "{age} · {children} {}",
+            if cx.t.opts.ascii { ">" } else { "↳" }
+        )
     };
     (left, meta)
 }
@@ -3546,19 +3495,10 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             break;
         }
         let head = Rect::new(r.x, y, r.width, 1);
-        if cx.hovered(head) {
-            clear(buf, head, cx.st(MUTED, SIDEBAR));
-        }
         if focused && i == 0 {
-            put(
-                buf,
-                r.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", SIDEBAR)
-                    .add_modifier(Modifier::BOLD),
-                1,
-            );
+            clear(buf, head, cx.st(MUTED, SELECTED));
+        } else if cx.hovered(head) {
+            clear(buf, head, cx.st(MUTED, SIDEBAR));
         }
         let label = match sec.id.as_str() {
             "session_info" => "Session",
@@ -4455,8 +4395,8 @@ fn draw_timeline(
         let total = text_rows + if logo { logo_rows } else { 0 };
         let mut y = r.y + r.height.saturating_sub(total) / if logo { 2 } else { 3 };
         if logo {
-            // The accent colour; bold is what carries it in monochrome.
-            let mut style = cx.st(ACCENT, CANVAS);
+            // The normal text colour (white on dark); bold is what carries it in monochrome.
+            let mut style = cx.st(PRIMARY, CANVAS);
             if cx.t.opts.tier == crate::theme::Tier::Mono {
                 style = style.add_modifier(Modifier::BOLD);
             }
@@ -4595,22 +4535,22 @@ fn draw_timeline(
             if width == 0 {
                 continue;
             }
-            let y = r.y + preview.start.saturating_sub(top) as u16;
-            let y0 = y.max(r.y);
-            let y1 = (y + preview.rows as u16).min(r.bottom());
+            // The image is laid out over every row the builder reserved, then
+            // only the rows inside the viewport are copied: a diagram cut by
+            // the top edge shows its lower part, never shifted or rescaled.
+            let virtual_top = r.y as i64 + preview.start as i64 - top as i64;
+            let y0 = virtual_top.max(r.y as i64) as u16;
+            let y1 = (virtual_top + preview.rows as i64).min(r.bottom() as i64) as u16;
             if y1 <= y0 {
                 continue;
             }
             if let Some(state) = viewer.protocol(&preview.key, &preview.data_url) {
-                let image =
-                    ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new(
-                    )
-                    .resize(ratatui_image::Resize::Fit(None));
-                ratatui::widgets::StatefulWidget::render(
-                    image,
-                    Rect::new(x, y0, width, y1 - y0),
+                draw_image_clipped(
                     buf,
                     state,
+                    Rect::new(x, 0, width, preview.rows as u16),
+                    virtual_top,
+                    Rect::new(x, y0, width, y1 - y0),
                 );
             }
             preview_hits.push((
@@ -4793,6 +4733,7 @@ fn draw_timeline(
             );
         }
     }
+    a.sticky_rows.set(0);
     draw_sticky(cx, buf, r, inner, hits, timeline, top);
     // The focus location: the selected block's first row, else the top.
     let bar_y = if a.ui.focus == Focus::Timeline {
@@ -4923,6 +4864,37 @@ fn draw_tline(
     }
 }
 
+/// Draw `state` as if it had the whole `full` size (its `y` is ignored) with its
+/// top row at screen row `virtual_top` (which may be negative), and copy only
+/// the cells inside `clip` to `buf`. Cells the image leaves untouched keep what
+/// is already there, so the image never draws outside the rows reserved for it.
+fn draw_image_clipped(
+    buf: &mut Buffer,
+    state: &mut ratatui_image::protocol::StatefulProtocol,
+    full: Rect,
+    virtual_top: i64,
+    clip: Rect,
+) {
+    let scratch_area = Rect::new(0, 0, full.width, full.height);
+    let mut scratch = Buffer::empty(scratch_area);
+    let widget = ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::new()
+        .resize(ratatui_image::Resize::Fit(None));
+    ratatui::widgets::StatefulWidget::render(widget, scratch_area, &mut scratch, state);
+    let blank = ratatui::buffer::Cell::default();
+    for y in clip.y..clip.bottom() {
+        let sy = y as i64 - virtual_top;
+        if sy < 0 || sy >= full.height as i64 {
+            continue;
+        }
+        for x in clip.x..clip.right().min(full.x + full.width) {
+            let cell = &scratch[(x - full.x, sy as u16)];
+            if *cell != blank {
+                buf[(x, y)] = cell.clone();
+            }
+        }
+    }
+}
+
 /// The sticky user header (D04): the pinned copy of the user band whose text
 /// has scrolled off the top, with a shade row and the count of this turn's rows
 /// above. The next band pushes it up; a click scrolls back to the band.
@@ -5018,6 +4990,7 @@ fn draw_sticky(
         inner.width,
         pin.shown.min(r.height as usize) as u16,
     );
+    cx.app.sticky_rows.set(shown.height);
     hits.add(shown, Target::StickyUser(block_index));
 }
 
@@ -6683,7 +6656,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let reference = a.effective_model(session);
     // Until the catalog reports Core's default, the model is not known yet.
     let (provider, model_name, model_id) = if reference.is_empty() {
-        (String::new(), cx.ell().to_owned(), String::new())
+        (String::new(), "Select a model".to_owned(), String::new())
     } else {
         model_parts(a, &reference)
     };
@@ -6854,7 +6827,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 model_label,
                 Target::ComposerModel,
                 Modifier::empty(),
-                PRIMARY,
+                if model_id.is_empty() { ACCENT } else { PRIMARY },
             ),
             (
                 provider.clone(),
@@ -7080,6 +7053,15 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             .and_then(|p| a.state.model.projects.get(p).map(|p| p.path.clone()))
     });
     let Some(directory) = directory else {
+        // No project: keep the row, saying so quietly, rather than leave a blank line.
+        put(
+            buf,
+            r.x + 3,
+            r.bottom() - 1,
+            "No project selected",
+            cx.st(MUTED, CANVAS),
+            r.width.saturating_sub(5),
+        );
         return;
     };
     let listing = a
@@ -7161,7 +7143,7 @@ fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         buf,
         start,
         y,
-        &truncate_middle(&path, room, cx.ell()),
+        &crate::text::truncate_path_tail(&path, room, cx.ell()),
         cx.st(MUTED, CANVAS),
         left_end.saturating_sub(start),
     );
@@ -7259,10 +7241,7 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         .min(24)
         + 3;
     let start = selected.saturating_sub(shown as usize - 1);
-    let band = cx
-        .st(PRIMARY, "interactive.selection")
-        .bg
-        .unwrap_or_default();
+    let band = cx.st(PRIMARY, SELECTED).bg.unwrap_or_default();
     for (offset, (i, row)) in rows
         .iter()
         .enumerate()
@@ -7279,18 +7258,6 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             cx.st(PRIMARY, RAISED)
         };
         clear(buf, line, base);
-        if on {
-            put(
-                buf,
-                area.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", RAISED)
-                    .bg(band)
-                    .add_modifier(Modifier::BOLD),
-                1,
-            );
-        }
         let muted = base.patch(cx.t.fg(MUTED));
         let (name, dir) = split(&row.value);
         let name_style = if row.reason.is_some() {
@@ -7416,10 +7383,14 @@ fn segment_view(cx: &Cx, row: &crate::manifest::Row, room: u16) -> Option<Segmen
     if options.len() < 2 {
         return None;
     }
-    let selected = options
+    let mut selected = options
         .iter()
         .position(|option| *option == current)
         .unwrap_or(0);
+    // The row being edited shows its draft choice, not the saved value.
+    if let Some(edit) = cx.app.ui.settings_edit.as_ref().filter(|e| e.row == row.id) {
+        selected = edit.draft.min(options.len() - 1);
+    }
     for padded in [true, false] {
         let labels: Vec<String> = options
             .iter()
@@ -7457,7 +7428,7 @@ fn draw_segments(
     for (option, label) in seg.labels.iter().enumerate() {
         let w = width(label) as u16;
         let (token, bg) = if option == seg.selected {
-            (PRIMARY, "interactive.selection")
+            (PRIMARY, SELECTED)
         } else {
             (SECONDARY, PANEL)
         };
@@ -7477,6 +7448,21 @@ fn draw_segments(
 /// The value shown for a settings row, and whether it is live (wired).
 fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     let a = cx.app;
+    if let Some(n) =
+        a.ui.settings_edit
+            .as_ref()
+            .filter(|e| e.row == row.id)
+            .and_then(|e| e.number)
+    {
+        let shown = if row.id == "context.handoff_percent" && n == 0 {
+            "off".to_owned()
+        } else if row.id == "context.handoff_percent" {
+            format!("{n}%")
+        } else {
+            n.to_string()
+        };
+        return (format!("\u{2039} {shown} \u{203a}"), true);
+    }
     let live = match row.id.as_str() {
         "tools.defaults" => {
             let disabled: Vec<&str> = a
@@ -7518,6 +7504,15 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         "appearance.scrollbar" => Some(on_off(a.ui.scrollbar)),
         "appearance.details" => Some(on_off(a.ui.right_open)),
         "appearance.timeline_detail" => Some(a.ui.detail.label().into()),
+        "appearance.time_format" => Some(
+            a.state
+                .config
+                .as_ref()
+                .and_then(|c| c["values"]["ui"]["time_format"].as_str())
+                .filter(|v| matches!(*v, "12h" | "system"))
+                .unwrap_or("24h")
+                .into(),
+        ),
         "appearance.session_scope" => Some(
             if a.ui.scope_all {
                 "all projects"
@@ -7655,24 +7650,9 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
 }
 
 /// Selected Settings rows fill their entire hit area with a neutral gray band.
-fn row_band(cx: &Cx, buf: &mut Buffer, r: Rect, token: &str, focused: bool) -> Style {
-    let style = cx
-        .st(token, "interactive.settings_selection")
-        .add_modifier(Modifier::BOLD);
+fn row_band(cx: &Cx, buf: &mut Buffer, r: Rect, token: &str, _focused: bool) -> Style {
+    let style = cx.st(token, SELECTED).add_modifier(Modifier::BOLD);
     clear(buf, r, style);
-    if focused {
-        put(
-            buf,
-            r.x,
-            r.y,
-            cx.t.structure("focus_bar"),
-            cx.st(
-                "interactive.settings_focus",
-                "interactive.settings_selection",
-            ),
-            1,
-        );
-    }
     style
 }
 
@@ -7921,7 +7901,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     let style = cx.st(
                         if selected { SECONDARY } else { MUTED },
                         if selected {
-                            "interactive.settings_selection"
+                            "interactive.row_selected"
                         } else {
                             RAISED
                         },
@@ -7984,7 +7964,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     let mut vstyle = cx.st(
                         if disabled { MUTED } else { tone(*t) },
                         if selected {
-                            "interactive.settings_selection"
+                            "interactive.row_selected"
                         } else {
                             RAISED
                         },
@@ -8129,7 +8109,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                         let mut vstyle = cx.st(
                             if wired && !disabled { SECONDARY } else { MUTED },
                             if selected {
-                                "interactive.settings_selection"
+                                "interactive.row_selected"
                             } else {
                                 RAISED
                             },
@@ -8184,6 +8164,12 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     let left = if cx.t.opts.ascii { "<" } else { "\u{2190}" };
     let hints: Vec<(&str, &str)> = if a.ui.settings_nav_focus {
         vec![(updown(cx), "section"), ("enter", "open"), ("esc", "close")]
+    } else if let Some(edit) = a.ui.settings_edit.as_ref() {
+        if edit.tools {
+            vec![(both, "tool"), ("enter", "toggle"), ("esc", "done")]
+        } else {
+            vec![(both, "choose"), ("enter", "set"), ("esc", "cancel")]
+        }
     } else if let Some(page) = page.as_deref() {
         if page.starts_with("agents/") {
             vec![
@@ -8200,7 +8186,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             vec![("enter", "select"), ("esc", "back")]
         }
     } else {
-        vec![("enter", "select"), (both, "value"), ("esc", "back")]
+        vec![(updown(cx), "move"), ("enter", "change"), ("esc", "back")]
     };
     hint_row(cx, buf, &m, &hints);
     let count = format!("{} sections", sections.len());
@@ -8335,7 +8321,7 @@ fn draw_provider_detail(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap
                 let mut vstyle = cx.st(
                     tone(*t),
                     if selected {
-                        "interactive.settings_selection"
+                        "interactive.row_selected"
                     } else {
                         RAISED
                     },
@@ -8488,7 +8474,7 @@ fn draw_mcp_detail(
                 let mut vstyle = cx.st(
                     tone(*t),
                     if selected {
-                        "interactive.settings_selection"
+                        "interactive.row_selected"
                     } else {
                         RAISED
                     },
@@ -8575,18 +8561,11 @@ fn modal(cx: &Cx, buf: &mut Buffer, area: Rect, r: Rect, title: &str, hits: &mut
     m
 }
 
-/// A selected modal row uses a focus bar and bold text without a fill.
+/// A selected modal row: bold text on the full-width gray fill, no left bar.
 fn band(cx: &Cx, buf: &mut Buffer, m: &Modal, y: u16, token: &str) -> Style {
     let rr = Rect::new(m.r.x + 1, y, m.r.width.saturating_sub(2), 1);
-    let style = cx.st(token, RAISED).add_modifier(Modifier::BOLD);
-    put(
-        buf,
-        rr.x,
-        y,
-        cx.t.structure("focus_bar"),
-        cx.st("interactive.focus", RAISED),
-        1,
-    );
+    let style = cx.st(token, SELECTED).add_modifier(Modifier::BOLD);
+    clear(buf, rr, style);
     style
 }
 
@@ -9002,17 +8981,10 @@ fn draw_projects_overview(
             }
         }
         if selected {
-            clear(buf, rect, cx.st(PRIMARY, RAISED));
-            put(
-                buf,
-                rect.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", RAISED),
-                1,
-            );
+            clear(buf, rect, cx.st(PRIMARY, SELECTED));
             for span in line.iter_mut() {
                 span.style = span.style.add_modifier(Modifier::BOLD);
+                span.style = span.style.patch(selected_fill(cx));
             }
         }
         draw_spans(cx, buf, m.x, y, &line, m.w);
@@ -9378,18 +9350,12 @@ fn draw_row_menu(cx: &Cx, buf: &mut Buffer, area: Rect, row: Rect, p: &Palette, 
         } else {
             PRIMARY
         };
-        let mut style = cx.st(token, RAISED);
-        let hint = cx.st(MUTED, RAISED);
+        let surface = if selected { SELECTED } else { RAISED };
+        let mut style = cx.st(token, surface);
+        let hint = cx.st(MUTED, surface);
         if selected {
             style = style.add_modifier(Modifier::BOLD);
-            put(
-                buf,
-                rr.x,
-                rr.y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", RAISED),
-                1,
-            );
+            clear(buf, rr, cx.st(PRIMARY, SELECTED));
         }
         let hw = width(&it.hint) as u16;
         put(
@@ -11067,19 +11033,7 @@ fn draw_dialog(
                 let s = format!("[ {label} ]");
                 let sw = width(&s) as u16;
                 let style = if focus == i {
-                    let mut st = cx.st(token, RAISED).add_modifier(Modifier::BOLD);
-                    if cx.t.mono() {
-                        st = st.add_modifier(Modifier::REVERSED);
-                    }
-                    put(
-                        buf,
-                        x.saturating_sub(1),
-                        by,
-                        cx.t.structure("focus_bar"),
-                        cx.st("interactive.focus", RAISED),
-                        1,
-                    );
-                    st
+                    cx.st(token, SELECTED).add_modifier(Modifier::BOLD)
                 } else {
                     cx.st(token, RAISED)
                 };

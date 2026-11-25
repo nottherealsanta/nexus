@@ -737,7 +737,7 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:turn-footer");
     const footer = app.texts().join("\n");
-    const parts = ["GPT-5", "0 tools", "100Ki", "10.0Ko", "500r", "50%c", "1.0s", new Date(2000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })];
+    const parts = ["GPT-5", "0 tools", "100Ki", "10.0Ko", "500r", "50%c", "1.0s", `${String(new Date(2000).getHours()).padStart(2, "0")}:${String(new Date(2000).getMinutes()).padStart(2, "0")}`];
     let previous = -1;
     for (const part of parts) {
       const index = footer.indexOf(part, previous + 1);

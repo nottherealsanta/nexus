@@ -60,7 +60,7 @@ export function FilePane(p: { id: string; group: string }) {
           <Text class={`${T.meta} w-20 text-right`} testID="file-find-count">{matchCount()}</Text>
           <View class="flex-row rounded-(--radius) bg-muted p-0.5">
             <Button onPress={() => caseSensitive.set(!caseSensitive())} selected={caseSensitive()} accessibilityLabel="Match case" testID="file-find-case"
-              class={`rounded-(--radius) px-2 min-h-6 items-center justify-center hover:bg-accent ${caseSensitive() ? "bg-selection" : ""} ${FOCUS}`}>
+              class={`rounded-(--radius) px-2 min-h-6 items-center justify-center hover:bg-accent ${caseSensitive() ? "bg-row-selected" : ""} ${FOCUS}`}>
               <Text class={`text-[13px] leading-5 ${caseSensitive() ? "font-medium text-foreground" : "text-foreground-secondary"}`}>Aa</Text>
             </Button>
           </View>

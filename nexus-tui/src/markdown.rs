@@ -816,7 +816,10 @@ fn diagram_cached(body: &str, p: &Palette, width: usize) -> Option<Diagram> {
     )
     .ok()
     .and_then(|raster| {
-        let image = crate::images::Image::from_png("mermaid diagram".into(), &raster.png).ok()?;
+        // The raster is transparent; a terminal image protocol turns alpha into
+        // black, so lay it over the theme canvas first.
+        let png = flatten_png(&raster.png, &p.diagram.background).unwrap_or(raster.png);
+        let image = crate::images::Image::from_png("mermaid diagram".into(), &png).ok()?;
         let columns =
             ((raster.css_width / f64::from(DIAGRAM_CELL_W)).ceil() as usize).clamp(1, 200);
         let rows = ((raster.css_height / f64::from(DIAGRAM_CELL_H)).ceil() as usize).clamp(1, 200);
@@ -830,6 +833,38 @@ fn diagram_cached(body: &str, p: &Palette, width: usize) -> Option<Diagram> {
         cache.insert(key, raster.clone());
     });
     raster
+}
+
+/// `png` composited over the `#rrggbb` `background`, as an opaque PNG.
+fn flatten_png(png: &[u8], background: &str) -> Option<Vec<u8>> {
+    let hex = background.strip_prefix('#')?;
+    let hex = if hex.len() == 3 {
+        hex.chars().flat_map(|c| [c, c]).collect::<String>()
+    } else {
+        hex.to_owned()
+    };
+    if hex.len() != 6 {
+        return None;
+    }
+    let bg = [
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ];
+    let mut image = image::load_from_memory(png).ok()?.to_rgba8();
+    for pixel in image.pixels_mut() {
+        let alpha = u32::from(pixel[3]);
+        for c in 0..3 {
+            pixel[c] = ((u32::from(pixel[c]) * alpha + u32::from(bg[c]) * (255 - alpha) + 127)
+                / 255) as u8;
+        }
+        pixel[3] = 255;
+    }
+    let mut out = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
 }
 
 /// Whether the fenced block spanning `block` (opening through closing line)

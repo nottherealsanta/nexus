@@ -1,7 +1,7 @@
 import { Image, Scroll, Text, View, computed, effect, keyboardFrame, keymap, safeArea, signal, untracked, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { sendChoice } from "./mobile/state";
-import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, midTruncate, shortPath } from "./kit";
+import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, pathTail, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { PRINTABLE_KEYS, printableOf } from "../manager";
 import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, questionLineFocus, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
@@ -13,6 +13,7 @@ import {
   bashJobs, loadResources, resourceCounts, resourcesOpen, resourcesKind, composerFocused, questionLine, flowStage, flowProject,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
+import { liveRequests, requestsOf } from "../core/turns";
 import { Approval, Question, QuestionItem } from "../core/api";
 import { agentColor, agentSlot } from "../agent-color";
 import { detailOf, fmtDuration } from "./timeline";
@@ -232,18 +233,26 @@ function EditableComposer() {
   };
   const interrupted = () => term("session.interrupted");
   const agent = () => { m(); return ses()?.agent ?? sessionDraft().agent ?? "build"; };
+  /** A session stored without a model still ran on one: the newest request's model, as a catalog ref when it is a bare id. */
+  const requestModelRef = (id: string) => {
+    const v = model.selected;
+    if (!v || v.sessionId !== id) return "";
+    const used = v.turns.flatMap((t) => requestsOf(t)).concat(liveRequests(v.scratch ?? [])).map((r) => r.model).filter(Boolean).at(-1) as string | undefined;
+    if (!used) return "";
+    return used.includes("/") ? used : modelCatalog().find((e) => e.ref.split("/").at(-1) === used)?.ref ?? "";
+  };
   const modelRef = () => {
     m();
     const s = ses();
     const chosen = !s ? sessionDraft().model : undefined;
-    if (s) return s.model ? String(s.model) : "";
+    if (s) return s.model ? String(s.model) : requestModelRef(s.id);
     if (chosen) return chosen;
     const entry = agentCatalog().agents.find((a) => a.name === agent());
     return entry?.model || rememberedModel(currentProject(), agent());
   };
   const modelParts = () => {
     const ref = modelRef();
-    if (!ref) return { name: "default", provider: "" };
+    if (!ref) return { name: "Select a model", provider: "" };
     const entry = modelCatalog().find((item) => item.ref === ref);
     if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: ref.includes("/") ? ref.split("/")[0] : "" };
     return { name: entry.name || ref.split("/").at(-1) || ref, provider: entry.provider || ref.split("/")[0] };
@@ -482,7 +491,7 @@ function EditableComposer() {
     <View class={`flex-1 min-w-0 flex-row items-center ${phone ? "gap-1.5 overflow-hidden" : "gap-1"}`}>
       <Selector command="agent.change" label={agentName()} labelClass={agentColor(agent())} testID="composer-agent" alignStart fixed={phone} cap={phone ? 132 : undefined} />
       <If when={!phone}><Text class={T.meta}>·</Text></If>
-      <Selector command="model.change" label={modelParts().name} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
+      <Selector command="model.change" label={modelParts().name} labelClass={modelRef() ? undefined : "text-primary"} sub={dockWidth() < 560 || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
       <If when={!phone}><Text class={T.meta}>·</Text></If>
       <If when={!phone}><Selector command="model.effort" label={effort()} testID="composer-effort" fixed /></If>
       <If when={!busy() && interrupted()}>
@@ -551,8 +560,7 @@ function EditableComposer() {
                         const sel = () => first() + i() === at();
                         return (
                           <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
-                            class={`relative flex-row items-center gap-3 rounded-lg ${sel() ? "bg-selection" : ""} ${isNarrow() ? "min-h-11" : "h-[34px]"} px-2.5 hover:bg-accent ${FOCUS}`}>
-                            <If when={sel()}><View class="absolute left-0 top-[7px] w-[3px] h-5 rounded-sm bg-primary" testID="completion-bar" /></If>
+                            class={`relative flex-row items-center gap-3 rounded-lg ${sel() ? "bg-row-selected" : ""} ${isNarrow() ? "min-h-11" : "h-[34px]"} px-2.5 hover:bg-accent ${FOCUS}`}>
                             <If when={!!r().file} else={<>
                               <Text style={{ numberOfLines: 1, ...UI_FONT }} class={`w-24 shrink-0 text-[14px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
                               <Text style={{ numberOfLines: 1, ...UI_FONT }} class="flex-1 min-w-0 text-[14px] leading-5 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
@@ -735,7 +743,7 @@ function RoundButton(p: { icon: "mic" | "arrow-up" | "stop"; label: string; onPr
   if (p.onLongPress) {
     return (
       <View role="button" focusable onPress={() => { if (!p.disabled) p.onPress?.(); }} onLongPress={() => { if (!p.disabled) p.onLongPress?.(); }}
-        accessibilityLabel={p.label} testID={p.testID} class={`items-center justify-center rounded-full ${size} ${outerSkin} active:bg-selection ${FOCUS}`}>{visual}</View>
+        accessibilityLabel={p.label} testID={p.testID} class={`items-center justify-center rounded-full ${size} ${outerSkin} active:bg-row-selected ${FOCUS}`}>{visual}</View>
     );
   }
   return (
@@ -979,7 +987,7 @@ function LocationStrip(p: { working: boolean }) {
     const dir = directory();
     const stateHome = info()?.home ?? "";
     const home = userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
-    return midTruncate(shortPath(dir, home), pathLimit());
+    return pathTail(shortPath(dir, home), pathLimit());
   };
   const pathLimit = () => {
     const w = stripWidth();
@@ -1016,7 +1024,7 @@ function LocationStrip(p: { working: boolean }) {
     void loadResources();
   };
   return (
-    <If when={phone ? p.working : (project() && directory()) || p.working}>
+    <If when={phone ? p.working : true}>
       <View class={`w-full flex-row items-center gap-2 min-w-0 min-h-7 pt-1 pb-1.5 ${phone ? "" : "pl-5 pr-4"}`} testID="location-strip"
         onLayout={(b: any) => stripWidth.set(b.bounds?.size?.width ?? b.size?.width ?? 0)}>
         {/* A phone keeps only the working status here: directory, branch, kernel and shell are desktop surfaces. */}
@@ -1029,7 +1037,7 @@ function LocationStrip(p: { working: boolean }) {
               class={`min-w-0 shrink rounded-(--radius) ${FOCUS}`}
             ><Text style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0`}>{path()}</Text></Button>
           </If>
-          <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.mono}`}>{path()}</Text></If>
+          <If when={!session()}><Text testID="location-directory" style={{ numberOfLines: 1 }} class={`min-w-0 shrink ${T.mono}`}>{directory() ? path() : "No project selected"}</Text></If>
           <If when={!!branch()}>
             <If when={!!session()} else={<Text testID="location-branch" style={{ numberOfLines: 1 }} class={`${T.mono} min-w-0 shrink`}>{`⌥ ${branch()!}`}</Text>}>
               <Button
@@ -1483,7 +1491,7 @@ function ApprovalBody(p: { a: Approval }) {
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
                   style={phone ? { width: "48%" } : {}}
-                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${phone ? "min-h-11 justify-center bg-background" : isNarrow() ? "min-h-11" : "min-h-8"} ${!phone && i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${phone ? "min-h-11 justify-center bg-background" : isNarrow() ? "min-h-11" : "min-h-8"} ${!phone && i() === choice() && !off() ? "bg-row-selected" : ""} ${off() ? "" : "hover:bg-accent"} ${FOCUS}`}>
                   <If when={!phone}><Text class={`shrink-0 w-5 text-center rounded-(--radius) bg-muted text-[16px] leading-6 font-medium ${off() ? "text-muted-foreground" : "text-foreground"}`}>{byId.get(r().cmd)?.keys?.tui ?? ""}</Text></If>
                   <Text style={{ numberOfLines: 1, fontFamily: "Google Sans" }} class={`${phone ? "text-center text-[14px] font-semibold" : "flex-1 text-[16px]"} min-w-0 leading-6 ${off() ? "text-muted-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={T.meta}>{reason()}</Text></If>
@@ -1602,7 +1610,7 @@ function QuestionBody(p: { q: Question }) {
                 <Button role={current().multiple ? "checkbox" : "radio"} selected={sel()} disabled={done()}
                   accessibilityLabel={`${current().question} ${[o().label, o().preview].filter(Boolean).join('. ')}`}
                   onPress={() => { choice.set(n()); chooseAnswer(q, current(), o().id); }}
-                  class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${(phone ? sel() : n() === choice()) ? "bg-selection" : ""} ${FOCUS}`}>
+                  class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 ${phone ? "min-h-11" : "min-h-8"} hover:bg-accent ${(phone ? sel() : n() === choice()) ? "bg-row-selected" : ""} ${FOCUS}`}>
                   <Text class={`shrink-0 w-5 text-center text-[14px] leading-6 tabular-nums ${sel() ? "text-primary font-semibold" : "text-muted-foreground"}`}>{n() + 1}</Text>
                   <If when={current().multiple} else={<RadioMark on={sel()} testID={`choice-mark-${o().id}`} />}>
                     <CheckMark on={sel()} testID={`choice-mark-${o().id}`} />
@@ -1675,7 +1683,7 @@ export function PeerComposer(p: { sid: string; onFocus: () => void }) {
   const modelName = () => {
     const s = ses();
     const ref = s?.model ? String(s.model) : (agentCatalog().agents.find((a) => a.name === agent())?.model || rememberedModel(s?.project_id ?? null, agent()) || "");
-    if (!ref) return { name: "default", provider: "" };
+    if (!ref) return { name: "Select a model", provider: "" };
     const entry = modelCatalog().find((item) => item.ref === ref);
     if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: ref.includes("/") ? ref.split("/")[0] : "" };
     return { name: entry.name || ref.split("/").at(-1) || ref, provider: entry.provider || ref.split("/")[0] };
@@ -1686,7 +1694,7 @@ export function PeerComposer(p: { sid: string; onFocus: () => void }) {
     const dir = ses()?.directory ?? "";
     const stateHome = info()?.home ?? "";
     const home = userHome() || (/\/\.nexus(10)?$/.test(stateHome) ? stateHome.replace(/\/\.nexus(10)?$/, "") : "");
-    return midTruncate(shortPath(dir, home), Math.max(24, Math.floor((width() - 32) / 9.6)));
+    return pathTail(shortPath(dir, home), Math.max(24, Math.floor((width() - 32) / 9.6)));
   };
   const label = (t: string, cls = "") => <Text style={{ numberOfLines: 1, ...UI_FONT, fontSize: 14, lineHeight: 22 }} class={`min-w-0 shrink ${T.sec} ${cls}`}>{t}</Text>;
   const press = () => { p.onFocus(); setTimeout(() => focusComposer.fn(), 0); };

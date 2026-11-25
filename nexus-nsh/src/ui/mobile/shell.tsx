@@ -58,7 +58,7 @@ function ConversationHeader() {
   return (
     <View class="flex-row items-center gap-1 px-1 pb-1.5 bg-background border-b border-border" style={{ paddingTop: safeArea().top + 2 }} testID="phone-top-bar">
       <Button onPress={() => { Keyboard.dismiss(); goBack(); }} accessibilityLabel={phoneParent() ? `Back to ${phoneParent()!.title}` : "Back to Sessions"} testID="phone-back"
-        class={`items-center justify-center size-11 rounded-full active:bg-selection ${FOCUS}`}>
+        class={`items-center justify-center size-11 rounded-full active:bg-row-selected ${FOCUS}`}>
         <Icon name="chevron-left" size={28} class="tint-foreground" />
       </Button>
       <View class="flex-1 min-w-0 px-1">
@@ -128,7 +128,7 @@ export function PhoneShell() {
     <If when={phoneTabBarVisible(phonePage())}>
       <View class="flex-row items-stretch px-1 bg-background border-t border-border" style={{ paddingTop: 6, paddingBottom: keyboardFrame().height > 0 ? 0 : safeArea().bottom }} testID="phone-tabs">
         <Each of={PHONE_TABS} key={(tab) => tab.id}>
-          {(tab) => <Button onPress={() => { Keyboard.dismiss(); phonePage.set(tab().id); }} selected={phonePage() === tab().id} accessibilityLabel={tab().id === "sessions" && needsYou() > 0 ? `${tab().label}, ${needsYou()} waiting on you` : tab().label} testID={`phone-tab-${tab().id}`} class={`relative flex-1 items-center justify-center gap-0.5 min-h-14 rounded-2xl active:bg-selection ${FOCUS}`}>
+          {(tab) => <Button onPress={() => { Keyboard.dismiss(); phonePage.set(tab().id); }} selected={phonePage() === tab().id} accessibilityLabel={tab().id === "sessions" && needsYou() > 0 ? `${tab().label}, ${needsYou()} waiting on you` : tab().label} testID={`phone-tab-${tab().id}`} class={`relative flex-1 items-center justify-center gap-0.5 min-h-14 rounded-2xl active:bg-row-selected ${FOCUS}`}>
             <Icon name={tab().icon} size={24} class={phonePage() === tab().id ? "tint-foreground" : "tint-muted-foreground"} />
             <Text class={`font-(family-name:--font-ui) text-[11px] leading-[13px] ${phonePage() === tab().id ? "text-foreground font-semibold" : "text-muted-foreground font-medium"}`}>{tab().label}</Text>
             <If when={tab().id === "sessions" && needsYou() > 0}>

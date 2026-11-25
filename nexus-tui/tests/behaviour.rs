@@ -1846,7 +1846,7 @@ fn searching_for_a_page_then_entering_opens_that_page() {
 }
 
 #[test]
-fn the_tools_grid_moves_with_left_right_and_toggles_with_enter() {
+fn the_tools_grid_edits_with_enter_then_left_right_and_toggles_with_enter() {
     let mut a = app();
     a.state.config = Some(serde_json::json!({
         "revision": "cfg-1",
@@ -1864,6 +1864,8 @@ fn the_tools_grid_moves_with_left_right_and_toggles_with_enter() {
         )
         .unwrap();
     press(&mut a, &["right"]);
+    assert_eq!(a.ui.tool_cursor, 0, "Right alone does not move the grid");
+    press(&mut a, &["enter", "right"]);
     assert_eq!(a.ui.tool_cursor, 1);
     press(&mut a, &["enter"]);
     assert!(matches!(
@@ -2965,7 +2967,13 @@ fn handoff_threshold_setting_steps_by_five_and_zero_is_off() {
         .iter()
         .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == "context.handoff_percent"))
         .unwrap();
-    press(&mut a, &["shift+right"]);
+    a.effects.clear();
+    press(&mut a, &["enter", "left"]);
+    assert!(
+        a.effects.is_empty(),
+        "stepping the draft changes nothing yet"
+    );
+    press(&mut a, &["enter"]);
     assert!(
         matches!(a.effects.last(), Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
         if path == "context.handoff_percent" && value == &serde_json::json!(0))
@@ -3629,7 +3637,16 @@ fn browser_chrome_profile_setting_is_off_by_default_and_patches_core() {
         })
         .expect("Browser > Use my Chrome profile");
     a.ui.settings_row = at;
+    a.effects.clear();
     press(&mut a, &["right"]);
+    assert!(
+        !a.effects.iter().any(|e| matches!(
+            e,
+            Effect::Sync(nexus_tui::sync::Command::PatchConfig { .. })
+        )),
+        "Right on a row never changes a value"
+    );
+    press(&mut a, &["space"]);
     assert!(matches!(
         a.effects.last(),
         Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { revision, path, value }))
@@ -3687,4 +3704,118 @@ fn browser_status_row_says_what_is_missing_and_asks_again_when_the_mode_changes(
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Api(nexus_tui::actions::ApiCall::BrowserStatus))));
+}
+
+/// An app on the Settings view with `section` open and its rows focused, the row `id` selected.
+fn settings_row_app(section: &str, id: &str) -> nexus_tui::app::App {
+    let mut a = app();
+    a.state.config = Some(serde_json::json!({
+        "revision": "cfg-1",
+        "values": {"browser": {"use_my_chrome": false}, "defaults": {"permission": "allow"}}
+    }));
+    a.execute("app.settings");
+    a.ui.settings_section = section.into();
+    a.ui.settings_nav_focus = false;
+    let rows = a.settings_rows();
+    let items = a.settings_items();
+    a.ui.settings_row = rows
+        .iter()
+        .position(|at| matches!(&items[*at], SettingsItem::Row { row, .. } if row.id == id))
+        .unwrap_or_else(|| panic!("row {id}"));
+    a.effects.clear();
+    a
+}
+
+#[test]
+fn right_on_a_section_enters_it_and_changes_nothing() {
+    let mut a = app();
+    a.execute("app.settings");
+    a.ui.settings_nav_focus = true;
+    a.effects.clear();
+    let theme = a.theme.opts.mode;
+    press(&mut a, &["right"]);
+    assert!(!a.ui.settings_nav_focus);
+    assert_eq!(a.ui.settings_row, 0);
+    assert_eq!(a.theme.opts.mode, theme);
+    assert!(a.ui.settings_edit.is_none());
+    assert!(a.effects.is_empty());
+    // Left (and Esc) go back to the sections; Esc there closes Settings.
+    press(&mut a, &["left"]);
+    assert!(a.ui.settings_nav_focus);
+    press(&mut a, &["right", "esc"]);
+    assert!(a.ui.settings_nav_focus);
+    assert_eq!(a.ui.view, View::Settings);
+    press(&mut a, &["esc"]);
+    assert_ne!(a.ui.view, View::Settings);
+}
+
+#[test]
+fn arrows_on_a_row_never_change_config() {
+    let mut a = settings_row_app("tools", "tools.default_permission");
+    press(&mut a, &["right", "right", "down", "up"]);
+    assert!(a.effects.is_empty());
+    assert!(a.ui.settings_edit.is_none());
+    press(&mut a, &["left"]);
+    assert!(a.ui.settings_nav_focus);
+    assert!(a.effects.is_empty());
+}
+
+#[test]
+fn enter_and_space_flip_a_switch() {
+    for key in ["enter", "space"] {
+        let mut a = settings_row_app("browser", "browser.use_my_chrome");
+        press(&mut a, &[key]);
+        assert!(
+            a.ui.settings_edit.is_none(),
+            "a switch flips without an edit state"
+        );
+        assert!(matches!(
+            a.effects.last(),
+            Some(Effect::Sync(nexus_tui::sync::Command::PatchConfig { path, value, .. }))
+                if path == "browser.use_my_chrome" && value == &serde_json::json!(true)
+        ));
+    }
+}
+
+#[test]
+fn an_enum_edits_in_place_enter_sets_and_esc_restores() {
+    let mut a = settings_row_app("appearance", "appearance.timeline_detail");
+    let before = a.ui.detail;
+    press(&mut a, &["enter"]);
+    assert!(a.ui.settings_edit.is_some());
+    let shown = draw(&mut a, 120, 36).1.join("\n");
+    assert!(
+        shown.contains("choose") && shown.contains("cancel"),
+        "{shown}"
+    );
+    press(&mut a, &["right"]);
+    assert_eq!(a.ui.detail, before, "choosing is a draft until Enter");
+    press(&mut a, &["esc"]);
+    assert!(a.ui.settings_edit.is_none());
+    assert_eq!(a.ui.detail, before, "Esc restores the previous value");
+    assert!(
+        !a.ui.settings_nav_focus,
+        "Esc cancels the edit, not the pane"
+    );
+    press(&mut a, &["enter", "right", "enter"]);
+    assert_ne!(a.ui.detail, before, "Enter sets the chosen value");
+    assert!(a.ui.settings_edit.is_none());
+}
+
+#[test]
+fn settings_footer_shows_the_keys_of_the_current_mode() {
+    let mut a = app();
+    a.execute("app.settings");
+    a.ui.settings_nav_focus = true;
+    let shown = draw(&mut a, 120, 36).1.join("\n");
+    assert!(
+        shown.contains("section") && shown.contains("open") && shown.contains("close"),
+        "{shown}"
+    );
+    press(&mut a, &["enter"]);
+    let shown = draw(&mut a, 120, 36).1.join("\n");
+    assert!(
+        shown.contains("move") && shown.contains("change") && shown.contains("back"),
+        "{shown}"
+    );
 }

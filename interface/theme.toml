@@ -68,8 +68,7 @@ strong  = "#4a4a50"     # diff split rule, tool-detail box (decorative)
 focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
 
 [dark.interactive]
-settings_focus = "#ffffff" # active Settings pane marker
-settings_selection = "#303030" # full-width neutral Settings selection
+row_selected = "#363636" # the selected/focused row, button or option: a full-width neutral gray fill (no left bar)
 accent    = "#e8a46e"   # brand mark, active tab, links, primary action
 multi     = "#a78bfa"   # multi-select questions: rail, marker and ticks
 on_accent = "#121314"   # text on an accent fill
@@ -78,7 +77,6 @@ selection = "#2c2824"   # selected row/range background (accent tint)
 hover     = "#1e1e1e"   # pointer-hover background
 scrollbar = "#3c3c3c"   # timeline scroll bar: present but very quiet (decorative)
 active    = "#242424"   # active sidebar block: selected project tile and session row
-active_bar = "#e6e7e8"  # its left bar
 
 [dark.status]
 success = "#8fc46a"
@@ -130,8 +128,7 @@ strong  = "#c2c3c0"
 focus   = "#a84e16"
 
 [light.interactive]
-settings_focus = "#1f2124" # dark equivalent on light surfaces
-settings_selection = "#d9d9d4"  # neutral focus band; a step below hover, never the selection tint
+row_selected = "#d9d9d4"  # the selected/focused row, button or option: a full-width neutral gray fill (no left bar)
 accent    = "#a84e16"
 multi     = "#6743ae"
 on_accent = "#ffffff"
@@ -140,7 +137,6 @@ selection = "#e8d0b9"   # selected row/segment: warm sand, clearly off the panel
 hover     = "#e9e9e6"
 scrollbar = "#c4c4bf"
 active    = "#ffffff"
-active_bar = "#1f2124"
 
 [light.status]
 success = "#2f7a1f"
@@ -191,7 +187,7 @@ style = ""
 
 [roles.skill_card_focus]
 fg = "text.secondary"
-bg = "interactive.settings_selection"
+bg = "interactive.row_selected"
 rail = ""
 label = ""
 style = ""
@@ -251,11 +247,9 @@ style = ""
 # surfaces collapse to the terminal background and are told apart by rails,
 # borders and labels (never by background alone).
 [fallback256.dark]
-"interactive.settings_focus" = 255
-"interactive.settings_selection" = 236
+"interactive.row_selected" = 237
 "interactive.scrollbar" = 237
 "interactive.active" = 235
-"interactive.active_bar" = 254
 "text.highlight" = 255
 "surface.canvas" = 232
 "surface.panel" = 234
@@ -297,11 +291,9 @@ style = ""
 "agent.gold" = 179
 
 [fallback256.light]
-"interactive.settings_focus" = 235
-"interactive.settings_selection" = 253
+"interactive.row_selected" = 253
 "interactive.scrollbar" = 251
 "interactive.active" = 231
-"interactive.active_bar" = 234
 "text.highlight" = 233
 "surface.canvas" = 255
 "surface.panel" = 254
@@ -343,11 +335,9 @@ style = ""
 "agent.gold" = 58
 
 [fallback16.dark]
-"interactive.settings_focus" = "bright_white"
-"interactive.settings_selection" = "bright_black"
+"interactive.row_selected" = "bright_black"
 "interactive.scrollbar" = "bright_black"
 "interactive.active" = "default"
-"interactive.active_bar" = "bright_white"
 "text.highlight" = "bright_white"
 "surface.canvas" = "default"
 "surface.panel" = "default"
@@ -389,11 +379,9 @@ style = ""
 "agent.gold" = "yellow"
 
 [fallback16.light]
-"interactive.settings_focus" = "black"
-"interactive.settings_selection" = "white"
+"interactive.row_selected" = "white"
 "interactive.scrollbar" = "white"
 "interactive.active" = "default"
-"interactive.active_bar" = "black"
 "text.highlight" = "black"
 "surface.canvas" = "default"
 "surface.panel" = "default"
@@ -439,11 +427,9 @@ style = ""
 # Meaning that colour carried moves to glyph + label + prefix, which every
 # mode shows anyway. text.muted and text.faint are dim; titles are bold.
 [monochrome.tokens]
-"interactive.settings_focus" = ["bold"]
-"interactive.settings_selection" = ["reverse"]
+"interactive.row_selected" = ["reverse"]
 "interactive.scrollbar" = ["dim"]
 "interactive.active" = []
-"interactive.active_bar" = ["bold"]
 "text.highlight" = []
 "surface.canvas" = []
 "surface.panel" = []

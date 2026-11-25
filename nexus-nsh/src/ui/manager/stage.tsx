@@ -172,7 +172,7 @@ export function ManagerPanel(p: { full?: boolean }) {
 /** Two buttons, each labelled by its action: Connect / Disconnect the voice, and Mute / Unmute the microphone. */
 function VoiceButtons() {
   const size = phone ? "min-h-11 flex-1 justify-center" : "px-2 py-2";
-  const look = phone ? "bg-raised" : "hover:bg-accent active:bg-selection";
+  const look = phone ? "bg-raised" : "hover:bg-accent active:bg-row-selected";
   const button = (p: { id: string; label: () => string; icon: () => any; command: string; disabled?: () => boolean }) =>
     <Button onPress={() => void run(p.command)} disabled={p.disabled?.()} class={`flex-row items-center gap-2 rounded-(--radius) px-3 ${size} ${look} disabled:opacity-50 ${FOCUS}`} testID={p.id} accessibilityLabel={p.label()}>
       <Icon name={p.icon()} size={14} /><Text class={T.body}>{p.label()}</Text>
@@ -181,7 +181,7 @@ function VoiceButtons() {
     {button({ id: "manager-voice-connect", label: () => voiceConnected() ? "Disconnect" : "Connect", icon: () => voiceConnected() ? "stop" : "play", command: "manager.audio_toggle" })}
     {button({ id: "manager-voice-mute", label: () => micMuted() ? "Unmute" : "Mute", icon: () => micMuted() ? "mic-off" : "mic", command: "manager.mute_toggle", disabled: () => !liveVoice() })}
     <If when={phone && voiceConnected() && !liveVoice()}><Button onPress={() => void run("manager.talk")} class={`flex-row items-center gap-2 rounded-(--radius) bg-primary px-4 min-h-11 ${FOCUS}`} testID="manager-talk" accessibilityLabel={talkLabel()}><Icon name={listening() ? "arrow-up" : "mic"} size={16} class="tint-on-accent" /><Text class={`${TS.body} text-on-accent font-semibold`}>{talkLabel()}</Text></Button></If>
-    <If when={!phone}><View class="flex-1" /><Button onPress={() => void run("manager.open_session")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-selection ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button></If>
+    <If when={!phone}><View class="flex-1" /><Button onPress={() => void run("manager.open_session")} class={`flex-row items-center gap-2 rounded-(--radius) px-2 py-2 hover:bg-accent active:bg-row-selected ${FOCUS}`} testID="manager-open-session"><Icon name="session" size={14} /><Text class={T.body}>Open Manager session</Text></Button></If>
   </View>;
 }
 

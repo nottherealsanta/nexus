@@ -81,8 +81,10 @@ describe("Void second pass", () => {
     const app = await view(snapshot());
     await app.waitFor("id:session-ses_1");
     expect(app.shows("id:session-line-ses_1")).toBe(true);
-    // The parent has a child, so its second line carries the child count.
+    // The time is on the second line, never on the title line, so the second line is never empty.
+    expect(app.shows("id:session-meta-ses_1")).toBe(true);
+    // The parent has a child, so its second line carries the child count after the time.
     expect(app.shows("id:session-line-ses_2")).toBe(true);
-    expect(app.texts().includes("1 ↳")).toBe(true);
+    expect(app.texts().some((t: string) => /^\S+ · 1 ↳$/.test(t))).toBe(true);
   });
 });

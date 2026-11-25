@@ -64,7 +64,7 @@ describe("archived sessions", () => {
 });
 
 describe("sidebar selection highlight", () => {
-  test("the selected session row and project tile share the active block and left bar", async () => {
+  test("the selected session row and project tile share the gray selected fill", async () => {
     const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
     await app.waitFor("id:session-ses_1");
     expect(app.shows("id:session-active-ses_1")).toBe(false);

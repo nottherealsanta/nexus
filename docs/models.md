@@ -99,7 +99,7 @@ from `providers.make(provider_id, SIGN_INS[provider_id]())`.
 
 There is no default model and no provider fallback. A new root session starts with the model the user last
 selected ([daemon.md](daemon.md#model-selection)); with none remembered it has none, and clients show "Select
-a model". The TUI opens its model picker by itself, once per launch, when the catalog arrives with models and
+a model" in the composer's model slot (accent colour; a session stored without a model shows its newest request's model instead). The TUI opens its model picker by itself, once per launch, when the catalog arrives with models and
 the new-session view has none; dismissing it keeps the composer's "Select a model". Providers carry no suggested model either; pickers list the catalog.
 
 The chosen model id is not checked against the catalog; the provider rejects an

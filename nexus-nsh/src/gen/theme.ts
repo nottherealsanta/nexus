@@ -25,7 +25,7 @@ export const roles = {
   },
   "skill_card_focus": {
     "fg": "text.secondary",
-    "bg": "interactive.settings_selection",
+    "bg": "interactive.row_selected",
     "rail": "",
     "label": "",
     "style": ""

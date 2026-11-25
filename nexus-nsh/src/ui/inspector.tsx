@@ -192,7 +192,7 @@ function InspectorBody() {
               return <View class="gap-1">
                 <If when={header()}><Text class={`${T.label} pt-2`} testID={`inspect-group-${r().session_id}`}>{`${r().session ?? r().session_id} · ${rows().filter((x) => x.session_id === r().session_id).length} operation${rows().filter((x) => x.session_id === r().session_id).length === 1 ? "" : "s"}`}</Text></If>
                 <Button ref={(n: any) => { if (n) rowNodes.set(id(), n); else rowNodes.delete(id()); }} onPress={() => { if (page().selected === id()) toggleExpand(id()); else { select(id()); toggleExpand(id()); } }} accessibilityLabel={view() === 0 ? `${r().session}, ${r().kind}, ${r().label}, ${r().status}, ${duration(r())}` : r().summary ?? id()} testID={view() === 0 ? `lane-${id()}` : `row-${id()}`}
-                  class={`flex-row items-center min-h-9 gap-2 ${picked() ? "bg-selection" : ""} ${FOCUS}`}>
+                  class={`flex-row items-center min-h-9 gap-2 ${picked() ? "bg-row-selected" : ""} ${FOCUS}`}>
                   <If when={view() === 0} else={<Text class={`${T.base} flex-1 ${picked() ? "font-medium" : ""}`}>{`${open() ? "▾" : "▸"} ${r().summary ?? ""}`}</Text>}>
                     <View style={{ width: labelWidth() }}><Text class="text-xs text-foreground" style={{ numberOfLines: 1 }}>{`${open() ? "▾" : "▸"} ${r().kind}`}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{r().label ?? ""}</Text></View>
                     <View class="flex-1 h-6 bg-card relative overflow-hidden">

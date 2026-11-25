@@ -16,7 +16,7 @@ import type { IconName } from "../icons";
 function TerminalButton(p: {icon: IconName; label: string; onPress: () => void; disabled?: boolean; testID: string}) {
   const hovered = signal(false);
   return <View class="relative" onMouseEnter={() => hovered.set(true)} onMouseLeave={() => hovered.set(false)}><Button onPress={p.onPress} disabled={p.disabled} accessibilityLabel={p.label} testID={p.testID}
-    class={`size-8 items-center justify-center rounded-(--radius) hover:bg-accent active:bg-selection disabled:opacity-50 ${FOCUS}`}>
+    class={`size-8 items-center justify-center rounded-(--radius) hover:bg-accent active:bg-row-selected disabled:opacity-50 ${FOCUS}`}>
     <View testID={`terminal-icon-${p.icon}`}><Icon name={p.icon} /></View>
   </Button><If when={hovered()}><View style={{width:224}} class="absolute right-0 top-8 z-50 bg-popover rounded-(--radius) px-2 py-1" testID={`${p.testID}-tooltip`}><Text class="text-[12px] leading-4 font-(family-name:--font-ui) text-popover-foreground">{p.label}</Text></View></If></View>;
 }

@@ -3,8 +3,9 @@ import { Button } from "nsh/base";
 import { Btn, Icon, IconButton, Spinner, T, FOCUS } from "./kit";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
 import { run, availability, byId, copyText, escape, otherWaits } from "../commands";
-import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, phone, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
+import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, m, native, openAlert, phone, splitAlert, stickyShown, tick, TOAST_VISIBLE, toasts } from "../store";
 import type { Toast } from "../store";
+import { clockTime } from "../time";
 import { statusGlyphs } from "../gen/theme";
 import { TEXT_INSET, TimelineColumn } from "./reading-column";
 
@@ -112,12 +113,18 @@ export function Banners() {
 
 const TG = { success: { g: "✓", t: "text-success", r: "bg-success" }, info: { g: "i", t: "text-info", r: "bg-info" }, warning: { g: "!", t: "text-warning", r: "bg-warning" }, error: { g: "✕", t: "text-error", r: "bg-error" } };
 
+/** The top offset of the toast stack: under the banner when one shows, and below the sticky user bar (as in the TUI) rather than over it. */
+export function toastTop(banner: boolean, sticky: boolean): string {
+  if (sticky) return banner ? "top-[120px]" : "top-[76px]";
+  return banner ? "top-14" : "top-3";
+}
+
 /** Toasts (D15): top-right under the header, oldest on top, three at most and then `+N more`; no lifetime hairline. */
 export function Toasts() {
   const shown = () => toasts().slice(0, TOAST_VISIBLE);
   const more = () => Math.max(0, toasts().length - TOAST_VISIBLE);
   return (
-    <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-14" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
+    <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${toastTop(currentAlerts().length > 0, stickyShown())}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
       <Each of={shown()} key={(t) => t.id}>{(t) => <ToastCard t={t} />}</Each>
       <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-(--radius) bg-popover px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
     </View>
@@ -166,7 +173,7 @@ function AlertDetailBody(p: { a: () => Toast }) {
           <Text testID="alert-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{a().text}</Text>
         </Scroll>
         <View class="flex-row justify-end"><Btn label="Copy" onPress={copy} testID="alert-detail-copy" /></View>
-        <ModalFooter hints="c copy · esc close" right={new Date(a().at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} />
+        <ModalFooter hints="c copy · esc close" right={clockTime(new Date(a().at))} />
       </View>
     </Modal>
   );

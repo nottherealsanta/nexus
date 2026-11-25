@@ -479,7 +479,7 @@ and Projects, opened by its command, has a trailing `+ Add project` row; an adde
 closed, except on phones and below 500 px, which keep the project picker in the Sessions tab. A border separates it from the sidebar, and the sidebar's project-session and Files tabs keep their icons. It shows projects in Core's saved order (drag a tile to reorder, or Alt+Up / Alt+Down and the row menu's Move project up/down; Esc or dropping outside the rail cancels; a press without travel still selects), without inactive projects, with stable uppercase initials in creation order (moving a project never changes a label)
 (collisions use the next available consonant, then a numeric suffix; the first character stays centred). Projects with running sessions or session activity
 within the last hour are lighter gray; passive projects are dimmed further and idle ones are darker. The row menu sets a project's status (current, passive, inactive; the names are the user's, 2026-11-06). An inactive project leaves the rail and is restored by pressing it in the Projects tab. Remove project asks first, only unregisters the project (its sessions are kept and return if the folder is added again; files are never touched) and is refused while a session runs. The selected project, and the selected session row in the sidebar, share one active
-treatment: a lighter block (`interactive.active`) with a left bar (`interactive.active_bar`)
+treatment: the gray selected fill (`interactive.row_selected`, no left bar)
 drawn over the row, so nothing shifts. The selected session's title is `text.highlight`
 (white in dark mode) and never bold. Each project has a counter in each corner: attention (violet) and unread
 (info) on top, running (success) and idle (primary) below, with any count past
@@ -507,7 +507,9 @@ at 70% of window height; scrollable bodies reserve space for their title, contro
 footer, including in short windows. Titles have no duplicate Esc chip; dismissal hints
 live in `ModalFooter`. See `interface/design-language.md` for the shared rules.
 Settings is the same square modal as the TUI's, with a compact section rail on the left
-and the selected section on the right. The same search field filters both. MCP is a page too (`src/ui/mcp-settings.tsx`, the TUI's `app/mcp.rs`):
+and the selected section on the right. The same search field filters both. Keys never change a value by moving:
+Enter or Right on a section enters its settings; Left, Esc or Tab returns to the sections; Enter or Space on a row
+flips a switch or starts editing an enum in place (←/→ choose, Enter sets, Esc cancels; the footer shows the keys). MCP is a page too (`src/ui/mcp-settings.tsx`, the TUI's `app/mcp.rs`):
 *Add a remote server* takes an address only, each server opens a detail modal with Sign in (the link Core sends is opened in the browser),
 Add a header (`Name: value`, masked), Switch off/on, Restart and Remove (confirmed); it is desktop and web only. Providers and Agents are
 rendered in the right pane: each provider row opens a detail modal with one
@@ -968,8 +970,8 @@ For modal geometry checks against a disposable visual host, run
 the height cap, visible footers and Esc at normal and short window sizes.
 
 Settings sections have no gaps between rows. Selected sections and setting rows use a
-neutral gray highlight across the entire row, including its value. A white left bar marks
-the focused pane (dark in the light theme). Choice and switch rows are the same segmented
+neutral gray highlight (`interactive.row_selected`) across the entire row, including its value; no left bar
+marks the focused pane. Choice and switch rows are the same segmented
 controls as the TUI; each option is a press target. Left returns focus to the section
 heading without changing the setting. (The TUI, which is keyboard-first, binds ←/→ to the
 focused segment instead; its Tab returns to the rail.)

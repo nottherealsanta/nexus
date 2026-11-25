@@ -282,11 +282,29 @@ def test_shared_ui_preferences_validate_independently(tmp_path):
     result = config.patch(config.read()["revision"], {
         "ui.detail": "high", "ui.reduced_motion": True,
     }, [])
-    assert result["values"]["ui"] == {"detail": "high", "reduced_motion": True, "favorite_models": [], "onboarded": False}
+    assert result["values"]["ui"] == {"detail": "high", "time_format": "24h", "reduced_motion": True, "favorite_models": [], "onboarded": False}
     config.path.write_text('[ui]\ndetail = "unknown"\nreduced_motion = true\n')
     result = config.read()
-    assert result["values"]["ui"] == {"detail": "medium", "reduced_motion": True, "favorite_models": [], "onboarded": False}
+    assert result["values"]["ui"] == {"detail": "medium", "time_format": "24h", "reduced_motion": True, "favorite_models": [], "onboarded": False}
     assert "ui.detail: invalid value" in result["errors"]
+
+
+def test_ui_time_format_defaults_to_24h_and_validates(tmp_path):
+    config = ConfigFile(tmp_path / "config.toml")
+    state = config.read()
+    assert state["values"]["ui"]["time_format"] == "24h"
+    assert state["schema"]["ui.time_format"]["enum"] == ["24h", "12h", "system"]
+    for good in ("12h", "system", "24h"):
+        result = config.patch(config.read()["revision"], {"ui.time_format": good}, [])
+        assert result["values"]["ui"]["time_format"] == good
+    for bad in ("13h", "", True, 24):
+        with pytest.raises(ValueError):
+            config.patch(config.read()["revision"], {"ui.time_format": bad}, [])
+    assert config.read()["values"]["ui"]["time_format"] == "24h"
+    config.path.write_text('[ui]\ntime_format = "nope"\n')
+    result = config.read()
+    assert result["values"]["ui"]["time_format"] == "24h"
+    assert "ui.time_format: invalid value" in result["errors"]
 
 
 async def test_provider_list_says_how_to_sign_in(tmp_path: Path, monkeypatch) -> None:

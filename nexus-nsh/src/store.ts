@@ -99,6 +99,8 @@ export function settlePending(type: string, sid: string | undefined, data: any) 
 /** Flush `/continue` calls queued while Core was not connected. Set by commands.ts. */
 export const flushQueuedContinues = { fn: (() => {}) as () => void };
 export const info = signal<Info | null>(null);
+/** The sticky user-message bar is on screen (desktop/web); toasts sit below it. */
+export const stickyShown = signal(false);
 export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
@@ -351,6 +353,10 @@ export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
 /** Whether the Settings section rail has focus (the pane is entered with Enter or a section press). */
 export const settingsNavFocused = signal(true);
+/** The Settings choice being edited in place (Enter on an enum row): ←/→ choose the draft, Enter sets it, Esc cancels. */
+export const settingsEdit = signal<{ id: string; draft: string } | null>(null);
+/** The keyboard-reachable choice rows of the open Settings pane (registered by `Seg` with an `id`), by setting id. */
+export const settingsSegs = new Map<string, { options: string[]; value: () => string; pick: (value: string) => void }>();
 /** Whether a page section (Providers, Agents) is open in the pane; Esc from it returns to the rail. */
 export const settingsPageOpen = signal(false);
 /** The Settings search text; it filters the section rail and the selected pane. */

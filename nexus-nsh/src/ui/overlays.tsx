@@ -62,8 +62,7 @@ function PaletteBody() {
                   <View>
                     <If when={heading()}><Text class={`px-3 ${T.section} uppercase pt-3.5 pb-1.5`} testID={`palette-group-${paletteGroup(c().category)}`}>{paletteGroup(c().category)}</Text></If>
                     <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                      class={`group/row relative rounded-(--radius) px-3 h-[34px] justify-center hover:bg-accent ${idx() === i() ? "bg-selection" : ""} ${FOCUS}`}>
-                      <If when={idx() === i()}><View class="absolute left-0 top-[7px] h-5 w-[3px] rounded-full bg-primary" accessible={false} /></If>
+                      class={`group/row relative rounded-(--radius) px-3 h-[34px] justify-center hover:bg-accent ${idx() === i() ? "bg-row-selected" : ""} ${FOCUS}`}>
                       <View class="flex-row items-center gap-3">
                         <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{dis() ? `${c().title} · ${it().a.reason}` : c().title}</Text>
                         <Text class={T.meta}>{keyLabel(c()) ?? ""}</Text>
@@ -154,7 +153,7 @@ function PickerBody() {
               <Each of={filtered()} key={(x) => x.id}>
                 {(it, i) => (
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
-                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent active:bg-selection ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent active:bg-row-selected ${idx() === clamp(i()) ? "bg-row-selected" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
                       <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{favorites().includes(it().id) ? `★ ${it().label}` : it().label}</Text>
                       <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class={`${TS.base} text-muted-foreground tabular-nums`}>{it().hint}</Text></If>
@@ -219,7 +218,7 @@ function SkillChecklistBody() {
                 const checked = () => selected().includes(skill().name);
                 return (
                   <Button onPress={() => { active.set(i()); toggle(skill().name); }} selected={active() === i()} accessibilityLabel={`${skill().name}, ${checked() ? "selected" : "not selected"}${skill().installed ? ", installed, will be replaced" : ""}`} testID={`learn-skill-${skill().name}`}
-                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${active() === i() ? "bg-selection" : ""} ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 py-1.5 min-h-9 hover:bg-accent ${active() === i() ? "bg-row-selected" : ""} ${FOCUS}`}>
                     <View class="flex-row items-start gap-2">
                       <Text class={`w-4 text-center ${TS.base} ${checked() ? "text-primary" : "text-muted-foreground"}`}>{checked() ? "☑" : "☐"}</Text>
                       <View class="flex-1 min-w-0 gap-0.5">

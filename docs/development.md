@@ -355,6 +355,15 @@ and other keys that need the last layout work, and Core's replies are applied be
 A seeded Core has no pending approval, so the waiting card and alert shots come from
 fixtures: `I8_SHOTS=DIR cargo test --test alerts -- --ignored shots` writes their SVGs.
 `--svg` writes `<name>.svg` beside `<name>.txt` (truecolor unless `--256`/`--16`).
+After the keys, `--dump-frame` waits (up to 10 s) until a session opened by them has
+loaded its history, so a capture never shows `Loading session…`, at any size.
+
+In the TUI, terminal images (Mermaid diagrams, attachment previews) are laid out over the
+rows the timeline reserved and clipped to the visible ones: a diagram cut by the top of the
+viewport shows its lower part and never draws outside its rows. The sticky user band and
+toasts are painted over it; toasts start below the sticky band (NSH does the same through
+`stickyShown`). A diagram's transparent PNG is flattened onto the theme canvas colour before
+display, so it follows the dark and light themes.
 
 `nexus-tui/tools/shots.sh <root> <out>` runs a standard set (session at three
 sizes in dark and light, palette, settings, files, new session, detail high,

@@ -32,7 +32,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "context": {"handoff_percent": 80, "title_models": ["copilot/gpt-6-luna", "codex/gpt-6-luna"]},
     "sessions": {"auto_archive_idle_seconds": 3600},
     "usage": {"refresh_minutes": 10},
-    "ui": {"detail": "medium", "reduced_motion": False, "favorite_models": [], "onboarded": False},
+    "ui": {"detail": "medium", "time_format": "24h", "reduced_motion": False, "favorite_models": [], "onboarded": False},
     "web": {"search_url": "http://127.0.0.1:18765/search", "fetch_timeout_s": 15},
     "browser": {"use_my_chrome": False},
     "mcp": {"full_definitions": False, "max_listed_tools": 25},
@@ -51,6 +51,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
                            "description": "Alias for workers.claude_backend; `zmx` still selects the CLI"},
     "zmx.antigravity": {"type": "boolean", "description": "Alias for workers.antigravity"},
     "ui.detail": {"type": "string", "enum": ["low", "medium", "high"]},
+    "ui.time_format": {"type": "string", "enum": ["24h", "12h", "system"],
+                       "description": "how clients show clock times: 24h (default), 12h, or follow the system"},
     "ui.reduced_motion": {"type": "boolean"},
     "ui.onboarded": {"type": "boolean", "description": "the first-run onboarding was finished or skipped; both clients open it until this is true"},
     "ui.favorite_models": {"type": "array", "items": {"type": "string"},
@@ -139,6 +141,8 @@ def _valid(section: str, key: str, value: Any) -> bool:
     if section == "ui" and key == "favorite_models":
         return (isinstance(value, list) and len(value) <= 200 and len(set(value)) == len(value)
                 and all(isinstance(v, str) and "/" in v and v == v.strip() and len(v) <= 200 for v in value))
+    if section == "ui" and key == "time_format":
+        return isinstance(value, str) and value in ("24h", "12h", "system")
     if section == "ui":
         return (isinstance(value, bool) if key in ("reduced_motion", "onboarded")
                 else isinstance(value, str) and value in ("low", "medium", "high"))

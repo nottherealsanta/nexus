@@ -148,7 +148,7 @@ function SessionSwitcherBody() {
                   return (
                     <Button onPress={() => choose(row())} selected={idx() === clamp(i())}
                       accessibilityLabel={`${row().title}, ${state().label}`} testID={`switch-session-${row().id}`}
-                      class={`group/row relative rounded-(--radius) px-3 py-0.5 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-selection" : ""} ${FOCUS}`}>
+                      class={`group/row relative rounded-(--radius) px-3 py-0.5 min-h-8 justify-center hover:bg-accent ${idx() === clamp(i()) ? "bg-row-selected" : ""} ${FOCUS}`}>
                       <View class="flex-row items-center gap-2">
                         <If when={state().spin} else={<Text testID={`switch-glyph-${row().id}`} accessibilityLabel={state().label}
                           class={`w-3.5 shrink-0 text-center text-[13px] leading-5 ${state().tone}`}>{state().glyph}</Text>}>

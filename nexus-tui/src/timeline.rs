@@ -912,6 +912,59 @@ fn is_manager_reply(e: &crate::api::Event) -> bool {
         && e.data["origin"].as_str() == Some("manager")
 }
 
+/// The clock-time setting (`ui.time_format`: `24h`, `12h`, `system`), shared by every clock the
+/// TUI draws. 0 = 24h (default), 1 = 12h, 2 = system.
+static TIME_FORMAT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Apply a `ui.time_format` value from Core's config; unknown values keep 24h.
+pub(crate) fn set_time_format(value: &str) {
+    let mode = match value {
+        "12h" => 1,
+        "system" => 2,
+        _ => 0,
+    };
+    TIME_FORMAT.store(mode, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The OS clock preference, read once: macOS `AppleICUForce12HourTime`; 24h when unknown.
+fn system_uses_24h() -> bool {
+    static SYSTEM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SYSTEM.get_or_init(|| {
+        let forced = |key: &str| {
+            std::process::Command::new("defaults")
+                .args(["read", "-g", key])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .is_some_and(|o| {
+                    o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1"
+                })
+        };
+        !(cfg!(target_os = "macos") && forced("AppleICUForce12HourTime"))
+    })
+}
+
+fn use_24h() -> bool {
+    match TIME_FORMAT.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => false,
+        2 => system_uses_24h(),
+        _ => true,
+    }
+}
+
+/// `18:03` (24h) or `6:03 PM` (12h) for a local hour and minute.
+pub(crate) fn format_clock(hour24: i32, minute: i32, h24: bool) -> String {
+    if h24 {
+        return format!("{hour24:02}:{minute:02}");
+    }
+    let hour = hour24.rem_euclid(12);
+    format!(
+        "{}:{minute:02} {}",
+        if hour == 0 { 12 } else { hour },
+        if hour24 < 12 { "AM" } else { "PM" }
+    )
+}
+
 /// Format a stored timestamp in the terminal's local timezone.
 #[cfg(unix)]
 pub(crate) fn local_clock(timestamp: f64) -> Option<String> {
@@ -925,13 +978,7 @@ pub(crate) fn local_clock(timestamp: f64) -> Option<String> {
         return None;
     }
     let time = unsafe { out.assume_init() };
-    let hour = time.tm_hour.rem_euclid(12);
-    Some(format!(
-        "{}:{:02} {}",
-        if hour == 0 { 12 } else { hour },
-        time.tm_min,
-        if time.tm_hour < 12 { "AM" } else { "PM" }
-    ))
+    Some(format_clock(time.tm_hour, time.tm_min, use_24h()))
 }
 #[cfg(not(unix))]
 pub(crate) fn local_clock(_timestamp: f64) -> Option<String> {
@@ -5035,8 +5082,8 @@ fn patch_arg(patch: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        band_meta, fmt_count, fmt_duration, line_count, parse_subagent_notice, patch_arg,
-        plain_preview,
+        band_meta, fmt_count, fmt_duration, format_clock, line_count, parse_subagent_notice,
+        patch_arg, plain_preview, set_time_format, use_24h,
     };
 
     #[test]
@@ -5165,5 +5212,20 @@ mod tests {
             "steer · #3 · 3:46 PM"
         );
         assert_eq!(band_meta(&["queued"], 3, None, sep), "queued · #4");
+    }
+
+    #[test]
+    fn clock_follows_the_time_format() {
+        assert_eq!(format_clock(18, 3, true), "18:03");
+        assert_eq!(format_clock(0, 5, true), "00:05");
+        assert_eq!(format_clock(18, 3, false), "6:03 PM");
+        assert_eq!(format_clock(0, 5, false), "12:05 AM");
+        assert_eq!(format_clock(12, 0, false), "12:00 PM");
+        set_time_format("12h");
+        assert!(!use_24h());
+        set_time_format("24h");
+        assert!(use_24h());
+        set_time_format("bogus");
+        assert!(use_24h());
     }
 }

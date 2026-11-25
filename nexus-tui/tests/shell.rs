@@ -1925,7 +1925,7 @@ fn long_session_titles_end_in_an_ellipsis_in_every_tier() {
 }
 
 #[test]
-fn selected_session_row_takes_the_rail_active_block_and_bar() {
+fn selected_session_row_takes_the_gray_fill_and_no_bar() {
     use ratatui::style::Modifier;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.state.model.sessions.get_mut(SESSION).unwrap().title = "Selected title".into();
@@ -1940,17 +1940,17 @@ fn selected_session_row_takes_the_rail_active_block_and_bar() {
         })
         .expect("the selected session row") as u16;
     let left = app.regions.left.expect("sidebar");
-    let active = app.theme.bg("interactive.active");
-    let bar = app.theme.fg("interactive.active_bar");
+    let active = app.theme.bg("interactive.row_selected");
     let sidebar = app.theme.bg("surface.sidebar");
     assert_ne!(
         active.bg, sidebar.bg,
         "the block is lighter than the sidebar"
     );
-    let x = (left.x..left.right())
-        .find(|x| buf[(*x, y)].symbol() == "\u{258f}")
-        .expect("the left accent bar");
-    assert_eq!(buf[(x, y)].fg, bar.fg.unwrap());
+    assert!(
+        (left.x..left.right()).all(|x| !matches!(buf[(x, y)].symbol(), "\u{258f}" | "\u{258c}")),
+        "no left indicator"
+    );
+    let x = left.x;
     // Both lines of the row sit on the block, to its right edge.
     for line in [y, y + 1] {
         assert_eq!(buf[(x + 4, line)].bg, active.bg.unwrap(), "line {line}");
@@ -2039,7 +2039,9 @@ fn system_theme_can_be_selected_and_restored() {
         text.contains("system") && text.contains("light") && text.contains("dark"),
         "{text}"
     );
-    press(&mut app, &["left", "left"]);
+    press(&mut app, &["enter", "left", "left"]);
+    assert!(!app.theme_system, "choosing is a draft until Enter");
+    press(&mut app, &["enter"]);
     assert!(app.theme_system);
     assert_eq!(
         app.theme.opts.mode,
@@ -2082,26 +2084,32 @@ fn settings_segments_move_with_left_right_and_esc_steps_back() {
         "segments show their options: {text}"
     );
     let before = app.theme.opts.reduced_motion;
+    press(&mut app, &["right", "left"]);
+    assert_eq!(
+        app.theme.opts.reduced_motion, before,
+        "arrows never change a value"
+    );
+    assert!(app.ui.settings_nav_focus, "Left returned to the sections");
+    // Go back into the rows with Right (the search keeps the match).
     press(&mut app, &["right"]);
-    assert_ne!(app.theme.opts.reduced_motion, before);
-    assert!(!app.ui.settings_nav_focus, "Right moves the segment");
-    press(&mut app, &["left"]);
-    assert_eq!(app.theme.opts.reduced_motion, before, "Left steps back");
+    assert!(!app.ui.settings_nav_focus);
+    press(&mut app, &["enter"]);
+    assert_ne!(
+        app.theme.opts.reduced_motion, before,
+        "Enter flips a switch"
+    );
+    press(&mut app, &["enter"]);
+    assert_eq!(app.theme.opts.reduced_motion, before, "Enter flips it back");
     press(&mut app, &["esc"]);
     press(&mut app, &["m", "o", "n", "o"]);
     draw(&mut app, 120, 36);
     app.click(Target::SettingsRow(0));
     assert_eq!(app.theme.opts.tier, Tier::Mono);
     press(&mut app, &["left"]);
+    assert!(app.ui.settings_nav_focus, "Left returns to the sections");
+    assert_eq!(app.theme.opts.tier, Tier::Mono, "and changes nothing");
+    press(&mut app, &["tab"]);
     assert!(!app.ui.settings_nav_focus);
-    assert_eq!(
-        app.theme.opts.tier,
-        Tier::TrueColor,
-        "Left moves the segment instead of leaving the pane"
-    );
-    press(&mut app, &["right"]);
-    assert_eq!(app.theme.opts.tier, Tier::Mono);
-    // Tab returns to the section rail; Esc then closes.
     press(&mut app, &["tab"]);
     assert!(app.ui.settings_nav_focus);
     assert_eq!(
@@ -2111,10 +2119,12 @@ fn settings_segments_move_with_left_right_and_esc_steps_back() {
     );
     press(&mut app, &["esc"]);
     press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
+    press(&mut app, &["enter"]);
+    assert!(app.ui.settings_edit.is_some(), "the sidebar is an enum");
     press(&mut app, &["right"]);
+    assert!(app.ui.left_open, "choosing is a draft");
+    press(&mut app, &["enter"]);
     assert!(!app.ui.left_open, "rail only");
-    press(&mut app, &["right"]);
-    assert!(app.ui.left_open, "the sidebar beside the rail");
 }
 
 #[test]
@@ -2195,10 +2205,10 @@ fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
     let side: String = rows[row].chars().skip(6).take(28).collect();
     assert!(side.trim_end().ends_with("2 ↳"), "{side:?}");
     assert!(
-        rows[row - 1].contains("3h"),
-        "age on the title line: {:?}",
-        rows[row - 1]
+        side.contains("3h · 2 ↳"),
+        "age before the child count on the meta line: {side:?}"
     );
+    assert!(!rows[row - 1].contains("3h"), "title line has no age");
     // Child sessions are not listed, so only the parent row has a meta.
     assert!(!rows.iter().any(|l| l.contains("1 ↳")), "{rows:#?}");
 
@@ -4394,7 +4404,7 @@ fn the_strip_marks_a_linked_worktree_with_a_muted_icon() {
 }
 
 #[test]
-fn completion_is_an_overlay_with_a_footer_and_a_focus_bar() {
+fn completion_is_an_overlay_with_a_footer_and_a_gray_selected_row() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     let before = draw(&mut app, 120, 36).1;
     typing(&mut app, "/");
@@ -4412,9 +4422,11 @@ fn completion_is_an_overlay_with_a_footer_and_a_focus_bar() {
     assert!(footer.contains("1 of "), "{footer}");
     // Eight rows at most, the first selected with the focus bar in the card's column.
     let top = r.y - 8;
-    assert_eq!(buf[(r.x + 2, top)].symbol(), "\u{258c}");
-    assert_ne!(buf[(r.x + 2, top - 1)].symbol(), "\u{258c}");
-    assert_ne!(buf[(r.x + 1, top)].symbol(), "\u{258c}");
+    let gray = app.theme.color("interactive.row_selected").unwrap();
+    assert_eq!(buf[(r.x + 2, top)].symbol(), " ");
+    assert_eq!(buf[(r.x + 2, top)].bg, gray);
+    assert_eq!(buf[(r.right() - 3, top)].bg, gray, "full width");
+    assert_ne!(buf[(r.x + 2, top + 1)].bg, gray);
     // Above the overlay the timeline is untouched.
     for y in 0..top as usize {
         assert_eq!(rows[y], before[y], "row {y}");
@@ -4490,10 +4502,11 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         );
         // The open session's active bar at x=0, the mark slot at x=1, title at x=3, time
         // right-aligned with a margin of 1.
-        assert!(title.starts_with("▏●"), "{w}: unread mark: {title:?}");
+        assert!(title.starts_with(" ●"), "{w}: unread mark: {title:?}");
         assert_eq!(col_of(title, "Refactor"), 3, "{w}");
+        // The age moved to line 2, so the title line carries none.
         assert!(
-            title.trim_end().ends_with('h') || title.trim_end().ends_with("now"),
+            !title.trim_end().ends_with("now") && !title.trim_end().ends_with('h'),
             "{title:?}"
         );
         assert!(
@@ -4514,7 +4527,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
         // The open session carries the active block on both lines, not on the spacer (PLAN 15.5).
         let band = buf[(w / 2, (title_y + 1) as u16)].bg;
         assert_eq!(band, buf[(w / 2, title_y as u16)].bg, "{w}: band vs header");
-        assert_eq!(band, Color::Rgb(0x24, 0x24, 0x24), "{w}: active block");
+        assert_eq!(band, Color::Rgb(0x36, 0x36, 0x36), "{w}: selected fill");
         assert_eq!(
             buf[(w / 2, (title_y + 2) as u16)].bg,
             Color::Rgb(0x14, 0x14, 0x14),
@@ -4526,7 +4539,7 @@ fn session_rows_follow_d03_at_sidebar_widths_22_28_and_34() {
 }
 
 #[test]
-fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees() {
+fn a_focused_session_row_has_no_bar_and_headers_group_worktrees() {
     use nexus_tui::ui::Focus;
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
     let mut other = app.state.model.sessions[SESSION].clone();
@@ -4578,7 +4591,7 @@ fn a_focused_session_row_has_the_bar_on_both_lines_and_headers_group_worktrees()
         .unwrap()
         + rule;
     assert!(
-        text[title].starts_with('▌') && text[title + 1].starts_with('▌'),
+        !text[title].starts_with('▌') && !text[title + 1].starts_with('▌'),
         "{text:#?}"
     );
 }
@@ -4699,24 +4712,20 @@ fn the_rail_marks_the_open_project_with_the_selection_band() {
         .expect("rail item for the open project");
     assert_eq!(
         Some(buf[(band.x + 1, band.y + 1)].bg),
-        app.theme.bg("surface.raised").bg
+        app.theme.bg("interactive.row_selected").bg
     );
     app.mouse = Some((band.x + 2, band.y + 1));
     let (buf, _) = draw(&mut app, 120, 36);
     for y in band.y..=band.y + 2 {
         assert_eq!(
             Some(buf[(band.x + 1, y)].bg),
-            app.theme.bg("surface.raised").bg
+            app.theme.bg("interactive.row_selected").bg
         );
         assert_eq!(
             Some(buf[(band.right() - 2, y)].bg),
-            app.theme.bg("surface.raised").bg
+            app.theme.bg("interactive.row_selected").bg
         );
-        assert_eq!(buf[(band.x, y)].symbol(), "▏");
-        assert_eq!(
-            buf[(band.x, y)].fg,
-            app.theme.color("text.primary").unwrap()
-        );
+        assert_ne!(buf[(band.x, y)].symbol(), "▏", "no left bar");
     }
 }
 
@@ -4850,15 +4859,11 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     let (buf, rows) = draw(&mut app, 120, 36);
     let r = raised_box(&app, &buf);
     let nav = app.hits.rect_of(&Target::SettingsSection(0)).unwrap();
-    let selection = app.theme.color("interactive.settings_selection").unwrap();
+    let selection = app.theme.color("interactive.row_selected").unwrap();
     for x in nav.x..nav.right() {
         assert_eq!(buf[(x, nav.y)].bg, selection);
     }
-    assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
-    assert_eq!(
-        buf[(nav.x, nav.y)].fg,
-        app.theme.color("interactive.settings_focus").unwrap()
-    );
+    assert_eq!(buf[(nav.x, nav.y)].symbol(), " ", "no left indicator");
     assert!(r.contains((nav.x, nav.y).into()));
     // The highlight includes the label; the segmented value draws its own
     // well and selection band over it.
@@ -4874,7 +4879,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
         buf[(sel.x + 5, sel.y)].bg,
         app.theme.color("interactive.accent").unwrap()
     );
-    let selected = app.theme.color("interactive.selection").unwrap();
+    let selected = app.theme.color("interactive.row_selected").unwrap();
     let seg_rects: Vec<_> = (0..3)
         .filter_map(|option| {
             app.hits
@@ -4904,7 +4909,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     assert!(rows.join("\n").contains("Appearance"));
     press(&mut app, &[scenario["content_key"].as_str().unwrap()]);
     let (buf, _) = draw(&mut app, 120, 36);
-    assert_eq!(buf[(sel.x, sel.y)].symbol(), "▌");
+    assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
     assert_eq!(buf[(nav.x, nav.y)].symbol(), " ");
     app.effects.clear();
     press(&mut app, &[scenario["tui_return_key"].as_str().unwrap()]);
@@ -4914,7 +4919,7 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
         "Returning focus must not change a setting"
     );
     let (buf, _) = draw(&mut app, 120, 36);
-    assert_eq!(buf[(nav.x, nav.y)].symbol(), "▌");
+    assert_eq!(buf[(nav.x, nav.y)].symbol(), " ");
     assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
     assert_eq!(buf[(lit[0].1.x, lit[0].1.y)].bg, selected);
     press(&mut app, &[scenario["next_section_key"].as_str().unwrap()]);
@@ -4933,8 +4938,13 @@ fn confirm_defaults_to_cancel_and_marks_delete_as_an_error() {
     let cx = col_of(&rows[y], "[ Cancel ]") as u16;
     let dx = col_of(&rows[y], "[ Delete ]") as u16;
     let selection = app.theme.color("surface.raised").unwrap();
-    assert_eq!(buf[(cx + 2, y as u16)].bg, selection, "Cancel has no fill");
-    assert_eq!(buf[(cx - 1, y as u16)].symbol(), "▌", "focus bar");
+    let gray = app.theme.color("interactive.row_selected").unwrap();
+    assert_eq!(
+        buf[(cx + 2, y as u16)].bg,
+        gray,
+        "focused Cancel is filled gray"
+    );
+    assert_ne!(buf[(cx - 1, y as u16)].symbol(), "▌", "no focus bar");
     assert_eq!(
         buf[(dx + 2, y as u16)].fg,
         app.theme.color("status.error").unwrap()
@@ -4943,7 +4953,12 @@ fn confirm_defaults_to_cancel_and_marks_delete_as_an_error() {
     // right/left moves the default onto Delete
     press(&mut app, &["right"]);
     let (buf, _) = draw(&mut app, 120, 36);
-    assert_eq!(buf[(dx + 2, y as u16)].bg, selection);
+    assert_eq!(
+        buf[(dx + 2, y as u16)].bg,
+        gray,
+        "focused Delete is filled gray"
+    );
+    assert_eq!(buf[(cx + 2, y as u16)].bg, selection);
 }
 
 /// An app on the new-session view with a project at `dir` and the given agent.
@@ -5289,7 +5304,7 @@ fn the_empty_workspace_shows_the_centred_logo_and_the_next_step() {
                 rows[y]
             );
         }
-        // accent, and bold in monochrome only
+        // the normal text colour, and bold in monochrome only
         let mark = (want..want + logo_width() as u16)
             .find(|x| buf[(*x, top as u16)].symbol() == "_")
             .unwrap();
@@ -5297,7 +5312,7 @@ fn the_empty_workspace_shows_the_centred_logo_and_the_next_step() {
         if tier == Tier::Mono {
             assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
         } else {
-            assert_eq!(cell.fg, app.theme.color("interactive.accent").unwrap());
+            assert_eq!(cell.fg, app.theme.color("text.primary").unwrap());
             assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
         }
         // the title is below the logo, centred on the same axis

@@ -502,6 +502,20 @@ export const manifest = {
       "note": "Low groups activity into one line, medium lists each tool collapsed, high expands every tool."
      },
      {
+      "id": "appearance.time_format",
+      "label": "Time format",
+      "kind": "choice",
+      "scope": "core",
+      "clients": "both",
+      "default": "24h",
+      "options": [
+       "24h",
+       "12h",
+       "system"
+      ],
+      "note": "How clock times show: 18:03, 6:03 PM, or whatever the system uses. Ages such as 3h are unchanged."
+     },
+     {
       "id": "appearance.scrollbar",
       "label": "Scroll bar",
       "kind": "toggle",
@@ -932,10 +946,10 @@ export const manifest = {
   "finish_no_project": "You have no project yet, so Finish opens Add project.",
   "no_provider": "No provider is connected yet. Connect one first, then choose models.",
   "quest_provider": "Connect a provider",
-  "hints_info": "enter next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
-  "hints_rows": "\u2191\u2193 choose \u00b7 enter change \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
-  "hints_agents": "\u2191\u2193 choose \u00b7 enter change \u00b7 e effort \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
-  "hints_search": "enter retry \u00b7 \u2192 next \u00b7 \u2190 back \u00b7 esc back \u00b7 s skip",
+  "hints_info": "enter next \u00b7 \u2190/esc back",
+  "hints_rows": "\u2191\u2193 choose \u00b7 enter change \u00b7 \u2190/esc back",
+  "hints_agents": "\u2191\u2193 choose \u00b7 enter change \u00b7 e effort \u00b7 \u2190/esc back",
+  "hints_search": "enter retry \u00b7 \u2190/esc back",
   "search_retry": "Retry",
   "step": [
    {

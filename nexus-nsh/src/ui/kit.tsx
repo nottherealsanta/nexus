@@ -6,7 +6,7 @@ import { icons, type IconName } from "../icons";
 import panelClosed from "../icons/panel-closed.svg";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
-import { config, isNarrow, phone } from "../store";
+import { config, isNarrow, phone, settingsEdit, settingsSegs } from "../store";
 
 // Screen typography keeps metadata quieter.
 const typeSize = (platform.os === "web" || platform.os === "macos")
@@ -77,7 +77,7 @@ function IconButtonBase(p: { icon: IconName; label: string; onPress?: () => void
     <Button
       onPress={p.onPress} disabled={p.disabled} selected={p.selected} accessibilityLabel={p.label} testID={p.testID}
       tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{p.reason ? `${p.label}: ${p.reason}` : p.label}</Text>}
-      class={`items-center justify-center ${phone ? "rounded-full" : "rounded-(--radius)"} hover:bg-accent active:bg-selection disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
+      class={`items-center justify-center ${phone ? "rounded-full" : "rounded-(--radius)"} hover:bg-accent active:bg-row-selected focus-visible:bg-row-selected disabled:opacity-50 ${isNarrow() ? "size-11" : "size-8"} ${FOCUS} ${p.class ?? ""}`}
     >
       <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </Button>
@@ -90,7 +90,7 @@ export function IconButton(p: Parameters<typeof IconButtonBase>[0]) {
   return (
     <View role="button" focusable onPress={() => { if (!p.disabled) p.onPress?.(); }} onLongPress={() => { if (!p.disabled) p.onLongPress?.(); }}
       accessibilityLabel={p.label} testID={p.testID}
-      class={`items-center justify-center rounded-full active:bg-selection ${p.disabled ? "opacity-50" : ""} size-11 ${FOCUS} ${p.class ?? ""}`}>
+      class={`items-center justify-center rounded-full active:bg-row-selected ${p.disabled ? "opacity-50" : ""} size-11 ${FOCUS} ${p.class ?? ""}`}>
       <Icon name={p.icon} selected={p.selected} class={p.tint ?? "tint-foreground-secondary"} />
     </View>
   );
@@ -106,7 +106,7 @@ export function Btn(p: { initial?: boolean; label: string; onFocus?: () => void;
   return (
     <View role="button" focusable ref={p.ref}
       onFocus={p.onFocus} onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-full px-4" : "rounded-(--radius) px-3"} ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? (phone ? "active:opacity-80" : "active:bg-primary") : "active:bg-selection"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 ${phone ? "rounded-full px-4" : "rounded-(--radius) px-3"} ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 ${k === "primary" ? (phone ? "active:opacity-80" : "active:bg-primary") : "active:bg-row-selected focus-visible:bg-row-selected"} ${skin} ${p.initial ? "border-ring" : ""} ${p.class ?? ""} ${FOCUS}`}
     >
       <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? (phone ? "tint-background" : "tint-on-accent") : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`${TS.base} font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
@@ -203,9 +203,13 @@ export function AttentionMark(p: { kind: keyof typeof attention }) {
   return <Text class={`w-3.5 text-center ${TS.base} ${TONE[g.token]}`} accessibilityLabel={p.kind}>{g.unicode}</Text>;
 }
 
-/** The active Settings pane marker. */
-export function FocusEdge(p: { testID?: string }) {
-  return <View testID={p.testID} class="absolute left-0 top-0 bottom-0 w-[2px] bg-settings-focus" />;
+/**
+ * An invisible (transparent, 1 px) marker that only exposes which row holds the keyboard cursor or is
+ * the active block (a test and automation hook). Selection is drawn as the row's
+ * `bg-row-selected` fill, never as a left bar.
+ */
+export function CursorMark(p: { testID?: string }) {
+  return <View testID={p.testID} class="absolute left-0 top-0 bottom-0 w-px bg-transparent" style={{ pointerEvents: "none" }} />;
 }
 
 /**
@@ -220,14 +224,25 @@ export function StatusRail(p: { color?: string; testID?: string; join?: "top" | 
 }
 
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
-export function Seg(p: { onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
+/** A segmented choice. With an `id` (a Settings row) it is driven from the keyboard by the row, not by its own focus stops:
+ * Enter flips a switch or edits an enum in place (the draft shows here until Enter sets it). */
+export function Seg(p: { id?: string; onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
+  const keyed = () => !!p.id && !phone && !p.disabled;
+  effect(() => {
+    if (!keyed()) return;
+    const id = p.id!;
+    settingsSegs.set(id, { options: p.options, value: () => p.value, pick: (v) => p.onPick?.(v) });
+    return () => { settingsSegs.delete(id); };
+  });
+  const shown = () => { const e = settingsEdit(); return keyed() && e && e.id === p.id ? e.draft : p.value; };
   return (
     <View class="flex-row gap-0.5 rounded-(--radius) bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
         {(o) => (
-          <View focusable onFocus={p.onFocus} role="radio" accessibilityState={{ selected: p.value === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
-            class={`rounded-(--radius) px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${p.value === o() ? "bg-selection" : ""} ${FOCUS}`}>
-            <Text class={`${TS.base} ${p.value === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
+          <View focusable={!keyed()} onFocus={p.onFocus} role="radio" accessibilityState={{ selected: shown() === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
+            testID={p.id ? `seg-${p.id}-${o()}` : undefined}
+            class={`rounded-(--radius) px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${shown() === o() ? "bg-row-selected" : ""} ${FOCUS}`}>
+            <Text class={`${TS.base} ${shown() === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
           </View>
         )}
       </Each>
@@ -267,6 +282,27 @@ export function midTruncate(t: string, max: number): string {
   if (t.length <= max) return t;
   const keep = max - 1, tail = Math.ceil(keep * 0.6), head = keep - tail;
   return `${t.slice(0, head)}…${t.slice(t.length - tail)}`;
+}
+
+/**
+ * Shorten a path: its first part, then `…`, then as many trailing folders as fit (`~/repos/…/ws/nexus-demo`,
+ * `/private/…/ws/nexus-demo`). The head is `~/first` for a home path, else the first folder; the last folder is kept.
+ */
+export function pathTail(t: string, max: number): string {
+  if (t.length <= max) return t;
+  const parts = t.split("/").filter(Boolean);
+  const home = t.startsWith("~");
+  const n = home ? 2 : 1;
+  if (parts.length <= n + 1) return midTruncate(t, max);
+  const head = home ? parts.slice(0, n).join("/") : `/${parts[0]}`;
+  const room = max - head.length - 3;
+  let kept = "";
+  for (const part of parts.slice(n).reverse()) {
+    const next = kept ? `${part}/${kept}` : part;
+    if (next.length > room) break;
+    kept = next;
+  }
+  return kept ? `${head}/…/${kept}` : midTruncate(t, max);
 }
 
 /** A path with the user's home shortened to `~`, shared by the location strip and the project rows. */

@@ -121,7 +121,11 @@ def main(path, overlay=None):
             check(f"{p} text.highlight on active", cc["text.highlight"], cc["interactive.active"], tmin)
             check(f"{p} text.primary on active", cc["text.primary"], cc["interactive.active"], tmin)
             check(f"{p} text.secondary on active", cc["text.secondary"], cc["interactive.active"], tmin)
-            check(f"{p} active_bar on active", cc["interactive.active_bar"], cc["interactive.active"], nmin)
+            check(f"{p} text.primary on row_selected", cc["text.primary"], cc["interactive.row_selected"], tmin)
+            check(f"{p} text.secondary on row_selected", cc["text.secondary"], cc["interactive.row_selected"], tmin)
+            for s in surfaces:
+                if cc[s] == cc["interactive.row_selected"]:
+                    errors.append(f"{p}: interactive.row_selected == {s}")
             check(f"{p} text.muted on hover", cc["text.muted"], cc["interactive.hover"], tmin)
             check(f"{p} text.primary on hover", cc["text.primary"], cc["interactive.hover"], tmin)
             check(f"{p} on_accent on accent", cc["interactive.on_accent"], cc["interactive.accent"], tmin)

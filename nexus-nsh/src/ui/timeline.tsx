@@ -10,7 +10,8 @@ import { disabledOf, startingSections, StartingContext, worktreeStatus, zmxSecti
 import type { CtxSection } from "./newsession";
 import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
 import { byId, copyText, jump, keyLabel, openLinked, run } from "../commands";
-import { pendingTurns, tick, config, contextDetail, firstPin, firstPrompts, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import { pendingTurns, stickyShown, tick, config, contextDetail, firstPin, firstPrompts, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import { clockTime } from "../time";
 import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
 import { apiUrl } from "../core/transport";
@@ -328,8 +329,7 @@ export function fmtDuration(s: number): string {
 function clock(sec: number | string | null | undefined): string {
   const at = typeof sec === "string" ? Number(sec) : sec;
   if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) return "";
-  const time = new Date(at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return time === "Invalid Date" ? "" : time;
+  return clockTime(new Date(at * 1000));
 }
 /** The TUI's delivery tags: the start of a queued turn and a steer inside one, never Core's raw enum. */
 function deliveryTags(delivery?: string | null): string[] {
@@ -1440,6 +1440,7 @@ function StickyBar(p: { rows: () => Row[]; firstVisible: () => { sid: string; ke
     const key = visibleRowKey(rows, p.firstVisible(), sessionId());
     return key === null ? null : stickyUser(rows, key);
   });
+  effect(() => { stickyShown.set(!!current()); });
   return (
     <If when={!!current()}>
       {() => {

@@ -206,3 +206,41 @@ fn zmx_interrupted_turn_keeps_the_unknown_tool_outcome() {
 fn zmx_recovered_turn_says_the_cli_may_still_be_running() {
     zmx_scenario(include_str!("../../interface/scenarios/zmx-recovered.json"));
 }
+
+/// A diagram cut by the top of the viewport (or the sticky user band) used to be
+/// drawn from the first timeline row with its full height, so it ran past the
+/// rows reserved for it and hid the prose below. Whatever the height, the text
+/// after the diagram must stay whole.
+#[test]
+fn a_clipped_mermaid_diagram_never_covers_the_text_after_it() {
+    let text = "Intro.\n\n```mermaid\nflowchart TD\n  Client --> Core --> Store\n  Core --> Cache\n```\n\nTAIL-ONE the cache keys on mtime\n\nTAIL-TWO and the test checks the hit.\n";
+    let scenario = serde_json::json!({
+        "messages": [
+            { "id": "m1", "seq": 1, "created": 1, "role": "user", "parts": [{ "type": "text", "text": "Draw it.\nAnd more." }] },
+            { "id": "m2", "seq": 2, "created": 2, "role": "assistant", "parts": [{ "type": "text", "text": text }] },
+        ]
+    });
+    let (_, mut app) = open(&scenario.to_string());
+    for height in 12..=40u16 {
+        let rows = draw(&mut app, 120, height).1;
+        let shown = rows.join("\n");
+        for tail in [
+            "TAIL-ONE the cache keys on mtime",
+            "TAIL-TWO and the test checks the hit.",
+        ] {
+            let row = rows.iter().find(|row| row.contains(tail));
+            if height >= 26 {
+                assert!(
+                    row.is_some(),
+                    "{tail:?} hidden at height {height}:\n{shown}"
+                );
+            }
+            if let Some(row) = row {
+                assert!(
+                    !row.contains('▀') && !row.contains('▄') && !row.contains('█'),
+                    "diagram cells on the text row at height {height}:\n{shown}"
+                );
+            }
+        }
+    }
+}

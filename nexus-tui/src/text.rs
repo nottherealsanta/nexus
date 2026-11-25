@@ -66,6 +66,45 @@ pub fn truncate_start(s: &str, max: usize, ellipsis: &str) -> String {
     format!("{ellipsis}{}", keep.into_iter().collect::<String>())
 }
 
+/// Shorten a path, keeping its first part, then the ellipsis, then as many trailing
+/// folders as fit: `~/repos/…/ws/nexus-demo`, `/private/…/ws/nexus-demo`. The head is
+/// `~/first` for a home path and the first folder otherwise; the last folder is always kept
+/// (cut from its left only when it alone does not fit).
+pub fn truncate_path_tail(s: &str, max: usize, ellipsis: &str) -> String {
+    if width(s) <= max {
+        return s.to_owned();
+    }
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    let home = s.starts_with('~');
+    let head_parts = if home { 2 } else { 1 };
+    if parts.len() <= head_parts + 1 {
+        return truncate_middle(s, max, ellipsis);
+    }
+    let head = if home {
+        parts[..head_parts].join("/")
+    } else {
+        format!("/{}", parts[0])
+    };
+    let sep = format!("/{ellipsis}/");
+    let room = max.saturating_sub(width(&head) + width(&sep));
+    let mut kept = String::new();
+    for part in parts[head_parts..].iter().rev() {
+        let next = if kept.is_empty() {
+            (*part).to_owned()
+        } else {
+            format!("{part}/{kept}")
+        };
+        if width(&next) > room {
+            break;
+        }
+        kept = next;
+    }
+    if kept.is_empty() {
+        return truncate_middle(s, max, ellipsis);
+    }
+    format!("{head}{sep}{kept}")
+}
+
 /// Truncate the middle (paths).
 pub fn truncate_middle(s: &str, max: usize, ellipsis: &str) -> String {
     if width(s) <= max {
@@ -236,6 +275,18 @@ mod tests {
         assert_eq!(truncate("short", 10, "…"), "short");
         assert_eq!(truncate("abcdef", 4, "..."), "a...");
         assert_eq!(truncate_start("root › child", 7, "…"), "… child");
+        assert_eq!(
+            truncate_path_tail("/private/tmp/shots/root/ws/nexus-demo", 26, "…"),
+            "/private/…/ws/nexus-demo"
+        );
+        assert_eq!(
+            truncate_path_tail("~/repos/a/b/scratchpad/ws/nexus-demo", 30, "…"),
+            "~/repos/…/ws/nexus-demo"
+        );
+        assert_eq!(
+            truncate_path_tail("~/repos/nexus", 20, "…"),
+            "~/repos/nexus"
+        );
         assert_eq!(
             truncate_middle("/work/nexus/src/lib.rs", 12, "…"),
             "/work/…ib.rs"

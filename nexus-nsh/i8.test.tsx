@@ -4,6 +4,7 @@ import { open } from "./open-bundle";
 import { splitAlert } from "./src/store";
 import { approvalParts, clock } from "./src/ui/composer";
 import { detailOf } from "./src/ui/timeline";
+import { toastTop } from "./src/ui/alerts";
 import readability from "../interface/scenarios/question-readability.json";
 
 const sse = (...frames: string[]) => frames.join("");
@@ -329,6 +330,13 @@ describe("alerts (D15)", () => {
     expect(app.texts().includes("c copy · esc close")).toBe(true);
     await app.keyboard.press("escape");
     expect(app.shows("id:alert-detail")).toBe(false);
+  });
+
+  test("toasts sit below the sticky user bar and the banner, never over them", () => {
+    expect(toastTop(false, false)).toBe("top-3");
+    expect(toastTop(true, false)).toBe("top-14");
+    expect(toastTop(false, true)).not.toBe("top-3");
+    expect(toastTop(true, true)).not.toBe(toastTop(false, true));
   });
 
   test("the notifications drawer opens the same dialog for an entry", async () => {

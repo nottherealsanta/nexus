@@ -43,7 +43,7 @@ shot() {
 
 open_session="ctrl+k Refactor enter"
 H="$WEBTERM_HOME"
-for size in 200x50 120x36 80x24; do
+for size in 240x64 200x50 120x36 80x24; do
   for theme in dark light; do
     shot "session-$size-$theme" "$size" "$theme" "$H" --keys "$open_session"
   done

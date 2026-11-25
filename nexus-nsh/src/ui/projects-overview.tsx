@@ -2,7 +2,7 @@
 import { Scroll, Text, View, keymap } from "nsh";
 import { Button } from "nsh/base";
 import { Modal, modalBodyHeight, ModalFooter, ModalTitle } from "./modal";
-import { FOCUS, FocusEdge, T, TS } from "./kit";
+import { FOCUS, CursorMark, T, TS } from "./kit";
 import { attention } from "./sidebar";
 import { flowEnd, setProjectStatus } from "../commands";
 import { m, model, projectsOverview, selectProject, selectSession } from "../store";
@@ -99,8 +99,8 @@ function ProjectsOverviewBody() {
                 {(row, i) => (
                   <Button onPress={() => { set(i()); activate(row()); }} selected={cursor() === i()} disabled={row().kind === "group"} testID={`overview-row-${i()}`}
                     accessibilityLabel={overviewRowLabel(row(), project(projectOf(row()) ?? ""), row().kind === "session" ? model.sessions.get((row() as { id: string }).id) : undefined, row().kind === "session" ? stateOf((row() as { id: string }).id) : "")}
-                    class={`relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${cursor() === i() ? "bg-selection" : ""} ${FOCUS}`}>
-                    <If when={cursor() === i()}><FocusEdge testID={`overview-cursor-${i()}`} /></If>
+                    class={`relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent ${cursor() === i() ? "bg-row-selected" : ""} ${FOCUS}`}>
+                    <If when={cursor() === i()}><CursorMark testID={`overview-cursor-${i()}`} /></If>
                     {line(row())}
                   </Button>
                 )}

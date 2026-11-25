@@ -29,17 +29,19 @@ until its body supports scrolling; never hide confirmation text just to meet a s
 The file editor keeps its dedicated workspace geometry, and a row menu remains anchored
 to its row because it is a popover rather than a modal.
 
+**Selection is one gray fill, never a left bar.** The selected or keyboard-focused row, button, option pill, tab-like control or menu item is painted with `interactive.row_selected` across its whole width (dark `#363636`, light `#d9d9d4`; 256-colour 237/253, ANSI-16 bright black/white, monochrome reverse video). Text keeps its normal colour (bold where it already was). Informational rails (the user band, tool-group connector, toast level bar, timeline block focus bar, composer focus bar in ANSI-16/monochrome) are not selection and keep their glyphs.
+
 Titles use the full content width, without a duplicate Esc chip. Key hints occupy the
 last row: navigation, primary action, then dismissal. Use **close** to leave a modal,
 **back** to return one level, and **cancel** to discard input. The TUI uses `hint_row`,
-NSH `ModalFooter`; input dialogs use the same footer as other modals. Settings selection uses `interactive.settings_selection`: a neutral gray band across the
-whole section or setting row (including its value). A white left bar marks the focused
-pane (a dark bar in the light theme); inactive selections retain their gray background. NSH uses
+NSH `ModalFooter`; input dialogs use the same footer as other modals. Settings selection uses `interactive.row_selected`: a neutral gray band across the
+whole section or setting row (including its value). No left bar marks the focused
+pane; inactive selections retain their gray background. NSH uses
 the same fill for selected sections and hovered or keyboard-focused setting rows.
 Settings values are segmented controls, as NSH draws them: the options sit in a quiet
 well at the row's end, with the current one on `interactive.selection`. The two bands are deliberately different:
 `interactive.selection` is the warm selected band (a deeper sand in the light theme, so it stands off the panel,
-sidebar and raised surfaces), while `interactive.settings_selection` stays neutral gray, so a current value and the
+sidebar and raised surfaces), while `interactive.row_selected` stays neutral gray, so a current value and the
 keyboard focus are told apart. In the TUI
 Left/Right move the focused segment (wrapping at the ends, as the old cycling did) and
 Tab or Esc returns focus to the section heading; in a detail page Left still returns to
@@ -74,10 +76,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   padding left and right and 1 row top and bottom; the title (bold) is the first row
   inside, key hints (bold key, muted label, including Esc) the last row;
   at most 70% of the frame high and within 2 cells of its edge. The fill resets
-  modifiers. Rows use the selection band and the `▌` focus bar, section headings are
+  modifiers. Rows use the gray selected fill (`interactive.row_selected`, no left bar), section headings are
   UPPERCASE bold muted, a disabled row is muted with its reason in the footer.
-  Borders are quiet hairlines. A focused row uses the focus bar as well as its selection
-  surface so the state remains visible without colour.
+  Borders are quiet hairlines. A focused row uses the gray fill (reverse video in monochrome)
+  so the state remains visible without colour.
 - Primary text carries content and headings. Secondary text carries labels;
   muted text carries metadata and instructions. Status colour is paired with
   a word or glyph. Agent colours identify agent names, not whole rows. Forks use sky blue,
@@ -148,13 +150,13 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. The left sidebar opens with a search row, then an UPPERCASE project header
   (`⌥ branch` sub-groups for linked worktrees that hold two or more listed root sessions; a lone session shows no header, its second line names the branch. The TUI and NSH follow the same rule, and a filter change recounts). Session rows show a mark slot, title and
   time, then the agent in its colour, `⌥ branch` and the child count, and end with
-  `+ New session`; the open session is bold on the selection band, focus is a `▌`
-  on both lines, hover is a surface, and attention is marked. The right sidebar
+  `+ New session`; the open session and the focused row take the gray selected fill
+  on both lines, with no bar, hover is a surface, and attention is marked. The right sidebar
   uses UPPERCASE bold muted section labels and a 9-cell key column. The left sidebar resizes
   by its edge and collapses to a rail of one letter per session whose hover
   shows the title and place. Settings is the modal recipe over the scrimmed
   session: search, UPPERCASE muted section headings, values right-aligned, the selected
-  row on a full-width neutral gray band with a white focus bar, → to change and ← to return to sections. Escape clears the search, then closes.
+  row on a full-width neutral gray band with no bar, → to change and ← to return to sections. Escape clears the search, then closes.
 - The waiting card is docked above the composer on the panel surface with a heavy accent
   rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
   12 rows and the choices as key chips on `surface.raised` (the selected row on the

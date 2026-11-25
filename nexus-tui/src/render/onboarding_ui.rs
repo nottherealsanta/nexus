@@ -21,12 +21,17 @@ fn button(
     target: T,
 ) -> u16 {
     let text = format!("[ {label} ]");
-    let mut style = cx.st(token, CANVAS);
+    // The focused button takes the gray selected fill, as every other control does.
+    let mut style = cx.st(
+        token,
+        if focused {
+            "interactive.row_selected"
+        } else {
+            CANVAS
+        },
+    );
     if focused {
         style = style.add_modifier(Modifier::BOLD);
-        if cx.t.mono() {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
     }
     let end = put(buf, x, y, &text, style, width(&text) as u16);
     hits.add(Rect::new(x, y, end - x, 1), Target::Onboarding(target));
@@ -387,7 +392,7 @@ fn draw_providers(
         let mut vstyle = cx.st(
             vtoken,
             if selected {
-                "interactive.settings_selection"
+                "interactive.row_selected"
             } else {
                 CANVAS
             },
@@ -492,7 +497,7 @@ fn draw_agents(
         let mut vstyle = cx.st(
             if unset { MUTED } else { "status.success" },
             if selected {
-                "interactive.settings_selection"
+                "interactive.row_selected"
             } else {
                 CANVAS
             },

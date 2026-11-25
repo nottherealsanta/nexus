@@ -5,6 +5,7 @@ import { Icon, Status, T, relTime, midTruncate, shortPath } from "./kit";
 import { manifest } from "../gen/manifest";
 import { run } from "../commands";
 import { contextBudget, info, m, model, modelCatalog, userHome, viewed, width } from "../store";
+import { clockTime } from "../time";
 import { rightSidebarWidth } from "./geometry";
 import { agentColor } from "../agent-color";
 import type { SelectedView } from "../core/reduce";
@@ -32,7 +33,11 @@ function Section(p: { title: string; children?: JSX.Element; onLayout?: (b: any)
     </View>
   );
 }
-const date = (s?: number) => (s ? new Date(s * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const date = (s?: number) => {
+  if (!s) return "—";
+  const at = new Date(s * 1000);
+  return `${at.toLocaleDateString([], { month: "short", day: "numeric" })}, ${clockTime(at)}`;
+};
 
 function fmtCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
