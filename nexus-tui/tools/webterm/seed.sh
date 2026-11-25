@@ -27,6 +27,9 @@ if [ "${2:-}" = "stop" ]; then
   exit 0
 fi
 for h in home home-empty; do rm -rf "$root/$h"; mkdir -p "$root/$h"; chmod 700 "$root/$h"; done
+# Both homes have finished the first-run tour; otherwise every client opens it
+# and the frames show onboarding instead of the surface under test.
+for h in home home-empty; do printf '[ui]\nonboarded = true\n' > "$root/$h/config.toml"; done
 # The Core lists only models of connected providers (server.py `models`), so an
 # unsigned home has no catalog entry for the seeded model and no context window:
 # the composer meter needs one. Write a placeholder codex sign-in (never used:
