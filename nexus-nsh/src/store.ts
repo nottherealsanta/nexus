@@ -375,6 +375,8 @@ export type TimelineDetail = "low" | "medium" | "high";
 export const timelineDetail = signal<TimelineDetail>("medium");
 /** The timeline shows a subdued scroll bar while scrolling (`appearance.scrollbar`). */
 export const scrollBarOn = signal(true);
+/** The message rail at the timeline's right edge (`appearance.turn_rail`). */
+export const turnRailOn = signal(true);
 /** Explicit open/closed state for timeline groups and tool details. */
 export const timelineOpen = signal<Record<string, boolean>>({});
 export const scrolledUp = signal(false);
@@ -487,11 +489,12 @@ export async function loadPrefs() {
       const detail = p.timelineDetail ?? p.prefs?.["appearance.timeline_detail"];
       if (detail === "low" || detail === "medium" || detail === "high") timelineDetail.set(detail);
       if (typeof p.scrollBar === "boolean") scrollBarOn.set(p.scrollBar);
+      if (typeof p.turnRail === "boolean") turnRailOn.set(p.turnRail);
     }
   } catch {}
 }
 export function savePrefs() {
-  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail(), scrollBar: scrollBarOn() })); } catch {}
+  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail(), scrollBar: scrollBarOn(), turnRail: turnRailOn() })); } catch {}
 }
 
 /** Notification sounds are on unless Settings turned them off. */
@@ -505,6 +508,11 @@ export function setNotificationSounds(on: boolean) {
 
 export function setScrollBar(on: boolean) {
   scrollBarOn.set(on);
+  savePrefs();
+}
+
+export function setTurnRail(on: boolean) {
+  turnRailOn.set(on);
   savePrefs();
 }
 

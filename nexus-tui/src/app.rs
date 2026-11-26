@@ -1019,6 +1019,10 @@ pub struct Ui {
     pub scrollbar: bool,
     /// When the timeline was last scrolled, for the bar's short idle timeout.
     pub scroll_mark: Option<Instant>,
+    /// The message rail at the timeline's right edge (`appearance.turn_rail`).
+    pub turn_rail: bool,
+    /// The rail's track is being dragged.
+    pub turn_rail_scrub: bool,
     pub drafts: HashMap<String, Composer>,
     pub image_pasting: HashSet<String>,
     /// The `/learn` source waiting for its project-or-global answer.
@@ -1505,6 +1509,8 @@ impl App {
                 scrolls: HashMap::new(),
                 scrollbar: true,
                 scroll_mark: None,
+                turn_rail: true,
+                turn_rail_scrub: false,
                 completion: CompletionState::default(),
                 drafts: HashMap::new(),
                 image_pasting: HashSet::new(),
@@ -13145,6 +13151,41 @@ impl App {
         }
     }
 
+    /// A message rail mark: select the message and bring its band to the top of the timeline.
+    fn rail_jump(&mut self, idx: usize) {
+        let Some(start) = self.ui.timeline_blocks.get(idx).map(|b| b.start) else {
+            return;
+        };
+        self.select_block(idx);
+        let max_top = self
+            .ui
+            .timeline_total
+            .saturating_sub(self.ui.timeline_height);
+        let top = start.min(max_top);
+        self.ui.scroll = Scroll {
+            follow: top >= max_top,
+            top,
+        };
+    }
+
+    /// The rail's track: centre the viewport on the part of the conversation at screen row `y`.
+    fn rail_scrub_to(&mut self, y: u16) {
+        let r = self.regions.timeline;
+        let h = self.ui.timeline_height.max(1);
+        let total = self.ui.timeline_total;
+        if total <= h || r.height == 0 {
+            return;
+        }
+        let row = y.saturating_sub(r.y).min(r.height - 1) as usize;
+        let line = row * total / r.height as usize;
+        let max_top = total - h;
+        let top = line.saturating_sub(h / 2).min(max_top);
+        self.ui.scroll = Scroll {
+            follow: top >= max_top,
+            top,
+        };
+    }
+
     fn fold_turns(&mut self, all_but_last: bool) {
         let blocks = self.ui.timeline_blocks.clone();
         let turns: Vec<usize> = blocks
@@ -14295,6 +14336,7 @@ impl App {
                 | "appearance.timeline_detail"
                 | "appearance.time_format"
                 | "appearance.scrollbar"
+                | "appearance.turn_rail"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
                 | "browser.use_my_chrome"
@@ -14396,6 +14438,7 @@ impl App {
                     .to_owned(),
             ),
             "appearance.scrollbar" => pair(&["off", "on"], on_off(self.ui.scrollbar)),
+            "appearance.turn_rail" => pair(&["off", "on"], on_off(self.ui.turn_rail)),
             "notifications.sound" => pair(&["off", "on"], on_off(self.ui.sound)),
             "notifications.terminal" => pair(
                 &["off", "waiting", "all"],
@@ -14553,6 +14596,7 @@ impl App {
                     self.ui.scroll_mark = None;
                 }
             }
+            "appearance.turn_rail" => self.ui.turn_rail = chosen == "on",
             "notifications.sound" => self.ui.sound = chosen == "on",
             "notifications.terminal" => {
                 self.ui.notify = match chosen {
@@ -14756,6 +14800,7 @@ impl App {
                     self.ui.scroll_mark = None;
                 }
             }
+            "appearance.turn_rail" => self.ui.turn_rail = !self.ui.turn_rail,
             "manager.enabled" | "manager.mode" | "manager.proactive" => {
                 self.manager_setting_change(&row.id, step)
             }
@@ -14972,7 +15017,8 @@ impl App {
             | "notifications.terminal"
             | "appearance.timeline_detail"
             | "appearance.time_format"
-            | "appearance.scrollbar" => self.settings_change_row(row, 1),
+            | "appearance.scrollbar"
+            | "appearance.turn_rail" => self.settings_change_row(row, 1),
             "mcp.full_definitions"
             | "browser.use_my_chrome"
             | "mcp.max_listed_tools"
@@ -16069,6 +16115,7 @@ impl App {
                 left_open: Some(self.ui.left_open),
                 right_open: Some(self.ui.right_open),
                 scrollbar: Some(self.ui.scrollbar),
+                turn_rail: Some(self.ui.turn_rail),
                 detail: Some(self.ui.detail.label().to_owned()),
             },
             theme: ThemePrefs {
@@ -16118,6 +16165,9 @@ impl App {
         }
         if let Some(v) = prefs.ui.scrollbar {
             self.ui.scrollbar = v;
+        }
+        if let Some(v) = prefs.ui.turn_rail {
+            self.ui.turn_rail = v;
         }
         if let Some(d) = prefs
             .ui
@@ -16561,6 +16611,9 @@ impl App {
                 }
                 self.ui.rail_drag = Some(drag);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.ui.turn_rail_scrub => {
+                self.rail_scrub_to(ev.row);
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.ui.left_drag => {
                 let x0 = self.regions.left.map_or(0, |l| l.x);
                 let want = ev.column.saturating_sub(x0) + 1;
@@ -16607,6 +16660,7 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.ui.turn_rail_scrub = false;
                 if self.terminal_panel.selecting {
                     self.terminal_panel.selecting = false;
                     let mut copied = None;
@@ -16996,6 +17050,13 @@ impl App {
                 self.copy_selected();
             }
             Target::StickyUser(i) => self.select_block(i),
+            Target::TurnRail(Some(i)) => self.rail_jump(i),
+            Target::TurnRail(None) => {
+                self.ui.turn_rail_scrub = true;
+                if let Some((_, y)) = self.mouse {
+                    self.rail_scrub_to(y);
+                }
+            }
             Target::ImagePreview { name, data_url } => {
                 self.open_overlay(OverlayKind::ImagePreview { name, data_url });
             }

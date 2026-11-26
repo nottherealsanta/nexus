@@ -525,6 +525,15 @@ export const manifest = {
       "note": "Shows a subdued bar only while the timeline scrolls, then hides it after a moment."
      },
      {
+      "id": "appearance.turn_rail",
+      "label": "Message rail",
+      "kind": "toggle",
+      "scope": "client",
+      "clients": "both",
+      "default": true,
+      "note": "Once a session has two of your messages, a rail at the timeline's right edge marks each one where it falls in the conversation and the part on screen. Click a mark to jump to that message, or click or drag the rail to scroll. It replaces the scroll bar while it shows. Desktop and web only."
+     },
+     {
       "id": "appearance.details",
       "label": "Details sidebar",
       "kind": "toggle",
@@ -2930,6 +2939,14 @@ export const manifest = {
     "tui": "[",
     "nsh": "cmd+["
    },
+   "key_aliases": {
+    "tui": [
+     "alt+up"
+    ],
+    "nsh": [
+     "alt+up"
+    ]
+   },
    "key_context": "timeline",
    "when": [
     "has_turns"
@@ -2946,6 +2963,14 @@ export const manifest = {
    "keys": {
     "tui": "]",
     "nsh": "cmd+]"
+   },
+   "key_aliases": {
+    "tui": [
+     "alt+down"
+    ],
+    "nsh": [
+     "alt+down"
+    ]
    },
    "key_context": "timeline",
    "when": [

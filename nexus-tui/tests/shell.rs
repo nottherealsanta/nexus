@@ -2174,6 +2174,60 @@ fn the_timeline_scroll_bar_shows_while_scrolling_then_fades_out() {
     assert!((r.y..r.bottom()).all(|y| buf[(r.right() - 1, y)].symbol() != glyph));
 }
 
+fn add_message(app: &mut nexus_tui::app::App, n: u64, role: &str, text: &str) {
+    let value = serde_json::json!({"id": 3000 + n, "type": "message.added", "session_id": SESSION,
+        "cursor": format!("log_c915bfc9b6d826c4:{}", 3000 + n),
+        "data": {"id": format!("msg_rail_{n}"), "session_id": SESSION, "seq": 300 + n,
+                 "created": 1793113600.0 + n as f64,
+                 "role": role, "parts": [{"type": "text", "text": text}]}});
+    if let Ok(nexus_tui::api::Frame::Event(event)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &value)
+    {
+        app.apply_sync(nexus_tui::sync::SyncMsg::Event(event));
+    }
+}
+
+#[test]
+fn the_message_rail_appears_after_two_messages_and_jumps_between_them() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for n in 0..30 {
+        add_message(&mut app, n, "assistant", &format!("filler paragraph {n}"));
+    }
+    let mark = app.theme.structure("rail_mark").to_owned();
+    let (buf, _) = draw(&mut app, 120, 36);
+    let r = app.regions.timeline;
+    let marks = |buf: &ratatui::buffer::Buffer| {
+        (r.y..r.bottom())
+            .filter(|&y| buf[(r.right() - 1, y)].symbol() == mark)
+            .collect::<Vec<u16>>()
+    };
+    assert!(marks(&buf).is_empty(), "one message: no rail");
+    add_message(&mut app, 100, "user", "second question about the rail");
+    for n in 101..131 {
+        add_message(&mut app, n, "assistant", &format!("more text {n}"));
+    }
+    let (buf, _) = draw(&mut app, 120, 36);
+    let at = marks(&buf);
+    assert_eq!(at.len(), 2, "one mark per message: {at:?}");
+    // The first mark sits above the second, proportionally: it jumps to message #1.
+    click(&mut app, r.right() - 1, at[0]);
+    assert!(!app.ui.scroll.follow, "jumping up leaves the end");
+    let first_top = app.timeline_top();
+    // alt+down with the timeline focused goes to the next message.
+    app.ui.focus = nexus_tui::ui::Focus::Timeline;
+    let _ = draw(&mut app, 120, 36);
+    press(&mut app, &["alt+down"]);
+    let _ = draw(&mut app, 120, 36);
+    assert!(app.timeline_top() > first_top, "alt+down moves to message #2");
+    press(&mut app, &["alt+up"]);
+    let _ = draw(&mut app, 120, 36);
+    assert!(app.timeline_top() <= first_top + 1, "alt+up returns to message #1");
+    // The setting turns it off; the scroll bar is back in charge.
+    app.ui.turn_rail = false;
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert!(marks(&buf).is_empty());
+}
+
 #[test]
 fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));

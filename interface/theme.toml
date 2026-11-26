@@ -546,6 +546,7 @@ unread  = { unicode = "●", ascii = "*", token = "status.info",        rank = 3
 focus_bar  = { unicode = "▌", ascii = ">" }
 rail       = { unicode = "│", ascii = "|" }
 rail_heavy = { unicode = "┃", ascii = "|" }
+rail_mark  = { unicode = "━", ascii = "-" }
 tree_mid   = { unicode = "├─", ascii = "|-" }
 tree_end   = { unicode = "╰─", ascii = "`-" }
 rule       = { unicode = "─", ascii = "-" }

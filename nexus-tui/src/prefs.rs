@@ -43,6 +43,9 @@ pub struct UiPrefs {
     /// The timeline's scroll bar, shown while scrolling and then hidden.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scrollbar: Option<bool>,
+    /// The message rail at the timeline's right edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_rail: Option<bool>,
     /// `low`, `medium` or `high`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -147,6 +150,7 @@ pub fn merge_changes(stored: &mut Prefs, seen: &Prefs, now: &Prefs) {
     field!(ui.left_open);
     field!(ui.right_open);
     field!(ui.scrollbar);
+    field!(ui.turn_rail);
     field!(ui.detail);
     field!(theme.mode);
     field!(theme.monochrome);
@@ -193,6 +197,7 @@ mod tests {
                 left_open: Some(true),
                 right_open: Some(false),
                 scrollbar: Some(false),
+                turn_rail: Some(false),
                 detail: Some("high".into()),
             },
             theme: ThemePrefs {
