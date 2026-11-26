@@ -34,7 +34,10 @@ stage improves speed or correctness. Provider failures need separate handling (p
 - [x] `builtin_agents/scout.md`: enough evidence to act, not exhaustive discovery; separate facts from hypotheses;
   report edit locations, constraints, validation commands, blocking gaps and next step. Tool budget is a ceiling.
 - [x] `builtin_agents/plan.md`: consume the brief, verify critical assumptions, resolve choices and return bounded
-  work items with dependencies, ownership, acceptance and integration checks. No compulsory plan file.
+  work items with dependencies, ownership, acceptance and integration checks. Standalone planning does not require a file.
+- [x] 2026-11-25: keep orchestrator-to-planner assignments minimal: the task and relevant scout details, no Nexus or
+  orchestration instructions, and an explicit request for a Markdown plan at a unique `/tmp` path. Prompt guidance
+  only; the planner's system prompt and session instruction file are unchanged.
 - [x] `builtin_agents/build.md`: consume evidence without restarting discovery, inspect current targets, respect
   ownership, surface scope growth/blockers early, and report exact checks and unmet acceptance criteria.
 - [x] Update `docs/agents.md` and record the decision. No runtime, tool permissions, model configuration, session

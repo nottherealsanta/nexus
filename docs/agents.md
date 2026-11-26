@@ -177,7 +177,10 @@ The built-in prompts guide this flow; the runtime does not force stages or autom
    discovery. Scouts cannot run shell tests; suggested validation commands are not test results.
 3. **Plan conditionally.** Use a planner for architectural trade-offs, migrations, coupled cross-client changes or
    dependent work items; skip it for an obvious localized fix or an actionable existing plan. The planner consumes the
-   brief and verifies critical assumptions rather than starting discovery over.
+   brief and verifies critical assumptions rather than starting discovery over. The orchestrator sends a minimal
+   assignment with the task and relevant scout details, no Nexus or orchestration instructions, and an explicit
+   request to write a Markdown plan at a unique `/tmp` path and return that path. This is prompt guidance, not a
+   runtime guarantee; the planner still receives its own system prompt and the session's instruction file.
 4. **Build bounded outcomes.** Each assignment carries the outcome, evidence, owned files / boundaries, dependencies,
    acceptance criteria, validation and expected return. Independent work may run in parallel only with disjoint edit
    ownership; shared integration points have one owner. Builders inspect current targets, run focused checks and
