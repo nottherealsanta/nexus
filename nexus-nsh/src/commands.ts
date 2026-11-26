@@ -932,6 +932,8 @@ on("tool.raw_toggle", () => focusedTool()?.toggleRaw());
 on("sessions.scope_toggle", () => scopeAll.update((v) => !v));
 on("sessions.archived_filter", () => archivedFilter.update((v) => !v));
 on("session.jump_latest", () => { scrolledUp.set(false); jump.fn(); });
+on("turn.prev", () => turnNav.fn(-1));
+on("turn.next", () => turnNav.fn(1));
 on("waiting.next", () => waitIndex.update((n) => n + 1));
 on("waiting.prev", () => waitIndex.update((n) => Math.max(0, n - 1)));
 on("waiting.focus", () => focusWaiting.fn());
@@ -1120,6 +1122,8 @@ on("model.effort", () => void pickOne("Reasoning effort", async () => {
   ];
 }));
 export const jump = { fn: () => {} };
+/** The timeline's previous/next message (`turn.prev` / `turn.next`), set by the mounted timeline. */
+export const turnNav = { fn: (_delta: number) => {} };
 export const focusWaiting = { fn: () => {} };
 /** The question's context line (the composer's input while a question waits, plan 47): put the caret in it, or hand the keys back to the options. */
 export const questionLineFocus = { fn: (_end?: boolean) => {}, leave: () => {} };
@@ -1286,6 +1290,14 @@ export function bindKeys(): () => void {
   if (applePaste() && !phone) {
     const k = byId.get("composer.paste")?.keys?.nsh;
     if (k) try { offs.push(keymap.bind(toKeystroke(k), () => { if (composerFocused() && !terminalFocused()) void run("composer.paste"); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+  }
+  // Previous/next message act on the timeline: never while typing, in a terminal or in an open file.
+  if (!phone) for (const id of ["turn.prev", "turn.next"]) {
+    const c = byId.get(id);
+    for (const k of new Set([c?.keys?.nsh, ...(c?.key_aliases?.nsh ?? [])])) {
+      if (!k) continue;
+      try { offs.push(keymap.bind(toKeystroke(k), () => { if (!composerFocused() && !terminalFocused() && !openFile()) void run(id); }, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ }
+    }
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {
     const c = byId.get(id);

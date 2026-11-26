@@ -775,6 +775,9 @@ pub enum Target {
     CopyBlock(usize),
     /// The pinned copy of a user band (sticky header): scrolls back to the band, by block index.
     StickyUser(usize),
+    /// The message rail at the timeline's right edge: a mark (by turn block index)
+    /// jumps to that message; the track (`None`) scrolls to where it was pressed.
+    TurnRail(Option<usize>),
     /// An attachment preview (timeline or composer): open its full-size modal.
     ImagePreview {
         name: String,

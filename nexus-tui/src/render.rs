@@ -4755,7 +4755,9 @@ fn draw_timeline(
             1,
         );
     }
-    draw_scroll_bar(cx, buf, r, top, total, h);
+    if !draw_turn_rail(cx, buf, r, hits, timeline, top, total, h) {
+        draw_scroll_bar(cx, buf, r, top, total, h);
+    }
     // Blocks wholly below the viewport count for the jump pill, which is
     // drawn on the composer's live row, never over the timeline.
     let behind = (top < max_top).then(|| {
@@ -4798,6 +4800,93 @@ fn draw_scroll_bar(cx: &Cx, buf: &mut Buffer, r: Rect, top: usize, total: usize,
             1,
         );
     }
+}
+
+/// The message rail (`appearance.turn_rail`): once the session has two user
+/// messages, the right gutter becomes a track of the whole conversation. Each
+/// message is a mark where it falls (accent while on screen), the viewport is
+/// the heavy band, and hovering a mark shows `#n · first line`. A mark jumps to
+/// its message; the track scrolls (and drags) to where it is pressed. It
+/// replaces the fading scroll bar and takes no column from the content.
+#[allow(clippy::too_many_arguments)]
+fn draw_turn_rail(
+    cx: &Cx,
+    buf: &mut Buffer,
+    r: Rect,
+    hits: &mut HitMap,
+    timeline: &crate::timeline::Timeline,
+    top: usize,
+    total: usize,
+    h: usize,
+) -> bool {
+    let a = cx.app;
+    if !a.ui.turn_rail || r.width < 8 || r.height < 3 {
+        return false;
+    }
+    let turns: Vec<(usize, &crate::timeline::Block)> = timeline
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.kind == crate::timeline::BlockKind::Turn)
+        .collect();
+    if turns.len() < 2 {
+        return false;
+    }
+    let x = r.right() - 1;
+    let rows = r.height as usize;
+    let span = total.max(h).max(1);
+    let row_of = |line: usize| (line * rows / span).min(rows - 1);
+    let band_top = row_of(top);
+    let band_end = row_of((top + h).saturating_sub(1)).max(band_top);
+    let track = cx.st("border.default", CANVAS);
+    let band = cx.st("interactive.scrollbar", CANVAS);
+    for k in 0..rows {
+        let (glyph, style) = if (band_top..=band_end).contains(&k) {
+            (cx.t.structure("rail_heavy"), band)
+        } else {
+            (cx.t.structure("rail"), track)
+        };
+        put(buf, x, r.y + k as u16, glyph, style, 1);
+    }
+    hits.add(Rect::new(x, r.y, 1, r.height), Target::TurnRail(None));
+    let mut hovered = None;
+    for (index, b) in &turns {
+        let y = r.y + row_of(b.start) as u16;
+        let seen = b.start < top + h && b.end > top;
+        let style = if seen {
+            cx.st("interactive.accent", CANVAS)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(MUTED, CANVAS)
+        };
+        put(buf, x, y, cx.t.structure("rail_mark"), style, 1);
+        let cell = Rect::new(x, y, 1, 1);
+        hits.add(cell, Target::TurnRail(Some(*index)));
+        if cx.hovered(cell) {
+            hovered = Some((cell, *b));
+        }
+    }
+    if let Some((cell, b)) = hovered {
+        let text: String = b
+            .target
+            .as_deref()
+            .and_then(|id| a.messages().iter().find(|m| m.id == id))
+            .map(|m| {
+                m.parts
+                    .iter()
+                    .filter(|p| p["type"] == "text")
+                    .filter_map(|p| p["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        let n = b.turn.map_or(0, |t| t + 1);
+        let label = format!("#{n}{}{first}", cx.sep());
+        let label = truncate(&label, 48, cx.ell());
+        draw_tooltip(cx, buf, cell, &label, hits);
+    }
+    true
 }
 
 /// The jump-to-latest pill (D15): raised, right-aligned on the live row above
@@ -7502,6 +7591,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
         "notifications.terminal" => Some(a.ui.notify.label().into()),
         "appearance.sidebar" => Some(if a.ui.left_open { "full" } else { "rail" }.into()),
         "appearance.scrollbar" => Some(on_off(a.ui.scrollbar)),
+        "appearance.turn_rail" => Some(on_off(a.ui.turn_rail)),
         "appearance.details" => Some(on_off(a.ui.right_open)),
         "appearance.timeline_detail" => Some(a.ui.detail.label().into()),
         "appearance.time_format" => Some(
