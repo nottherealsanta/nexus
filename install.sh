@@ -197,7 +197,7 @@ download_firecrawl() {
 
 install_release() {
   need curl
-  need uv "https://docs.astral.sh/uv/"
+  need uv "install it with: curl -LsSf https://astral.sh/uv/install.sh | sh"
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   case "$os" in darwin|linux) ;; *) die "Nexus supports macOS and Linux, not $(uname -s)" ;; esac
   if [ "$os" = linux ] && { ldd --version 2>&1 || true; } | grep -qi musl; then

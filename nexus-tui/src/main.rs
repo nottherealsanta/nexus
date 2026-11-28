@@ -561,6 +561,21 @@ fn splash_lets_through(ev: &Event) -> bool {
     }
 }
 
+/// `Picker::from_query_stdio` gives up after a second but leaves its thread blocked
+/// reading stdin until a Device Status reply arrives. Left there it takes every
+/// other key from the input thread (a detached tmux pane never forwards the
+/// wrapped query). A plain DSR is answered by the terminal or tmux itself, which
+/// lets that thread finish before the input thread starts.
+const IMAGE_QUERY_GAVE_UP: Duration = Duration::from_millis(950);
+
+fn release_stalled_image_query() {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[5n");
+    let _ = out.flush();
+    std::thread::sleep(Duration::from_millis(150));
+}
+
 fn should_probe_images(term: Option<&str>) -> bool {
     !matches!(term, Some("dumb" | "linux" | "vt100" | "ansi"))
 }
@@ -581,8 +596,14 @@ async fn run(
     // still runs before the input thread starts, so its replies are not eaten.
     draw_terminal(&mut terminal, &mut app)?;
     let picker = if should_probe_images(std::env::var("TERM").ok().as_deref()) {
-        ratatui_image::picker::Picker::from_query_stdio()
-            .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)))
+        let started = Instant::now();
+        let probed = ratatui_image::picker::Picker::from_query_stdio();
+        // It answers with its default picker after its one-second timeout, so only the
+        // elapsed time tells that its reader thread was left behind.
+        if started.elapsed() >= IMAGE_QUERY_GAVE_UP {
+            release_stalled_image_query();
+        }
+        probed.unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((10, 20)))
     } else {
         ratatui_image::picker::Picker::from_fontsize((10, 20))
     };

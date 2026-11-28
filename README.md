@@ -7,18 +7,21 @@ One agentic loop, any model, real approvals, and a visible, ordered context time
 
 </div>
 
-Nexus 0.10 is built from the provider wire up: a Python Core (`nexus-core/`) that owns sessions, tools and the agent loop,
+Nexus is built from the provider wire up: a Python Core (`nexus-core/`) that owns sessions, tools and the agent loop,
 and two clients that speak only its HTTP API: a Ratatui terminal client (`nexus-tui/`) and an NSH web and desktop client
 (`nexus-nsh/`). What the model receives is what you see, in order, and clipping is announced.
 
 ## Install
 
+On macOS or Linux, with [uv](https://docs.astral.sh/uv/) installed
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`):
+
 ```sh
 curl -LsSf https://github.com/nottherealsanta/nexus/releases/latest/download/install.sh | sh
 ```
 
-The installer is attached to each GitHub release, so this works once 0.10.0 is published. Until then, install from a checkout;
-it needs `uv`, Rust (`cargo`), Node and `nsh`:
+It installs the latest GitHub release, checked against its `SHA256SUMS`; `nexus update` moves to a newer one later.
+To build from a checkout instead (needs `uv`, Rust (`cargo`), Node and `nsh`):
 
 ```sh
 git clone https://github.com/nottherealsanta/nexus && cd nexus

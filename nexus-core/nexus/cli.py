@@ -1208,6 +1208,8 @@ def main(argv: list[str] | None = None) -> int:
     if not raw or raw[0] == "tui":  # plain `nexus` opens the terminal client
         return _launch_tui(raw[1:])
     parser = argparse.ArgumentParser(prog="nexus")
+    from importlib.metadata import version as _dist_version
+    parser.add_argument("--version", action="version", version=f"nexus {_dist_version('nexus10')}")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("tui", help="open the terminal client (also what plain `nexus` does); flags go to nexus-tui")
 
@@ -1361,9 +1363,12 @@ def main(argv: list[str] | None = None) -> int:
             return _migrate(args.yes)
         elif args.command == "status":
             live = set(connected())
+            wide_id = max(len(pid) for pid in PROVIDERS)
+            wide_label = max(len(info.label) for info in PROVIDERS.values())
+            wide_dialect = max(len(info.dialect) for info in PROVIDERS.values())
             for pid, info in PROVIDERS.items():
                 state = "connected" if pid in live else f"not connected (nexus login {pid})"
-                print(f"{pid:<9} {info.label:<17} {info.dialect:<9} {state}")
+                print(f"{pid:<{wide_id}}  {info.label:<{wide_label}}  {info.dialect:<{wide_dialect}}  {state}")
         elif args.command == "models":
             asyncio.run(_models(args))
         elif args.command == "voice":
