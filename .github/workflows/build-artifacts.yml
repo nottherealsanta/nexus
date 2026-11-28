@@ -31,6 +31,8 @@ jobs:
         with: {ref: "${{ inputs.ref }}"}
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm, cache-dependency-path: nexus-nsh/package-lock.json}
+      # `npm run gen` runs scripts/gen.py through uv; the runner image no longer ships it.
+      - uses: astral-sh/setup-uv@v10.2.0
       - uses: ./.github/actions/setup-nsh
       - run: npm ci && npm run check && npm run test:host && npm run build
         working-directory: nexus-nsh
