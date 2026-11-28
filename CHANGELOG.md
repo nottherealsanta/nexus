@@ -15,6 +15,24 @@
 - Let users provide custom free-text answers to every `ask` question in the Core API, TUI, and NSH.
 - Running `nexus` or `nexus tui` opens the terminal client directly, passing through command-line flags.
 
+## [0.20.0](https://github.com/nottherealsanta/nexus/compare/v0.17.0...v0.20.0) (2026-11-28)
+
+
+### Features
+
+* add experimental native Claude subscription provider ([f01c568](https://github.com/nottherealsanta/nexus/commit/f01c56860c8a36a681da8ab7bbdda19659195aaa))
+* claude-direct fixes, header and timeline polish, green CI for 0.20 ([e44c6a0](https://github.com/nottherealsanta/nexus/commit/e44c6a0ac690d80f88ad17d9b3cf4bf2716e0818))
+* improve agent settings and session interactions ([ac11c46](https://github.com/nottherealsanta/nexus/commit/ac11c4641ac2850c8272e2e6419a2e10efbea89b))
+* improve question choice interactions ([9e7261c](https://github.com/nottherealsanta/nexus/commit/9e7261cca6ff491dce16647150ee9d850ef95b7f))
+* **tui:** message rail at the timeline's right edge (NSH partial) ([2e0067e](https://github.com/nottherealsanta/nexus/commit/2e0067eddb76e7c18b76f1bcb939afcaf9cc52f5))
+* **ui:** TUI and NSH design polish ([06e5cc4](https://github.com/nottherealsanta/nexus/commit/06e5cc4a1d7a71a0283406d69883f769eb0fd162))
+* update search services and client experiences ([b70abcb](https://github.com/nottherealsanta/nexus/commit/b70abcb2bb31eb3547fda1ead0e16094b398058c))
+
+
+### Bug fixes
+
+* **tui:** screenshot seed marks homes onboarded ([ded9ac7](https://github.com/nottherealsanta/nexus/commit/ded9ac7b0085851d7da2885ec04f01f8040290b2))
+
 ## [0.17.0](https://github.com/nottherealsanta/nexus/compare/v0.16.0...v0.17.0) (2026-11-24)
 
 
