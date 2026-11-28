@@ -133,6 +133,12 @@ def _tiers(entry: dict[str, Any]) -> tuple[int, ...]:
     return tuple(sorted(out))
 
 
+def _direct_efforts(model: str) -> tuple[str, ...]:
+    from .anthropic_policy import thinking_policy
+
+    return thinking_policy(model).efforts
+
+
 def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
     if provider_id == "claude-code":
         from dataclasses import replace
@@ -164,11 +170,11 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
             ModelInfo(
                 provider=provider_id,
                 id=model_id,
-                name=str(entry.get("name") or model_id),
+                name=("Direct · " if provider_id == "claude-direct" else "") + str(entry.get("name") or model_id),
                 context=limit.get("context"),
                 max_output=limit.get("output"),
                 reasoning=bool(entry.get("reasoning")),
-                efforts=_efforts(entry),
+                efforts=_direct_efforts(model_id) if provider_id == "claude-direct" else _efforts(entry),
                 input_cost=cost.get("input"),
                 output_cost=cost.get("output"),
                 cache_read_cost=cost.get("cache_read"),

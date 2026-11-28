@@ -658,6 +658,8 @@ pub struct AgentEffortPick {
 fn sign_in_label(method: &str) -> String {
     match method {
         "browser" => "Sign in with browser".into(),
+        "browser-long" => "Sign in with browser (1-year token)".into(),
+        "cli-profile" => "Use signed-in Claude Code profile (read-only)".into(),
         "device" => "Sign in with a device code".into(),
         "cli" => "Sign in with Claude Code".into(),
         "local" => "Use the local server".into(),
@@ -15637,7 +15639,11 @@ impl App {
             } else {
                 Tone::Warning
             };
-            out.push(PageLine::Text(note.to_owned(), tone));
+            if id == "claude-direct" {
+                out.extend(note.lines().map(|line| PageLine::Text(line.to_owned(), tone)));
+            } else {
+                out.push(PageLine::Text(note.to_owned(), tone));
+            }
         }
         if connected {
             if p["key_source"].as_str() == Some("env") {

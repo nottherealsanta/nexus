@@ -29,6 +29,7 @@ Adapters never read stored credentials. They take a header source
 | `codex` | ChatGPT (Codex) | responses | `https://chatgpt.com/backend-api/codex` | `{base}/responses` | `openai` |
 | `grok` | xAI (SuperGrok) | responses | `https://cli-chat-proxy.grok.com/v1` | `{base}/responses` | `xai` |
 | `claude` | Claude (Agent SDK) | agent-sdk | — (the user's own Claude Code) | `SDK claude-agent-sdk://query` | `anthropic` |
+| `claude-direct` | Claude (Direct · experimental) | messages | `https://api.anthropic.com/v1` | `{base}/messages` | `anthropic` |
 | `copilot` | GitHub Copilot | chat | `https://api.githubcopilot.com` | `{base}/chat/completions` | `github-copilot` |
 | `opencode` | OpenCode Go | chat | `https://opencode.ai/zen/go/v1` | `{base}/chat/completions` | `opencode-go` |
 | `openai` | OpenAI (API key) | responses | `https://api.openai.com/v1` | `{base}/responses` | `openai` |
@@ -45,6 +46,102 @@ Two more ids live outside `PROVIDERS`, in `nexus/workers/registry.py`: `claude-c
 (`ACP · Antigravity`), dialect `external-cli`. They are not request/stream providers: `stream()` refuses, and a child
 on one of them runs the CLI's own loop through `workers.ExternalAgent` instead of Nexus's. Off by default, children
 only. See [external-workers.md](external-workers.md).
+
+### Claude direct (experimental)
+
+Select `claude-direct/<model>` (for example `claude-direct/claude-haiku-4-5`). Both desktop clients receive the same
+provider row and `Direct ·` model names from Core; the existing `claude` SDK mode is unchanged.
+`llmhub/anthropic.py` sends the frozen system instructions, native user/assistant messages, native tool calls/results
+and base64 images, including tool-result images. Nexus owns the tool loop; no CLI prompt or hidden Claude Code system
+instruction is added. Text, tool arguments and any returned thinking stream live. Same-origin signed thinking blocks
+are retained for replay with generating-model provenance; foreign-model thinking is omitted. Cache reads and cache creation count toward total input usage.
+Wire requests redact credentials and HTTP errors retain status/retry timing rather than possibly echoed secrets.
+Incomplete streams fail, with no provider fallback. Tool schemas require an object root; unsupported root
+`oneOf`/`anyOf`/`allOf` constraints move into the schema description, with object branches folded into usable property
+declarations. Recursive wire-only normalization retains supported structural keywords and moves unsupported constraints
+into each node's description; literal values and property names are untouched, and unspecified/open maps stay open.
+Local tool validation uses the unchanged original schema. Unknown stream events/deltas and mismatched block deltas fail
+explicitly. Unimplemented
+server-tool/compaction content blocks fail explicitly instead of being silently omitted.
+
+Thinking compatibility lives in `anthropic_policy.py`: Haiku 4.5 and older Claude generations use token budgets;
+Opus 4.5 also carries output effort; known Opus/Sonnet 4.6+ generations use adaptive thinking with model-specific
+efforts and summarized-display support. Unknown future generations advertise no thinking ladder. Budget thinking
+reserves 4000 tokens for the answer. The output cap comes from the cached model catalog, with OMP's 64000 fallback
+for unknown models; constructor overrides are total generation caps, not extra visible-answer budgets.
+Policy parsing also recognizes legacy version-first ids (`claude-3-7-sonnet-…`) and separator-collapsed
+revisions (`claude-opus-45`, `claude-sonnet-46`), without treating date suffixes as minor versions.
+
+Direct-only `DirectRequest.tool_choice` accepts `auto`, `any`, `none` or `tool`; `forced_tool` selects an
+offered tool by its native name (and implies `tool`). Forced choices with thinking, Fable/Mythos models,
+prewarm or no offered tools fail before authentication; Nexus never silently disables thinking or downgrades
+the choice. Omitting both fields preserves the existing automatic tool behavior. Offline-tested only.
+
+`DirectRequest.task_budget=TokenTaskBudget(total, remaining=None)` sends the native token budget under
+`output_config`, alongside effort. Values are validated before authentication, and a remaining-budget override
+with signed thinking replay fails instead of silently removing it. Budgets are restricted to known adaptive
+models: Haiku 4.5's live request returned HTTP 400, so budget-model requests now fail locally. Adaptive-model
+acceptance remains unverified; no automatic session budget tracking is enabled.
+
+Known binding-capable models (Fable/Mythos 5.1+, Haiku/Sonnet/Opus 5.5–<6) request prefix-mismatch errors rather than
+letting the service silently drop signed thinking; the matching beta is sent only when the field is present. This is
+offline-tested, not live-verified. `AnthropicProvider(eager_tools=(...))` optionally enables eager input streaming for
+selected tools only; tools still execute after complete JSON is validated. Haiku's eager probe roundtrip passed.
+
+`AnthropicProvider(strict_tools=(...))` opts named tools into strict decoding when their original and normalized
+schemas are compatible: all objects must be explicitly closed, unconstrained nodes and unsupported references/
+combinators are excluded, and the request stays within 20 strict tools, 24 optional properties and 16 unions.
+Eager-selected tools remain non-strict. Overflow leaves a tool non-strict rather than injecting nullable-required
+properties that local validation would reject. No OMP tool-name allowlist or automatic downgrade/retry is copied.
+The structured-output beta is derived from the final body; beta tokens are deduplicated case-insensitively.
+The strict native-tool Haiku roundtrip passed live on 2026-11-28; aggregate/complex schema cases remain offline-tested.
+
+Direct requests fail before credential resolution if their serialized UTF-8 body exceeds 128 MB or their user and
+tool-result images exceed the shared count limit (100 for pre-4.6/unknown models, 600 for recognized 4.6+ models).
+Nothing is resized or discarded. The direct-only `api_version` constructor option accepts `2023-06-01` (default)
+or `2026-10-21`; neither sends sampling fields. The newer version passed a live Haiku text probe. No subscription
+long-context-credit beta is added.
+Optional `AnthropicProvider(request_encoding="gzip")` compresses only transport bytes, retains the original
+body in wire diagnostics, and enforces the uncompressed size limit. Other encodings fail locally and rejection
+never triggers an uncompressed retry. Gzip passed a live Haiku probe.
+
+Stream integrity checks reject duplicate starts, reused block indices, malformed usage, missing initial message,
+conflicting stop reasons and initial tool input overwritten by deltas. Usage-only message deltas preserve the
+previous stop reason. Refusal/sensitive/pause/compaction and unknown stops retain their exact reason in `Done.detail`.
+
+Prompt caching defaults to one-hour retention: a maximum of four breakpoints on the final tool, frozen system,
+latest message and stable every-15-user-turn checkpoints (then the prior message if room remains). Thinking blocks
+are never decorated and stored raw parts are not mutated. The adapter can disable caching or use short retention.
+Direct-only `anthropic.DirectRequest.cache_retention` (`none`, `short`, `long`) overrides the adapter default for one request; this is a provider-layer
+option, not yet a session setting. Extended-TTL headers are derived from the final body's actual cache controls.
+`DirectRequest.stable_system_chars` optionally splits the existing instruction string at an explicit Unicode
+character boundary and anchors system caching on the stable prefix rather than a volatile suffix. Concatenating
+the wire blocks reproduces the original instructions exactly; nothing is reordered or inferred from markup.
+A zero boundary means all system text is volatile (no system breakpoint); omitting it keeps the current single
+frozen block. This is an offline-tested provider primitive, not automatic session context scheduling.
+`DirectRequest(prewarm=True)` explicitly makes one zero-output, non-streaming cache request, not a hidden extra
+inference call. It preserves the normal request body except `max_tokens: 0` and `stream: false`, emits the request,
+response and complete raw JSON response as wire events, and accounts for all returned input/cache usage.
+Budget thinking and disabled/no-breakpoint caching are rejected before sending. Responses are bounded to 64 KiB;
+unexpected content or output fails explicitly instead of being discarded. Zero-output prewarm followed by a cache
+hit passed live on Haiku. This provider-layer primitive is not automatically scheduled by sessions or the agent loop.
+The shared `Request` type, other adapters, SDK/worker transports and their auth are unchanged. Direct auth never starts
+Claude Code login/logout: the `cli-profile` choice verifies a readable, already-signed-in profile and stores a token-free
+opt-in marker; disconnect removes only that marker. Existing CLI/env credentials do not auto-connect direct mode for
+background usage. Credentials and refresh locks live separately in `claude-direct/auth.json`. The new `browser-long` method is direct-only, with narrow
+profile/inference scopes and a requested one-year access token; actual server expiry is retained and no refresh token
+is stored or used for that grant. Fresh long-lived authorization is not live-verified.
+Direct subscription limits use the same credential source as inference, without a CLI fallback. Context estimates
+price native image bytes as images, not base64 text, and exclude generation/effort options.
+
+It uses Nexus's own user-agent, not OMP's Claude Code identity spoofing. Direct subscription use is experimental,
+not an official supported integration or an undetectability/terms-compliance guarantee.
+Auth restrictions: [auth.md](auth.md#claude-direct-experimental).
+
+Live Haiku checks on 2026-11-28 passed native tool roundtrip, thinking and signed replay, user/tool images and
+an actual cache hit. Fresh Nexus browser authorization, owned-token refresh and a repeat of all five Haiku probes
+passed in an isolated scratch home, including the recursively normalized default tool roster and an eager tool probe.
+Adaptive models, prefix binding, long contexts and future service compatibility are not live-verified.
 
 ### Quirks per provider
 

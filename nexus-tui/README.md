@@ -6,6 +6,10 @@ reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus-old/rust/tui` is reference.
 
+Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with `Direct ·` model names,
+model-specific effort choices, regular/1-year browser sign-in, read-only signed-in CLI profiles and direct subscription usage. Connection notes preserve line
+breaks, matching NSH. Shared fixture: `../interface/scenarios/claude-direct.json`.
+
 This client is also the visual reference for `nexus nsh tui`, which runs the shared
 NSH TSX app rather than this Rust implementation. NSH uses the shared Unicode
 sidebar/fold/tool glyphs and compact full-width reading gutters. Its interface and

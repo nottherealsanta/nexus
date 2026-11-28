@@ -56,6 +56,7 @@ LABELS = {pid: info.label for pid, info in PROVIDERS.items() if pid != "mock"} |
 SOURCES = {
     "codex": "chatgpt.com · wham/usage",
     "claude": "Claude OAuth · api/oauth/usage (CLI fallback)",
+    "claude-direct": "Claude OAuth · api/oauth/usage (direct)",
     "grok": "cli-chat-proxy.grok.com · v1/billing",
     "copilot": "api.github.com · copilot_internal/user",
     "opencode": "opencode.ai · zen/go/v1/usage",
@@ -546,6 +547,14 @@ def parse_claude_oauth(data: Mapping[str, Any], plan: str = "") -> dict[str, Any
     return {"plan": _text(plan, 40).title(), "windows": windows[:MAX_WINDOWS], "notes": notes}
 
 
+async def _claude_direct(client: httpx.AsyncClient) -> dict[str, Any]:
+    headers = await SIGN_INS["claude-direct"]().headers()
+    data = await _get(client, CLAUDE_URL, {**headers, "accept": "application/json"})
+    credential = await asyncio.to_thread(oauth_credentials, child_env())
+    plan = credential[1] if credential and headers.get("authorization") == f"Bearer {credential[0]}" else ""
+    return parse_claude_oauth(data, plan)
+
+
 async def _claude(client: httpx.AsyncClient) -> dict[str, Any]:
     executable = cli_path()
     if executable is None:
@@ -628,6 +637,7 @@ _LIMIT_SOURCES = {
     "agy": _agy,
     "codex": _codex,
     "claude": _claude,
+    "claude-direct": _claude_direct,
     "grok": _grok,
     "copilot": _copilot,
     "opencode": _opencode,

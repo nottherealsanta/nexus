@@ -32,7 +32,7 @@ from .responses import HeaderSource, ResponsesProvider, ResponsesQuirks
 class ProviderInfo:
     id: str
     label: str
-    dialect: Literal["responses", "chat", "agent-sdk", "scripted", "external-cli"]
+    dialect: Literal["responses", "chat", "messages", "agent-sdk", "scripted", "external-cli"]
     base_url: str
     catalog_id: str  # provider id on models.dev
     quirks: ResponsesQuirks | ChatQuirks | None
@@ -52,6 +52,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
     "claude": ProviderInfo(
         "claude", "Claude (Agent SDK)", "agent-sdk", "claude-agent-sdk://", "anthropic", None,
         verified=False,
+    ),
+    "claude-direct": ProviderInfo(
+        "claude-direct", "Claude (Direct · experimental)", "messages", "https://api.anthropic.com/v1", "anthropic", None,
+        verified=True,
     ),
     "grok": ProviderInfo(
         "grok",
@@ -130,6 +134,10 @@ def make(provider_id: str, auth: HeaderSource, model: str | None = None) -> Prov
         from ..mock.provider import MockProvider
 
         return MockProvider(model or "hello")
+    if info.dialect == "messages":
+        from .anthropic import AnthropicProvider
+
+        return AnthropicProvider(auth)
     if info.dialect == "agent-sdk":
         from .claude import ClaudeProvider
 

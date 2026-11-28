@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .api_key import ApiKeyAuth, api_key_auth
 from .claude import ClaudeAuth
+from .claude_direct import ClaudeDirectAuth
 from .codex import CodexAuth
 from .copilot import CopilotAuth
 from .errors import AuthError
@@ -20,6 +21,7 @@ from .store import CredentialError, CredentialStore
 SIGN_INS = {
     "codex": CodexAuth,
     "claude": ClaudeAuth,
+    "claude-direct": ClaudeDirectAuth,
     "copilot": CopilotAuth,
     "grok": GrokAuth,
     "opencode": OpenCodeAuth,

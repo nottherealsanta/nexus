@@ -574,12 +574,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
 
         def handoff(url: str) -> bool:
             # The daemon never launches a browser: the client opens the URL.
-            notify(f"Open {url} to sign in to ChatGPT.")
+            notify(f"Open {url} to sign in to {'Claude' if provider == 'claude-direct' else 'ChatGPT'}.")
             return True
 
         async def run() -> None:
             try:
-                if method == "browser":
+                if method == "browser" or (provider == "claude-direct" and method == "browser-long"):
                     await auth.login(method, notify=notify, browser_open=handoff)
                 else:
                     await auth.login(method, notify=notify)
@@ -749,6 +749,8 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         if provider == "claude":
             out["note"] = ("Needs Claude Code 2.1.248 or newer." if claude_cli_path() else
                            "Claude Code is not installed. Install Claude Code 2.1.248 or newer, then sign in.")
+        if provider == "claude-direct":
+            out["note"] = "Experimental direct OAuth.\nBrowser login: Nexus stores and refreshes its own tokens.\nOtherwise: CLAUDE_CODE_OAUTH_TOKEN, then the CLI profile.\nCLI tokens are read-only; no Keychain access."
         return out
 
     async def providers(request: Request) -> Response:

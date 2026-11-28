@@ -14,6 +14,10 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
+Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with `Direct ·` model names,
+model-specific effort choices, regular/1-year browser sign-in, read-only signed-in CLI profiles and direct subscription usage. Connection notes preserve line
+breaks, matching the TUI. Shared fixture: `../interface/scenarios/claude-direct.json`.
+
 `/btw <question>` opens a live read-only side-question modal, including on mobile and while the parent is busy.
 It shares the parent's settled cached prefix but never changes its context. Compact tool rows and a `N/10`
 budget accompany streamed Markdown replies. `i`/Expand inherited context shows the copied request prefix;

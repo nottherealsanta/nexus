@@ -240,6 +240,24 @@ def main() -> None:
     )
     store = Store(h / "nexus.db")
     store.set_preference("model.last", "scripted/m")
+    if os.environ.get("NEXUS_CLAUDE_DIRECT_FIXTURE") == "1":
+        from nexus import provider_usage, server
+        from nexus.llmhub import catalog
+
+        scenario = json.loads((Path(__file__).resolve().parents[2] / "interface/scenarios/claude-direct.json").read_text())
+        server.connected = lambda: [] if os.environ.get("NEXUS_CLAUDE_DIRECT_DISCONNECTED") == "1" else ["claude-direct"]
+        server.SIGN_INS = dict(server.SIGN_INS)
+        server.SIGN_INS["claude-direct"] = type("FixtureAuth", (), {"methods": tuple(scenario["provider"]["methods"])})
+        model = scenario["model"]
+        async def fixture_catalog(*args, **kwargs):
+            return {"anthropic": {"models": {model["id"]: {"name": "Claude Haiku 4.5", "tool_call": True,
+                    "reasoning": True, "limit": {"context": model["context"], "output": model["max_output"]},
+                    "modalities": {"input": ["text", "image"], "output": ["text"]}}}}}, "fixture"
+        async def direct_usage():
+            return {"fetched": time.time(), "providers": [scenario["usage"]]}
+        catalog.load = fixture_catalog
+        provider_usage.providers_usage = direct_usage
+        store.set_preference("model.last", model["ref"])
     if os.environ.get("NEXUS_USAGE_FIXTURE") == "1":
         from nexus import provider_usage
 

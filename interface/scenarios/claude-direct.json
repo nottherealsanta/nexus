@@ -1,0 +1,33 @@
+{
+  "provider": {
+    "id": "claude-direct",
+    "label": "Claude (Direct · experimental)",
+    "dialect": "messages",
+    "base_url": "https://api.anthropic.com/v1",
+    "catalog": "anthropic",
+    "connected": true,
+    "verified": true,
+    "methods": ["browser", "browser-long", "cli-profile"],
+    "note": "Experimental direct OAuth.\nBrowser login: Nexus stores and refreshes its own tokens.\nOtherwise: CLAUDE_CODE_OAUTH_TOKEN, then the CLI profile.\nCLI tokens are read-only; no Keychain access."
+  },
+  "model": {
+    "provider": "claude-direct",
+    "id": "claude-haiku-4-5",
+    "ref": "claude-direct/claude-haiku-4-5",
+    "name": "Direct · Claude Haiku 4.5",
+    "reasoning": true,
+    "efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+    "context": 200000,
+    "max_output": 64000,
+    "image_input": true
+  },
+  "usage": {
+    "id": "claude-direct",
+    "label": "Claude (Direct · experimental)",
+    "source": "Claude OAuth · api/oauth/usage (direct)",
+    "plan": "Max",
+    "windows": [{"label": "5-hour session", "used_percent": 36, "period_seconds": 18000, "kind": "five_hour"}],
+    "notes": [],
+    "error": null
+  }
+}

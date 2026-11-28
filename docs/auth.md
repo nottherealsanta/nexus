@@ -154,6 +154,46 @@ count). The answer is cached for 30 s because `connected()` asks often. The CLI 
 locations); Nexus does not ship it, and without it the provider is not connected and `login` says Claude Code is not installed. `login` runs `claude auth login --claudeai` and passes the first URL it prints to the client
 (`Open <url> to sign in to Claude.`); `logout` runs `claude auth logout`. `nexus login claude` works from a terminal.
 
+## claude-direct (experimental)
+
+Methods: `browser` (default), `browser-long`, `cli-profile`. `nexus login claude-direct` opens a PKCE browser sign-in against
+`https://claude.ai/oauth/authorize`, using the public Claude OAuth client id and a loopback `/callback` on port 54545.
+The callback requires a matching random state. Access/refresh tokens, expiry, authorization time, returned scope and
+bounded account/org identity fields (when returned by the token endpoint) are stored in Nexus's
+owner-only `claude-direct/auth.json` in the Nexus home; neither the shared provider `auth.json` nor Claude Code's
+store is modified. Direct refresh uses its own process/file lock, independent of other providers. Refresh uses
+`https://platform.claude.com/v1/oauth/token`, within five minutes of expiry, under the shared process/file lock.
+Concurrent requests re-read the rotated credentials rather than refreshing the same token twice. Refresh failures
+keep the last stored entry and never fall back to another account. Account/org metadata and authorization time remain
+fixed on refresh; a returned account/org UUID conflicting with the stored identity rejects the refresh without
+overwriting credentials. No CLI bootstrap identity request is made. Fresh browser authorization and owned-token refresh were
+live-verified on 2026-11-28 in an isolated scratch home. It requests profile/inference/session/MCP/file scopes, not API-key creation.
+
+Credential precedence: explicitly set `CLAUDE_CODE_OAUTH_TOKEN` (an invalid/empty value fails closed), then Nexus's
+own browser login, then the selected Claude profile's `.credentials.json`. Only `sk-ant-oat` OAuth access tokens are
+accepted. The same `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` precedence as the usage probe applies.
+No Keychain access or fallback to another profile; CLI tokens are read-only and are never refreshed by Nexus.
+An existing CLI login does not auto-connect direct mode or schedule its background usage. The `cli-profile` choice
+records a token-free opt-in marker bound to the current profile environment; changing profiles requires selecting again.
+An environment token can be used by explicit direct inference, but alone never marks direct mode connected.
+`nexus login claude-direct --method cli-profile` verifies an already-signed-in Claude Code profile without starting its
+login or logout. A Keychain-only profile must use Nexus browser sign-in instead. The direct auth class is independent
+of SDK auth; environment tokens are validated by the service, not refreshed locally.
+
+`browser-long` uses the same PKCE callback, requests only `user:profile user:inference`, and asks the token endpoint for
+31536000 seconds. The server may grant less; the stored expiry is authoritative. Any returned refresh token is discarded,
+and the grant is never refreshed. Expiry requires fresh sign-in. This optional mode is offline-tested, not live-verified.
+
+Headers: `authorization: Bearer <access>`, `anthropic-beta: oauth-2025-04-20`, `user-agent: nexus/0.10` (additional
+feature betas are attached by the Messages adapter). Disconnect removes a Nexus-owned entry only; when using CLI
+credentials it removes only the direct opt-in marker, without invoking CLI logout or altering the CLI profile.
+An environment credential requires unsetting
+the variable; disconnect reports that rather than logging out the CLI. The existing `claude` mode is unchanged.
+
+Live probes accept `NEXUS_CLAUDE_DIRECT_AUTH_HOME` pointing to a separate Nexus-owned scratch login so each test's
+temporary state home does not hide that login. Never copy CLI refresh tokens into this store. Run with explicit
+`NEXUS_CLAUDE_DIRECT_LIVE=1` only after quota approval; the refresh probe rotates only the owned scratch grant.
+
 ## External worker providers (`claude-code`, `agy`)
 
 No sign-in in Nexus, and no credential read: the CLI signs itself in (`claude auth login`, or run `agy` once in a
@@ -187,8 +227,9 @@ entry per provider id.
 | `opencode`, `openai`, `groq`, `nvidia` | `api_key` | an env key is not stored; a stored key wins over `$<ENV>` |
 | `ollama` | `base_url` | n/a |
 | `claude` | nothing | the CLI owns the credential store |
+| `claude-direct` | **separate** `claude-direct/auth.json`: owned browser tokens/expiry/identity or token-free CLI opt-in | environment and CLI-profile tokens are never copied; long-lived grants retain no refresh token |
 
-Access tokens live in memory on the sign-in object only.
+Access tokens live in memory on the sign-in object only, except the Nexus-owned `claude-direct` browser login above.
 
 Safety checks (`CredentialError` on failure):
 

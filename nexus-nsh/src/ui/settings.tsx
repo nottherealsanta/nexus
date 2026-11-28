@@ -209,6 +209,8 @@ function poolUsers(provider: string): string[] {
 /** The row that starts one provider sign-in method; Core lists the methods in order. */
 const SIGN_IN_LABELS: Record<string, string> = {
   browser: "Sign in with browser",
+  "browser-long": "Sign in with browser (1-year token)",
+  "cli-profile": "Use signed-in Claude Code profile (read-only)",
   device: "Sign in with a device code",
   cli: "Sign in with Claude Code",
   local: "Use the local server",
@@ -272,7 +274,7 @@ export function ProviderDetailModal() {
     <View class="gap-3">
       <ModalTitle title={provider()!.label ?? id()!} />
       <Text class={T.sec}>{pending() ? "Sign-in pending · waiting for you" : failed() ? "Sign-in failed · open" : providerStatus(provider())}</Text>
-      <If when={provider()!.note}>{() => <Text class={provider()!.connected ? T.meta : `${TS.base} text-warning`} testID="provider-detail-note">{provider()!.note}</Text>}</If>
+      <If when={provider()!.note}>{() => provider()!.id === "claude-direct" ? <View testID="provider-detail-note"><Each of={String(provider()!.note).split("\n")}>{(line) => <Text class={provider()!.connected ? T.meta : `${TS.base} text-warning`}>{line()}</Text>}</Each></View> : <Text class={provider()!.connected ? T.meta : `${TS.base} text-warning`} testID="provider-detail-note">{provider()!.note}</Text>}</If>
       <If when={provider()!.connected}>{() => <View class="gap-2">
         <If when={provider()!.key_source === "env"}>{() => <Text class={T.meta}>{`Using $${provider()!.key_env}`}</Text>}</If>
         <View class="flex-row"><Btn label="Disconnect" kind="danger" disabled={!live()} onPress={() => void disconnect(provider())} testID="provider-detail-disconnect" /></View>
