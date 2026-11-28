@@ -353,7 +353,7 @@ function finishFirstPrompt() {
 }
 export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
-export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null }; worktree?: WorktreeOffer } } | null>(null);
+export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number; skills?: number; mcp?: number; worktree?: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null }; worktree?: WorktreeOffer } } | null>(null);
 /** Core's answer about the draft's worktree switch (`POST /api/draft/context`). */
 export type WorktreeOffer = { available: boolean; on?: boolean; branch?: string | null; head?: string; dirty?: boolean; changes?: number; notice?: string };
 let draftSeq = 0;

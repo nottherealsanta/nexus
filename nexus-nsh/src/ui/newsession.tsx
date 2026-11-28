@@ -520,7 +520,7 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
               <Text class={`${TS.base} ${p.worktree?.on ? "text-foreground-secondary" : "text-muted-foreground"}`}>Worktree</Text>
             </Button>
             <If when={!!p.worktree?.on && p.worktree?.tokens !== undefined}><Text class={`${TS.base} text-foreground-secondary tabular-nums`} testID="context-worktree-tokens">{`${p.estimated ? "~" : ""}${contextTokens(p.worktree?.tokens ?? 0)}`}</Text></If>
-            <Button onPress={() => detail.set({ key: "worktree", title: "Worktree", meta: "", body: { kind: "none" }, detail: `Turning this on asks the agent to start in a new worktree. Nexus adds this notice to the context before your first message:\n\n${p.worktree?.notice ?? ""}` })} accessibilityLabel="Worktree details" testID="context-worktree-info" class={`shrink-0 w-6 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+            <Button onPress={() => detail.set({ title: "Worktree", detail: `Turning this on asks the agent to start in a new worktree. Nexus adds this notice to the context before your first message:\n\n${p.worktree?.notice ?? ""}` })} accessibilityLabel="Worktree details" testID="context-worktree-info" class={`shrink-0 w-6 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
               <Text class={`${TS.base} text-muted-foreground`}>›</Text>
             </Button>
           </View>
