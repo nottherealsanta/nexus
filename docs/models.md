@@ -81,7 +81,8 @@ In `nexus models`, the reasoning column shows the effort values, else `yes` or `
 A model is named `provider/model`, for example `grok/grok-4.7`.
 
 `claude-direct/…` selects experimental native Anthropic Messages using a Claude subscription OAuth token rather than
-the Agent SDK. It lists the same Anthropic catalog with `Direct ·` names in both clients; effort ladders come from
+the Agent SDK. It lists the same unprefixed Anthropic model names in both clients; the `claude-direct` provider label
+distinguishes the transport without a redundant `Direct ·` model-name prefix. Effort ladders come from
 the adapter's model-specific thinking policy rather than unrelated provider metadata. See
 [LLM providers](llm-providers.md#claude-direct-experimental).
 

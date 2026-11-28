@@ -17,7 +17,6 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -760,7 +759,10 @@ impl<A: RecorderApi> RecorderDriver<A> {
         }
 
         if let Some(seconds) = recording.free_seconds.filter(|s| *s < LOW_DISK_SECONDS) {
-            self.warn(format!("{LOW_DISK_PREFIX}{}", crate::recorder_view::format_elapsed(seconds * 16_000)));
+            self.warn(format!(
+                "{LOW_DISK_PREFIX}{}",
+                crate::recorder_view::format_elapsed(seconds * 16_000)
+            ));
         }
         let lease = recording.lease.clone().expect("checked above");
         let mut meta = SpoolMeta::new(
@@ -1487,7 +1489,7 @@ mod tests {
     use crate::recorder_spool::{Secret, SpoolMeta, SpoolStore};
     use crate::transport::Http;
     use std::collections::{BTreeMap, VecDeque};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::Semaphore;

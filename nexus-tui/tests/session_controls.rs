@@ -679,8 +679,9 @@ fn arrows_select_a_single_choice_and_a_lone_question_has_no_review_page() {
     let c = app.ask_current().unwrap();
     assert_eq!((c.page, c.pick().unwrap().chosen.clone()), (0, vec![0]));
     let all = joined(&draw(&mut app, 120, 36).1);
-    assert!(all.contains("[\u{2022}] 1 Conservative"), "{all}");
-    assert!(all.contains("[ ] 2 Direct"), "{all}");
+    assert!(all.contains("\u{2022} 1 Conservative"), "{all}");
+    assert!(all.contains("  2 Direct"), "{all}");
+    assert!(!all.contains("[ ]"), "{all}");
     press(&mut app, &["enter"]);
     assert_eq!(
         sent_answers(&app),

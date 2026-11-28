@@ -848,9 +848,8 @@ fn startup_block(
     }
 }
 
-type TuiRecorderDriver = crate::recorder_driver::RecorderDriver<
-    crate::recorder_driver::CoreRecorderApi,
->;
+type TuiRecorderDriver =
+    crate::recorder_driver::RecorderDriver<crate::recorder_driver::CoreRecorderApi>;
 
 async fn recorder_task(
     home: std::path::PathBuf,
@@ -892,8 +891,9 @@ async fn recorder_task(
                 return Err(());
             }
         };
-        let controller =
-            crate::recorder::RecorderController::microphone(crate::recorder::RecorderConfig::default());
+        let controller = crate::recorder::RecorderController::microphone(
+            crate::recorder::RecorderConfig::default(),
+        );
         *driver = Some(crate::recorder_driver::RecorderDriver::new(
             controller,
             crate::recorder_driver::CoreRecorderApi::new(api),
@@ -910,9 +910,7 @@ async fn recorder_task(
         let warnings = d.take_warnings();
         status.warnings.clear();
         let recoverable = recoverable_spools(&home);
-        if last_status.as_ref() != Some(&status)
-            || last_sent.elapsed() >= Duration::from_secs(1)
-        {
+        if last_status.as_ref() != Some(&status) || last_sent.elapsed() >= Duration::from_secs(1) {
             send(RecorderUpdate::Status {
                 owner: recorder_owner(&status, &recoverable),
                 recoverable,
@@ -1121,10 +1119,7 @@ async fn recorder_task(
     }
 }
 
-async fn read_transcript_pages(
-    api: &CoreApi,
-    id: &str,
-) -> Result<Value, String> {
+async fn read_transcript_pages(api: &CoreApi, id: &str) -> Result<Value, String> {
     let mut after: i64 = -1;
     let mut segments: Vec<Value> = Vec::new();
     let mut provisional = Value::Null;
@@ -1167,10 +1162,7 @@ async fn read_transcript_pages(
     }))
 }
 
-async fn copy_transcript(
-    home: &std::path::Path,
-    id: &str,
-) -> RecorderUpdate {
+async fn copy_transcript(home: &std::path::Path, id: &str) -> RecorderUpdate {
     let Some(api) = crate::actions::api_for(home) else {
         return RecorderUpdate::Error("Core is not reachable".into());
     };

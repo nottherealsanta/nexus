@@ -1927,6 +1927,10 @@ export const manifest = {
    "leader": [
     "w"
    ],
+   "keys": {
+    "tui": "ctrl+w"
+   },
+   "key_context": "global",
    "when": [
     "layout.tab_active"
    ],
@@ -2839,7 +2843,6 @@ export const manifest = {
    "category": "inspect",
    "slash": "wire",
    "keys": {
-    "tui": "ctrl+w",
     "nsh": "cmd+shift+w"
    },
    "key_context": "global",

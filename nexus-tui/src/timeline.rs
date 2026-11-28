@@ -2256,9 +2256,25 @@ impl Builder<'_> {
             body: CtxBody::Inventory(self.app.context_header_tools()),
         });
         for title in ["Skills", "MCP"] {
+            let names: &[&str] = if title == "Skills" {
+                &["skill"]
+            } else {
+                &["mcp_tool_search", "mcp_call"]
+            };
+            let listed: Vec<_> = names.iter().filter_map(|n| schemas.get(*n)).collect();
             sections.push(CtxSection {
                 title: title.into(),
-                tokens: None,
+                tokens: (!listed.is_empty()).then(|| {
+                    estimate(
+                        listed
+                            .iter()
+                            .map(|d| {
+                                d["description"].to_string().chars().count()
+                                    + d["parameters"].to_string().chars().count()
+                            })
+                            .sum(),
+                    )
+                }),
                 meta: self.app.context_inventory_meta(title),
                 body: CtxBody::Inventory(self.app.context_items_for(title)),
             });
@@ -2412,7 +2428,9 @@ impl Builder<'_> {
                 let mut spans = vec![Span::raw("  ".to_owned())];
                 for (text, role) in row {
                     let style = match role {
-                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.st(MUTED, CANVAS),
+                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview | CtxRole::Detail => {
+                            b.st(MUTED, CANVAS)
+                        }
                         CtxRole::Title | CtxRole::TotalLabel => {
                             b.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD)
                         }
@@ -3625,8 +3643,6 @@ impl Builder<'_> {
         let label = self.t.role("reasoning").label.clone();
         let muted = self.meta();
         let italic = muted.add_modifier(Modifier::ITALIC);
-        let rail = self.st("border.default", CANVAS);
-        let vbar = self.t.structure("rail").to_owned();
         self.block(key, BlockKind::Reasoning, self.turn, !encrypted, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
@@ -3656,7 +3672,7 @@ impl Builder<'_> {
                 let room = b.bw.saturating_sub(indent.len() + 2).max(1);
                 for row in b.wrap_text(&summary, room) {
                     b.line(vec![
-                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::raw(format!("{indent}  ")),
                         Span::styled(row, italic),
                     ]);
                 }
@@ -3669,11 +3685,9 @@ impl Builder<'_> {
     fn streaming_reasoning_block(&mut self, text: &str) {
         let key = "reason:streaming".to_owned();
         let open = self.is_open(&key, true);
-        let label = self.t.role("reasoning").label.clone();
+        let label = "Thinking".to_owned();
         let muted = self.meta();
         let italic = muted.add_modifier(Modifier::ITALIC);
-        let rail = self.st("border.default", CANVAS);
-        let vbar = self.t.structure("rail").to_owned();
         self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
             let pad = " ".repeat(ACTIVITY_INDENT);
             let prefix = format!("{pad}{} ", if b.t.opts.ascii { "o" } else { "◇" });
@@ -3698,13 +3712,13 @@ impl Builder<'_> {
                 let hidden = rows.len().saturating_sub(10);
                 if hidden > 0 {
                     b.line(vec![
-                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::raw(format!("{indent}  ")),
                         Span::styled(format!("{} {hidden} earlier lines", b.ell()), muted),
                     ]);
                 }
                 for row in rows.into_iter().skip(hidden) {
                     b.line(vec![
-                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::raw(format!("{indent}  ")),
                         Span::styled(row, italic),
                     ]);
                 }

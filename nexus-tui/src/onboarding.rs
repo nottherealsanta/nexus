@@ -253,7 +253,8 @@ impl App {
         self.ui.onboarding.step = step;
         self.ui.onboarding.row = 0;
         self.ui.pool_pick = None;
-        if self.ui.view == View::Onboarding && Tour::of(&self.manifest).is_search(&self.ui.onboarding)
+        if self.ui.view == View::Onboarding
+            && Tour::of(&self.manifest).is_search(&self.ui.onboarding)
         {
             self.search_step_entered();
         }
@@ -449,8 +450,14 @@ mod tests {
         assert!(t.step.iter().any(|s| s.kind == "provider"));
         assert!(t.step.iter().any(|s| s.kind == "agents"));
         let kinds: Vec<&str> = t.step.iter().map(|s| s.kind.as_str()).collect();
-        let search = kinds.iter().position(|k| *k == "search").expect("a search step");
-        assert_eq!(search, kinds.iter().position(|k| *k == "agents").unwrap() + 1);
+        let search = kinds
+            .iter()
+            .position(|k| *k == "search")
+            .expect("a search step");
+        assert_eq!(
+            search,
+            kinds.iter().position(|k| *k == "agents").unwrap() + 1
+        );
         assert!(t.step[search].lines.iter().any(|l| l.contains("Core")));
         assert!(t.step[search].lines.iter().any(|l| l.contains("image")));
         assert!(!t.hints_search.is_empty());

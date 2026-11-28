@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import suppress
 from typing import Any
 
@@ -567,8 +567,67 @@ async def _wav_body(iterator: Iterator[bytes], first: bytes,
         release()
 
 
-def routes(host: RecorderHost, wrap: Callable[[Callable[..., Any]], Callable[..., Any]]) -> list[Route]:
+TITLE_POLL_SECONDS = 2.0
+TITLE_WAIT_SECONDS = 1800.0
+TITLE_MAX_PAGES = 20
+
+
+async def _transcript_text(host: RecorderHost, recording_id: str) -> str:
+    parts: list[str] = []
+    after = -1
+    for _ in range(TITLE_MAX_PAGES):
+        page = await host.call(_read_transcript_page, host.service.store, recording_id, after, MAX_PAGE_LIMIT)
+        parts.extend(str(seg.get("text") or "").strip() for seg in page["segments"] if seg.get("status") == "final")
+        nxt = page.get("next_after")
+        if not page["segments"] or nxt is None or nxt == after:
+            break
+        after = nxt
+    return " ".join(part for part in parts if part)
+
+
+async def _title_after_stop(host: RecorderHost, recording_id: str,
+                            titler: Callable[[str], Awaitable[str | None]]) -> None:
+    """Once, after a stop: wait for the transcript, ask for a title, and store it if the recording is still untitled."""
+    try:
+        waited = 0.0
+        while waited < TITLE_WAIT_SECONDS:
+            state = await host.call(host.service.get, recording_id)
+            if state.get("title"):
+                return
+            snapshot = _transcript_snapshot(host, recording_id)
+            transcription = str((snapshot or {}).get("state") or state.get("transcription_state") or "")
+            if transcription in ("complete", "failed", "unavailable"):
+                break
+            await asyncio.sleep(TITLE_POLL_SECONDS)
+            waited += TITLE_POLL_SECONDS
+        text = await _transcript_text(host, recording_id)
+        if not text:
+            return
+        title = await titler(text)
+        if title:
+            await host.call(host.service.set_title, recording_id, title)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.info("recording title skipped for %s", recording_id, exc_info=True)
+
+
+def routes(host: RecorderHost, wrap: Callable[[Callable[..., Any]], Callable[..., Any]],
+           titler: Callable[[str], Awaitable[str | None]] | None = None) -> list[Route]:
     """The recorder HTTP surface, wrapped by the daemon's auth/idempotency/error middleware."""
+    title_tasks: set[asyncio.Task[None]] = set()
+
+    def title_later(state: dict[str, Any]) -> None:
+        recording_id = state.get("id")
+        if titler is None or not state.get("sealed") or state.get("title") or not isinstance(recording_id, str):
+            return
+        if any(task.get_name() == f"title:{recording_id}" for task in title_tasks):
+            return
+        task = asyncio.get_running_loop().create_task(
+            _title_after_stop(host, recording_id, titler), name=f"title:{recording_id}")
+        title_tasks.add(task)
+        task.add_done_callback(title_tasks.discard)
+
     inflight = _Inflight(RECORDER_MAX_INFLIGHT_BODIES)
     exports = _ExportPins(MAX_TRANSCRIPT_EXPORTS)
     checked = _checked
@@ -658,6 +717,7 @@ def routes(host: RecorderHost, wrap: Callable[[Callable[..., Any]], Callable[...
         stream_id = _text_field(data, "stream_id", required=False)
         final = _int_field(data, "final_sample_count")
         state = await host.call(host.service.stop, recording_id, lease, final, stream_id=stream_id)
+        title_later(state)
         return _json(state)
 
     async def recover(request: Request) -> Response:
@@ -669,6 +729,7 @@ def routes(host: RecorderHost, wrap: Callable[[Callable[..., Any]], Callable[...
         stream_id = _text_field(data, "stream_id", required=False)
         state = await host.call(host.service.recover_stop, recording_id, token, client_id, final,
                                 stream_id=stream_id)
+        title_later(state)
         return _json(state)
 
     async def recover_chunk(request: Request) -> Response:

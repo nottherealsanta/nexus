@@ -21,7 +21,7 @@ and files. The recorder adds a lease capability for capture, not a second login.
 | GET | /api/debug/perf | request timings per route, slow requests, event-loop stalls with the requests in flight (docs/api.md#performance) |
 | GET | /api/provider | the provider table, with `connected` |
 | GET | /api/model | models of connected providers (models.dev); `?provider=` |
-| GET | /api/model/last | `{model, source}`: the model a new session for this project and agent starts with |
+| GET | /api/model/last | `{model, source}`: the model a new session for this agent starts with |
 | GET | /api/agent | agents for `?project=` or `?directory=` (built-in, global, project) and file problems |
 | GET | /api/agent/{name} | one agent, with its full prompt |
 | GET | /api/skill | skills for `?project=` or `?directory=` (project over global) and file problems |
@@ -827,7 +827,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     async def last_model(request: Request) -> Response:
         """The model a new session for this project and agent starts with: `{model, source}` (`""`/`none` when never chosen)."""
         query = request.query_params
-        ref, source = runtime.remembered_model(query.get("project"), query.get("agent"))
+        ref, source = runtime.remembered_model(query.get("agent"))
         return JSONResponse({"model": ref, "source": source})
 
     def agent_json(agent: Any, *, prompt: bool, values: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1637,9 +1637,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 effort=body.get("effort"), agent=body.get("agent"), parent=parent, disabled_tools=body.get("disabled_tools"),
                 worktree=body.get("worktree", False))
             if parent is None and body.get("model"):
-                runtime.remember_model(session.project_id, session.agent, body["model"])
+                runtime.remember_model(session.agent, body["model"])
             if parent is None and isinstance(body.get("effort"), str):
-                runtime.store.set_preference("effort.last", body["effort"])
+                runtime.remember_effort(session.agent, body["effort"])
             return JSONResponse(runtime.session_json(session))
         archived = _archive_filter(request)
         if request.query_params.get("parent"):
@@ -1662,9 +1662,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 fields["expected_revision"] = expected
             session = runtime.update_session(sid, **fields)
             if body.get("model"):
-                runtime.remember_model(session.project_id, session.agent, body["model"])
+                runtime.remember_model(session.agent, body["model"])
             if not session.parent_id and isinstance(body.get("effort"), str):
-                runtime.store.set_preference("effort.last", body["effort"])
+                runtime.remember_effort(session.agent, body["effort"])
             return JSONResponse(runtime.session_json(session))
         if request.method == "DELETE":
             body = await _body(request)
@@ -1820,7 +1820,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
             fields["expected_revision"] = expected
         session = runtime.update_session(p(request, "id"), **fields)
         if body["model"]:
-            runtime.remember_model(session.project_id, session.agent, body["model"])
+            runtime.remember_model(session.agent, body["model"])
         return JSONResponse(runtime.session_json(session))
 
     async def session_switch_cost(request: Request) -> Response:
@@ -2402,7 +2402,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/event", route(events)),
     ]
     routes.extend(terminal_routes(terminal_service, runtime, route, token=token, url=url))
-    routes.extend(recorder_routes(recorder, route))
+    routes.extend(recorder_routes(recorder, route, titler=runtime.recording_title))
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:

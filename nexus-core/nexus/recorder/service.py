@@ -601,6 +601,15 @@ class RecorderService:
             record = self._record_for(recording_id, _doc(state))
             return self._public(record, state)
 
+    def set_title(self, recording_id: str, title: str) -> dict[str, Any]:
+        """Give an untitled recording a generated title and announce the new state."""
+        with self._lock:
+            self._ensure_started_locked()
+            state = self.store.set_title(recording_id, _optional_text(title, "title", MAX_TITLE) or "")
+            record = self._record_for(recording_id, _doc(state))
+            self._publish_state_locked(record, state, force=True, reason="titled")
+            return self._public(record, state)
+
     def list(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """A bounded recent-recording list, newest first, with public states only."""
         if type(limit) is not int or limit <= 0:
@@ -1686,6 +1695,7 @@ class RecorderService:
             "durable_bytes": int(document.get("durable_bytes", 0)),
             "chunks": int(document.get("chunks", 0)),
             "final_sample_count": document.get("final_sample_count"),
+            "title": document.get("title"),
             "complete": self._complete(document),
             "holes": len(document.get("holes") or []),
             "lag_seconds": None,

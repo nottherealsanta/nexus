@@ -15,7 +15,7 @@ import { defaultSkillSelection, selectedSkillCounts } from "../skills-mcp";
 export function Palette() {
   return <If when={paletteOpen()}><PaletteBody /></If>;
 }
-const PALETTE_ORDER = ["session", "project", "model", "composer", "tools", "timeline", "tool", "waiting", "navigation", "files", "editor", "git", "copy", "inspect", "notifications", "connection", "auth", "appearance", "dictation", "app"];
+const PALETTE_ORDER = ["session", "project", "model", "composer", "tools", "timeline", "tool", "waiting", "navigation", "files", "editor", "git", "copy", "inspect", "notifications", "connection", "auth", "appearance", "dictation", "recorder", "manager", "app"];
 const paletteKey = (category: string) => category === "sessions" ? "session" : category === "agent" ? "model" : category;
 const paletteRank = (category: string) => { const at = PALETTE_ORDER.indexOf(paletteKey(category)); return at < 0 ? PALETTE_ORDER.length : at; };
 /** The palette heading for a manifest category: the session categories share one, and so do model and agent. */

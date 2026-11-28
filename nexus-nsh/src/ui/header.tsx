@@ -195,9 +195,6 @@ export function Header() {
             <Text class={`${TS.base} font-medium`}>Core</Text>
           </Button>
         </If>
-        <View ref={(node: any) => { focusRecorderHeader.fn = () => { try { node?.focus?.(); } catch { /* no focus host */ } }; }}>
-          <RecorderHeaderButton onPress={() => { noteRecorderSource("header"); void run("recorder.open"); }} />
-        </View>
         <If when={unread() > 0}>
           <Button onPress={() => run("notifications.open")} accessibilityLabel={`Notifications, ${unread()} unread`} testID="open-notifications" class={`shrink-0 px-2 justify-center ${isNarrow() ? "min-h-11" : "h-7"} hover:bg-accent ${FOCUS}`}>
             <Text class={`${TS.base} text-info`}>{`${attentionGlyph.unread.unicode} ${unread()}`}</Text>
@@ -213,6 +210,9 @@ export function Header() {
         </If>
         <ManagerHeaderIndicator />
         </If>
+        <View ref={(node: any) => { focusRecorderHeader.fn = () => { try { node?.focus?.(); } catch { /* no focus host */ } }; }}>
+          <RecorderHeaderButton onPress={() => { noteRecorderSource("header"); void run("recorder.open"); }} />
+        </View>
         <IconButton icon="panel-right" label="Toggle right sidebar" testID="toggle-right" selected={isNarrow() ? drawer() === "right" : rightIsOpen(width())} onPress={() => { rightWidthHint.w = width(); void run("sidebar.right.toggle"); }} reason={key("sidebar.right.toggle") ?? undefined} />
       </View>
     </View>

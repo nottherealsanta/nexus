@@ -110,7 +110,7 @@ pub struct Regions {
     pub bell: Rect,
     /// The header's Manager button, left of the right toggle (and the bell).
     pub manager: Rect,
-    /// The recorder entry, left of the bell. Zero width when hidden.
+    /// The recorder entry, against the right toggle (right of the Manager button). Zero width when hidden.
     pub recorder: Rect,
     pub title: Rect,
 }
@@ -242,7 +242,7 @@ impl Regions {
         let (heading, banner, timeline, waiting, composer) =
             session_rects(body, heights(body.width));
 
-        // Header: [ toggle ] [ title .... ] [ recorder ] [ bell ] [ Manager ] [ toggle ]
+        // Header: [ toggle ] [ title .... ] [ bell ] [ Manager ] [ recorder ] [ toggle ]
         let toggle_width = if rail.is_some() { RAIL_WIDTH } else { 3 };
         let toggle_left = r(
             header.x,
@@ -256,23 +256,11 @@ impl Regions {
             4.min(header.width),
             header.height,
         );
-        // [ title ] [ recorder ] [ bell ] [ Manager ] [ toggle ]: the Manager button sits against the
-        // toggle and the bell (only with unread notices) moves left of it. Too narrow to fit beside a
-        // title: no Manager button. The recorder keeps a compact pill below 60 columns while capturing.
+        // [ title ] [ bell ] [ Manager ] [ recorder ] [ toggle ]: the recorder sits against the toggle,
+        // the Manager button left of it and the bell (only with unread notices) left of that. Too narrow
+        // to fit beside a title: no Manager button. The recorder keeps a compact pill below 60 columns
+        // while capturing.
         let wide = header.width >= 60;
-        let manager = r(
-            toggle_right.x.saturating_sub(MANAGER_BUTTON),
-            header.y,
-            if wide { MANAGER_BUTTON } else { 0 },
-            header.height,
-        );
-        let bell_right = if wide { manager.x } else { toggle_right.x };
-        let bell = r(
-            bell_right.saturating_sub(6),
-            header.y,
-            6.min(bell_right.saturating_sub(header.x)),
-            header.height,
-        );
         let recorder_width = if wide {
             flags.recorder_width
         } else if flags.recorder_active {
@@ -280,17 +268,32 @@ impl Regions {
         } else {
             0
         };
+        let recorder_left = toggle_left.x + toggle_left.width;
         let recorder = r(
-            bell.x.saturating_sub(recorder_width),
+            toggle_right.x.saturating_sub(recorder_width),
             header.y,
-            recorder_width.min(bell.x.saturating_sub(toggle_left.x + toggle_left.width)),
+            recorder_width.min(toggle_right.x.saturating_sub(recorder_left)),
             header.height,
         );
-        let title_right = if recorder.width > 0 {
+        let recorder_edge = if recorder.width > 0 {
             recorder.x
         } else {
-            bell.x
+            toggle_right.x
         };
+        let manager = r(
+            recorder_edge.saturating_sub(MANAGER_BUTTON),
+            header.y,
+            if wide { MANAGER_BUTTON } else { 0 },
+            header.height,
+        );
+        let bell_right = if wide { manager.x } else { recorder_edge };
+        let bell = r(
+            bell_right.saturating_sub(6),
+            header.y,
+            6.min(bell_right.saturating_sub(header.x)),
+            header.height,
+        );
+        let title_right = bell.x;
         let title = r(
             toggle_left.x + toggle_left.width,
             header.y,

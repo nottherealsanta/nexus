@@ -83,7 +83,7 @@ const posts = (app: any, suffix: string) => app.requests().filter((r: any) => r.
 const recordingRequests = (app: any) => app.requests().filter((r: any) => r.url.includes("/api/recordings"));
 
 describe("recorder header and modal", () => {
-  test("the header entry sits left of Notifications and opens without creating a recording or microphone", async () => {
+  test("the header entry sits right of Manager, beside the right sidebar toggle, and opens without creating a recording or microphone", async () => {
     let listCalls = 0;
     const app = await openRecorder({
       "GET */api/recordings?limit=50": () => ({ body: { recordings: listCalls++ === 0 ? [] : [{ ...stopped }] } }),
@@ -93,7 +93,8 @@ describe("recorder header and modal", () => {
     const manager = app.layout("id:open-manager-context");
     expect(recorder).not.toBe(null);
     expect(manager).not.toBe(null);
-    expect(recorder!.x < manager!.x).toBe(true);
+    expect(recorder!.x > manager!.x).toBe(true);
+    expect(recorder!.x < app.layout("id:toggle-right")!.x).toBe(true);
     await app.press("id:open-recorder");
     await app.waitFor("id:recorder-modal");
     await app.waitFor("text:Hello there.");

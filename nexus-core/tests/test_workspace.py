@@ -1011,7 +1011,7 @@ async def test_worktree_switch_adds_the_nudge_before_the_first_message_and_activ
 
     messages = await _messages_of(env.client, sid)
     first, second = messages[0]["parts"][0]["text"], messages[1]["parts"][0]["text"]
-    assert first.startswith(runtime_module.WORKTREE_NOTICE) and "1 uncommitted change;" in first
+    assert first.startswith(runtime_module.WORKTREE_NOTICE) and "ask the user whether to commit" in first
     assert "base it on main at " in first and second == "fix the task"
     # The model received the nudge, in order, before the user's words.
     sent = env.provider.requests[0].messages

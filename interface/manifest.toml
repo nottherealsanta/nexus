@@ -1466,6 +1466,8 @@ id = "layout.tab_close"
 title = "Close tab"
 category = "navigation"
 leader = ["w"]
+keys = { tui = "ctrl+w" }
+key_context = "global"
 when = ["layout.tab_active"]
 unavailable_reason = "Open a tab first."
 placement = ["palette", "menu", "panel"]
@@ -2002,7 +2004,7 @@ id = "session.wire_toggle"
 title = "Toggle wire view"
 category = "inspect"
 slash = "wire"
-keys = { tui = "ctrl+w", nsh = "cmd+shift+w" }
+keys = { nsh = "cmd+shift+w" }
 key_context = "global"
 when = ["has_session"]
 unavailable_reason = "Open a session first."

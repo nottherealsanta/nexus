@@ -15,8 +15,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::audio_capture::{
-    acquire_mic, acquire_mic_after_dictation, MicOwner, DICTATION_RELEASE_STEP,
-    DICTATION_RELEASE_TIMEOUT,
+    acquire_mic_after_dictation, MicOwner, DICTATION_RELEASE_STEP, DICTATION_RELEASE_TIMEOUT,
 };
 use crate::dictation::{open_input, AudioMessage, Resampler};
 
@@ -631,6 +630,7 @@ fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_capture::acquire_mic;
 
     #[test]
     fn readiness_failure_signals_stop_and_reaps_the_device_thread() {

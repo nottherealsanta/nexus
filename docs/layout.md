@@ -63,6 +63,9 @@ no preview (italic) tabs.
 The layout is **client-local** (TUI prefs, NSH `Storage`), keyed by project and worktree, and is not shared through
 Core. On start a client rebuilds the saved layout. Tabs whose resource is gone (closed session, deleted file,
 terminated terminal) are dropped quietly and empty groups collapse. A fresh worktree gets one group with its sessions.
+Switching project keeps each project's layout, terminal tabs included: the new project's saved terminal tabs stay until
+its own terminal list arrives (the previous project's list never prunes them; both clients), and the previous project's
+viewed session is not added to the layout being restored. A tab closed by the user stays closed after a restart.
 A new-session draft has no worktree of its own, so it stays in the layout it was opened from; it never loads the main
 checkout's layout, whose focused session would otherwise replace the draft at once (both clients).
 The viewed session chose the worktree, so a restored layout brings that session's tab forward rather than opening
@@ -85,7 +88,7 @@ strip's right end). Leader keys follow Ctrl+X.
 | Join down | `layout.join_down` | `shift+down` | when possible |
 | Focus group left / right / up / down | `layout.focus_left` ... | `left` `right` `up` `down` | no |
 | Move tab to group left / right / up / down | `layout.move_left` ... | `alt+left` ... | no |
-| Close tab | `layout.tab_close` | `w` | yes |
+| Close tab | `layout.tab_close` | `w` (TUI also Ctrl+W) | yes |
 | Open to the side | `layout.open_to_side` | none (Ctrl/Cmd+click) | row menus |
 | Group menu | `layout.group_menu` | `.` | is the menu |
 

@@ -68,9 +68,11 @@ async def test_selection_is_remembered_globally_and_per_agent(env):
     assert got == {"model": "scripted/a", "source": "agent"}
     assert (await client.get("/api/model/last", params={"project": project, "agent": "free"})).json() == {
         "model": "scripted/b", "source": "last"}
-    # Another project has no per-agent history, only the global last selection.
+    # The memory is per agent, not per project: another project gets the same model for the same agent.
     other = (await client.post("/api/project", json={"path": str(workspace.parent)})).json()["id"]
-    assert (await client.get("/api/model/last", params={"project": other, "agent": "build"})).json()["source"] == "last"
+    assert (await client.get("/api/model/last", params={"project": other, "agent": "build"})).json() == {
+        "model": "scripted/a", "source": "agent"}
+    assert (await client.post("/api/session", json={"project": other, "agent": "build"})).json()["model"] == "scripted/a"
 
 
 async def test_model_switch_is_remembered_and_agent_switch_keeps_the_model(env):
@@ -119,7 +121,7 @@ async def test_subagent_inherits_the_parent_model(env):
     assert rt.session_json(child)["model"] == "scripted/a" and rt.session_json(child)["model_source"] == "parent"
     rt.update_session(parent.id, model="scripted/b")
     assert rt.session_json(child)["model"] == "scripted/b"
-    assert rt.remembered_model(project.id, "scout") == ("", "none")  # a subagent's model is never "selected"
+    assert rt.remembered_model("scout") == ("", "none")  # a subagent's model is never "selected"
 
 
 async def test_effort_selection_is_remembered_for_new_root_sessions(env):
@@ -139,3 +141,12 @@ async def test_effort_selection_is_remembered_for_new_root_sessions(env):
     await restarted.patch(f"/api/session/{third['id']}", json={"effort": ""})
     assert (await restarted.post("/api/session", json={"project": project})).json()["effort"] is None
 
+
+async def test_effort_is_remembered_per_agent_across_projects(env):
+    make, workspace = env
+    _, client = await make()
+    await client.post("/api/session", json={"directory": str(workspace), "agent": "build", "effort": "high"})
+    await client.post("/api/session", json={"directory": str(workspace), "agent": "orchestrate", "effort": "low"})
+    other = (await client.post("/api/project", json={"path": str(workspace.parent)})).json()["id"]
+    assert (await client.post("/api/session", json={"project": other, "agent": "build"})).json()["effort"] == "high"
+    assert (await client.post("/api/session", json={"project": other, "agent": "orchestrate"})).json()["effort"] == "low"

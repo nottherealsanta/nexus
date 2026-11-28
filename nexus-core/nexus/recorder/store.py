@@ -1282,6 +1282,20 @@ class RecorderStore:
             meta = self._checkpoint_meta(rec_dir, meta, cp)
             return self._state(meta, cp)
 
+    def set_title(self, recording_id: str, title: str, *, only_if_empty: bool = True) -> RecorderState:
+        """Name a recording. A title the client or user already gave is kept unless `only_if_empty` is false."""
+        if len(title) > 500:
+            raise RecorderInvalid("bad_metadata", "title is too long")
+        with self._lock:
+            rec_dir = self._rec_dir(recording_id)
+            meta = self._read_meta(rec_dir, recording_id)
+            if not (only_if_empty and meta.get("title")):
+                meta = dict(meta)
+                meta["title"] = title
+                meta["revision"] = int(meta.get("revision", 1)) + 1
+                self._write_meta(rec_dir, meta)
+            return self.get(recording_id)
+
     # -- output -----------------------------------------------------------------------------------------------
 
     def _read_prefix_bytes(

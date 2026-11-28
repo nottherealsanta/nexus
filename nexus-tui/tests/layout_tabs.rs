@@ -1357,3 +1357,45 @@ fn a_narrow_window_draws_no_other_composer() {
         assert!(app.hits.rect_of(&Target::PeerComposer(g)).is_none());
     }
 }
+
+#[test]
+fn a_project_keeps_its_layout_and_terminal_tabs_when_you_switch_away_and_back() {
+    let mut app = app_at(160, 48);
+    let first = app.current_project().unwrap();
+    app.execute("layout.split_right");
+    add_terminal(
+        &mut app,
+        "t1",
+        nexus_tui::app::tabs::Placement::Split(Side::Down),
+    );
+    app.apply_done(ActionDone {
+        call: ApiCall::TerminalList {
+            project: first.clone(),
+        },
+        result: Ok(Done {
+            terminals: Some(app.terminal_panel.terminals.clone()),
+            ..Done::default()
+        }),
+    });
+    draw(&mut app, 160, 48);
+    let groups = app.groups().group_count();
+    assert!(groups >= 3);
+    assert!(app.groups().contains(&Tab::terminal("t1")));
+
+    let mut second = app.state.model.projects[&first].clone();
+    second.id = "second-project".into();
+    second.name = "Second".into();
+    app.state.model.projects.insert(second.id.clone(), second);
+    app.ui.project = Some("second-project".into());
+    app.groups_reconcile();
+    assert!(!app.groups().contains(&Tab::terminal("t1")));
+    assert!(!app.groups().contains(&Tab::session(SESSION)));
+
+    app.ui.project = Some(first.clone());
+    app.groups_reconcile();
+    assert_eq!(app.groups().group_count(), groups);
+    assert!(
+        app.groups().contains(&Tab::terminal("t1")),
+        "kept until the terminals are listed"
+    );
+}

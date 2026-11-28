@@ -8,6 +8,10 @@ Requested 2026-11-28. Separate from the existing Agent SDK mode; Nexus controls 
   `499544713fc7ee7dcf9e7ffcc45863fa57d9adca` (`can1357/oh-my-pi`). Its bearer-token transport is separate from
   Claude Code identity spoofing (user-agent/runtime headers, official-CLI system instruction, tool prefix).
 - [x] `claude-direct`, native history/images/tools and live SSE, signed reasoning with generating-model provenance.
+- [x] Remove redundant `Direct ·` model-name prefix (user, 2026-11-28); both clients retain the `claude-direct`
+  provider label, and the shared catalog/scenario supplies the plain model name. Validation: 77 Core tests, both
+  TUI direct tests and both NSH direct tests passed; targeted Ruff passed. Composer text is asserted in both clients;
+  paired screenshots were not captured for this label-only change.
 - [x] Model-specific budget/adaptive/effort compatibility; catalog output ceilings, 64000 unknown-model fallback,
   4000-token visible-answer reserve for budget thinking. Other-model policies are offline-tested, not live-verified.
 - [x] One-hour caching by default, short/disabled adapter options, at most four tool/system/rolling/every-15-user-turn
@@ -82,6 +86,29 @@ Requested 2026-11-28. Separate from the existing Agent SDK mode; Nexus controls 
 
 ## Continuation validation (2026-11-28)
 
+- [x] OMP 429 follow-up: cloned current reference to `/tmp/nexus-omp-429-reference-20261128`, revision
+  `c9730fdb620ce4599dd898691e3e3b56003bfcb5`. Beta URL/utility headers and full CLI headers alone still 429;
+  OMP system/billing identity with CLI headers succeeded on Sonnet/Haiku, and with Nexus headers succeeded on Sonnet.
+  The official-CLI instruction **alone** succeeded with Nexus headers and legacy URL/version. User explicitly approved
+  permanent visible compatibility, superseding the earlier no-identity-instruction decision. Adopt only that instruction:
+  no billing hash, runtime impersonation, tool renaming, extra requests, fallback credits or account pooling.
+  Both clients' System prompt uses the exact provider-prefixed prompt via display copies, including draft/open/snapshot
+  endpoints; frozen snapshots remain unchanged. Real Nexus Sonnet 5.5 medium-effort `read` loop passed (two HTTP 200s,
+  native tool executed, exact `NEXUS_SONNET_DIRECT_OK`, normal two-step finish); no signed reasoning was returned.
+  The unchanged default 128000-token output cap also passed a separate short Sonnet medium response (HTTP 200).
+  238 Core integration tests, three TUI tests and three NSH tests passed; full Core Ruff and diff checks passed.
+  The new live Sonnet regression is separately quota-gated (not automatically run with the Haiku suite).
+  Paired screenshots were not captured; both clients' exact System prompt detail is covered by focused tests.
+- [x] Diagnose reported Sonnet 5.5 HTTP 429: original three attempts had no retry timing; two user-approved minimal
+  128-token requests (legacy/new API versions, no tools/thinking/cache) both returned `rate_limit_error` with only
+  `Error` as the service message and no `Retry-After`. This rules out the large output cap/tool/cache/thinking body
+  as necessary causes, but does not establish quota exhaustion versus a service-side restriction. No provider fallback
+  or identity spoofing added. HTTP diagnostics now use status-specific wording and bounded, allowlisted error types
+  without retaining service messages or raw bodies. Sonnet inference remained blocked at this checkpoint; the OMP
+  follow-up above subsequently resolved the reproduced failure.
+  Validation: 80 focused tests and 215 provider/policy/auth/catalog/routing integration tests passed; targeted Ruff
+  and `git diff --check` passed. Both clients consume the same Core error string; no client code changed, client suites
+  and paired screenshots were not run for this diagnostic-only change.
 - 47 focused offline tests passed for the first compatibility tranche; 223 integration tests passed (5 live probes skipped), Ruff passed.
 - After per-request retention/mismatched-delta additions: 79 focused schema/provider/JSON/counting tests passed, Ruff passed.
 - Live: five Haiku probes passed using fresh owned OAuth; two targeted checks passed for owned refresh and selective eager
@@ -110,5 +137,6 @@ Requested 2026-11-28. Separate from the existing Agent SDK mode; Nexus controls 
   (11 live checks skipped before removing the local-only task-budget case from the live suite); final targeted
   cleanup: 131 passed, 10 live probes skipped. Full Core Ruff and diff whitespace checks passed. No client/shared Request changes.
 
-No claim of undetectability, official support or subscription-terms compliance. Identity spoofing, account-ban evasion,
-credit fallback and cross-account quota pooling are not part of this implementation. Existing SDK mode remains unchanged.
+No claim of undetectability, official support or subscription-terms compliance. The user approved the visible official-CLI
+compatibility instruction on 2026-11-28; HTTP/runtime/billing spoofing, account-ban evasion, credit fallback and
+cross-account quota pooling remain excluded. Existing SDK mode remains unchanged.

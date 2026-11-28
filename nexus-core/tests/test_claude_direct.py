@@ -4,7 +4,7 @@ import time
 import httpx
 import pytest
 
-from nexus.llmhub.anthropic import AnthropicProvider, DirectRequest, MessagesState, build_body
+from nexus.llmhub.anthropic import COMPATIBILITY_INSTRUCTION, AnthropicProvider, DirectRequest, MessagesState, build_body
 from nexus.llmhub.auth.claude_direct import ClaudeDirectAuth
 from nexus.llmhub.auth.errors import AuthError
 from nexus.llmhub.catalog import models_for
@@ -76,7 +76,8 @@ def test_native_history_images_tools_and_signed_reasoning():
         Message("user", (Text("continue"),)),
     ), (ToolSpec("read", "Read", {"type": "object"}),))
     body = build_body(req, origin="claude-direct")
-    assert body["system"][0]["text"] == "exact system"
+    assert body["system"][0]["text"] == COMPATIBILITY_INSTRUCTION
+    assert body["system"][1]["text"] == "exact system"
     assert body["tools"][0]["name"] == "read"
     assert body["messages"][1]["content"][0] == thinking
     assert body["messages"][1]["content"][1]["input"] == {"path": "a"}
@@ -144,12 +145,48 @@ async def test_http_errors_never_echo_token(profile, status):
     assert caught.value.body is None and caught.value.retry_after == 5
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"error": {"type": "rate_limit_error", "message": "sk-ant-oat-test private prompt"}},
+    {"error": {"type": "sk-ant-oat-test", "message": "private prompt"}},
+    {"error": {"type": ["rate_limit_error"]}},
+    {"error": "sk-ant-oat-test"},
+    ["private prompt"],
+])
+async def test_rate_limit_diagnostic_is_safe_and_does_not_claim_unsupported(profile, payload):
+    await ClaudeDirectAuth().login("cli-profile")
+    calls = []
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(429, json=payload, headers={"retry-after": "60"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ProviderError) as caught:
+            _ = [e async for e in AnthropicProvider(ClaudeDirectAuth(), client=client).stream(Request("haiku", "", ()))]
+    error = caught.value
+    assert "rate limit reached" in str(error)
+    assert "unsupported" not in str(error)
+    assert "sk-ant-oat" not in str(error) and "private prompt" not in str(error)
+    assert (error.status, error.phase, error.retry_after, error.body) == (429, "response", 60, None)
+    assert len(calls) == 1
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict) and payload["error"].get("type") == "rate_limit_error":
+        assert "rate_limit_error" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_oversized_http_error_body_is_not_retained(profile):
+    await ClaudeDirectAuth().login("cli-profile")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(429, text="x" * 70000))) as client:
+        with pytest.raises(ProviderError, match="rate limit reached") as caught:
+            _ = [e async for e in AnthropicProvider(ClaudeDirectAuth(), client=client).stream(Request("haiku", "", ()))]
+    assert caught.value.body is None
+
+
 def test_routing_catalog_and_effort():
     assert isinstance(make("claude-direct", ClaudeDirectAuth()), AnthropicProvider)
     catalog = {"anthropic": {"models": {"claude-haiku-4-5": {"tool_call": True, "reasoning": True,
                 "reasoning_options": [{"type": "effort", "values": ["high"]}]}}}}
     [model] = models_for(catalog, "claude-direct")
-    assert model.ref == "claude-direct/claude-haiku-4-5" and model.name == "Direct · claude-haiku-4-5"
+    assert model.ref == "claude-direct/claude-haiku-4-5" and model.name == "claude-haiku-4-5"
     assert model.reasoning and model.efforts == ("minimal", "low", "medium", "high", "xhigh", "max")
     with pytest.raises(ProviderError, match="unsupported effort"):
         build_body(Request("haiku", "", (), reasoning_effort="high"), origin="claude-direct")
@@ -385,8 +422,8 @@ def test_cache_retention_modes():
     req = Request("claude-haiku-4-5", "system", (Message("user", (Text("hi"),)),))
     long = build_body(req, origin="claude-direct")
     short = build_body(req, origin="claude-direct", cache_retention="short")
-    assert long["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
-    assert short["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert long["system"][1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert short["system"][1]["cache_control"] == {"type": "ephemeral"}
     with pytest.raises(ProviderError, match="retention"):
         build_body(req, origin="claude-direct", cache_retention="invalid")
 

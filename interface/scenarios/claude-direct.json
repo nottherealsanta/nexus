@@ -14,12 +14,19 @@
     "provider": "claude-direct",
     "id": "claude-haiku-4-5",
     "ref": "claude-direct/claude-haiku-4-5",
-    "name": "Direct · Claude Haiku 4.5",
+    "name": "Claude Haiku 4.5",
     "reasoning": true,
     "efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
     "context": 200000,
     "max_output": 64000,
     "image_input": true
+  },
+  "starting": {
+    "system_prompt": "You are Claude Code, Anthropic's official CLI for Claude.\n\nYou are an AI agent running in Nexus.",
+    "agent": {"name": "build"},
+    "tools": [],
+    "tool_definitions": {},
+    "instruction_file": {"path": "/work/demo/AGENTS.md", "status": "missing"}
   },
   "usage": {
     "id": "claude-direct",

@@ -159,11 +159,9 @@ def worktree_notice(offer: dict[str, Any]) -> str:
     text = (f"{WORKTREE_NOTICE} The user asked for this session to work in a new Git worktree. Before you change "
             f"anything, create one for this task with the `worktree` tool (choose a short branch name that describes "
             f"the task; base it on {base}) and move into it with `change_session_directory`. Do all of the work "
-            f"there.\nRepository: {offer['repository']}")
-    if offer.get("dirty"):
-        count = offer.get("changes") or 0
-        text += (f"\nThe checkout has {count} uncommitted change{'' if count == 1 else 's'}; they are not in the new "
-                 "worktree.")
+            f"there.\nIf the checkout has uncommitted changes, first ask the user whether to commit the current "
+            f"progress; once they agree, commit it and create the worktree from that commit.\nRepository: "
+            f"{offer['repository']}")
     return text
 # A fork's task message starts with this fixed text (only the parent id varies), so forks taken from the same point
 # share their request prefix up to the task itself. The `fork` tool description, which the fork also has, says what a
@@ -812,19 +810,23 @@ class Runtime:
     LAST_MODEL = "model.last"
 
     @staticmethod
-    def _agent_model_key(project_id: str, agent: str) -> str:
-        return f"model.agent.{project_id}.{agent}"
+    def _agent_model_key(agent: str) -> str:
+        return f"model.agent.{agent}"
 
-    def remembered_model(self, project_id: str | None = None, agent: str | None = None) -> tuple[str, str]:
+    @staticmethod
+    def _agent_effort_key(agent: str) -> str:
+        return f"effort.agent.{agent}"
+
+    def remembered_model(self, agent: str | None = None) -> tuple[str, str]:
         """`(ref, source)` a new root session starts with when nothing names a model.
 
-        The model last selected for this agent in this project (`"agent"`), else the model last selected anywhere
+        The model last selected for this agent in any project (`"agent"`), else the model last selected anywhere
         (`"last"`), else none (`""`). A remembered ref is never replaced by another: if its provider is signed out
         the client says so and asks for a new choice.
         """
         candidates = []
-        if project_id and agent:
-            candidates.append(("agent", self.store.preference(self._agent_model_key(project_id, agent))))
+        if agent:
+            candidates.append(("agent", self.store.preference(self._agent_model_key(agent))))
         candidates.append(("last", self.store.preference(self.LAST_MODEL)))
         for source, ref in candidates:
             if ref:
@@ -839,12 +841,25 @@ class Runtime:
                 "efforts": settings.get("efforts", {}).get(spec.name, {}),
                 "effective": {"model": spec.model, "source": "agent"} if spec.model else {"model": "", "source": "parent"}}
 
-    def remember_model(self, project_id: str, agent: str, ref: str) -> None:
-        """Record an explicit selection: the last model anywhere and the last for this agent in this project."""
+    def remembered_effort(self, agent: str | None = None) -> str | None:
+        """The effort last selected for this agent in any project, else the last selected anywhere; None when never chosen."""
+        for key in ([self._agent_effort_key(agent)] if agent else []) + ["effort.last"]:
+            value = self.store.preference(key)
+            if value is not None:
+                return value
+        return None
+
+    def remember_effort(self, agent: str, effort: str) -> None:
+        """Record an explicit effort selection: the last anywhere and the last for this agent."""
+        self.store.set_preference("effort.last", effort)
+        self.store.set_preference(self._agent_effort_key(agent), effort)
+
+    def remember_model(self, agent: str, ref: str) -> None:
+        """Record an explicit selection: the last model anywhere and the last for this agent."""
         self._guard_worker_model(ref, child=False)
         provider_for(ref)  # validates the provider name
         self.store.set_preference(self.LAST_MODEL, ref)
-        self.store.set_preference(self._agent_model_key(project_id, agent), ref)
+        self.store.set_preference(self._agent_model_key(agent), ref)
 
     # -- session snapshots -----------------------------------------------------
 
@@ -1222,9 +1237,18 @@ class Runtime:
         self.bus.publish("session.snapshot", snapshots.summary(rebuilt), session_id=session.id)
         return rebuilt
 
+    def starting_for(self, session: Session) -> dict[str, Any]:
+        snapshot = self.snapshot_for(session)
+        ref = self.resolve_model(session, snapshot["agent"])[0]
+        if ref.startswith("claude-direct/"):
+            from .llmhub.anthropic import compatibility_prompt
+
+            return {**snapshot, "system_prompt": compatibility_prompt(snapshot["system_prompt"])}
+        return snapshot
+
     def snapshot_json(self, session_id: str) -> dict[str, Any]:
-        """The full stored snapshot: prompt, tool schemas and every source path."""
-        return self.snapshot_for(self.session(session_id))
+        """The full visible starting context, including provider compatibility instructions."""
+        return self.starting_for(self.session(session_id))
 
     def _sync_tool_definitions(self, snapshot: dict[str, Any], session: Session) -> None:
         """Keep definitions for exactly the tools an explicit switch leaves available.
@@ -1303,9 +1327,7 @@ class Runtime:
             settings = defaults["defaults"]
             if permission is None:
                 permission = settings["permission"]
-            if effort is None:
-                remembered = self.store.preference("effort.last")
-                effort = remembered if remembered is not None else settings["effort"]
+            configured_effort = settings["effort"]
             if disabled_tools is None:
                 disabled_tools = self.default_disabled(project.path, defaults["tools"]["disabled"])
             if agent is None and settings["agent"]:
@@ -1328,12 +1350,15 @@ class Runtime:
                 raise ValueError(f"no agent can run as {where}" + (f" ({detail})" if detail else ""))
             agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else fitting[0]
         spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
+        if parent is None and effort is None:
+            remembered = self.remembered_effort(agent)
+            effort = remembered if remembered is not None else configured_effort
         if parent is None or model:
             self._guard_worker_model(model or spec.model or "", child=parent is not None)
         if parent is None and not model and not spec.model:
             # A root session stores its model now, so a later agent switch keeps it. An agent's own model stays the agent's
             # until the session switches away from it (see `update_session`).
-            model = self.remembered_model(project.id, agent)[0] or None
+            model = self.remembered_model(agent)[0] or None
         directory = parent.directory if parent else (directory or project.path)
         self._check_removing_worktree(directory)
         carry = None
@@ -2386,16 +2411,28 @@ class Runtime:
         file = snapshot["instruction_file"]
         parts = {"instructions": estimate_tokens(request.instructions), "tools": estimate_tokens([[t.name, t.description, t.parameters] for t in request.tools]),
                  "instruction_file": estimate_tokens(file.get("content") or "")}
+        definitions = snapshot["tool_definitions"]
+        for key, names in (("skills", (skill_files.SKILL_TOOL,)), ("mcp", mcp_files.MCP_TOOLS)):
+            present = [definitions[n] for n in names if n in definitions]
+            if present:
+                parts[key] = estimate_tokens([[d["description"], d["parameters"]] for d in present])
+        if worktree:
+            parts["worktree"] = estimate_tokens(worktree_notice(offer))
         info = {n: {"description": d["description"]}
                 for n, d in snapshot["tool_definitions"].items()}
         skills, servers = self._switches(snapshot, set(disabled), started=False)
         details = self._draft_details(snapshot)
+        if ref.startswith("claude-direct/"):
+            from .llmhub.anthropic import compatibility_prompt
+
+            details["system_prompt"] = compatibility_prompt(snapshot["system_prompt"])
+            parts["instructions"] = estimate_tokens(details["system_prompt"])
         return body | budget(body, window, None) | {"model": ref, "agent": plan["agent"], "parts": parts,
                                                     "details": details,
                                                     "snapshot": snapshots.summary(snapshot), "tool_info": info,
                                                     "tools": list(snapshot["tools"]), "skills": skills, "mcp": servers,
                                                     "session": {"model": plan["model"], "effort": plan["effort"]},
-                                                    "worktree": offer | {"on": worktree},
+                                                    "worktree": offer | {"on": worktree} | ({"notice": worktree_notice(offer)} if offer.get("available") else {}),
                                                     **({"notice": worktree_notice(offer)} if worktree else {})}
 
     @staticmethod
@@ -2495,6 +2532,23 @@ class Runtime:
             if current is not None and current.title == placeholder:  # the user did not rename it meanwhile
                 self.update_session(session_id, title=title)
             return
+
+    async def recording_title(self, transcript: str) -> str | None:
+        """One-shot title for a stopped recording from its transcript, using the `[context] title_models` in turn."""
+        prompt = Message("user", (Text(oneshot.RECORDING_TITLE_INSTRUCTION + "\n\nTranscript:\n" + transcript[:4000]),))
+        for ref in ConfigFile().read()["values"]["context"]["title_models"]:
+            if ref.startswith("mock/"):
+                continue
+            try:
+                provider, model = provider_for(ref)
+                result = await asyncio.wait_for(oneshot.ask(provider, Request(
+                    model=model, instructions="You write short titles.", messages=(prompt,))), TITLE_TIMEOUT_S)
+                title = oneshot.clean_title(result["text"])
+            except (TimeoutError, ProviderError, AuthError, CredentialError, oneshot.OneshotError, ValueError, KeyError, OSError):
+                continue
+            if title:
+                return title
+        return None
 
     def _handoff_disabled(self, project: Project, session: Session) -> list[str]:
         """Switches a continuation keeps: explicit ones that still name something.
@@ -3539,7 +3593,7 @@ class Runtime:
         session = self.session(session_id)
         bundle = self.store.open_bundle(session_id, limit=limit)
         self._overlay_live(session_id, bundle["turns"])
-        return {"session": self.session_json(session), "starting": self.snapshot_for(session), **bundle,
+        return {"session": self.session_json(session), "starting": self.starting_for(session), **bundle,
                 "approvals": self.pending_approvals(session_id), "questions": self.pending_questions(session_id)}
 
     def older_history(self, session_id: str, *, before: int, limit: int) -> dict[str, Any]:
@@ -3552,7 +3606,7 @@ class Runtime:
         """`open_session` with the store reads off the loop (one read snapshot); live state is added on the loop."""
         def view() -> dict[str, Any]:
             session = self.session(session_id)
-            return {"session": self.session_json(session), "starting": self.snapshot_for(session),
+            return {"session": self.session_json(session), "starting": self.starting_for(session),
                     **self.store.open_bundle(session_id, limit=limit)}
         bundle = await self.read(view)
         self._overlay_live(session_id, bundle["turns"])

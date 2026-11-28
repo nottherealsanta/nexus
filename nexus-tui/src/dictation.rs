@@ -15,8 +15,8 @@ use cpal::traits::StreamTrait;
 use tokio::sync::mpsc;
 
 use crate::audio_capture::{
-    acquire_mic, acquire_mic_after_dictation, FramePump, FrameSink, MicOwner,
-    DICTATION_RELEASE_STEP, DICTATION_RELEASE_TIMEOUT,
+    acquire_mic_after_dictation, FramePump, FrameSink, MicOwner, DICTATION_RELEASE_STEP,
+    DICTATION_RELEASE_TIMEOUT,
 };
 
 pub(crate) use crate::audio_capture::{open_input, AudioMessage};
@@ -728,6 +728,7 @@ fn finish_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_capture::acquire_mic;
     use crate::audio_capture::stream_error_is_fatal;
 
     #[test]

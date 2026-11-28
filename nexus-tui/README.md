@@ -6,9 +6,11 @@ reads Nexus state files, SQLite or provider credentials. The one file it owns in
 the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus-old/rust/tui` is reference.
 
-Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with `Direct ·` model names,
+Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with unprefixed model names,
 model-specific effort choices, regular/1-year browser sign-in, read-only signed-in CLI profiles and direct subscription usage. Connection notes preserve line
 breaks, matching NSH. Shared fixture: `../interface/scenarios/claude-direct.json`.
+Direct's user-approved Claude Code compatibility instruction is included verbatim in System prompt details;
+the frozen agent instructions follow unchanged, matching NSH.
 
 This client is also the visual reference for `nexus nsh tui`, which runs the shared
 NSH TSX app rather than this Rust implementation. NSH uses the shared Unicode
@@ -181,7 +183,7 @@ Open **Tools** in the draft header or type `/tools` to switch individual tools i
 (↑/↓ to move, Space to switch, Enter for schema details). Skill and MCP rows show their
 on/off state inline. In a draft, click a row or focus the timeline and use ↑/↓ then Enter/Space to switch
 it; the `Worktree` row under `total` (Git checkouts only; the switch index after the last inventory row is the last
-cursor stop) asks the agent to start in a new worktree. From the first send the header is fixed
+cursor stop) asks the agent to start in a new worktree (its `›` opens the notice; when on, the row shows the notice's estimated tokens). From the first send the header is fixed
 (plan 48): no `PANEL` background, no inline switches, and read-only header dialogs.
 Use `/tools`, `/skills` or `/mcp` to switch the started session. Tests: `behaviour.rs` `draft_worktree_*`,
 `the_header_is_fixed_from_the_first_send`, `started_header_is_fixed_and_slash_skills_switches_the_session`.
@@ -701,7 +703,7 @@ since. Capture is capped at 120 seconds.
 ## Standalone recorder
 
 The TUI's recorder (plan 54) is separate from dictation and the Manager. A
-`Record` entry sits in the header left of the bell and Manager button; while
+`Record` entry sits in the header against the right toggle, right of the bell and Manager button; while
 capturing it shows the elapsed time, and another client's capture reads
 `REC elsewhere`. Opening the modal never opens the microphone: `Start recording`
 creates the Core recording first, then opens the default input device with

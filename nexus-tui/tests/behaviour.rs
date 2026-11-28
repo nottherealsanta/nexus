@@ -112,7 +112,7 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
     // the model's name on the left, its provider on the right (nexus-tui README)
     assert!(
         items.iter().any(
-            |i| i.kind == PaletteKind::Model("codex/gpt-6.1-terra".into())
+            |i| matches!(&i.kind, PaletteKind::Model { reference, .. } if reference == "codex/gpt-6.1-terra")
                 && i.label == "GPT"
                 && i.hint == "codex"
         ),
@@ -548,7 +548,8 @@ fn draft_worktree_switch_follows_the_inventory_and_goes_in_the_create_fields() {
         request,
         data: Ok(serde_json::json!({
             "tools": ["read"], "skills": [], "mcp": [],
-            "worktree": {"available": true, "on": false, "branch": "main", "head": "abc1234", "dirty": true, "changes": 2}
+            "parts": {"worktree": 190, "skills": 900},
+            "worktree": {"available": true, "on": false, "branch": "main", "head": "abc1234", "dirty": true, "changes": 2, "notice": "[Nexus notice: start in a worktree] ask first"}
         })),
     });
     assert!(a.draft_worktree_offer().is_some());
@@ -557,8 +558,8 @@ fn draft_worktree_switch_follows_the_inventory_and_goes_in_the_create_fields() {
     assert!(a.ui.draft.worktree);
     assert_eq!(a.ui.draft.fields()["worktree"], serde_json::json!(true));
     let screen = draw(&mut a, 120, 36).1.join("\n");
-    assert!(screen.contains("Worktree  ask the agent to start in a new worktree"));
-    assert!(screen.contains("2 uncommitted changes stay in the checkout"));
+    assert!(screen.contains("Worktree ~190  \u{203a}"), "{screen}");
+    assert!(!screen.contains("uncommitted changes stay"));
     a.click(Target::ContextToggle(worktree));
     assert!(a.ui.draft.fields().get("worktree").is_none());
 }
@@ -1806,19 +1807,23 @@ fn settings_navigation_follows_the_manifest_order() {
         .into_iter()
         .map(|section| section.label)
         .collect();
+    let sections = a.manifest.settings_for_tui();
     let manifest: Vec<String> = a
         .manifest
-        .settings_for_tui()
-        .into_iter()
+        .settings
+        .rail
+        .iter()
+        .flat_map(|group| &group.sections)
+        .filter_map(|id| sections.iter().find(|s| &s.id == id))
         .filter(|s| s.page || !s.row.is_empty())
-        .map(|s| s.label)
+        .map(|s| s.label.clone())
         .collect();
     assert_eq!(labels, manifest);
     let (_, rows) = draw(&mut a, 120, 36);
     assert!(rows.join("\n").contains("Appearance"));
     // The rail moves first, Enter moves into the pane, Esc steps back, then closes.
     press(&mut a, &["down", "down"]);
-    assert_eq!(a.ui.settings_section, "agents");
+    assert_eq!(a.ui.settings_section, "notifications");
     press(&mut a, &["enter"]);
     assert!(!a.ui.settings_nav_focus);
     press(&mut a, &["esc"]);
@@ -1836,6 +1841,7 @@ fn searching_for_a_page_then_entering_opens_that_page() {
         "id": "codex", "label": "Codex", "connected": true, "methods": ["device"]
     })];
     a.execute("app.settings");
+    press(&mut a, &["/"]);
     typing(&mut a, "providers");
     press(&mut a, &["enter"]);
     assert_eq!(a.settings_open_page().as_deref(), Some("providers"));
@@ -3809,7 +3815,7 @@ fn settings_footer_shows_the_keys_of_the_current_mode() {
     a.ui.settings_nav_focus = true;
     let shown = draw(&mut a, 120, 36).1.join("\n");
     assert!(
-        shown.contains("section") && shown.contains("open") && shown.contains("close"),
+        shown.contains("section") && shown.contains("focus") && shown.contains("close"),
         "{shown}"
     );
     press(&mut a, &["enter"]);

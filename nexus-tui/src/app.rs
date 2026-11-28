@@ -1055,6 +1055,9 @@ pub struct Ui {
     pub project: Option<String>,
     /// Content rows and viewport rows of the timeline at the last draw.
     pub timeline_total: usize,
+    /// The most rows the viewed session's timeline reached while it ran: the end keeps that height as blank room, so a
+    /// collapsing thought or tool group does not move what is on screen.
+    pub timeline_peak: std::cell::Cell<(u64, usize)>,
     pub timeline_height: usize,
     /// Explicit fold state, by block key. Absent means the block's default
     /// (turns open, reasoning and tool detail closed, context open only before
@@ -1538,6 +1541,7 @@ impl App {
                 asks: HashMap::new(),
                 project: None,
                 timeline_total: 0,
+                timeline_peak: std::cell::Cell::new((0, 0)),
                 timeline_height: 0,
                 timeline_open: HashMap::new(),
                 live_groups: std::collections::HashSet::new(),
@@ -15743,7 +15747,10 @@ impl App {
                 Tone::Warning
             };
             if id == "claude-direct" {
-                out.extend(note.lines().map(|line| PageLine::Text(line.to_owned(), tone)));
+                out.extend(
+                    note.lines()
+                        .map(|line| PageLine::Text(line.to_owned(), tone)),
+                );
             } else {
                 out.push(PageLine::Text(note.to_owned(), tone));
             }

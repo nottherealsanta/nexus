@@ -450,10 +450,15 @@ fn the_header_has_a_manager_button_left_of_the_right_toggle_that_opens_the_conte
     let (_, _) = draw(&mut a, 120, 40);
     let g = a.regions.clone();
     assert!(g.manager.width > 0, "a wide header has the button");
+    let right = if g.recorder.width > 0 {
+        g.recorder.x
+    } else {
+        g.toggle_right.x
+    };
     assert_eq!(
         g.manager.x + g.manager.width,
-        g.toggle_right.x,
-        "it sits directly against the right toggle"
+        right,
+        "it sits directly against the recorder entry (or the right toggle)"
     );
     assert!(g.manager.x > g.title.x, "and to the right of the title");
     // Clicking it runs the command, which asks Core for the current context.

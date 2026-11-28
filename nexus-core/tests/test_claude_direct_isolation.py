@@ -41,7 +41,7 @@ def test_sdk_and_other_catalog_entries_do_not_inherit_direct_policy():
     [sdk] = models_for(catalog, "claude")
     [direct] = models_for(catalog, "claude-direct")
     assert sdk.name == "Haiku" and sdk.efforts == ("low", "high")
-    assert direct.name == "Direct · Haiku" and direct.efforts != sdk.efforts
+    assert direct.name == "Haiku" and direct.efforts != sdk.efforts
 
 
 def test_direct_discovery_fails_closed_for_damaged_credentials(tmp_path, monkeypatch):

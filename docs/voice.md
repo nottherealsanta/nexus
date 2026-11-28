@@ -146,7 +146,7 @@ The standalone recorder is a desktop and web feature of the TUI and NSH, separat
 from dictation and from the Manager. The phone shell has no recorder entry or
 modal, and the recorder commands are desktop-only; the iOS native capture module
 reports itself unavailable. The header entry (`Record`, or the active capture's
-label) sits left of Notifications and Manager and works with Manager disabled and
+label) sits right of Notifications and Manager, against the right sidebar toggle, and works with Manager disabled and
 with no notifications. Opening it lists recent recordings and the current
 recording's state; it never opens the microphone, starts a capture or starts the
 Manager. Capture begins only on an explicit `Start recording`.

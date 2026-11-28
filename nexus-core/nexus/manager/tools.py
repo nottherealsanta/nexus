@@ -691,7 +691,7 @@ class ManagerTools:
                     raise ToolError(str(exc)) from exc
                 raise
             if args.get("model"):
-                runtime.remember_model(session.project_id, session.agent, args["model"])
+                runtime.remember_model(session.agent, args["model"])
             started = runtime.prompt(session.id, text, via="manager")
             handle = svc.retriever.handle_for(runtime.session(session.id))
             if started.get("status") != "busy":

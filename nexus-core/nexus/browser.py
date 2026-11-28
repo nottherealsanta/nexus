@@ -53,6 +53,8 @@ CALL_TIMEOUT = 120.0
 
 EXEC, SCREENSHOT = "browser_exec", "browser_screenshot"
 BROWSER_TOOLS = (EXEC, SCREENSHOT)
+# Anthropic rejects any image over 2000 px a side once a request holds more than 20 images.
+SCREENSHOT_MAX_DIM = 1800
 
 _DEFINITIONS: dict[str, dict[str, Any]] = {
     EXEC: {
@@ -74,8 +76,8 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Capture the current browser page and return it as an image. Prefer this over capture_screenshot() in browser_exec.",
         "parameters": {"type": "object", "properties": {
             "full": {"type": "boolean", "description": "Capture beyond the viewport (full page)", "default": False},
-            "max_dim": {"type": "integer", "minimum": 1,
-                        "description": "Downscale so no side exceeds this many pixels (e.g. 1800 for 2x displays)"}}},
+            "max_dim": {"type": "integer", "minimum": 1, "maximum": SCREENSHOT_MAX_DIM,
+                        "description": f"Downscale so no side exceeds this many pixels (default and limit {SCREENSHOT_MAX_DIM})"}}},
     },
 }
 
@@ -229,6 +231,10 @@ class BrowserService:
         daemon restarted after this session used the browser) does so at once, without the MCP backoff, and
         returns `RESTART_NOTICE`. `used_before()` says whether the session called a browser tool in an earlier
         daemon; it is asked only when a process starts."""
+        if tool == SCREENSHOT:
+            requested = arguments.get("max_dim")
+            if isinstance(requested, bool) or not isinstance(requested, int) or not 0 < requested <= SCREENSHOT_MAX_DIM:
+                arguments = {**arguments, "max_dim": SCREENSHOT_MAX_DIM}
         flag = CHROME_FLAG if self.use_my_chrome() else OWN_FLAG
         conn = self.connections.get(session_id)
         if conn is not None and (conn.state == "failed" or self.flags.get(session_id) != flag):

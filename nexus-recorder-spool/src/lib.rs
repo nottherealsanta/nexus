@@ -1575,6 +1575,8 @@ enum AttemptedLock {
 }
 
 fn try_acquire_once(path: &Path, attempt: u32) -> Result<AttemptedLock> {
+    #[cfg(not(test))]
+    let _ = attempt;
     let file = open_lock_file(path)?;
     if !try_lock_exclusive(&file, path)? {
         return Ok(AttemptedLock::Held);

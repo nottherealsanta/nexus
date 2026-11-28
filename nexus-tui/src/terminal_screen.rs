@@ -177,11 +177,15 @@ mod tests {
         assert_eq!(screen.cursor_position(area), Some((15, 5)));
         assert_eq!(screen.cursor_position(Rect::new(10, 5, 5, 4)), None);
         screen
-            .apply(&json!({"version":1,"seq":2,"type":"output","data":STANDARD.encode(b"\x1b[?25l")}))
+            .apply(
+                &json!({"version":1,"seq":2,"type":"output","data":STANDARD.encode(b"\x1b[?25l")}),
+            )
             .unwrap();
         assert_eq!(screen.cursor_position(area), None);
         screen
-            .apply(&json!({"version":1,"seq":3,"type":"output","data":STANDARD.encode(b"\x1b[?25h")}))
+            .apply(
+                &json!({"version":1,"seq":3,"type":"output","data":STANDARD.encode(b"\x1b[?25h")}),
+            )
             .unwrap();
         assert_eq!(screen.cursor_position(area), Some((15, 5)));
     }

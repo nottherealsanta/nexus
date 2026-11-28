@@ -1306,3 +1306,44 @@ async def test_create_and_rebind_reach_the_host_as_bound_service_methods(api) ->
     for name in ("create", "rebind"):
         assert any(getattr(fn, "__name__", None) == name and getattr(fn, "__self__", None) is recorder.service
                    for fn in seen), name
+
+
+@pytest.mark.asyncio
+async def test_title_after_stop_names_an_untitled_recording(monkeypatch) -> None:
+    from nexus import recorder_api
+
+    class Service:
+        def __init__(self) -> None:
+            self.titles: list[str] = []
+            self.scheduler = None
+            self.store = object()
+
+        def get(self, recording_id: str) -> dict[str, Any]:
+            return {"id": recording_id, "title": None, "transcription_state": "complete"}
+
+        def set_title(self, recording_id: str, title: str) -> None:
+            self.titles.append(title)
+
+    class Host:
+        def __init__(self) -> None:
+            self.service = Service()
+
+        async def call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+            return fn(*args, **kwargs)
+
+    def page(_store: Any, _rid: str, after: int, _limit: int) -> dict[str, Any]:
+        if after >= 0:
+            return {"segments": [], "next_after": None}
+        return {"segments": [{"status": "final", "text": "plan the launch"},
+                             {"status": "provisional", "text": "ignored"}], "next_after": 1}
+
+    monkeypatch.setattr(recorder_api, "_read_transcript_page", page)
+    seen: list[str] = []
+
+    async def titler(text: str) -> str:
+        seen.append(text)
+        return "Launch Plan"
+
+    host = Host()
+    await recorder_api._title_after_stop(host, "r1", titler)
+    assert seen == ["plan the launch"] and host.service.titles == ["Launch Plan"]

@@ -38,6 +38,44 @@ from .types import (
 )
 
 REQUEST_BYTE_LIMIT = 128000000
+COMPATIBILITY_INSTRUCTION = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def compatibility_prompt(instructions: str) -> str:
+    return COMPATIBILITY_INSTRUCTION + ("\n\n" + instructions if instructions else "")
+
+
+async def http_error(response: httpx.Response, *, origin: str) -> ProviderError:
+    descriptions = {
+        400: "invalid request",
+        401: "authentication failed; sign in to Claude Direct again",
+        403: "access denied",
+        404: "model or endpoint not available",
+        413: "request too large; no context was removed",
+        429: "rate limit reached; retry later",
+        500: "Anthropic service error",
+        529: "Anthropic service overloaded; retry later",
+    }
+    description = descriptions.get(response.status_code, "request rejected")
+    raw = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(raw) + len(chunk) > 65536:
+            break
+        raw.extend(chunk)
+    else:
+        try:
+            data = json.loads(raw)
+            error = data.get("error") if isinstance(data, dict) else None
+            kind = error.get("type") if isinstance(error, dict) else None
+            # Only known error types are safe: service messages can echo credentials or context.
+            if kind in {"invalid_request_error", "authentication_error", "permission_error", "not_found_error",
+                        "request_too_large", "rate_limit_error", "api_error", "overloaded_error"}:
+                description += f" ({kind})"
+        except (ValueError, TypeError):
+            pass
+    return ProviderError(f"{origin}: HTTP {response.status_code}; {description}",
+                         status=response.status_code, phase="response",
+                         retry_after=retry_after_seconds(response.headers.get("retry-after")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +207,9 @@ def build_body(req: Request, *, origin: str, max_tokens: int | None = None, cach
         body["system"] = [{"type": "text", "text": text} for text in
                           (req.instructions[:boundary], req.instructions[boundary:]) if text]
         system_anchor = 0 if boundary else None
+    body.setdefault("system", []).insert(0, {"type": "text", "text": COMPATIBILITY_INSTRUCTION})
+    if isinstance(req, DirectRequest) and req.stable_system_chars is not None:
+        system_anchor = 1 if req.stable_system_chars else 0
     if req.tools:
         if any(t.parameters.get("type") != "object" for t in req.tools):
             raise ProviderError("claude-direct: tool schemas must have an object root")
@@ -467,10 +508,7 @@ class AnthropicProvider:
                                      **({"content": payload} if payload is not None else {"json": body})) as response:
                 yield WireResponse(response.status_code, redact_headers(dict(response.headers)))
                 if response.status_code != 200:
-                    # Error text can echo credentials; retain only status and retry timing.
-                    raise ProviderError(f"{self.name}: HTTP {response.status_code}; direct subscription requests may be unsupported",
-                                        status=response.status_code, phase="response",
-                                        retry_after=retry_after_seconds(response.headers.get("retry-after")))
+                    raise await http_error(response, origin=self.name)
                 if not body["stream"]:
                     raw = bytearray()
                     async for chunk in response.aiter_bytes():

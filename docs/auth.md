@@ -189,6 +189,9 @@ feature betas are attached by the Messages adapter). Disconnect removes a Nexus-
 credentials it removes only the direct opt-in marker, without invoking CLI logout or altering the CLI profile.
 An environment credential requires unsetting
 the variable; disconnect reports that rather than logging out the CLI. The existing `claude` mode is unchanged.
+The Messages adapter prepends a user-approved, visible Claude Code compatibility instruction; auth headers and
+credential ownership remain Nexus's. No CLI runtime/user-agent or billing fingerprint is forged. See
+[LLM providers](llm-providers.md#claude-direct-experimental).
 
 Live probes accept `NEXUS_CLAUDE_DIRECT_AUTH_HOME` pointing to a separate Nexus-owned scratch login so each test's
 temporary state home does not hide that login. Never copy CLI refresh tokens into this store. Run with explicit

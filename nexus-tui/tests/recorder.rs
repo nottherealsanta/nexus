@@ -512,7 +512,7 @@ fn opening_never_creates_a_recording_or_opens_the_microphone() {
 }
 
 #[test]
-fn header_order_is_recorder_then_bell_then_manager() {
+fn header_order_is_bell_then_manager_then_recorder() {
     let mut a = app();
     a.state.config = Some(json!({"values": {"manager": {"enabled": true}}}));
     a.ui.alerts
@@ -521,8 +521,8 @@ fn header_order_is_recorder_then_bell_then_manager() {
     let recorder = a.hits.rect_of(&Target::Recorder).expect("recorder entry");
     let bell = a.hits.rect_of(&Target::Notifications).expect("bell");
     let manager = a.hits.rect_of(&Target::ManagerSession).expect("manager");
-    assert!(recorder.right() <= bell.x, "{recorder:?} {bell:?}");
     assert!(bell.right() <= manager.x, "{bell:?} {manager:?}");
+    assert!(manager.right() <= recorder.x, "{manager:?} {recorder:?}");
 }
 
 #[test]

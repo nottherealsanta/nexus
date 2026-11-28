@@ -218,7 +218,7 @@ Settings. browser-use's other tools (`browser_login` for its cloud, and
 | Tool | Arguments | Effect |
 | --- | --- | --- |
 | `browser_exec` | `code` | Run Python that drives the browser (`new_tab`, `goto_url`, `page_info`, `click_at_xy`, `type_text`, `js`, `cdp`, …); the namespace persists |
-| `browser_screenshot` | `full?`, `max_dim?` | The current page as an image (saved as an artifact and sent to the model) |
+| `browser_screenshot` | `full?`, `max_dim?` | The current page as an image (saved as an artifact and sent to the model). No side exceeds 1800 px: `max_dim` defaults to 1800 and larger values are clamped, because Anthropic rejects images over 2000 px once a request has more than 20 |
 
 - **Which browser.** By default, browser-use's own Chromium on a temporary profile
   (`browser-use --mcp`). It never attaches your Chrome, whatever Chrome's settings.

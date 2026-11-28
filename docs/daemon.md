@@ -190,7 +190,7 @@ metadata, so release and development versions follow the package version.
 ## Model selection
 
 Nexus has no default model. It remembers the user's selections in the `preference` table: `model.last` (the last model
-selected anywhere) and `model.agent.<project>.<agent>` (the last selected for that agent in that project). A selection
+selected anywhere) and `model.agent.<agent>` (the last selected for that agent in any project; likewise `effort.last` and `effort.agent.<agent>` for the reasoning effort). A selection
 is a model chosen with `POST /api/session` (`model`), `POST /api/session/{id}/model` or `PATCH` on a root session; a
 subagent's model, a handoff continuation and an inherited model are not selections.
 
@@ -198,12 +198,12 @@ A new root session resolves its model in this order and **stores** it, so the se
 
 1. the `model` in the request;
 2. the agent's own `model` (kept as `model_source: "agent"` until the session switches away from that agent);
-3. the model last selected for this agent in this project;
+3. the model last selected for this agent, in any project;
 4. the model last selected anywhere;
 5. none: the session is created with `model: ""`, and `POST .../prompt` and `.../continue` return 400
    "no model selected; choose one first".
 
-`GET /api/model/last?project=&agent=` returns steps 3 to 5 for a draft. Nothing replaces a remembered model that has become unavailable (a
+`GET /api/model/last?agent=` returns steps 3 to 5 for a draft. Nothing replaces a remembered model that has become unavailable (a
 provider signed out, a model gone): clients show the state and ask for another choice.
 
 Switching agents never changes a session's model. A session that was running its agent's pinned model stores it first.

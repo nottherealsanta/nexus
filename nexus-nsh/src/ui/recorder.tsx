@@ -746,7 +746,7 @@ function RecorderHeaderLabel() {
   );
 }
 
-/** The header entry, left of Notifications. Desktop/web only; the phone shell has no header. */
+/** The header entry, beside the right sidebar toggle (right of Manager). Desktop/web only; the phone shell has no header. */
 export function RecorderHeaderButton(p: { onPress: () => void }) {
   const view = () => recorderViewNow();
   return (

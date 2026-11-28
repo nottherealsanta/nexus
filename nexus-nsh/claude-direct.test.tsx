@@ -1,5 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import scenario from "../interface/scenarios/claude-direct.json";
+import { startingSections } from "./src/ui/newsession";
 
 const project = { id: "prj_direct", path: "/work/demo", name: "demo", created: 1, updated: 2, revision: 1 };
 const network = {
@@ -18,9 +19,17 @@ const network = {
 };
 
 describe("Claude direct", () => {
+  test("compatibility instruction is visible in the system prompt detail", () => {
+    const system = startingSections(scenario.starting, []).sections[0];
+    expect(system.detail).toContain("You are Claude Code, Anthropic's official CLI for Claude.");
+    expect(system.detail).toContain("You are an AI agent running in Nexus.");
+  });
   test("shared provider row and connection note remain distinct from SDK mode", async () => {
     const app = await open("./App.tsx", { network, width: 1280, height: 768 });
     await app.waitFor("id:header");
+    await app.waitFor("id:composer-model");
+    expect(app.texts().join("\n")).toContain("Claude Haiku 4.5");
+    expect(app.texts().join("\n")).not.toContain("Direct · Claude Haiku");
     await app.keyboard.press("mod+,");
     await app.waitFor("id:settings");
     await app.press("id:section-providers");

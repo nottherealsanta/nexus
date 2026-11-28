@@ -1287,7 +1287,7 @@ fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() 
         "AGENTS.md ~200",
         "Tools [3] ~14",
         "Skills [0]  none",
-        "MCP [0]  none",
+        "MCP [0]",
         "total  ~1,020 tok",
         "of the window",
     ] {
@@ -2027,7 +2027,7 @@ fn reasoning_rows_follow_d07() {
     assert_eq!(line_text(&t.lines[at]), "   ◇ Thought");
     assert_eq!(
         line_text(&t.lines[at + 1]),
-        "     │ Looking for where the manifest is parsed."
+        "       Looking for where the manifest is parsed."
     );
     // The italic preview is muted.
     let preview = &build(&a, &a.theme, 0, 100);

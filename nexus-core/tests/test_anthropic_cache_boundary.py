@@ -1,6 +1,6 @@
 import pytest
 
-from nexus.llmhub.anthropic import DirectRequest, build_body
+from nexus.llmhub.anthropic import COMPATIBILITY_INSTRUCTION, DirectRequest, build_body
 from nexus.llmhub.types import Message, ProviderError, Text, ToolSpec
 
 
@@ -14,10 +14,10 @@ def body(instructions, boundary, *, retention="long"):
 def test_volatile_suffix_changes_do_not_change_stable_system_cache_block():
     first = body("stable\nvolatile A", 7)
     second = body("stable\nvolatile B", 7)
-    assert first["system"][0] == second["system"][0] == {
+    assert first["system"][1] == second["system"][1] == {
         "type": "text", "text": "stable\n", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
-    assert "cache_control" not in first["system"][1]
-    assert "".join(block["text"] for block in first["system"]) == "stable\nvolatile A"
+    assert "cache_control" not in first["system"][2]
+    assert "".join(block["text"] for block in first["system"][1:]) == "stable\nvolatile A"
     assert sum("cache_control" in block for group in (first["system"], first["tools"],
         *(m["content"] for m in first["messages"])) for block in group) <= 4
 
@@ -25,14 +25,14 @@ def test_volatile_suffix_changes_do_not_change_stable_system_cache_block():
 @pytest.mark.parametrize("boundary", [0, 3, None])
 def test_edge_boundaries_preserve_all_instruction_text(boundary):
     result = body("abc", boundary)
-    assert "".join(block["text"] for block in result["system"]) == "abc"
-    assert len(result["system"]) == 1
-    assert ("cache_control" in result["system"][0]) == (boundary != 0)
+    assert "".join(block["text"] for block in result["system"][1:]) == "abc"
+    assert len(result["system"]) == 2
+    assert "cache_control" in result["system"][0 if boundary == 0 else 1]
 
 
 def test_boundary_counts_unicode_characters_and_disabled_cache_stays_disabled():
     result = body("こんにちは suffix", 5, retention="none")
-    assert [block["text"] for block in result["system"]] == ["こんにちは", " suffix"]
+    assert [block["text"] for block in result["system"]] == [COMPATIBILITY_INSTRUCTION, "こんにちは", " suffix"]
     assert all("cache_control" not in block for block in result["system"])
 
 

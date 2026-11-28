@@ -4,8 +4,8 @@
 mod common;
 
 use common::*;
-use nexus_tui::app::{App, Effect};
 use nexus_tui::actions::{ActionDone, ApiCall, Done};
+use nexus_tui::app::{App, Effect};
 use nexus_tui::sync::{Command as SyncCommand, SyncMsg};
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::{OverlayKind, PaletteMode, Target, View};
@@ -350,7 +350,10 @@ fn the_search_step_follows_the_agents_step_and_starts_search_in_the_background()
     let shown = text(&mut a);
     assert!(shown.contains("Web search"), "{shown}");
     assert!(shown.contains("SearXNG"), "{shown}");
-    assert!(shown.contains("on the machine running Nexus Core"), "{shown}");
+    assert!(
+        shown.contains("on the machine running Nexus Core"),
+        "{shown}"
+    );
     // Entering the step asks Core for the current state; it does not start anything blind.
     let status_call = api_calls(&a)
         .into_iter()
@@ -375,7 +378,10 @@ fn the_search_step_follows_the_agents_step_and_starts_search_in_the_background()
     assert!(shown.contains("starting…"), "{shown}");
     assert!(shown.contains("runtime docker"), "{shown}");
     assert!(
-        a.ui.alerts.toasts.iter().any(|t| t.text.contains("is starting")),
+        a.ui.alerts
+            .toasts
+            .iter()
+            .any(|t| t.text.contains("is starting")),
         "the async start reports progress"
     );
     // The poll follows it to running.

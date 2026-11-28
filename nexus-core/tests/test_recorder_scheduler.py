@@ -417,8 +417,10 @@ async def test_feed_oserror_retries_without_new_closes(tmp_path, monkeypatch):
         await harness.start()
         await harness.upload(utterance(9_600))
         # The first closed range hits a raw OSError. No new range or stop follows; the deferred record
-        # must still be flushed by the retry path alone, without a leaked exception.
-        await harness.wait(lambda: (harness.snapshot() or {}).get("pending_finals", 0) >= 1)
+        # must still be flushed by the retry path alone, without a leaked exception. A fast retry can
+        # flush it before the first poll, so a recorded final settles this as well as a pending one.
+        await harness.wait(lambda: (snap := harness.snapshot() or {}).get("pending_finals", 0) >= 1
+                           or snap.get("counts", {}).get("final", 0) >= 1)
         assert read_all(harness)
         await harness.stop(9_600)
         await wait_state(harness, "complete", timeout=8.0)
@@ -821,7 +823,9 @@ async def test_restart_uses_the_sealed_checkpoint(tmp_path):
     engine = FakeEngine()
     engine.release = asyncio.Event()
 
-    first = Harness(tmp_path / "checkpoint", engine=engine)
+    # No periodic checkpoint: only close() may write it.
+    first = Harness(tmp_path / "checkpoint", engine=engine,
+                    limits=SchedulerLimits(checkpoint_interval=float("inf")))
     try:
         await first.start()
         await first.upload(audio)

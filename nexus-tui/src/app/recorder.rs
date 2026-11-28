@@ -744,12 +744,11 @@ impl App {
                     self.ui.recorder.owner = Some(owner);
                 }
                 for warning in warnings {
-                    let warning = match warning
-                        .strip_prefix(crate::recorder_driver::LOW_DISK_PREFIX)
-                    {
-                        Some(t) => self.manifest.ui_text("recorder.low_disk", &[("t", t)]),
-                        None => warning,
-                    };
+                    let warning =
+                        match warning.strip_prefix(crate::recorder_driver::LOW_DISK_PREFIX) {
+                            Some(t) => self.manifest.ui_text("recorder.low_disk", &[("t", t)]),
+                            None => warning,
+                        };
                     self.toast(Level::Warning, warning);
                 }
                 self.recorder_sync_focus();

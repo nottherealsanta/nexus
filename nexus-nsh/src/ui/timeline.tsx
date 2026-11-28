@@ -166,6 +166,8 @@ const selectedTurn = signal<Record<string, string | null>>({});
 /** A phone's user message whose time, number, copy and fold controls a long press revealed. */
 const revealedBand = signal<string | null>(null);
 const LIST_PAD = 12; // the list's `py-3`
+/** Blank room under a running timeline: rows collapsing at the end (a finished thought) leave the view where it is. */
+const STREAM_SLACK = 200;
 const ROW_ESTIMATE = 72; // the list's estimatedItemSize, for rows not laid out yet
 // The timeline's own scroll bar (Settings › Scroll bar): a quiet thumb shown
 // while scrolling, then dimmed and hidden. The TUI draws the same cue in its
@@ -1580,7 +1582,7 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
         class={`self-stretch flex-row items-center rounded-(--radius) -ml-1 pl-1 pr-4 ${hit("min-h-6")} hover:bg-accent ${FOCUS}`}>
         <View class={ACTIVITY_CHEVRON}><Icon name="diamond" size={activityIconSize("diamond")} class="tint-muted-foreground" /></View>
         <View class="flex-row flex-1 min-w-0 items-center gap-1.5">
-          <Text class={`${TS.base} text-muted-foreground`}>{roles.reasoning.label}</Text>
+          <Text class={`${TS.base} text-muted-foreground`}>{x().running ? "Thinking" : roles.reasoning.label}</Text>
           <If when={!x().open && !!preview()}>
             {() => <>
               <Text class={`${TS.base} text-muted-foreground`}>·</Text>
@@ -1591,7 +1593,6 @@ function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }>; nested?
       </Button>
       <If when={x().open && !x().encrypted}>
         <View class="relative pl-4 pr-4 py-1">
-          <View class="absolute left-[7px] top-0 bottom-0 w-px bg-border-strong" />
           <If when={hidden() > 0}>
             {() => <Text class={META}>{`… ${hidden()} earlier lines`}</Text>}
           </If>
@@ -1778,6 +1779,7 @@ export function Timeline() {
   const slots = listSlots<Row>();
   const listRows = computed(() => slots(withPending()));
   const below = computed(() => newBelow(rows(), viewId()));
+  const slack = () => viewed()?.status === "busy" ? STREAM_SLACK : 0;
   // Follow state, as in the TUI: an open session and the jump follow the end, any scroll up leaves it, and only
   // scrolling back to the end returns to it. The list's `autoscrollToBottomThreshold` is not used: it pulled a reader
   // within its distance of the end back down whenever content grew, including rows measured above the viewport.
@@ -1799,7 +1801,15 @@ export function Timeline() {
     if (!following || endQueued) return;
     const sid = viewId();
     endQueued = true;
-    setTimeout(() => { endQueued = false; if (mayFollowQueued(sid, viewId(), following)) toEnd(); }, 0);
+    setTimeout(() => {
+      endQueued = false;
+      if (!mayFollowQueued(sid, viewId(), following)) return;
+      if (!slack()) return toEnd();
+      // While a turn runs the list ends in blank slack: follow only once the real end passes the view's bottom, so a
+      // thought or tool group collapsing does not pull the whole timeline down.
+      const target = rowGeometry({ rows: rows(), heights: rowHeights(), sid }).total + 24 - viewHOf(sid);
+      if (target > lastY + 0.5) try { ref?.scrollToOffset({ offset: target, animated: false }); } catch {}
+    }, 0);
   };
   jump.fn = () => { firstHold = false; follow(true); toEnd(); };
   const selectTurn = (key: string) => {
@@ -1963,7 +1973,7 @@ export function Timeline() {
     <View class="relative flex-1 min-h-0" testID="timeline">
       <If when={rows().length > 0} else={<EmptyTimeline />}>
         <List
-          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 }} scrollbar={false}
+          ref={(n: any) => (ref = n)} each={listRows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentStyle={{ paddingTop: 12, paddingBottom: 12 + slack() }} scrollbar={false}
           onViewableItemsChange={({ viewableItems }) => {
             const first = viewableItems.reduce<typeof viewableItems[number] | null>((best, item) => !best || item.index < best.index ? item : best, null);
             const sid = viewId();

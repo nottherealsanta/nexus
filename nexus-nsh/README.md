@@ -14,9 +14,11 @@ hand.
 
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
-Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with `Direct ·` model names,
+Core's experimental `claude-direct` provider appears beside the Agent SDK provider, with unprefixed model names,
 model-specific effort choices, regular/1-year browser sign-in, read-only signed-in CLI profiles and direct subscription usage. Connection notes preserve line
 breaks, matching the TUI. Shared fixture: `../interface/scenarios/claude-direct.json`.
+Direct's user-approved Claude Code compatibility instruction is included verbatim in System prompt details;
+the frozen agent instructions follow unchanged, matching the TUI.
 
 `/btw <question>` opens a live read-only side-question modal, including on mobile and while the parent is busy.
 It shares the parent's settled cached prefix but never changes its context. Compact tool rows and a `N/10`
@@ -683,8 +685,8 @@ No global shortcut is registered.
 ## Standalone recorder
 
 The recorder (plan 54) is a desktop and web feature, separate from dictation and
-the Manager. Its `Record` entry sits in the header left of Notifications and
-Manager; the phone shell has no header or recorder modal, and the recorder
+the Manager. Its `Record` entry sits in the header right of Notifications and
+Manager, against the right toggle; the phone shell has no header or recorder modal, and the recorder
 commands are desktop-only. Opening the modal never opens the microphone: an
 explicit `Start recording` creates the Core recording and then starts capture.
 The web client uses `getUserMedia` (AudioWorklet, with a ScriptProcessor

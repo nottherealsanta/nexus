@@ -88,6 +88,30 @@ async def _context(client, session_id):
     return (await client.get(f"/api/session/{session_id}/context")).json()
 
 
+async def test_direct_compatibility_instruction_matches_visible_context_without_mutating_snapshot(env, monkeypatch):
+    from nexus.llmhub.anthropic import COMPATIBILITY_INSTRUCTION, AnthropicProvider
+
+    rt, client, _, workspace, store = env
+    provider = AnthropicProvider(None)
+    monkeypatch.setattr(runtime_module, "provider_for", lambda ref: (provider, ref.partition("/")[2]))
+    session = (await client.post("/api/session", json={"directory": str(workspace), "model": "claude-direct/claude-sonnet-5-5"})).json()
+    sid = session["id"]
+    frozen = store.snapshot(sid)["system_prompt"]
+    body = await _context(client, sid)
+    expected = "\n\n".join(block["text"] for block in body["system"])
+    assert expected.startswith(COMPATIBILITY_INSTRUCTION + "\n\n")
+    assert expected.endswith(frozen)
+    assert rt.snapshot_json(sid)["system_prompt"] == expected
+    assert rt.open_session(sid)["starting"]["system_prompt"] == expected
+    assert (await rt.open_session_async(sid))["starting"]["system_prompt"] == expected
+    draft = await rt.draft_context(rt.project(session["project_id"]), model=session["model"])
+    assert draft["details"]["system_prompt"] == "\n\n".join(block["text"] for block in draft["system"])
+    assert store.snapshot(sid)["system_prompt"] == frozen
+    await client.patch(f"/api/session/{sid}", json={"model": "scripted/m"})
+    assert rt.snapshot_json(sid)["system_prompt"] == frozen
+    await rt.shutdown()
+
+
 async def test_agent_changes_affect_new_sessions_only(env):
     rt, client, provider, workspace, _ = env
     files = workspace / ".agents" / "agents"

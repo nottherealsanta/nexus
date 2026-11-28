@@ -50,12 +50,18 @@ only. See [external-workers.md](external-workers.md).
 ### Claude direct (experimental)
 
 Select `claude-direct/<model>` (for example `claude-direct/claude-haiku-4-5`). Both desktop clients receive the same
-provider row and `Direct ·` model names from Core; the existing `claude` SDK mode is unchanged.
+provider row and unprefixed model names from Core; the `claude-direct` provider label identifies the transport.
+The existing `claude` SDK mode is unchanged.
 `llmhub/anthropic.py` sends the frozen system instructions, native user/assistant messages, native tool calls/results
-and base64 images, including tool-result images. Nexus owns the tool loop; no CLI prompt or hidden Claude Code system
-instruction is added. Text, tool arguments and any returned thinking stream live. Same-origin signed thinking blocks
+and base64 images, including tool-result images. Nexus owns the tool loop. Direct OAuth requests prepend the
+compatibility block `You are Claude Code, Anthropic's official CLI for Claude.` (user approved 2026-11-28), followed
+by the unchanged frozen instructions. The exact added text is included in both clients' System prompt detail,
+draft context and session-open/snapshot responses; stored agent snapshots are not rewritten. No billing fingerprint,
+CLI runtime headers, tool renaming or Claude Code process is added. Text, tool arguments and any returned thinking stream live. Same-origin signed thinking blocks
 are retained for replay with generating-model provenance; foreign-model thinking is omitted. Cache reads and cache creation count toward total input usage.
-Wire requests redact credentials and HTTP errors retain status/retry timing rather than possibly echoed secrets.
+Wire requests redact credentials and HTTP errors retain status/retry timing and an allowlisted error type rather
+than possibly echoed secrets. HTTP 429 is reported as a rate limit, not evidence that direct mode is unsupported;
+service messages and raw error bodies are never retained, and error-body parsing is bounded to 64 KiB.
 Incomplete streams fail, with no provider fallback. Tool schemas require an object root; unsupported root
 `oneOf`/`anyOf`/`allOf` constraints move into the schema description, with object branches folded into usable property
 declarations. Recursive wire-only normalization retains supported structural keywords and moves unsupported constraints
@@ -116,9 +122,10 @@ Direct-only `anthropic.DirectRequest.cache_retention` (`none`, `short`, `long`) 
 option, not yet a session setting. Extended-TTL headers are derived from the final body's actual cache controls.
 `DirectRequest.stable_system_chars` optionally splits the existing instruction string at an explicit Unicode
 character boundary and anchors system caching on the stable prefix rather than a volatile suffix. Concatenating
-the wire blocks reproduces the original instructions exactly; nothing is reordered or inferred from markup.
-A zero boundary means all system text is volatile (no system breakpoint); omitting it keeps the current single
-frozen block. This is an offline-tested provider primitive, not automatic session context scheduling.
+the blocks after the compatibility instruction reproduces the original instructions exactly; nothing is reordered
+or inferred from markup. A zero boundary means all caller system text is volatile: only the fixed compatibility
+instruction can carry the system breakpoint. Omitting the boundary keeps the caller's single frozen block.
+This is an offline-tested provider primitive, not automatic session context scheduling.
 `DirectRequest(prewarm=True)` explicitly makes one zero-output, non-streaming cache request, not a hidden extra
 inference call. It preserves the normal request body except `max_tokens: 0` and `stream: false`, emits the request,
 response and complete raw JSON response as wire events, and accounts for all returned input/cache usage.
@@ -134,14 +141,19 @@ is stored or used for that grant. Fresh long-lived authorization is not live-ver
 Direct subscription limits use the same credential source as inference, without a CLI fallback. Context estimates
 price native image bytes as images, not base64 text, and exclude generation/effort options.
 
-It uses Nexus's own user-agent, not OMP's Claude Code identity spoofing. Direct subscription use is experimental,
+It uses Nexus's own user-agent; only OMP's compatibility system instruction is adopted, not its HTTP/runtime or billing
+fingerprints. This instruction identifies the model as Claude Code even though Nexus owns the session; the user
+approved that compatibility tradeoff after successful live comparisons. Direct subscription use is experimental,
 not an official supported integration or an undetectability/terms-compliance guarantee.
 Auth restrictions: [auth.md](auth.md#claude-direct-experimental).
 
 Live Haiku checks on 2026-11-28 passed native tool roundtrip, thinking and signed replay, user/tool images and
 an actual cache hit. Fresh Nexus browser authorization, owned-token refresh and a repeat of all five Haiku probes
 passed in an isolated scratch home, including the recursively normalized default tool roster and an eager tool probe.
-Adaptive models, prefix binding, long contexts and future service compatibility are not live-verified.
+Sonnet 5.5 at medium effort passed a native streaming Nexus `read` tool loop on 2026-11-28 (two HTTP 200 requests)
+after the compatibility instruction was added. The original HTTP 429 was reproduced without it; the instruction alone
+succeeded with Nexus headers and the legacy API URL/version. Prefix-binding with actual signed reasoning,
+long contexts and future service compatibility remain unverified.
 
 ### Quirks per provider
 

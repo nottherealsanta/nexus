@@ -25,8 +25,9 @@ let legacySender: Sender | null = null;
 let lastRows = 24, lastCols = 80;
 let refreshGeneration = 0;
 let terminalsLoaded = false;
-/** True once the first terminal list arrived: until then a missing terminal proves nothing. */
-export const terminalsKnown = () => terminalsLoaded;
+let terminalsOf: string | null = null;
+/** True once the current project's terminal list arrived: until then a missing terminal proves nothing. */
+export const terminalsKnown = () => terminalsLoaded && terminalsOf === currentProject();
 const validDimensions = (r: unknown, c: unknown) => Number.isInteger(r) && Number.isInteger(c) && Number(r) >= 1 && Number(r) <= 200 && Number(c) >= 1 && Number(c) <= 500;
 const changeItem = (item: TerminalResource) => { refreshGeneration++; terminalItems.update(items => items.map(t => t.id === item.id ? item : t)); };
 const message = (e: unknown) => e instanceof Error ? e.message : String(e);
@@ -91,7 +92,9 @@ export function setTerminalScreenFocus(id: string, focused: boolean) { ctl(id).p
 export async function refreshTerminals() {
   const project = currentProject(), request = ++refreshGeneration;
   if (!project) return;
-  try { const items = await terminals.list(project); if (request === refreshGeneration && project === currentProject()) { terminalItems.set(items.filter(item => item.status !== "closed")); terminalsLoaded = true; } }
+  // Another project's terminals are not this one's: forget them until its own list arrives.
+  if (terminalsOf !== project) { terminalsOf = null; if (terminalItems().length) terminalItems.set([]); }
+  try { const items = await terminals.list(project); if (request === refreshGeneration && project === currentProject()) { terminalItems.set(items.filter(item => item.status !== "closed")); terminalsLoaded = true; terminalsOf = project; } }
   catch (e) { if (request === refreshGeneration) terminalError.set(message(e)); }
 }
 /** Detach every terminal and clear the selection (a client going away, and the tests' cleanup). */

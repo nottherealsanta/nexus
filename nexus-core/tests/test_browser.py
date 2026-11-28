@@ -214,3 +214,24 @@ async def test_api_and_doctor_report_the_requirements(env, monkeypatch):
     monkeypatch.setattr(browser_control, "requirements", lambda mine: {"ok": False, "mode": "own", "problems": ["no uvx"]})
     assert doctor.check_browser() == {"name": "browser", "status": "warn", "detail": "no uvx"}
     await rt.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("given, sent", [({}, 1800), ({"max_dim": 5000}, 1800), ({"max_dim": 0}, 1800),
+                                         ({"max_dim": 900}, 900), ({"full": True}, 1800)])
+async def test_screenshots_never_exceed_the_image_size_limit(given, sent):
+    seen = []
+
+    class Conn:
+        state = "connected"
+
+        async def call(self, tool, arguments):
+            seen.append(arguments)
+            return "ok"
+
+    service = browser_control.BrowserService(lambda *a: None, lambda: False)
+    service.connections["s"] = Conn()
+    service.flags["s"] = browser_control.OWN_FLAG
+    await service.call("s", "browser_screenshot", given)
+    assert seen[0]["max_dim"] == sent
+    assert {k: v for k, v in seen[0].items() if k != "max_dim"} == {k: v for k, v in given.items() if k != "max_dim"}

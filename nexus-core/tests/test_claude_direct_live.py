@@ -39,6 +39,22 @@ def auth(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.environ.get("NEXUS_CLAUDE_DIRECT_SONNET_LIVE") != "1", reason="Sonnet quota requires separate explicit opt-in")
+async def test_sonnet_medium_native_nexus_read_loop(tmp_path, auth):
+    from nexus.loop import Agent, ToolEnd, TurnEnd
+
+    (tmp_path / "verification.txt").write_text("NEXUS_SONNET_DIRECT_OK")
+    agent = Agent(AnthropicProvider(auth, max_tokens=2048), model="claude-sonnet-5-5", workspace=tmp_path,
+                  instructions="Read verification.txt using read. Reply only with its exact contents. Do nothing else.",
+                  reasoning_effort="medium", max_steps=3)
+    events = [e async for e in agent.turn("Verify the file now.")]
+    assert any(isinstance(e, ToolEnd) and e.call.name == "read" and not e.result.is_error for e in events)
+    assert isinstance(events[-1], TurnEnd) and events[-1].stop == "end_turn"
+    assert "NEXUS_SONNET_DIRECT_OK" in "".join(p.text for m in agent.messages if m.role == "assistant"
+                                            for p in m.parts if isinstance(p, Text))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["eager", "strict"])
 async def test_haiku_native_tool_roundtrip(tmp_path, monkeypatch, auth, mode):
     monkeypatch.setenv("NEXUS10_HOME", str(tmp_path))

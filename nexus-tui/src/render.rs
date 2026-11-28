@@ -1180,7 +1180,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         hits.add(g.manager, Target::ManagerSession);
     }
 
-    // The recorder entry, left of the bell. `●` dots stay red while text is primary.
+    // The recorder entry, left of the toggle, right of the Manager button. `●` dots stay red while text is primary.
     if g.recorder.width > 0 {
         let (wide, compact, _) = cx.app.recorder_header_labels();
         let label = if width(&wide) as u16 + 2 == g.recorder.width {
@@ -4049,7 +4049,7 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     for title in ["Skills", "MCP"] {
         sections.push(CtxSection {
             title: title.into(),
-            tokens: None,
+            tokens: part(if title == "Skills" { "skills" } else { "mcp" }),
             meta: a.context_inventory_meta(title),
             body: CtxBody::Inventory(a.context_items_for(title)),
         });
@@ -4092,12 +4092,13 @@ fn preview_rows(
                 paint::CtxRole::Meta,
             )]);
         }
-    } else if let Some(offer) = a.draft_worktree_offer() {
+    } else if a.draft_worktree_offer().is_some() {
         rows.push(Vec::new());
         rows.extend(paint::worktree_rows(
             a.context_items().len(),
             a.ui.draft.worktree,
-            offer["changes"].as_u64().unwrap_or(0),
+            a.draft_context()
+                .and_then(|d| d["parts"]["worktree"].as_u64()),
             layout,
         ));
     }
@@ -4253,9 +4254,10 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
             };
             let bg = if on_cell { RAISED } else { surface };
             let mut style = match role {
-                paint::CtxRole::Mark | paint::CtxRole::Meta | paint::CtxRole::Preview => {
-                    cx.st(MUTED, surface)
-                }
+                paint::CtxRole::Mark
+                | paint::CtxRole::Meta
+                | paint::CtxRole::Preview
+                | paint::CtxRole::Detail => cx.st(MUTED, surface),
                 paint::CtxRole::Title | paint::CtxRole::TotalLabel => bold(SECONDARY),
                 paint::CtxRole::Tokens => cx.st(SECONDARY, surface),
                 paint::CtxRole::ToggleOn(_) => cx.st(SECONDARY, bg),
@@ -4275,6 +4277,37 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMa
             if counts && cx.hovered(Rect::new(start, y, x - start, 1)) {
                 tip = Some((start, y));
             }
+        }
+        let mut detail_x = r.x;
+        for (text, role) in row {
+            if *role == paint::CtxRole::Detail {
+                let rect = Rect::new(detail_x, y, (width(text) + 1) as u16, 1);
+                if cx.hovered(rect) {
+                    clear(buf, rect, cx.st(PRIMARY, RAISED));
+                    put(
+                        buf,
+                        rect.x,
+                        rect.y,
+                        text,
+                        cx.st(PRIMARY, RAISED),
+                        rect.width,
+                    );
+                }
+                let notice = a
+                    .draft_worktree_offer()
+                    .and_then(|offer| offer["notice"].as_str())
+                    .unwrap_or_default();
+                hits.add(
+                    rect,
+                    Target::ContextPreview {
+                        title: "Worktree".to_owned(),
+                        text: format!(
+                            "Turning this on asks the agent to start in a new worktree. Nexus adds this notice to the context before your first message:\n\n{notice}"
+                        ),
+                    },
+                );
+            }
+            detail_x += width(text) as u16;
         }
         for (index, rect, name) in &cells {
             if !fixed {
@@ -4506,7 +4539,26 @@ fn draw_timeline(
         return (0, r.height as usize, None);
     }
     let h = r.height as usize;
-    let total = lines.len();
+    let mut total = lines.len();
+    {
+        let id = a.viewed_id();
+        let sid = id.map_or(0, |id| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            id.hash(&mut hasher);
+            hasher.finish()
+        });
+        let running = id.is_some_and(|id| a.is_busy(id)) && a.ui.scroll.follow;
+        let (peak_sid, peak) = a.ui.timeline_peak.get();
+        let peak = if running && peak_sid == sid {
+            peak.max(total)
+        } else {
+            total
+        };
+        a.ui.timeline_peak
+            .set((sid, if running { peak } else { 0 }));
+        total = peak;
+    }
     let max_top = total.saturating_sub(h);
     let top = if a.ui.scroll.follow {
         max_top
@@ -4919,7 +4971,11 @@ fn draw_turn_rail(
                     .join("\n")
             })
             .unwrap_or_default();
-        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        let first = text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim();
         let n = b.turn.map_or(0, |t| t + 1);
         let label = format!("#{n}{}{first}", cx.sep());
         let label = truncate(&label, 48, cx.ell());
@@ -9973,9 +10029,23 @@ fn draw_recorder(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                 let selected = cx.app.ui.recorder.focus == format!("recent.{i}");
                 if selected {
                     let style = band(cx, buf, &m, y, "interactive.row_selected");
-                    put(buf, m.x, y, &truncate(row, m.w as usize, cx.ell()), style, m.w);
+                    put(
+                        buf,
+                        m.x,
+                        y,
+                        &truncate(row, m.w as usize, cx.ell()),
+                        style,
+                        m.w,
+                    );
                 } else {
-                    put(buf, m.x, y, &truncate(row, m.w as usize, cx.ell()), value, m.w);
+                    put(
+                        buf,
+                        m.x,
+                        y,
+                        &truncate(row, m.w as usize, cx.ell()),
+                        value,
+                        m.w,
+                    );
                 }
                 hits.add(Rect::new(m.x, y, m.w, 1), Target::RecorderRecent(i));
                 y += 1;
@@ -9984,29 +10054,47 @@ fn draw_recorder(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                 put(buf, m.x, y.max(m.body.y + 2), empty, muted, m.w);
             }
             if let Some(notice) = recent.notice.as_deref() {
-                put(
-                    buf,
-                    m.x,
-                    action_y.saturating_sub(1),
-                    notice,
-                    muted,
-                    m.w,
-                );
+                put(buf, m.x, action_y.saturating_sub(1), notice, muted, m.w);
             }
         }
     } else {
         let mut y = m.body.y;
         if let Some(source) = view.source.as_deref() {
-            put(buf, m.x, y, &truncate(source, m.w as usize, cx.ell()), muted, m.w);
+            put(
+                buf,
+                m.x,
+                y,
+                &truncate(source, m.w as usize, cx.ell()),
+                muted,
+                m.w,
+            );
             y += 1;
         }
         let label_w = 12.min(m.w);
-        status_line(cx, buf, &m, y, label_w, "Capture", view.capture.as_deref(), value);
+        status_line(
+            cx,
+            buf,
+            &m,
+            y,
+            label_w,
+            "Capture",
+            view.capture.as_deref(),
+            value,
+        );
         if let Some(level) = view.level {
             draw_level(cx, buf, &m, y, level);
         }
         y += 1;
-        status_line(cx, buf, &m, y, label_w, "Audio", view.audio.as_deref(), value);
+        status_line(
+            cx,
+            buf,
+            &m,
+            y,
+            label_w,
+            "Audio",
+            view.audio.as_deref(),
+            value,
+        );
         y += 1;
         if let Some(detail) = view.audio_detail.as_deref() {
             put(
@@ -10072,9 +10160,7 @@ fn draw_recorder(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             rule,
             m.w,
         );
-        let viewport = action_y
-            .saturating_sub(1)
-            .saturating_sub(transcript_top) as usize;
+        let viewport = action_y.saturating_sub(1).saturating_sub(transcript_top) as usize;
         let id = cx.app.ui.recorder.shown_id().unwrap_or_default();
         let back = cx
             .app
@@ -10135,10 +10221,7 @@ fn draw_recorder(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             }
         }
         if view.jump_live && viewport > 0 {
-            let chip = format!(
-                "[ {} ]",
-                cx.app.manifest.ui_text("recorder.jump_live", &[])
-            );
+            let chip = format!("[ {} ]", cx.app.manifest.ui_text("recorder.jump_live", &[]));
             let chip_w = width(&chip) as u16;
             let focused = cx.app.ui.recorder.focus == "jump_live";
             let style = if focused {
@@ -10224,7 +10307,10 @@ fn status_line(
 
 /// The compact 8-cell level meter; it is drawn only while this client records.
 fn draw_level(cx: &Cx, buf: &mut Buffer, m: &Modal, y: u16, level: f64) {
-    const CELLS: [&str; 8] = ["\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}", "\u{2588}"];
+    const CELLS: [&str; 8] = [
+        "\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}",
+        "\u{2588}",
+    ];
     const ASCII: [&str; 8] = [".", ":", "-", "=", "+", "*", "#", "%"];
     let glyphs = if cx.t.opts.ascii { &ASCII } else { &CELLS };
     let lit = (level.clamp(0.0, 1.0) * 8.0).ceil() as usize;
@@ -10248,14 +10334,8 @@ fn draw_recorder_dialog(
             cx.app.manifest.ui_text("recorder.quit.title", &[]),
             cx.app.manifest.ui_text("recorder.quit.body", &[]),
             vec![
-                (
-                    cx.app.manifest.ui_text("recorder.quit.confirm", &[]),
-                    true,
-                ),
-                (
-                    cx.app.manifest.ui_text("recorder.quit.cancel", &[]),
-                    false,
-                ),
+                (cx.app.manifest.ui_text("recorder.quit.confirm", &[]), true),
+                (cx.app.manifest.ui_text("recorder.quit.cancel", &[]), false),
             ],
             *button,
         ),
@@ -10314,7 +10394,11 @@ fn draw_recorder_dialog(
         cx,
         buf,
         &m,
-        &[("left/right", "choose"), ("enter", "confirm"), ("esc", "cancel")],
+        &[
+            ("left/right", "choose"),
+            ("enter", "confirm"),
+            ("esc", "cancel"),
+        ],
     );
 }
 

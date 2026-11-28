@@ -54,7 +54,7 @@ export function previewSections(i: {
   disabled_tools?: string[];
   file?: { path: string; bytes: number; line: string } | null;
   /** Core's answer for this draft: its counts replace the estimates. */
-  core?: { used: number; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: SkillEntry[]; mcp: McpEntry[] } | null;
+  core?: { used: number; parts: { instructions: number; tools: number; instruction_file: number; skills?: number; mcp?: number; worktree?: number }; tools: string[]; skills: SkillEntry[]; mcp: McpEntry[] } | null;
 }): { sections: CtxSection[]; total: number } {
   // The lists are Core's plan for this draft, never a client guess: empty until it answers.
   const off = i.disabled_tools ?? [];
@@ -76,7 +76,8 @@ export function previewSections(i: {
   ];
   sections.push(...inventorySections(
     sessionInventoryRows(i.core?.skills ?? [], i.core?.mcp ?? [], off),
-    i.core ? undefined : "loading…",
+    i.core ? undefined : "loading…", undefined,
+    i.core?.parts,
   ));
   // The instruction file is part of the system prompt: the total counts the prompt and the tool schemas.
   return { sections, total: i.core?.used ?? promptTokens + (toolTokens ?? 0) };
@@ -118,7 +119,7 @@ function entryOf(item: InventoryRow): ContextEntry {
   };
 }
 
-export function inventorySections(items: InventoryRow[], loading?: string, error?: string): CtxSection[] {
+export function inventorySections(items: InventoryRow[], loading?: string, error?: string, tokens?: { skills?: number; mcp?: number }): CtxSection[] {
   return (["skill", "mcp"] as const).map((kind) => {
     const rows = items.filter((item) => item.kind === kind);
     const title = kind === "skill" ? "Skills" : "MCP";
@@ -127,9 +128,9 @@ export function inventorySections(items: InventoryRow[], loading?: string, error
     const duplicates = new Set(rows.flatMap((item) => item.warnings?.filter((warning) => warning.includes("is defined in both")) ?? [])).size;
     const meta = loading ?? error ?? (duplicates
       ? `${duplicates} duplicate name${duplicates === 1 ? "" : "s"}; .mcp.json wins`
-      : rows.length === 0 ? "none" : off ? `${off} off` : "");
+      : rows.length === 0 ? (kind === "mcp" ? "" : "none") : off ? `${off} off` : "");
     return {
-      key: kind === "skill" ? "skills" : "mcp", title, count: loading || error ? undefined : rows.length, meta,
+      key: kind === "skill" ? "skills" : "mcp", title, tokens: tokens?.[kind === "skill" ? "skills" : "mcp"], count: loading || error ? undefined : rows.length, meta,
       entries: rows.map((item) => entryOf(item)),
       body: rows.length ? { kind: "inventory", items: rows } : { kind: "none" },
       detail: rows.length ? rows.map(itemDetail).join("\n\n") : error ?? (loading ? "Loading…" : `No ${noun} found.`),
@@ -192,7 +193,12 @@ export function startingSections(s: any, off: string[], inventory?: { skills?: S
       body: { kind: "none" }, detail: "Nothing here.",
     },
   ];
-  sections.push(...inventorySections(sessionInventoryRows(inventory?.skills ?? s.skills ?? [], inventory?.mcp ?? s.mcp ?? [], off)));
+  const listed = (...keys: string[]) => {
+    const found = keys.filter((k) => schemas[k]);
+    return found.length ? Math.ceil(Array.from(JSON.stringify(found.map((k) => [schemas[k].description, schemas[k].parameters]))).length / 4) : undefined;
+  };
+  sections.push(...inventorySections(sessionInventoryRows(inventory?.skills ?? s.skills ?? [], inventory?.mcp ?? s.mcp ?? [], off), undefined, undefined,
+    { skills: listed("skill"), mcp: listed("mcp_tool_search", "mcp_call") }));
   if (s.workspace?.active) sections.push({ key: "workspace", title: "Workspace tools", meta: "active", body: { kind: "none" }, detail: JSON.stringify(s.workspace, null, 2) });
   return { sections, total: sysTokens + toolTokens };
 }
@@ -468,7 +474,7 @@ export function ContextDetailModal() {
 
 /** The sections and the total as text (no bar). */
 /** The draft's worktree switch (plan 48): shown after the total when Core says the project is a Git checkout. */
-export type DraftWorktree = { on: boolean; changes: number; onToggle: () => void };
+export type DraftWorktree = { on: boolean; tokens?: number; notice?: string; onToggle: () => void };
 /** The fixed header's worktree line: requested, entered (with its branch) or, once a turn ended without the move, a warning. */
 export type WorktreeStatus = { text: string; warning: boolean };
 
@@ -513,9 +519,11 @@ export function ContextSections(p: { sections: CtxSection[]; total: number; esti
               <View class="w-5 items-center"><Text class={`text-[10px] leading-5 ${p.worktree?.on ? "text-muted-foreground" : "text-muted-foreground opacity-60"}`}>{p.worktree?.on ? "●" : "○"}</Text></View>
               <Text class={`${TS.base} ${p.worktree?.on ? "text-foreground-secondary" : "text-muted-foreground"}`}>Worktree</Text>
             </Button>
-            <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 ${TS.base} text-muted-foreground`}>ask the agent to start in a new worktree</Text>
+            <If when={!!p.worktree?.on && p.worktree?.tokens !== undefined}><Text class={`${TS.base} text-foreground-secondary tabular-nums`} testID="context-worktree-tokens">{`${p.estimated ? "~" : ""}${contextTokens(p.worktree?.tokens ?? 0)}`}</Text></If>
+            <Button onPress={() => detail.set({ key: "worktree", title: "Worktree", meta: "", body: { kind: "none" }, detail: `Turning this on asks the agent to start in a new worktree. Nexus adds this notice to the context before your first message:\n\n${p.worktree?.notice ?? ""}` })} accessibilityLabel="Worktree details" testID="context-worktree-info" class={`shrink-0 w-6 h-6 items-center justify-center rounded-(--radius) hover:bg-accent ${FOCUS}`}>
+              <Text class={`${TS.base} text-muted-foreground`}>›</Text>
+            </Button>
           </View>
-          <If when={(p.worktree?.changes ?? 0) > 0}><Text class={`pl-6 ${TS.base} text-muted-foreground`} testID="context-worktree-dirty">{`${p.worktree?.changes} uncommitted change${p.worktree?.changes === 1 ? " stays" : "s stay"} in the checkout`}</Text></If>
         </View>
       </If>
       <If when={!!p.worktreeStatus}><Text testID="context-worktree-status" class={`${TS.base} ${p.worktreeStatus?.warning ? "text-warning" : "text-muted-foreground"}`}>{p.worktreeStatus?.text ?? ""}</Text></If>
@@ -609,7 +617,7 @@ export function NewSessionView() {
               <StartingContext sections={preview().sections} total={preview().total} estimated window={window()}
                 fixed={!!pendingFirstPrompt()}
                 onInventoryToggle={(kind, name, locked) => toggleDraftInventory(kind, name, locked)}
-                worktree={worktreeOffer() ? { on: !!sessionDraft().worktree, changes: worktreeOffer()!.changes ?? 0, onToggle: toggleDraftWorktree } : undefined}
+                worktree={worktreeOffer() ? { on: !!sessionDraft().worktree, tokens: draftLastAnswer(project()!.id)?.parts?.worktree, notice: worktreeOffer()!.notice, onToggle: toggleDraftWorktree } : undefined}
                 worktreeStatus={pendingFirstPrompt() && sessionDraft().worktree && worktreeOffer() ? { text: "⌥ new worktree requested", warning: false } : undefined} />
               <If when={pendingFirstPrompt()}>
                 {() => <View class="w-full pt-4 pb-2" testID="first-prompt-sending">

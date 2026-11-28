@@ -369,6 +369,9 @@ impl App {
             self.ui.groups.saved.insert(old, layout);
             if project_changed {
                 self.detach_terminal();
+                // The new project's terminals are not listed yet: its saved
+                // terminal tabs are kept until they are (`terminals_listed`).
+                self.ui.groups.terminals_loaded = false;
             }
         }
         let layout = match self.ui.groups.saved.get(&key).cloned() {
@@ -390,7 +393,14 @@ impl App {
         // forward (as in NSH). Otherwise the restored focused tab, a session of
         // another worktree, would open, swap the layout back, and the two
         // sessions would alternate every tick.
-        if let Some(viewed) = self.viewed_root() {
+        let viewed = self.viewed_root().filter(|root| {
+            self.state
+                .model
+                .sessions
+                .get(root)
+                .is_some_and(|s| s.project_id == project)
+        });
+        if let Some(viewed) = viewed {
             let tab = GTab::session(viewed);
             let focused = self.ui.groups.layout.focused;
             if !self.ui.groups.layout.contains(&tab) {

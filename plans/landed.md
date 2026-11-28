@@ -2,6 +2,14 @@
 
 One line per landed item, newest first. Moved from PLAN.md on 2026-11-11 when the plan became the `plans/` folder; text unchanged unless marked.
 
+- **0.20 release prep: CI green again (11-28).** Stale TUI tests updated to the shipped behaviour (rail-ordered Settings, `/` opens settings search, `enter focus` hint, `•` single-choice mark, header order bell · Manager · Record, favourite-aware model palette kind); the palette's Recorder and Manager groups no longer interleave in either client (both rank lists gained `recorder`, `manager`). Two Linux-racy recorder scheduler tests fixed; the CI lint job formats with current stable rustfmt. TUI `cargo test` all green, Core 2366 passed.
+
+- **Claude Direct Sonnet 429 fix (11-28).** Current OMP clone and live isolation identified the missing official-CLI system sentence; user approved visible compatibility. Native Direct prepends only that sentence, and draft/open/snapshot System prompt details in both clients include it without changing frozen snapshots. Nexus headers/auth/tool names unchanged. Sonnet 5.5 medium native streaming `read` loop passed (two HTTP 200s); 238 Core integration tests passed. [Plan 55](55-claude-direct.md).
+
+- **Claude model-name cleanup (11-28).** Remove the redundant `Direct ·` model-name prefix in the shared catalog and TUI/NSH fixture; keep `claude-direct` as the provider label. [Plan 55](55-claude-direct.md).
+
+- **Claude Direct HTTP diagnostics (11-28).** Replace misleading universal “may be unsupported” with status-specific, credential-safe errors and bounded allowlisted error classification. Two approved minimal Sonnet 5.5 requests still returned `rate_limit_error`; the service-side failure is unresolved. [Plan 55](55-claude-direct.md).
+
 - **Outstanding-work checkpoint (11-28, user requested commit/push of everything).** Saved the existing recorder, voice/scheduler, worker, client-navigation and build-tooling work together. Recorder remains paused/partial under [plan 54](54-standalone-recorder.md); this checkpoint does not establish completion or full UI/hardware validation. Build outputs remain ignored.
 
 - **Direct Claude live continuation and transport integrity (11-28).** Fresh scratch browser sign-in; strict native tools, zero-output prewarm/cache hit, new API version and gzip passed on Haiku. Native task budgets and stream/refresh-identity guards added; Haiku budget rejection is recorded and guarded locally, adaptive support unverified. 474 integration and 204 focused tests passed; Ruff passed. [Plan 55](55-claude-direct.md).
@@ -370,3 +378,10 @@ dirty/diverged/detached refusals, CLI flag wiring, `ruff`, focused and full Core
 `sh scripts/test-install.sh` (now including a tampered wheel that must not install) and `bash -n scripts/nexus`. No real update
 or home migration was run.
 
+
+- 2026-11-28: Switching project no longer loses the layout's terminal tabs. TUI: `groups_enter_project` restored the new project's
+  layout while the old project's terminal list still counted as loaded (now reset first), and it also brought the previous
+  project's viewed session into the restored layout. NSH: `terminalsKnown()` is now per project and the old list is cleared
+  on a switch. Saved layouts, and tabs closed staying closed across restarts, already existed (docs/layout.md). Verified: TUI
+  `layout_tabs` (32, new test fails without the fix), NSH `layout-ui` and `terminal-panel`; `layout-input` has 4 failures from
+  `keyboard.down` being unsupported in the headless runner. No NSH test for the project switch itself, and no manual check.

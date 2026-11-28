@@ -170,7 +170,7 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
             ModelInfo(
                 provider=provider_id,
                 id=model_id,
-                name=("Direct · " if provider_id == "claude-direct" else "") + str(entry.get("name") or model_id),
+                name=str(entry.get("name") or model_id),
                 context=limit.get("context"),
                 max_output=limit.get("output"),
                 reasoning=bool(entry.get("reasoning")),

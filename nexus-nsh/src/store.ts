@@ -107,7 +107,7 @@ export const stickyShown = signal(false);
 export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
 export const catalogSource = signal("");
-/** What a new session starts with, by `project|agent`: the user's last selection from `/api/model/last`. There is no default model. */
+/** What a new session starts with, by agent: the user's last selection from `/api/model/last`. There is no default model. */
 const remembered = signal<Record<string, string>>({});
 export const config = signal<any | null>(null);
 export type LearnChecklist = {
@@ -355,7 +355,7 @@ export const draft = signal<Record<string, string>>({});
 /** Core's starting context (PLAN K4) for the draft in `key`; a newer draft ignores a late older answer. */
 export const draftContext = signal<{ key: string; planKey: string; data: { used: number; window: number | null; parts: { instructions: number; tools: number; instruction_file: number }; tools: string[]; skills: any[]; mcp: any[]; session?: { effort: string | null }; worktree?: WorktreeOffer } } | null>(null);
 /** Core's answer about the draft's worktree switch (`POST /api/draft/context`). */
-export type WorktreeOffer = { available: boolean; on?: boolean; branch?: string | null; head?: string; dirty?: boolean; changes?: number };
+export type WorktreeOffer = { available: boolean; on?: boolean; branch?: string | null; head?: string; dirty?: boolean; changes?: number; notice?: string };
 let draftSeq = 0;
 export const draftContextKey = (project: string, d = sessionDraft()) => JSON.stringify([project, d.agent ?? null, d.model ?? null, d.effort ?? null, d.disabled_tools ?? null, !!d.worktree]);
 /** The draft fields that change the context itself. Effort steers the model; it is not context. The worktree switch
@@ -594,12 +594,12 @@ const projectWorktreeSeq = new Map<string, number>();
 /** The session directory each session's worktree listing was requested for. */
 const worktreeDirectories = new Map<string, string>();
 
-/** The model a new session for this project and agent starts with, or "" when none was ever selected. Asks Core once per key; `refresh` asks again. */
-export function rememberedModel(project: string | null | undefined, agent: string, refresh = false): string {
-  const key = `${project ?? ""}|${agent}`;
+/** The model a new session for this agent starts with, in any project, or "" when none was ever selected. Asks Core once per agent; `refresh` asks again. */
+export function rememberedModel(_project: string | null | undefined, agent: string, refresh = false): string {
+  const key = agent;
   if (refresh || !rememberedAsked.has(key)) {
     rememberedAsked.add(key);
-    const query = new URLSearchParams({ agent, ...(project ? { project } : {}) });
+    const query = new URLSearchParams({ agent });
     void request<any>("GET", `/api/model/last?${query}`)
       .then((r) => remembered.update((all) => ({ ...all, [key]: r.model ?? "" })))
       .catch(() => { rememberedAsked.delete(key); });

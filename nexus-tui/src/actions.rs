@@ -1385,18 +1385,23 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                 .await
             {
                 Ok(reply) => reply,
-                Err(error) if error.api().is_some_and(|a| a.status == 404 || a.status == 405) => api
-                    .http
-                    .call(
-                        reqwest::Method::POST,
-                        "/api/search/service/start",
-                        &[],
-                        None,
-                        None,
-                        None,
-                    )
-                    .await
-                    .map_err(e)?,
+                Err(error)
+                    if error
+                        .api()
+                        .is_some_and(|a| a.status == 404 || a.status == 405) =>
+                {
+                    api.http
+                        .call(
+                            reqwest::Method::POST,
+                            "/api/search/service/start",
+                            &[],
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                        .map_err(e)?
+                }
                 Err(error) => return Err(e(error)),
             };
             done.search_service = Some(reply.body);

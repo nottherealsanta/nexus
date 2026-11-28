@@ -284,6 +284,8 @@ pub enum CtxRole {
     ToggleOff(usize),
     /// A switch that cannot be enabled until a new session.
     ToggleLocked(usize),
+    /// The `›` that opens a row's details (muted).
+    Detail,
     /// The `Context total` label (bold secondary).
     TotalLabel,
     /// The total's figure (secondary).
@@ -535,7 +537,9 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
         {
             let empty_inventory =
                 matches!(&section.body, CtxBody::Inventory(items) if items.is_empty());
-            if empty_inventory || !matches!(&section.body, CtxBody::Inventory(_)) {
+            // An MCP section with no servers says nothing beyond `[0]`.
+            let none = section.title == "MCP" && section.meta == "none";
+            if (empty_inventory || !matches!(&section.body, CtxBody::Inventory(_))) && !none {
                 head.push((format!("  {}", section.meta), CtxRole::Meta));
             }
         }
@@ -607,41 +611,37 @@ pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> 
 
 /// A switch's marker: a full circle when on, an empty one when off.
 /// The new-session worktree switch (plan 48), after the total. `index` follows the last
-/// inventory switch. Off reads muted (not struck through: nothing is removed). Uncommitted
-/// changes in the checkout get their own line under it, so a narrow page cannot clip them.
-pub fn worktree_rows(index: usize, on: bool, changes: u64, layout: &CtxLayout) -> Vec<CtxRow> {
-    let mut rows = vec![clip_row(
-        vec![
-            (switch_marker(on, layout.ascii).to_owned(), CtxRole::Meta),
-            (
-                "Worktree".to_owned(),
-                if on {
-                    CtxRole::ToggleOn(index)
-                } else {
-                    CtxRole::ToggleLocked(index)
-                },
-            ),
-            (
-                "  ask the agent to start in a new worktree".to_owned(),
-                CtxRole::Meta,
-            ),
-        ],
-        layout,
-    )];
-    if changes > 0 {
-        rows.push(clip_row(
-            vec![(
-                format!(
-                    "  {changes} uncommitted change{} stay{} in the checkout",
-                    if changes == 1 { "" } else { "s" },
-                    if changes == 1 { "s" } else { "" },
-                ),
-                CtxRole::Meta,
-            )],
-            layout,
+/// inventory switch. Off reads muted (not struck through: nothing is removed). When on it
+/// shows what the nudge costs; the `›` opens the notice the agent would receive.
+pub fn worktree_rows(
+    index: usize,
+    on: bool,
+    tokens: Option<u64>,
+    layout: &CtxLayout,
+) -> Vec<CtxRow> {
+    let tilde = if layout.estimated { "~" } else { "" };
+    let mut row = vec![
+        (switch_marker(on, layout.ascii).to_owned(), CtxRole::Meta),
+        (
+            "Worktree".to_owned(),
+            if on {
+                CtxRole::ToggleOn(index)
+            } else {
+                CtxRole::ToggleLocked(index)
+            },
+        ),
+    ];
+    if let Some(tokens) = tokens.filter(|_| on) {
+        row.push((
+            format!(" {tilde}{}", compact(tokens).replace('k', "K")),
+            CtxRole::Tokens,
         ));
     }
-    rows
+    row.push((
+        format!("  {}", if layout.ascii { ">" } else { "\u{203a}" }),
+        CtxRole::Detail,
+    ));
+    vec![clip_row(row, layout)]
 }
 
 fn switch_marker(on: bool, ascii: bool) -> &'static str {
@@ -968,7 +968,7 @@ pub fn palette_group(category: &str) -> String {
 /// Where a palette group sorts when the query is empty: the session first,
 /// then the model, and the app-wide commands last, as in the mock-up.
 pub fn palette_group_rank(category: &str) -> usize {
-    const ORDER: [&str; 21] = [
+    const ORDER: [&str; 23] = [
         "session",
         "project",
         "model",
@@ -988,6 +988,8 @@ pub fn palette_group_rank(category: &str) -> usize {
         "auth",
         "appearance",
         "dictation",
+        "recorder",
+        "manager",
         "app",
         "",
     ];

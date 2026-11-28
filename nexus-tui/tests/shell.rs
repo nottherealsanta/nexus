@@ -2093,7 +2093,7 @@ fn system_theme_can_be_selected_and_restored() {
     let mut app = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.apply_prefs(&home, saved, Overrides::default());
     app.execute("app.settings");
-    press(&mut app, &["t", "h", "e", "m", "e"]);
+    press(&mut app, &["/", "t", "h", "e", "m", "e", "enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
     assert!(
@@ -2280,10 +2280,16 @@ fn the_message_rail_appears_after_two_messages_and_jumps_between_them() {
     let _ = draw(&mut app, 120, 36);
     press(&mut app, &["alt+down"]);
     let _ = draw(&mut app, 120, 36);
-    assert!(app.timeline_top() > first_top, "alt+down moves to message #2");
+    assert!(
+        app.timeline_top() > first_top,
+        "alt+down moves to message #2"
+    );
     press(&mut app, &["alt+up"]);
     let _ = draw(&mut app, 120, 36);
-    assert!(app.timeline_top() <= first_top + 1, "alt+up returns to message #1");
+    assert!(
+        app.timeline_top() <= first_top + 1,
+        "alt+up returns to message #1"
+    );
     // The setting turns it off; the scroll bar is back in charge.
     app.ui.turn_rail = false;
     let (buf, _) = draw(&mut app, 120, 36);

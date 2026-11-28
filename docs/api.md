@@ -124,7 +124,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | POST | `/api/provider/{id}/login` | `{method?, api_key?}` | 202 while a browser, device, CLI or local flow runs; 200 `{status: "connected"}` for an accepted key. 409 if that provider is already signing in. 400 for a method the provider does not list. A `browser` flow listens on the daemon's `127.0.0.1:1455` and publishes its URL; the client opens it |
 | DELETE | `/api/provider/{id}/login` | | 204; cancels a pending flow and signs out |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers; external-worker models add `zmx: true` (the compatibility flag) and are offered only in subagent pools |
-| GET | `/api/model/last` | `?project=`, `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it in the project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
+| GET | `/api/model/last` | `?agent=` | `{model, source}`: the model a new session for this agent starts with: `agent` (last selected for it, in any project), `last` (last selected anywhere) or `none` with `""` ([daemon.md](daemon.md#model-selection)) |
 | GET | `/api/agent` | `?project=` or `?directory=` | `{agents: [Agent], problems: [{path, error}]}` |
 | (session JSON) | | | also `skills: [{name, description, scope, state, locked}]` and `mcp: [{server, tools, state, locked, error, scope?: "global" or "project"}]`: what the starting-context header switches. `state` is `on`, `off` or `unavailable`; a disabled project entry is not part of the session ([tools.md](tools.md#skills-and-the-skill-tool), [mcp.md](mcp.md#project-servers)) |
 | GET | `/api/skill` | `?project=` or `?directory=` | `{skills: [{name, description, scope, path, sha256, allowed_tools, warnings}], problems: [{path, error, kind}]}` ([tools.md](tools.md#skills-and-the-skill-tool)) |
@@ -1853,7 +1853,7 @@ session-creation request (`project` or `directory`, and optionally `agent`,
 does, and returns the request its first turn would send, with nothing stored:
 the `/context` fields (`used`, `window`, `exact`, always false here), `model`,
 `agent`, `parts` (`instructions`, `tools`, `instruction_file`, estimated tokens
-of the system prompt, tool schemas and the AGENTS.md inside the prompt) and the
+of the system prompt, tool schemas and the AGENTS.md inside the prompt; `skills` and `mcp` when those tools are present, the part of `tools` they cost; `worktree` with the switch on, the notice) and the
 `snapshot` summary, `tool_info` (each tool's `description`), `details` (per-section text of the starting context: `system_prompt`, `instruction_file` `{path, status, bytes, content, error}`, `tools` `{name: {description, parameters}}`, `skills` and the fenced `mcp_listing`, exactly what the first request carries), and
 the lists the session would start with: `tools` (names, in request order),
 `skills` and `mcp` (the session JSON's rows, with `state` and `locked`; nothing the draft's own `disabled_tools` switched off is locked, since the session has not started, so only an unavailable server is), and `session` (`model`, `effort`: what creation would store, configured defaults included; null when unset). Clients show these, not their own defaults, so the screen does not change when the session is created. Enabled
@@ -1864,7 +1864,7 @@ context from these lists alone: they keep no tool list of their own and show
 The draft also takes `worktree` and always answers `worktree`: `{available, on, repository, checkout, branch, head,
 dirty, changes}` (`available: false` alone outside Git or in a repository with no commit; clients then hide the row).
 With `worktree: true` where it is available, the answer is the session's first request with the switch on: the
-workspace tools are in `tools` and their schemas in the counts, and `notice` is the text the session will receive.
+workspace tools are in `tools` and their schemas in the counts, and `notice` is the text the session will receive (`worktree.notice` carries it with the switch off too, for the clients' details dialog).
 
 ### Starting in a worktree
 
@@ -1873,7 +1873,8 @@ else is 400. Core does not create a worktree. The session starts with the worksp
 (`workspace.active` in the session JSON), and before the user's first message its context gets a visible notice, a
 user-role message starting `[Nexus notice: start in a worktree]`, asking the model to create a new worktree with
 `worktree` (choosing the branch name; base and repository given) and move into it with `change_session_directory`,
-and saying how many uncommitted changes stay in the checkout. Clients show it as a notice row.
+and telling it, if the checkout has uncommitted changes, to ask the user whether to commit the current progress first and
+create the worktree from that commit. Clients show it as a notice row.
 
 The session JSON carries `worktree_request` (null without the switch): `{repository, branch, head, dirty, state}`, where
 `state` is `requested`, `entered` (with `path` and `entered_branch`, once the session moved into a worktree other than

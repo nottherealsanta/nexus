@@ -86,8 +86,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   before names or the agent.
 - The context header has two modes (plan 48). **Draft** (no session yet): a box on the panel surface
   whose `●`/`○` markers switch tools, skills and servers, and, in a Git checkout, a `Worktree` switch
-  row under `total` (`ask the agent to start in a new worktree`, then `N uncommitted changes stay in
-  the checkout` on its own line; hidden, not disabled, outside Git). **Fixed** (from the first send,
+  row under `total` (marker, `Worktree`, the notice's estimated tokens when on, and a `›` that opens the notice
+  the agent would receive; hidden, not disabled, outside Git). Skills and MCP show their estimated tokens; an
+  MCP section with no servers shows only `[0]`. **Fixed** (from the first send,
   `You · Sending…`, onward): the same rows and padding on the timeline's background, with markers as
   plain state (off struck through) and no switches; headings and names still open their dialogs,
   read-only, whose hint names `/skills` or `/mcp`. A session started with the switch shows
