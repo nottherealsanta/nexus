@@ -187,11 +187,12 @@ The built-in prompts guide this flow; the runtime does not force stages or autom
    surface blockers or unexpected scope growth early.
 5. **Accept the result.** The orchestrator checks the actual diff and evidence against the criteria, coordinates one
    integration pass after edits settle, and reports unmet or unverified criteria honestly. An independent review is
-   optional, not another required stage. Existing children handle corrections through `message_session`; changed
+   optional, not another required stage. Existing children handle corrections through `message_session`, unless a child's reported size (context % full,
+   steps) is already large: then the orchestrator asks it for a handoff brief and starts a fresh child; changed
    requirements trigger a scope/ownership check instead of an ever-growing assignment. Interrupted work stays paused
    until resumption is wanted. Provider failures are not solved by adding stages or silently changing models.
 
-This changes prompts only, not model pools, permissions, tool budgets or scheduling. New sessions pick it up unless
+Besides child reports carrying each child's size ([daemon.md](daemon.md)), this changes prompts only, not model pools, permissions, tool budgets or scheduling. New sessions pick it up unless
 a global/project override replaces the built-in file. Existing sessions keep their frozen prompts; an explicit agent
 switch reloads the current files. No running session is rewritten automatically. Offline prompt checks protect the
 instructions and existing snapshot/child tests check the harness boundary; they do not prove model compliance or a

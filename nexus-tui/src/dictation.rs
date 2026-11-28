@@ -11,11 +11,17 @@ use std::sync::mpsc as std_mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::Sample;
+use cpal::traits::StreamTrait;
 use tokio::sync::mpsc;
 
-pub const TARGET_RATE: u32 = 16_000;
+use crate::audio_capture::{
+    acquire_mic, acquire_mic_after_dictation, FramePump, FrameSink, MicOwner,
+    DICTATION_RELEASE_STEP, DICTATION_RELEASE_TIMEOUT,
+};
+
+pub(crate) use crate::audio_capture::{open_input, AudioMessage};
+pub use crate::audio_capture::{Resampler, TARGET_RATE};
+
 pub const MAX_SECONDS: usize = 120;
 pub const MIN_SECONDS: f64 = 0.2;
 pub const PREVIEW_STEP_SECONDS: f64 = 0.4;
@@ -309,11 +315,6 @@ enum Control {
     Cancel,
 }
 
-pub(crate) enum AudioMessage {
-    Samples(Vec<f32>),
-    Failed(String),
-}
-
 /// A control handle only. The CPAL stream is intentionally not returned from its thread.
 pub struct CaptureHandle {
     generation: u64,
@@ -394,78 +395,9 @@ impl Drop for CaptureHandle {
     }
 }
 
-/// Stateful linear resampling of interleaved audio to a mono 16 kHz stream.
-#[derive(Debug, Clone)]
-pub struct Resampler {
-    target_rate: u32,
-    source_rate: u32,
-    channels: usize,
-    frames_seen: u64,
-    next_output: u64,
-    previous: Option<f32>,
-}
-
-impl Resampler {
-    pub fn new(source_rate: u32, channels: usize) -> Option<Self> {
-        Self::to_rate(source_rate, channels, TARGET_RATE)
-    }
-
-    /// Like `new`, to mono at `target_rate` (the GPT-Live call sends 24 kHz).
-    pub fn to_rate(source_rate: u32, channels: usize, target_rate: u32) -> Option<Self> {
-        (source_rate > 0 && channels > 0 && target_rate > 0).then_some(Self {
-            target_rate,
-            source_rate,
-            channels,
-            frames_seen: 0,
-            next_output: 0,
-            previous: None,
-        })
-    }
-
-    pub fn push(&mut self, interleaved: &[f32]) -> Vec<f32> {
-        let mono: Vec<f32> = interleaved
-            .chunks_exact(self.channels)
-            .map(|frame| (frame.iter().sum::<f32>() / self.channels as f32).clamp(-1.0, 1.0))
-            .collect();
-        if mono.is_empty() {
-            return Vec::new();
-        }
-        let start = self.frames_seen;
-        let end = start + mono.len() as u64 - 1;
-        let mut out = Vec::new();
-        loop {
-            let numerator = self.next_output * u64::from(self.source_rate);
-            let base = numerator / u64::from(self.target_rate);
-            let remainder = numerator % u64::from(self.target_rate);
-            if base > end || (base == end && remainder > 0) {
-                break;
-            }
-            let fraction = remainder as f32 / self.target_rate as f32;
-            let sample = if base < start {
-                let Some(previous) = self.previous else {
-                    break;
-                };
-                previous + (mono[0] - previous) * fraction
-            } else {
-                let index = (base - start) as usize;
-                if index + 1 < mono.len() {
-                    mono[index] + (mono[index + 1] - mono[index]) * fraction
-                } else {
-                    mono[index]
-                }
-            };
-            out.push(sample.clamp(-1.0, 1.0));
-            self.next_output += 1;
-        }
-        self.frames_seen += mono.len() as u64;
-        self.previous = mono.last().copied();
-        out
-    }
-}
-
+/// Dictation's own frame sink: mono 16 kHz PCM16 capped at `MAX_SAMPLES`.
 #[derive(Debug)]
-pub struct PcmRecorder {
-    resampler: Resampler,
+struct CappedFrames {
     samples: Vec<i16>,
     level_sum: f64,
     level_count: usize,
@@ -473,20 +405,21 @@ pub struct PcmRecorder {
     levels: VecDeque<f32>,
 }
 
-impl PcmRecorder {
-    pub fn new(source_rate: u32, channels: usize) -> Option<Self> {
-        Some(Self {
-            resampler: Resampler::new(source_rate, channels)?,
+impl Default for CappedFrames {
+    fn default() -> Self {
+        Self {
             samples: Vec::new(),
             level_sum: 0.0,
             level_count: 0,
             last_level: 0.0,
             levels: VecDeque::with_capacity(32),
-        })
+        }
     }
+}
 
-    pub fn push(&mut self, interleaved: &[f32]) {
-        for sample in self.resampler.push(interleaved) {
+impl FrameSink for CappedFrames {
+    fn push_frame(&mut self, frames: &[f32]) {
+        for sample in frames {
             if self.samples.len() >= MAX_SAMPLES {
                 break;
             }
@@ -509,25 +442,42 @@ impl PcmRecorder {
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub struct PcmRecorder {
+    pump: FramePump<CappedFrames>,
+}
+
+impl PcmRecorder {
+    pub fn new(source_rate: u32, channels: usize) -> Option<Self> {
+        Some(Self {
+            pump: FramePump::new(source_rate, channels, CappedFrames::default())?,
+        })
+    }
+
+    pub fn push(&mut self, interleaved: &[f32]) {
+        self.pump.push_block(interleaved);
+    }
 
     pub fn seconds(&self) -> f64 {
-        self.samples.len() as f64 / f64::from(TARGET_RATE)
+        self.pump.sink().samples.len() as f64 / f64::from(TARGET_RATE)
     }
 
     pub fn is_full(&self) -> bool {
-        self.samples.len() >= MAX_SAMPLES
+        self.pump.sink().samples.len() >= MAX_SAMPLES
     }
 
     pub fn level(&self) -> f32 {
-        self.last_level
+        self.pump.sink().last_level
     }
 
     pub fn levels(&self) -> &VecDeque<f32> {
-        &self.levels
+        &self.pump.sink().levels
     }
 
     pub fn wav(&self) -> Vec<u8> {
-        encode_wav(&self.samples)
+        encode_wav(&self.pump.sink().samples)
     }
 }
 
@@ -633,6 +583,22 @@ fn capture(
     controls: std_mpsc::Receiver<Control>,
     events: mpsc::UnboundedSender<CaptureEvent>,
 ) {
+    // Dictation, the Manager call and the recorder share one microphone owner.
+    // Acquire before the cue/open so a competing feature fails without a device.
+    let _guard = match acquire_mic_after_dictation(
+        MicOwner::Dictation,
+        DICTATION_RELEASE_TIMEOUT,
+        DICTATION_RELEASE_STEP,
+    ) {
+        Ok(guard) => guard,
+        Err(message) => {
+            let _ = events.send(CaptureEvent::Failed {
+                generation,
+                message,
+            });
+            return;
+        }
+    };
     // Play the start cue before opening the microphone so the tone is never recorded.
     if let Err(message) = play_cue("start", true) {
         let _ = events.send(CaptureEvent::CueWarning {
@@ -759,82 +725,10 @@ fn finish_capture(
     });
 }
 
-pub(crate) fn open_input(
-    audio: std_mpsc::Sender<AudioMessage>,
-) -> Result<(cpal::Stream, u32, usize), String> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "No microphone input device is available".to_owned())?;
-    let supported = device
-        .default_input_config()
-        .map_err(|e| format!("No microphone input device is available: {e}"))?;
-    let format = supported.sample_format();
-    let config = supported.config();
-    let rate = config.sample_rate;
-    let channels = config.channels as usize;
-    let data_tx = audio.clone();
-    let errors_tx = audio;
-    let stream = match format {
-        cpal::SampleFormat::F32 => input_stream::<f32>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::F64 => input_stream::<f64>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::I8 => input_stream::<i8>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::I16 => input_stream::<i16>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::I24 => input_stream::<cpal::I24>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::I32 => input_stream::<i32>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::I64 => input_stream::<i64>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::U8 => input_stream::<u8>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::U16 => input_stream::<u16>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::U24 => input_stream::<cpal::U24>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::U32 => input_stream::<u32>(&device, config, data_tx, errors_tx),
-        cpal::SampleFormat::U64 => input_stream::<u64>(&device, config, data_tx, errors_tx),
-        other => return Err(format!("Unsupported microphone sample format: {other}")),
-    }
-    .map_err(|e| format!("Could not open microphone input: {e}"))?;
-    Ok((stream, rate, channels))
-}
-
-fn input_stream<T>(
-    device: &cpal::Device,
-    config: cpal::StreamConfig,
-    samples_tx: std_mpsc::Sender<AudioMessage>,
-    errors_tx: std_mpsc::Sender<AudioMessage>,
-) -> Result<cpal::Stream, cpal::Error>
-where
-    T: cpal::SizedSample + Copy,
-    f32: cpal::FromSample<T>,
-{
-    device.build_input_stream::<T, _, _>(
-        config,
-        move |data, _| {
-            let samples = data
-                .iter()
-                .map(|sample| f32::from_sample(*sample))
-                .collect();
-            let _ = samples_tx.send(AudioMessage::Samples(samples));
-        },
-        move |error: cpal::Error| {
-            if stream_error_is_fatal(error.kind()) {
-                let _ = errors_tx.send(AudioMessage::Failed(error.to_string()));
-            }
-        },
-        None,
-    )
-}
-
-/// Whether a stream error callback means capture has stopped. A buffer xrun, a route
-/// change cpal already followed, or a refused real-time promotion is a glitch at worst:
-/// the stream keeps delivering audio, so dictation must not abort on it.
-fn stream_error_is_fatal(kind: cpal::ErrorKind) -> bool {
-    !matches!(
-        kind,
-        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_capture::stream_error_is_fatal;
 
     #[test]
     fn stream_glitches_do_not_abort_capture() {
@@ -862,6 +756,26 @@ mod tests {
         assert_eq!(output.len(), 32_000);
         assert!((*output.first().unwrap() + 1.0).abs() < 0.001);
         assert!((*output.last().unwrap() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn dictation_refuses_while_the_recorder_owns_the_microphone() {
+        let _test = crate::audio_capture::mic_test_guard();
+        let held = acquire_mic(MicOwner::Recorder).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = CaptureHandle::start(7, tx);
+        handle.join();
+        match rx.try_recv() {
+            Ok(CaptureEvent::Failed {
+                generation,
+                message,
+            }) => {
+                assert_eq!(generation, 7);
+                assert!(message.contains("recorder"), "{message}");
+            }
+            other => panic!("expected a busy failure, got {other:?}"),
+        }
+        drop(held);
     }
 
     #[test]

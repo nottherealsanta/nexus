@@ -155,7 +155,14 @@ function PickerBody() {
                   <Button onPress={() => choose(it())} selected={idx() === clamp(i())} accessibilityLabel={it().label} testID={`pick-${i()}`}
                     class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-accent active:bg-row-selected ${idx() === clamp(i()) ? "bg-row-selected" : ""} ${FOCUS}`}>
                     <View class="flex-row items-center gap-3">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{favorites().includes(it().id) ? `★ ${it().label}` : it().label}</Text>
+                      <View class="flex-1 min-w-0 flex-row items-center gap-1">
+                        <If when={isModels()}>
+                          <View class="w-4 shrink-0">
+                            <If when={favorites().includes(it().id)}><Text class={`${TS.base} text-popover-foreground`}>★</Text></If>
+                          </View>
+                        </If>
+                        <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${TS.base} ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
+                      </View>
                       <If when={!!it().hint}><Text style={{ numberOfLines: 1 }} class={`${TS.base} text-muted-foreground tabular-nums`}>{it().hint}</Text></If>
                     </View>
                   </Button>

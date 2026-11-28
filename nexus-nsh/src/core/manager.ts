@@ -20,6 +20,7 @@ import {
 import type { ClientView } from "./view";
 import { playbackLevel, speakText, stopSpeaking } from "../speech";
 import { dictationLevel, dictationPhase } from "../voice-state";
+import { microphoneOwner } from "../audio-capture";
 import { playNotificationCue } from "../cues";
 import { gptLiveLevels, gptLiveOpen, gptLiveSupported, interruptGptLive, setGptLiveMuted, startGptLive, stopGptLive } from "./gptlive";
 
@@ -382,6 +383,9 @@ async function openLive(callId: string) {
     managerError.set({ code: "live_unsupported", message: WORDS.liveUnsupported, fix: WORDS.liveUnsupportedFix });
     return;
   }
+  // Same policy as the TUI: the Manager voice takes the mic from dictation
+  // after its teardown, but a standalone recorder is never preempted.
+  await releaseDictationForManager();
   liveVoice.set(true);
   let coreOpen = false;
   try {
@@ -393,6 +397,8 @@ async function openLive(callId: string) {
     liveVoice.set(false);
     // Core's half opened but this client's did not: close it, so starting again is not refused as busy.
     if (coreOpen) { stopGptLive(); void request("POST", "/api/manager/live/stop", { body: { stream_id: streamId } }).catch(() => {}); }
+    // A hang-up or another call while getUserMedia/socket was pending is not an error to show.
+    if (call()?.id !== callId || !audioRequested()) return;
     const message = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e);
     managerError.set({ code: e instanceof ApiError && e.code ? e.code : "live_failed", message, fix: "The call is still open for typing; start it again to retry the voice." });
     return;
@@ -642,9 +648,19 @@ function voiceUnavailable() {
   notice.set(WORDS.noVoice);
 }
 
+/** TUI policy: Manager voice preempts dictation, but never a recorder, and waits for the old mic to close. */
+async function releaseDictationForManager(): Promise<void> {
+  if (dev?.simulate) return;
+  if (dictationPhase() !== "idle" || microphoneOwner() === "dictation") cancelDictation();
+  const end = Date.now() + 2_000;
+  while (microphoneOwner() === "dictation" && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function openMic() {
   if (!(await voiceReady())) { voiceUnavailable(); return; }
-  if (dictationPhase() !== "idle" && !dev?.simulate) cancelDictation();
+  await releaseDictationForManager();
   listening.set(true);
   recorded = false; delivered = false;
   if (dev?.simulate) return;

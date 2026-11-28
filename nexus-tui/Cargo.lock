@@ -1292,6 +1292,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-recorder-spool"
+version = "0.10.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "nexus-tui"
 version = "0.17.0"
 dependencies = [
@@ -1300,10 +1307,12 @@ dependencies = [
  "cpal",
  "crossterm",
  "futures-util",
+ "getrandom 0.4.3",
  "image",
  "libc",
  "nexus-annotate",
  "nexus-mermaid",
+ "nexus-recorder-spool",
  "png 0.17.16",
  "pulldown-cmark",
  "ratatui",

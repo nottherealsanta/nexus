@@ -12,6 +12,7 @@ import { call } from "../core/manager";
 import { coreEditing } from "./connect";
 import { currentAlerts } from "./alerts";
 import { rightSidebarWidth, textCellPoints } from "./geometry";
+import { RecorderHeaderButton, focusRecorderHeader, noteRecorderSource } from "./recorder";
 
 function key(id: string) { const c = byId.get(id); return c ? keyLabel(c) : null; }
 
@@ -194,6 +195,9 @@ export function Header() {
             <Text class={`${TS.base} font-medium`}>Core</Text>
           </Button>
         </If>
+        <View ref={(node: any) => { focusRecorderHeader.fn = () => { try { node?.focus?.(); } catch { /* no focus host */ } }; }}>
+          <RecorderHeaderButton onPress={() => { noteRecorderSource("header"); void run("recorder.open"); }} />
+        </View>
         <If when={unread() > 0}>
           <Button onPress={() => run("notifications.open")} accessibilityLabel={`Notifications, ${unread()} unread`} testID="open-notifications" class={`shrink-0 px-2 justify-center ${isNarrow() ? "min-h-11" : "h-7"} hover:bg-accent ${FOCUS}`}>
             <Text class={`${TS.base} text-info`}>{`${attentionGlyph.unread.unicode} ${unread()}`}</Text>

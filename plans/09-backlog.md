@@ -297,6 +297,8 @@ Items about the phone/iOS build apply only to the three mobile tabs in section 5
 
 ## 9.9 Settings (old 8.3)
 
+- [x] Group the desktop section rail and make search jump directly to a setting without changing it (11-26, both clients).
+- [~] Keep the saved choice visibly distinct from the keyboard draft (11-26): rendering implemented in both clients; TUI verified. NSH Web preview did not enter Theme edit mode from the keyboard, so paired visual verification is open.
 - [ ] Sign in to a real device-flow and a real browser-flow provider from each client's Providers pane.
 - [ ] Complete NSH suite coverage after the mock-stream/toolchain fixes, real PTY screenshots,
   and provider sign-in/detail and tool-grid verification.

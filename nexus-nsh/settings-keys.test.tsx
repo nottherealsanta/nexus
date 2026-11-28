@@ -33,7 +33,7 @@ describe("Settings keys", () => {
   test("Right on a section enters its settings and changes nothing; Left goes back", async () => {
     const app = await boot();
     await app.waitFor("id:settings-section-focus");
-    expect(shown(app)).toContain("enter open");
+    expect(shown(app)).toContain("enter focus");
     await app.keyboard.press("right");
     await app.waitFor("id:settings-row-focus");
     expect(app.shows("id:settings-section-focus")).toBe(false);
@@ -67,9 +67,11 @@ describe("Settings keys", () => {
     await app.waitUntil(() => shown(app).includes("esc cancel"));
     expect(shown(app)).toContain("enter set");
     await app.keyboard.press("right");
+    await app.waitFor("id:settings-option-draft");
     expect(patches(app).length).toBe(0);
     await app.keyboard.press("escape");
     await app.waitUntil(() => !shown(app).includes("esc cancel"));
+    expect(app.shows("id:settings-option-draft")).toBe(false);
     expect(patches(app).length).toBe(0);
     expect(app.shows("id:settings")).toBe(true);
     await app.keyboard.press("enter");

@@ -169,7 +169,14 @@ pub struct Centre {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
     pub navigation: SettingsNavigation,
+    pub rail: Vec<SettingsRailGroup>,
     pub section: Vec<Section>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsRailGroup {
+    pub label: String,
+    pub sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -177,6 +184,7 @@ pub struct SettingsNavigation {
     pub section_key: String,
     pub value_key: String,
     pub previous_value_key: String,
+    pub search_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -361,6 +369,7 @@ mod tests {
             chain,
             [
                 "manager_call",
+                "recorder",
                 "overlay",
                 "dialog",
                 "text_edit",

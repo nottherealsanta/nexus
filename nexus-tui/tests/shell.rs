@@ -4,7 +4,7 @@
 mod common;
 use common::*;
 use nexus_tui::actions::ApiCall;
-use nexus_tui::app::Effect;
+use nexus_tui::app::{App, Effect};
 use nexus_tui::manifest::Manifest;
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::{OverlayKind, PaletteMode, Target};
@@ -1820,7 +1820,9 @@ fn settings_is_a_centred_modal_over_the_session() {
     let (buf, rows) = draw(&mut app, 120, 36);
     let top = raised_box(&app, &buf).y as usize + 1;
     assert!(!rows[top].contains("esc"));
-    assert!(rows[top + 2].contains("Filter settings"));
+    assert!(rows[top + 2].contains("Search settings"));
+    assert!(joined(&rows).contains("AGENTS & MODELS"));
+    assert!(joined(&rows).contains("TOOLS & INTEGRATIONS"));
     assert!(joined(&rows).contains("Appearance"));
     assert!(joined(&rows).contains("esc close"));
     press(&mut app, &["esc"]);
@@ -1828,24 +1830,83 @@ fn settings_is_a_centred_modal_over_the_session() {
 }
 
 #[test]
-fn settings_search_filters_rows_and_esc_clears_then_closes() {
+fn settings_search_jumps_without_editing_and_escape_restores_focus() {
+    let scenario: serde_json::Value = serde_json::from_str(include_str!(
+        "../../interface/scenarios/settings-focus.json"
+    ))
+    .unwrap();
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
-    press(&mut app, &["m", "o", "d", "e", "l"]);
+    press(&mut app, &["enter", "down", "down"]);
+    let original = app.ui.settings_row;
+    let open = scenario["search_key"].as_str().unwrap();
+    press(&mut app, &[open]);
+    app.handle_paste("no such setting");
+    assert!(app.settings_search_results().is_empty());
+    press(&mut app, &["esc"]);
+    assert!(!app.ui.settings_search_active);
+    assert!(!app.ui.settings_nav_focus);
+    assert_eq!(app.ui.settings_row, original);
+    press(&mut app, &[open]);
+    app.handle_paste(scenario["search_query"].as_str().unwrap());
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
-    assert!(text.contains("model"));
-    // Model lists live on the Agents page: its entry matches.
-    assert!(text.contains("AGENTS"), "{text}");
-    assert!(!text.contains("MODELS"));
-    assert!(!text.contains("Dictation"));
+    assert!(text.contains("Search results"));
+    assert!(text.contains(scenario["search_path"].as_str().unwrap()));
+    assert_eq!(
+        app.settings_search_results()[0].row.as_deref(),
+        scenario["search_row"].as_str()
+    );
+    assert!(!text.contains("AGENTS & MODELS"));
+    let theme = app.theme.opts.mode;
+    press(&mut app, &["enter"]);
+    assert!(!app.ui.settings_search_active && !app.ui.settings_nav_focus);
+    assert_eq!(app.ui.settings_section, "appearance");
+    assert_eq!(app.ui.settings_row, 0);
+    assert_eq!(app.theme.opts.mode, theme);
+    assert!(app.ui.settings_edit.is_none());
+    press(&mut app, &["enter"]);
+    let saved = app.ui.settings_edit.as_ref().unwrap().draft;
+    press(&mut app, &["right"]);
+    let draft = app.ui.settings_edit.as_ref().unwrap().draft;
+    assert_ne!(draft, saved);
+    let (buf, _) = draw(&mut app, 120, 36);
+    let option = |option| {
+        let rect = app
+            .hits
+            .rect_of(&Target::SettingsSegment { row: 0, option })
+            .unwrap();
+        &buf[(rect.x + 1, rect.y)]
+    };
+    let fill = app.theme.color("interactive.row_selected").unwrap();
+    let underline = ratatui::style::Modifier::UNDERLINED;
+    assert_eq!(option(saved).bg, fill);
+    assert!(!option(saved).modifier.contains(underline));
+    assert_ne!(option(draft).bg, fill);
+    assert!(option(draft).modifier.contains(underline));
     press(&mut app, &["esc"]);
-    assert!(app.ui.settings_search.text().is_empty());
-    assert_eq!(app.ui.view, nexus_tui::ui::View::Settings);
-    press(&mut app, &["esc"]); // back to the section rail
-    assert!(app.ui.settings_nav_focus);
-    press(&mut app, &["esc"]);
-    assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
+    assert!(app.ui.settings_edit.is_none());
+    assert_eq!(app.theme.opts.mode, theme);
+}
+
+#[test]
+fn settings_search_can_jump_to_a_setting_inside_a_page() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.execute("app.settings");
+    press(&mut app, &["/"]);
+    app.handle_paste("default effort");
+    assert_eq!(
+        app.settings_search_results()[0].row.as_deref(),
+        Some("agents.default_effort")
+    );
+    press(&mut app, &["enter"]);
+    assert_eq!(app.settings_open_page().as_deref(), Some("agents"));
+    assert!(!app.ui.settings_nav_focus);
+    let lines = app.settings_page_lines();
+    assert!(
+        matches!(&lines[app.settings_page_items()[app.ui.settings_page_row]],
+        nexus_tui::app::PageLine::Item { action: nexus_tui::app::PageAction::Setting(row), .. } if row.id == "agents.default_effort")
+    );
 }
 
 #[test]
@@ -2074,7 +2135,7 @@ fn system_theme_can_be_selected_and_restored() {
 fn settings_segments_move_with_left_right_and_esc_steps_back() {
     let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     app.execute("app.settings");
-    press(&mut app, &["a", "n", "i", "m"]);
+    press(&mut app, &["/", "a", "n", "i", "m", "enter"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
     assert!(text.contains("Animations"));
@@ -2090,7 +2151,7 @@ fn settings_segments_move_with_left_right_and_esc_steps_back() {
         "arrows never change a value"
     );
     assert!(app.ui.settings_nav_focus, "Left returned to the sections");
-    // Go back into the rows with Right (the search keeps the match).
+    // Go back into the rows with Right; the previously focused row is retained.
     press(&mut app, &["right"]);
     assert!(!app.ui.settings_nav_focus);
     press(&mut app, &["enter"]);
@@ -2101,9 +2162,9 @@ fn settings_segments_move_with_left_right_and_esc_steps_back() {
     press(&mut app, &["enter"]);
     assert_eq!(app.theme.opts.reduced_motion, before, "Enter flips it back");
     press(&mut app, &["esc"]);
-    press(&mut app, &["m", "o", "n", "o"]);
+    press(&mut app, &["/", "m", "o", "n", "o", "enter"]);
     draw(&mut app, 120, 36);
-    app.click(Target::SettingsRow(0));
+    app.click(Target::SettingsRow(app.ui.settings_row));
     assert_eq!(app.theme.opts.tier, Tier::Mono);
     press(&mut app, &["left"]);
     assert!(app.ui.settings_nav_focus, "Left returns to the sections");
@@ -2117,9 +2178,10 @@ fn settings_segments_move_with_left_right_and_esc_steps_back() {
         Tier::Mono,
         "Tab must not change a value"
     );
-    press(&mut app, &["esc"]);
-    press(&mut app, &["s", "i", "d", "e", "b", "a", "r"]);
-    press(&mut app, &["enter"]);
+    press(
+        &mut app,
+        &["/", "s", "i", "d", "e", "b", "a", "r", "enter", "enter"],
+    );
     assert!(app.ui.settings_edit.is_some(), "the sidebar is an enum");
     press(&mut app, &["right"]);
     assert!(app.ui.left_open, "choosing is a draft");
@@ -2226,6 +2288,198 @@ fn the_message_rail_appears_after_two_messages_and_jumps_between_them() {
     app.ui.turn_rail = false;
     let (buf, _) = draw(&mut app, 120, 36);
     assert!(marks(&buf).is_empty());
+}
+
+/// Two user messages, each followed by enough filler to make the timeline
+/// scroll: the rail's smallest useful layout.
+fn rail_app() -> App {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for n in 0..30 {
+        add_message(&mut app, n, "assistant", &format!("filler paragraph {n}"));
+    }
+    add_message(&mut app, 100, "user", "second question about the rail");
+    for n in 101..131 {
+        add_message(&mut app, n, "assistant", &format!("more text {n}"));
+    }
+    app
+}
+
+/// The rows holding the rail's message marks, top to bottom.
+fn rail_marks(app: &mut App, w: u16, h: u16) -> Vec<u16> {
+    let r = app.regions.timeline;
+    let mark = app.theme.structure("rail_mark").to_owned();
+    let (buf, _) = draw(app, w, h);
+    (r.y..r.bottom())
+        .filter(|&y| buf[(r.right() - 1, y)].symbol() == mark)
+        .collect()
+}
+
+#[test]
+fn the_message_rail_track_scrubs_and_drags_the_timeline() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut app = rail_app();
+    let (buf, _) = draw(&mut app, 120, 36);
+    let r = app.regions.timeline;
+    let track = app.theme.structure("rail").to_owned();
+    let mouse = |app: &mut App, kind, row| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: r.right() - 1,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    let at_end = app.timeline_top();
+    assert!(app.ui.scroll.follow);
+    // The track above the band is drawn as `rail`, never a message mark.
+    let upper = (r.y..r.bottom())
+        .find(|&y| buf[(r.right() - 1, y)].symbol() == track)
+        .expect("a track row above the viewport band");
+    mouse(&mut app, MouseEventKind::Down(MouseButton::Left), upper);
+    assert!(app.ui.turn_rail_scrub, "pressing the track starts a scrub");
+    let pressed = app.timeline_top();
+    assert!(
+        pressed < at_end,
+        "the press scrolls up: {pressed} < {at_end}"
+    );
+    assert!(!app.ui.scroll.follow, "a scrub leaves the end");
+    // Dragging moves the scrub to the pointer's row, not the press row.
+    mouse(
+        &mut app,
+        MouseEventKind::Drag(MouseButton::Left),
+        r.bottom() - 1,
+    );
+    let dragged = app.timeline_top();
+    assert!(
+        dragged > pressed,
+        "the drag follows the pointer: {dragged} > {pressed}"
+    );
+    mouse(
+        &mut app,
+        MouseEventKind::Up(MouseButton::Left),
+        r.bottom() - 1,
+    );
+    assert!(!app.ui.turn_rail_scrub, "releasing ends the scrub");
+}
+
+#[test]
+fn the_message_rail_tooltip_names_and_truncates_the_message() {
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    for n in 0..30 {
+        add_message(&mut app, n, "assistant", &format!("filler paragraph {n}"));
+    }
+    add_message(
+        &mut app,
+        100,
+        "user",
+        "second question about the message rail that runs long enough to truncate",
+    );
+    for n in 101..131 {
+        add_message(&mut app, n, "assistant", &format!("more text {n}"));
+    }
+    let marks = rail_marks(&mut app, 120, 36);
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    let r = app.regions.timeline;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: r.right() - 1,
+        row: marks[1],
+        modifiers: KeyModifiers::NONE,
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    let tooltip = rows
+        .iter()
+        .find(|row| row.contains("#2 \u{b7} second question"))
+        .unwrap_or_else(|| panic!("no tooltip in:\n{}", rows.join("\n")));
+    assert!(
+        tooltip.contains("#2 \u{b7} second question about the message rail tha\u{2026}"),
+        "the tooltip names and truncates the second message: {tooltip:?}"
+    );
+    assert!(
+        !tooltip.contains("runs long enough to truncate"),
+        "the tooltip keeps to 48 cells: {tooltip:?}"
+    );
+}
+
+#[test]
+fn queued_messages_do_not_add_message_rail_marks() {
+    use std::time::Instant;
+    let mut app = rail_app();
+    app.state.inputs.insert(
+        SESSION.into(),
+        serde_json::json!({"held": false, "inputs": [
+            {"id": "q1", "mode": "queue", "parts": [{"type": "text", "text": "Queued message one"}]},
+            {"id": "q2", "mode": "queue", "parts": [{"type": "text", "text": "Queued message two"}]}
+        ]}),
+    );
+    app.ui.pending_turns.insert(
+        SESSION.into(),
+        nexus_tui::app::PendingTurn {
+            started: Instant::now(),
+            queued: true,
+            accepted: false,
+            busy_seen: false,
+            key: None,
+        },
+    );
+    assert_eq!(app.pending_inputs().len(), 2);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows.iter().any(|row| row.contains("Waiting for Core")),
+        "the queued turn's pending row is shown:\n{rows:#?}"
+    );
+    assert_eq!(
+        rail_marks(&mut app, 120, 36).len(),
+        2,
+        "queued inputs and a queued pending turn are not turns on the rail"
+    );
+    // Once Core shows the queued message as a real turn, it gains a mark.
+    add_message(&mut app, 200, "user", "third question after the queue");
+    assert_eq!(
+        rail_marks(&mut app, 120, 36).len(),
+        3,
+        "a delivered queued message is a turn"
+    );
+}
+
+#[test]
+fn alt_up_in_the_project_rail_moves_the_project_not_the_turn() {
+    let mut app = rail_app();
+    let first = app.current_project().expect("fixture project");
+    app.state.model.projects.get_mut(&first).unwrap().position = Some(0);
+    let mut second = app.state.model.projects[&first].clone();
+    second.id = "prj_second".into();
+    second.name = "Second".into();
+    second.position = Some(1);
+    app.state.model.projects.insert(second.id.clone(), second);
+    app.ui.project = Some("prj_second".into());
+    app.ui.focus = nexus_tui::ui::Focus::Rail;
+    let ids = app.rail_project_ids();
+    let at = ids
+        .iter()
+        .position(|id| id == "prj_second")
+        .expect("the added project is on the rail");
+    assert!(at > 0, "the added project has one above it: {ids:?}");
+    app.ui.rail_cursor = at;
+    draw(&mut app, 120, 36);
+    let top = app.timeline_top();
+    app.effects.clear();
+    press(&mut app, &["alt+up"]);
+    assert!(
+        app.effects.iter().any(|e| matches!(
+            e,
+            Effect::Api(ApiCall::MoveProject { project, before: Some(before), .. })
+                if project == "prj_second" && before == &ids[at - 1]
+        )),
+        "alt+up asks Core to move the project: {:?}",
+        app.effects
+    );
+    assert_eq!(
+        app.timeline_top(),
+        top,
+        "alt+up with the rail focused does not jump turns"
+    );
 }
 
 #[test]
@@ -4919,14 +5173,16 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     }
     assert_eq!(buf[(nav.x, nav.y)].symbol(), " ", "no left indicator");
     assert!(r.contains((nav.x, nav.y).into()));
-    // The highlight includes the label; the segmented value draws its own
-    // well and selection band over it.
+    // The content is readable, but is not highlighted while the rail has focus.
     let sel = app
         .hits
         .rect_of(&Target::SettingsRow(app.ui.settings_row))
         .unwrap();
     for x in sel.x..sel.x + 5 {
-        assert_eq!(buf[(x, sel.y)].bg, selection, "band at {x}");
+        assert_eq!(
+            buf[(x, sel.y)].bg,
+            app.theme.color("surface.raised").unwrap()
+        );
     }
     assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
     assert_ne!(
@@ -4963,6 +5219,11 @@ fn settings_highlights_the_whole_selected_section_and_row_in_gray() {
     assert!(rows.join("\n").contains("Appearance"));
     press(&mut app, &[scenario["content_key"].as_str().unwrap()]);
     let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(buf[(sel.x, sel.y)].bg, selected);
+    assert_eq!(
+        buf[(nav.x, nav.y)].bg,
+        app.theme.color("surface.raised").unwrap()
+    );
     assert_eq!(buf[(sel.x, sel.y)].symbol(), " ");
     assert_eq!(buf[(nav.x, nav.y)].symbol(), " ");
     app.effects.clear();
@@ -6200,6 +6461,37 @@ fn load_older_reads_the_page_before_the_oldest_message_and_prepends_it() {
     // The turns covering the older page arrive in the same step.
     assert!(view.turns.iter().any(|t| t.id == "trn_older"));
     assert!(!view.turns_more_before);
+}
+
+#[test]
+fn the_model_picker_aligns_favorite_and_unstarred_names() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.models = vec![
+        serde_json::json!({"ref": "codex/sol", "name": "GPT Sol"}),
+        serde_json::json!({"ref": "codex/terra", "name": "GPT Terra"}),
+    ];
+    app.state.config = Some(serde_json::json!({"values": {"ui": {
+        "favorite_models": ["codex/terra"]
+    }}}));
+    app.run_command("model.change");
+
+    let (buf, _) = draw(&mut app, 120, 36);
+    let favorite = app.hits.rect_of(&Target::PaletteItem(0)).unwrap();
+    let other = app.hits.rect_of(&Target::PaletteItem(1)).unwrap();
+    let row = |y| -> String {
+        (favorite.x..favorite.right())
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    };
+    let favorite = row(favorite.y);
+    let other = row(other.y);
+    let name_column = favorite.chars().position(|c| c == 'G').unwrap();
+    assert_eq!(other.chars().position(|c| c == 'G'), Some(name_column));
+    assert!(
+        favorite.trim_start().starts_with("★ GPT Terra"),
+        "{favorite}"
+    );
+    assert!(other.trim_start().starts_with("GPT Sol"), "{other}");
 }
 
 #[test]

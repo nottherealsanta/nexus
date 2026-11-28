@@ -99,6 +99,26 @@ describe("modal recipe (I7)", () => {
     expect(app.texts().some((text) => text.startsWith("The new session will use"))).toBe(false);
   });
 
+  test("the model picker renders the favorite star separately from the model name", async () => {
+    const app = await open("./App.tsx", {
+      network: network({
+        "GET */api/model*": { body: { models: [
+          { ref: "codex/sol", name: "GPT Sol" }, { ref: "codex/terra", name: "GPT Terra" },
+        ] } },
+        "GET */api/config": { body: { revision: "test", values: { ui: { onboarded: true, favorite_models: ["codex/terra"] } } } },
+      }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("id:rail-project-prj_1");
+    await app.keyboard.press(`${mod}+p`);
+    await app.type("id:palette-input", "model");
+    await app.press("id:cmd-model.change");
+    await app.waitFor("id:pick-1");
+    expect(app.texts().filter((text) => text.includes("★") || text.startsWith("GPT "))).toEqual([
+      "★", "GPT Terra", "GPT Sol",
+    ]);
+  });
+
   test("a destructive confirm has Cancel as its default: Enter cancels, nothing is deleted", async () => {
     const child = { id: "ses_1", project_id: "prj_1", directory: "/work/demo", title: "T", model: "", permission: "ask", created: 1, updated: 2, effort: null, agent: "build", parent_id: null, archived: 0, revision: 1, disabled_tools: "[]" };
     const app = await open("./App.tsx", {

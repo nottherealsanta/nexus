@@ -137,6 +137,10 @@ export const structure = {
     "unicode": "\u2503",
     "ascii": "|"
   },
+  "rail_mark": {
+    "unicode": "\u2501",
+    "ascii": "-"
+  },
   "tree_mid": {
     "unicode": "\u251c\u2500",
     "ascii": "|-"

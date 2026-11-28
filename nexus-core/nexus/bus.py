@@ -21,6 +21,17 @@ a watermark with no publish/replay race (`Stream.open`).
 
 `subscribe()` is the live-only iterator the runner tests use; the HTTP stream
 uses `open()` together with `nexus/eventlog.py`.
+
+`publish_threadsafe(loop, ...)` is the synchronous form for a caller on another
+thread (the recorder host): it commits on that thread, appends to `_pending`
+under the bus lock and wakes `loop` with `call_soon_threadsafe(self.flush)`. The
+event is durable before the call returns; delivery is on `loop`, in event-id
+order with loop-side `publish` and `apublish`. A durable event whose loop is
+already closed does not raise (the row is replayed by a reconnecting stream); a
+live-only event cannot be replayed, so it raises `RuntimeError` instead of
+silently succeeding. Either way the undeliverable event is dropped from
+`_pending`, so a later flush cannot deliver it stale. A storage failure raises
+with nothing delivered.
 """
 from __future__ import annotations
 
@@ -144,6 +155,42 @@ class Bus:
         event = await self._log.w.run(job)
         self.flush()
         return event
+
+    def publish_threadsafe(self, loop: asyncio.AbstractEventLoop, type_: str, data: Any = None, *,
+                           session_id: str | None = None, turn_id: str | None = None,
+                           durable: bool = True) -> dict[str, Any]:
+        """`publish` for a caller on another thread; delivery happens on `loop`.
+
+        Same contract: a durable event is committed before this returns, and a
+        storage failure raises with nothing delivered. Live-only events take the
+        same ordered path with `id: None`. The loop is only woken after the lock
+        is released. If the loop is already closed, a durable event is returned
+        (its row is replayed, so raising would cause a duplicate republish), but
+        a live-only event raises `RuntimeError` because it cannot be replayed.
+        The stale `_pending` entry is removed in both cases.
+        """
+        with self._lock:
+            event, stored = self._store_event(type_, data, session_id, turn_id, durable)
+            if stored:
+                self._pending.append(event)
+        if stored:
+            try:
+                loop.call_soon_threadsafe(self.flush)
+            except RuntimeError:  # loop closed while shutting down
+                self._discard_pending(event)
+                if not durable:
+                    raise RuntimeError(
+                        "cannot deliver a live-only event: the event loop is closed"
+                    ) from None
+        return event
+
+    def _discard_pending(self, event: dict[str, Any]) -> None:
+        """Remove one undelivered event from `_pending`."""
+        with self._lock:
+            for index, pending in enumerate(self._pending):
+                if pending is event:
+                    del self._pending[index]
+                    return
 
     def flush(self) -> None:
         """Deliver events committed on the writer thread, in order."""

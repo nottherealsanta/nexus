@@ -84,8 +84,12 @@ process (`nexus/voice/worker.py`) so the daemon's environment is never changed:
 - The verified sizes and SHA-256 hashes are checked by Core before the worker
   starts. A missing or corrupt snapshot fails closed.
 
-Inference is serialized on the single worker. After 10 idle minutes the worker
-is stopped and its memory released; the next request starts a new one from the
+Inference is serialized on the single worker. Internal recorder-window jobs share that worker:
+interactive requests have priority, pending recorder previews are replaceable, and recorder finals
+have bounded admission with retryable backpressure. The recorder scheduler shares this worker and
+persists final transcript revisions separately from live-only segment events. Recorder capture and
+transcription are independently managed; real-audio performance remains unverified.
+After 10 idle minutes the worker is stopped and its memory released; the next request starts a new one from the
 cache. Errors include 409 `voice_busy`/`voice_model_not_cached` and 422
 `voice_dependency_missing`/`voice_model_invalid`/`voice_load_failed`.
 
@@ -136,6 +140,83 @@ hidden model-only instructions. Clearing the draft clears the note.
 OS keyboard dictation usually arrives as ordinary text with no provenance flag,
 so Nexus cannot automatically identify it. Users can add the same note manually.
 
+## Standalone recorder
+
+The standalone recorder is a desktop and web feature of the TUI and NSH, separate
+from dictation and from the Manager. The phone shell has no recorder entry or
+modal, and the recorder commands are desktop-only; the iOS native capture module
+reports itself unavailable. The header entry (`Record`, or the active capture's
+label) sits left of Notifications and Manager and works with Manager disabled and
+with no notifications. Opening it lists recent recordings and the current
+recording's state; it never opens the microphone, starts a capture or starts the
+Manager. Capture begins only on an explicit `Start recording`.
+
+The modal keeps three independent statuses: capture (`Recording · 12:34`, then
+`Stopping`/`Stopped`/`Interrupted`), audio (`Saved to Core through …`, with
+pending audio or gaps reported separately) and transcription (`Preparing`,
+`Live`, `Catching up · Ns behind`, `Complete`, `Unavailable` or failed parts). It
+shows the microphone and the Core destination, a level meter while capturing,
+and the transcript with a replaceable provisional tail. Esc and `Minimize`
+minimize without stopping; `Stop` releases the microphone first and then drains
+the last audio. Auto-follow happens only while the reader is at the bottom;
+otherwise `Jump to live` appears. `Copy transcript` is the only export in the
+clients.
+
+Audio is stored in the configured Core's Nexus home under
+`recordings/<opaque-id>/`, never in the workspace, session log or model cache.
+With a remote Core the audio goes to that Core's home; NSH shows the Core host in
+the destination row (loopback reads `this computer`) and never uploads to another
+service. The clients deliberately offer no Save As or browser download: the
+recording stays in Core's Nexus home until the user deletes it. Deletion is
+explicit and confirmed and also removes its transcript; recordings do not expire
+automatically. A create that never received audio is kept as an empty recording
+until it is explicitly deleted. Audio and transcripts are never inserted into a
+session or model prompt by the recorder; a durable transcript belongs only to
+the recording (`recordings/<id>/transcript/log.jsonl`), while live transcript
+revisions travel as live-only events and are not replayed after a reconnect.
+
+Each client has one microphone owner shared by dictation, the Manager's live call
+and the recorder, so two features cannot open the device at once. Core allows
+one active capture across clients: another client can view it (`REC elsewhere`)
+but cannot use that client's microphone, and only the owner may upload or stop.
+The owner heartbeats its lease (nominally every 5 seconds; expiry after 20) and
+stops capture when the lease or event stream is lost. A headset or device
+failure, callback overflow or storage failure also stops capture and is reported
+as a gap rather than hidden.
+
+Capture is mono 16 kHz PCM16 in roughly one-second chunks (at most 64 000 bytes),
+with a 30-second bounded client spool; only Core-acknowledged audio is labelled
+saved. Transcription runs independently of capture through the shared voice
+worker: the scheduler closes energy-VAD utterances, uses bounded windows (up to
+10 seconds, with a short overlap), drops stale previews, and persists final
+revisions while provisional text stays live-only. Positions are integer sample
+offsets, not word timestamps, and `Catching up` lag comes from processed audio
+offsets. These are implementation defaults, not a measured latency guarantee.
+
+After a client crash, reload, stream loss or lease expiry, the recording becomes
+`Interrupted`; Nexus never restarts the microphone by itself. `Recover unsaved
+audio` may upload only audio already present in the client's local spool (the
+TUI's `<client Nexus home>/recorder-spool/`, or NSH's IndexedDB spool) up to the
+sealed final sample count. Missing ranges stay visible, are never filled with
+silence, and a browser or native runtime that cannot provide durable local
+storage says so instead of promising recovery. Recordings and their recovered
+state survive a Core or client restart; a new recording is a new recording, not
+gapless continuation.
+
+Quitting the TUI, or the NSH desktop app, while this client owns a capture asks
+`Stop and exit` / `Keep recording`. A browser tab or window close cannot show
+those controls and uses the browser's generic close confirmation instead; this
+approved client-specific difference is recorded in the porting ledger.
+
+Core's create contract now requires a client-generated recovery capability
+(`X-Recorder-Recovery`) and supports resume-by-idempotency-key without creating;
+see [api.md](api.md#recorder). The TUI and NSH create/recovery clients are still
+being adapted to that contract, so end-to-end recording against this Core is not
+yet verified. Deterministic recorder tests exist for storage, leases,
+scheduling, transcript logs and the clients' view models; no real microphone,
+real STT model, hour-long run, recovery drill or latency measurement has been
+performed for this feature.
+
 ## TUI
 
 `/speak` (command `session.speak`, palette) plays the viewed session's latest answer:
@@ -152,8 +233,9 @@ ignored test (`cargo test --lib speaks_a_real_answer -- --ignored`, with
 absent a consent modal (repo, size) comes first, then `POST /api/voice/stt/download` with
 progress; `runtime_missing` and `unsupported` show the status error as a toast. The TUI
 prepares the model before capture, playing a repeating tone while a cold model loads.
-`nexus-tui/src/dictation.rs` then captures with `cpal` on its own thread, downmixes and resamples
-to 16 kHz mono PCM16, plays start and stop cues, shows a blinking red square only during capture, and sends
+`nexus-tui/src/dictation.rs` then captures with `cpal` on its own thread, using the shared
+`nexus-tui/src/audio_capture.rs` primitives to downmix and resample to 16 kHz mono PCM16. It
+plays start and stop cues, shows a blinking red square only during capture, and sends
 paced `?partial=1` previews (at least 0.4 s of new audio apart) that appear inside the
 composer at the cursor where recording began. Enter stops and sends; Esc stops and keeps the
 words (Esc while transcribing discards them); typing stops the capture and the key applies.

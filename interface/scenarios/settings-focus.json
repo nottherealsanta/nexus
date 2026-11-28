@@ -3,5 +3,9 @@
   "return_key": "left",
   "tui_return_key": "tab",
   "next_section_key": "down",
-  "next_section": "providers"
+  "next_section": "keybindings",
+  "search_key": "/",
+  "search_query": "dark",
+  "search_row": "appearance.theme",
+  "search_path": "Appearance"
 }

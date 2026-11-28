@@ -1,9 +1,14 @@
 //! View state of the shell: focus, overlays, dialogs, scroll, alerts and the
 //! mouse targets. No rendering and no Core calls here.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::composer::Composer;
+use crate::recorder_view::{
+    CapturePhase, CoreInput, FailureInput, Page, ProvisionalInput, RecentRecording, SegmentInput,
+    SegmentStatus, SourceInput, SpoolKind, TranscriptInput, ViewInput,
+};
 
 /// Where the keyboard is. Exactly one element has focus; overlays record the
 /// focus they replaced (`Restore`) and give it back when they close.
@@ -161,7 +166,10 @@ pub enum PaletteKind {
     Provider(String, bool),
     Session(String),
     Project(String),
-    Model(String),
+    Model {
+        reference: String,
+        favorite: bool,
+    },
     PoolModel(String),
     /// A model chosen in the tour; `None` is "use the session's model".
     OnboardingModel(Option<String>),
@@ -215,10 +223,317 @@ pub struct ContextEntry {
     pub fetch: Option<&'static str>,
 }
 
+/// What this client's capture controller is doing, for the recorder UI.
+///
+/// Built from the driver's snapshot; tokens never reach this struct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecorderOwner {
+    pub phase: CapturePhase,
+    pub recording_id: Option<String>,
+    /// End of the audio delivered by the capture source.
+    pub captured_samples: u64,
+    /// Captured and spooled but not yet acknowledged by Core.
+    pub pending_samples: u64,
+    pub spool: SpoolKind,
+    /// The durable spool holds audio this client can still upload.
+    pub recoverable: bool,
+    pub reason: Option<String>,
+    /// Smoothed RMS while recording, 0..=1.
+    pub level: f64,
+    /// The microphone is open (the lease was granted).
+    pub capture_open: bool,
+}
+
+impl RecorderOwner {
+    pub fn active(&self) -> bool {
+        matches!(
+            self.phase,
+            CapturePhase::Starting | CapturePhase::Recording | CapturePhase::Stopping
+        )
+    }
+}
+
+/// One recorder dialog, drawn inside the recorder modal. Button 0 comes first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecorderDialog {
+    /// `app.quit` while this client records. 0 = Stop and exit, 1 = Keep recording.
+    Quit { button: usize },
+    /// Deleting a recording from the Recent page. 0 = Delete, 1 = Cancel.
+    Delete { id: String, button: usize },
+}
+
+/// The durable transcript kept for the open recording: the greatest revision
+/// per segment, one provisional tail, bounded to the shared 5,000-segment cap.
+#[derive(Debug, Clone, Default)]
+pub struct RecorderTranscript {
+    pub recording_id: Option<String>,
+    pub generation: Option<u64>,
+    pub segments: BTreeMap<u32, SegmentInput>,
+    pub provisional: Option<ProvisionalInput>,
+    /// Older durable text was dropped by the cap.
+    pub dropped: bool,
+}
+
+impl RecorderTranscript {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn replace_page(&mut self, page: &TranscriptInput) {
+        if page.recording_id.is_some() {
+            self.recording_id = page.recording_id.clone();
+        }
+        if page.generation.is_some() {
+            self.generation = page.generation;
+        }
+        for segment in &page.segments {
+            self.apply(segment);
+        }
+        // A paged read is authoritative for the live tail after a reconnect.
+        self.provisional = page.provisional.clone();
+        if page.dropped > 0 {
+            self.dropped = true;
+        }
+    }
+
+    pub fn apply_event(
+        &mut self,
+        recording_id: Option<&str>,
+        generation: Option<u64>,
+        segment: &SegmentInput,
+    ) {
+        if self
+            .recording_id
+            .as_deref()
+            .zip(recording_id)
+            .is_some_and(|(current, next)| current != next)
+        {
+            return;
+        }
+        if self
+            .generation
+            .zip(generation)
+            .is_some_and(|(current, next)| current != next)
+        {
+            return;
+        }
+        self.apply(segment);
+    }
+
+    pub fn apply(&mut self, segment: &SegmentInput) {
+        if segment.status == SegmentStatus::Provisional {
+            if self.provisional.as_ref().is_some_and(|tail| {
+                tail.segment_id == segment.segment_id && tail.revision >= segment.revision
+            }) || self
+                .segments
+                .get(&segment.segment_id)
+                .is_some_and(|durable| durable.revision >= segment.revision)
+                || self
+                    .segments
+                    .keys()
+                    .next_back()
+                    .is_some_and(|last| segment.segment_id < *last)
+            {
+                return;
+            }
+            self.provisional = Some(ProvisionalInput {
+                segment_id: segment.segment_id,
+                revision: segment.revision,
+                start: segment.start,
+                text: segment.text.clone().unwrap_or_default(),
+            });
+            return;
+        }
+        if self
+            .segments
+            .get(&segment.segment_id)
+            .is_some_and(|current| current.revision >= segment.revision)
+        {
+            return;
+        }
+        self.segments.insert(segment.segment_id, segment.clone());
+        if self
+            .provisional
+            .as_ref()
+            .is_some_and(|tail| tail.segment_id <= segment.segment_id)
+        {
+            self.provisional = None;
+        }
+        while self.segments.len() > crate::recorder_view::MAX_TRANSCRIPT_SEGMENTS {
+            let Some(oldest) = self.segments.keys().next().copied() else {
+                break;
+            };
+            self.segments.remove(&oldest);
+            self.dropped = true;
+        }
+    }
+
+    pub fn page(&self) -> TranscriptInput {
+        TranscriptInput {
+            recording_id: self.recording_id.clone(),
+            generation: self.generation,
+            segments: self.segments.values().cloned().collect(),
+            provisional: self.provisional.clone(),
+            dropped: u64::from(self.dropped),
+        }
+    }
+}
+
+/// The recorder's client-side state. Capture, persistence and transcription
+/// stay independent axes; the pure view-model combines them for drawing.
+#[derive(Debug, Clone)]
+pub struct RecorderUi {
+    pub page: Page,
+    /// The focused action or Recent row id (`recorder.stop`, `recent.0`).
+    pub focus: String,
+    /// Rows scrolled back from the bottom, per recording id. Zero follows live.
+    pub scroll_back: HashMap<String, usize>,
+    /// Recordings whose interrupted pill has been seen in the modal.
+    pub seen_interrupted: HashSet<String>,
+    pub owner: Option<RecorderOwner>,
+    pub core: Option<CoreInput>,
+    /// The recording the modal shows and the last id this client knew.
+    pub current_id: Option<String>,
+    pub transcript: RecorderTranscript,
+    pub recent: Vec<RecentRecording>,
+    pub recent_limit: usize,
+    pub failure: Option<FailureInput>,
+    pub source: SourceInput,
+    /// Spool recording ids this client can recover.
+    pub recoverable: Vec<String>,
+    pub dialog: Option<RecorderDialog>,
+    /// A quit is waiting for the stop drain, then exits (plan 54 §2.6).
+    pub pending_quit: Option<Instant>,
+    /// One idempotency key per Start press; retries reuse it.
+    pub start_key: Option<String>,
+    /// An earlier create intent still needs recovery, or Core needs a restart.
+    pub startup_block: Option<String>,
+    /// Create intents still on disk after the last startup recovery pass.
+    pub pending_starts: usize,
+}
+
+impl Default for RecorderUi {
+    fn default() -> Self {
+        Self {
+            page: Page::Recorder,
+            focus: "recorder.start".into(),
+            scroll_back: HashMap::new(),
+            seen_interrupted: HashSet::new(),
+            owner: None,
+            core: None,
+            current_id: None,
+            transcript: RecorderTranscript::default(),
+            recent: Vec::new(),
+            recent_limit: 50,
+            failure: None,
+            source: SourceInput::default(),
+            recoverable: Vec::new(),
+            dialog: None,
+            pending_quit: None,
+            start_key: None,
+            startup_block: None,
+            pending_starts: 0,
+        }
+    }
+}
+
+impl RecorderUi {
+    /// The recording currently shown, preferring this client's own capture.
+    pub fn shown_id(&self) -> Option<String> {
+        self.owner
+            .as_ref()
+            .and_then(|owner| owner.recording_id.clone())
+            .or_else(|| self.core.as_ref().map(|core| core.id.clone()))
+            .or_else(|| self.current_id.clone())
+    }
+
+    fn owner_input(&self) -> Option<crate::recorder_view::OwnerInput> {
+        self.owner
+            .as_ref()
+            .map(|owner| crate::recorder_view::OwnerInput {
+                phase: owner.phase,
+                recording_id: owner.recording_id.clone(),
+                captured_samples: owner.captured_samples,
+                pending_samples: owner.pending_samples,
+                spool: owner.spool,
+                recoverable: owner.recoverable,
+                reason: owner.reason.clone(),
+                level: owner.level,
+            })
+    }
+
+    /// The header only needs the capture axes; the transcript and Recent rows
+    /// are not built for it.
+    pub fn header_input(
+        &self,
+        width: crate::recorder_view::Width,
+    ) -> crate::recorder_view::RecorderViewInput {
+        let id = self.shown_id();
+        let follow = self
+            .scroll_back
+            .get(id.as_deref().unwrap_or_default())
+            .copied()
+            .unwrap_or(0)
+            == 0;
+        crate::recorder_view::RecorderViewInput {
+            owner: self.owner_input(),
+            core: self.core.clone(),
+            transcript: None,
+            failure: self.failure.clone(),
+            recent: None,
+            source: Some(self.source.clone()),
+            view: ViewInput {
+                modal_open: true,
+                page: Page::Recorder,
+                transcript_follow: follow,
+                seen_interrupted: id
+                    .as_deref()
+                    .is_some_and(|id| self.seen_interrupted.contains(id)),
+            },
+            width,
+        }
+    }
+
+    pub fn view_input(
+        &self,
+        width: crate::recorder_view::Width,
+    ) -> crate::recorder_view::RecorderViewInput {
+        let id = self.shown_id();
+        let follow = self
+            .scroll_back
+            .get(id.as_deref().unwrap_or_default())
+            .copied()
+            .unwrap_or(0)
+            == 0;
+        crate::recorder_view::RecorderViewInput {
+            owner: self.owner_input(),
+            core: self.core.clone(),
+            transcript: Some(self.transcript.page()),
+            failure: self.failure.clone(),
+            recent: Some(crate::recorder_view::RecentInput {
+                recordings: self.recent.clone(),
+                limit: self.recent_limit,
+            }),
+            source: Some(self.source.clone()),
+            view: ViewInput {
+                modal_open: true,
+                page: self.page,
+                transcript_follow: follow,
+                seen_interrupted: id
+                    .as_deref()
+                    .is_some_and(|id| self.seen_interrupted.contains(id)),
+            },
+            width,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayKind {
     Inspector(crate::inspector::Inspector),
     Palette(Palette),
+    /// The recorder modal. Its page, focus and scroll live in `RecorderUi`.
+    Recorder,
     LearnChecklist(LearnChecklist),
     Notifications {
         selected: usize,
@@ -736,6 +1051,16 @@ pub enum Target {
     Notifications,
     /// The header's Manager button.
     ManagerSession,
+    /// The header's recorder entry.
+    Recorder,
+    /// A recorder action-row button, by command id.
+    RecorderButton(String),
+    /// One row of the Recent recordings page.
+    RecorderRecent(usize),
+    /// A button of the recorder's own confirm dialog.
+    RecorderDialogButton(usize),
+    /// The transcript's `Jump to live` chip.
+    RecorderJumpLive,
     Tab(Tab),
     SettingsEntry,
     UsageRefresh,
@@ -869,6 +1194,9 @@ pub enum Target {
     },
     /// A section in Settings' left rail, by index into `App::settings_sections`.
     SettingsSection(usize),
+    SettingsSearch,
+    SettingsSearchClear,
+    SettingsSearchResult(usize),
     /// A selectable item on a Settings page, by position among the page's items.
     SettingsPageRow(usize),
     /// A row of a provider's detail modal.

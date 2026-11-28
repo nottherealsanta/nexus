@@ -4,7 +4,7 @@ import { sendChoice } from "./mobile/state";
 import { Btn, Icon, IconButton, FOCUS, UI_FONT, Shimmer, Status, StatusRail, T, TS, pathTail, shortPath } from "./kit";
 import { dockHeight } from "../core/manager";
 import { PRINTABLE_KEYS, printableOf } from "../manager";
-import { availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, questionLineFocus, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
+import { COMPACTING_LOCK, availability, bindOpenKeys, blurComposer, byId, commands, draftKey, focusComposer, focusWaiting, questionLineFocus, pasteClipboard, keyLabel, otherWaits, questionLocked, restorePendingParts, resumeArchived, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import { compactApproval } from "../mobile";
 import {
@@ -191,6 +191,7 @@ function EditableComposer() {
     const c = connection();
     if (c.kind !== "live") return c.kind === "reconnecting" ? "Reconnecting to Core: read-only" : c.kind === "offline" ? "Core is offline: read-only" : c.kind === "auth_failed" ? "Authentication failed: read-only" : c.kind === "incompatible" ? "Incompatible API: blocked" : "Connecting to Core…";
     // A question owns the answer: keep the draft, but no typing, send, steer or queue.
+    if (ses()?.handing_off) return COMPACTING_LOCK;
     if (questionPending()) return "Answer the question above";
     if (!currentProject() && centre() === "new_session") return "Add or choose a project first";
     return null;
@@ -601,8 +602,8 @@ function EditableComposer() {
             }}
             pasteBehavior="report"
             ref={(n: any) => (ref = n)} multiline value={shown()} testID="composer-input" accessibilityLabel={qMode() ? "Add context to the answer" : "Message"}
-            placeholder={qMode() ? (qItem()?.options.length ? "Add context…" : "Type your answer…") : reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (phoneApproval() ? "Or tell it what to do instead…" : busy() ? "Steer or queue…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
-            readonly={!live() || (qMode() ? !qItem() || submitted().has(dq()!.id) : questionPending())}
+            placeholder={ses()?.handing_off ? COMPACTING_LOCK : qMode() ? (qItem()?.options.length ? "Add context…" : "Type your answer…") : reason() ?? (centre() === "new_session" || !ses() ? "Message to start a new session" : phone ? (phoneApproval() ? "Or tell it what to do instead…" : busy() ? "Steer or queue…" : "Message") : busy() ? "Type a message… Enter steer · Tab queue · Alt+Enter interrupt" : "Type a message…")}
+            readonly={!live() || !!ses()?.handing_off || (qMode() ? !qItem() || submitted().has(dq()!.id) : questionPending())}
             submitBehavior="submit" onSubmit={() => {
               if (dictationPhase() === "recording") { void stopDictation(); return; }
               if (dictationPhase() !== "idle") return;
@@ -1535,11 +1536,8 @@ function AnswerHint() {
   return <If when={!!c && !phone}><Text class={T.meta} testID="waiting-answer-hint"><Text class="font-medium text-foreground">{c ? keyLabel(c) ?? "" : ""}</Text>{" answer"}</Text></If>;
 }
 
-/** A drawn radio mark: a 14 px ring with a filled centre when selected. */
 function RadioMark(p: { on: boolean; testID?: string }) {
-  return <View testID={p.testID} class={`size-3.5 shrink-0 items-center justify-center rounded-full border ${p.on ? "border-primary" : "border-muted-foreground"}`}>
-    <If when={p.on}><View class="size-1.5 rounded-full bg-primary" /></If>
-  </View>;
+  return <Text testID={p.testID} class={`w-3.5 text-center shrink-0 text-[14px] leading-6 ${p.on ? "text-primary" : "text-muted-foreground"}`}>{p.on ? "•" : " "}</Text>;
 }
 /** A drawn checkbox: a 14 px square box with a check icon when selected. */
 function CheckMark(p: { on: boolean; testID?: string }) {

@@ -28,8 +28,7 @@ fn main() -> ExitCode {
         ..AppOptions::default()
     };
     set_ui_sets(vec![nsh_base::registry(), nexus_nsh_native::registry()]);
-    run_app(AppSource::Bundle(bundle), options);
-    ExitCode::SUCCESS
+    run_app(AppSource::Bundle(bundle), options)
 }
 
 fn load_bundle(path: &Path) -> std::io::Result<Bundle> {

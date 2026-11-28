@@ -608,3 +608,22 @@ def test_effort_config_rejects_malformed_values(env):
     for bad in ({"helper": {"codex/child": "Very High"}}, {"helper": {"nomodel": "low"}}, {"helper": {}}, {"Bad Name": {"a/b": "low"}}):
         with pytest.raises(ValueError):
             config.patch(config.read()["revision"], {"agents.efforts": bad}, [])
+
+
+async def test_child_report_ends_with_its_size(env):
+    rt, _, providers, workspace = env
+    providers["child"] = Scripted([[Text("done")]])
+    project = rt.open_project(str(workspace))
+    parent = rt.create_session(project, title=None, model=None, permission=None)
+    child = rt.create_session(project, title=None, model=None, permission=None, agent="helper", parent=parent)
+    rt.prompt(child.id, "go")
+    await _idle(rt)
+    assert rt._child_report(child.id).endswith("\n\ndone")  # no measured input yet: no size
+    rt.store.db.execute("update turn_request set input_tokens = 50000 where session_id = ?", (child.id,))
+    rt.cached_window_for = lambda model: None
+    assert rt._child_report(child.id).endswith("\n\n[Sub agent size: 1 step; context window unknown]")
+    rt.cached_window_for = lambda model: 200000
+    report = rt._child_report(child.id)
+    assert report.startswith(f"Sub agent {child.id} (agent helper) finished.\n\ndone")
+    assert report.endswith("\n\n[Sub agent size: context 25% full, 1 step]")
+    assert rt._child_size(parent.id) == ""  # no request, no size

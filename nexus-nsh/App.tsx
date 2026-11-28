@@ -1,6 +1,6 @@
 import { installFileWatch } from "./src/file-watch";
 import { mount, View, platform, windowSize, effect, colorScheme } from "nsh";
-import { Tray, Window } from "nsh/desktop";
+import { Tray, currentWindow } from "nsh/desktop";
 import { Header } from "./src/ui/header";
 import { LeftSidebar, SessionRail } from "./src/ui/sidebar";
 import { PhoneShell } from "./src/ui/mobile/shell";
@@ -24,6 +24,7 @@ import trayIcon from "./src/icons/tray.svg";
 import trayAttentionIcon from "./src/icons/tray-attention.svg";
 import { ProjectsOverviewHost } from "./src/ui/projects-overview";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker, RenameSession, SkillChecklist, FileOperationDialog, WorktreeInfo } from "./src/ui/overlays";
+import { RecorderModal } from "./src/ui/recorder";
 import { SessionSwitcher } from "./src/ui/switcher";
 import { ConnectScreen, coreEditing } from "./src/ui/connect";
 import { Splash, splashDone } from "./src/ui/splash";
@@ -38,16 +39,16 @@ import "nexus/native";
 import "./fonts/GoogleSans-Variable.ttf";
 
 /** The system tray: projects and session status as a menu, and the icon marks a session that needs attention. */
-function installTray() {
+function installTray(window: ReturnType<typeof currentWindow>) {
   m();
   const t = trayModel(model.projects.values(), model.sessions.values(), model.approvals.values(), model.questions.values(), model.running, model.unreadSessions);
-  const open = (id: string) => { Window.orderFront(); void selectSession(id); };
+  const open = (id: string) => { window.focus(); void selectSession(id); };
   Tray.set({
     icon: t.attention ? trayAttentionIcon : trayIcon,
     tooltip: t.tooltip,
-    onClick: () => Window.orderFront(),
+    onClick: () => window.focus(),
     menu: [
-      { label: "Open Nexus", onSelect: () => Window.orderFront() },
+      { label: "Open Nexus", onSelect: () => window.focus() },
       { type: "separator" },
       ...t.projects.map((p) => ({
         label: projectTitle(p),
@@ -62,6 +63,8 @@ function installTray() {
 }
 
 function App() {
+  // `currentWindow()` names a desktop window; the web, terminal and phone surfaces have none.
+  const window = platform.os === "macos" || platform.os === "linux" || platform.os === "windows" ? currentWindow() : null;
   void loadPrefs().then(() => { if (themeChoice() !== "system") setColorScheme(themeChoice()); });
   startApp();
   bindKeys();
@@ -70,8 +73,8 @@ function App() {
   effect(() => { syncView(); });
   installFileWatch();
   if (!phone) installLayout();
-  effect(() => { if (platform.os === "macos") Window.setTitleBar({ style: "hidden", height: 44 }); });
-  effect(() => { if (!phone) installTray(); });
+  effect(() => { if (window && platform.os === "macos") window.set({ titleBar: { style: "hidden", height: 44 } }); });
+  effect(() => { if (window && !phone) installTray(window); });
   void colorScheme;
   // First run: Core says this home has not seen the tour (ui.onboarded); it opens once the launch splash is gone.
   effect(() => { if (splashDone() && shouldOfferOnboarding(config(), phone, onboardingOffered())) openOnboarding(); });
@@ -95,6 +98,7 @@ function App() {
         </View>
         </>}><PhoneShell /></If>
         <If when={!phone}><Onboarding /></If>
+        <If when={!phone}><RecorderModal /></If>
         <ContextDetailModal />
         <SubagentDoneModal />
         <ResourcesModal />

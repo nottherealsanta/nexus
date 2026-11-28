@@ -133,6 +133,8 @@ pub enum SyncMsg {
         tag: String,
         result: Result<Value, ManagerError>,
     },
+    /// A recorder task reply (status, list, one recording, transcript, …).
+    Recorder(RecorderUpdate),
 }
 
 /// The current stream's id, for the one route that streams audio back
@@ -158,6 +160,90 @@ pub struct ManagerError {
     pub message: String,
     /// The error body as Core sent it (`consent_required` carries the notice).
     pub body: Value,
+}
+
+/// One command for the recorder task. Tokens stay inside the driver; the app
+/// only ever names a recording, a title and an idempotency key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecorderAction {
+    Start {
+        title: Option<String>,
+        idempotency_key: String,
+    },
+    Stop,
+    /// A new event stream is live: recover create intents from an earlier run
+    /// before any Start can reach Core.
+    Connected,
+    List,
+    Detail {
+        id: String,
+    },
+    /// Read every durable transcript page for one recording.
+    Transcript {
+        id: String,
+    },
+    Retry {
+        id: String,
+    },
+    Delete {
+        id: String,
+    },
+    Recover,
+    /// Copy the durable export; `complete` is Core's completion marker.
+    CopyTranscript {
+        id: String,
+    },
+}
+
+/// Recorder task -> app. Public recording state is still applied from the
+/// durable `recorder.*` events; these are the reads and this client's capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoverableAudio {
+    pub id: String,
+    pub accepted_samples: u64,
+    pub pending_samples: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecorderUpdate {
+    Status {
+        owner: crate::ui::RecorderOwner,
+        recoverable: Vec<String>,
+        warnings: Vec<String>,
+    },
+    List(Result<Vec<Value>, String>),
+    Detail(Result<Value, String>),
+    Transcript {
+        id: String,
+        page: Result<Value, String>,
+    },
+    Retry(Result<(), String>),
+    Copied {
+        text: String,
+        complete: bool,
+    },
+    Deleted {
+        id: String,
+        result: Result<(), String>,
+    },
+    Recovered(Result<crate::recorder_driver::RecoveryReport, String>),
+    /// Startup create-intent recovery, with the number of intents still on
+    /// disk. `ready` is false while any intent remains or Core needs a restart.
+    Startup {
+        result: Result<crate::recorder_driver::RecoveryReport, String>,
+        pending: usize,
+        ready: bool,
+    },
+    /// This client's bounded spool holds audio that can still be uploaded.
+    Recoverable(Vec<RecoverableAudio>),
+    /// A read or copy failed; capture is unaffected.
+    Error(String),
+    Failed {
+        kind: String,
+        message: String,
+    },
+    /// A new event stream opened: re-read snapshots and rebind the capture.
+    Reconnected,
 }
 
 /// A Manager route that needs this stream's `stream_id`. The supervisor owns
@@ -218,6 +304,8 @@ pub enum Command {
     },
     /// A Manager route call (start, say, activity, navigate result, ...).
     Manager(ManagerCall),
+    /// Recorder captures, reads and recovery run in their own task.
+    Recorder(RecorderAction),
     Shutdown,
 }
 
@@ -310,6 +398,8 @@ struct Ctx {
     /// The selected session and its newest closed turn, the anchor of
     /// `/turn?after=` after a reconnect.
     newest_turn: Option<(String, String)>,
+    /// The recorder task's command queue; `None` once it is gone.
+    recorder: Option<mpsc::UnboundedSender<RecorderAction>>,
     shutdown: bool,
 }
 
@@ -385,6 +475,11 @@ impl Ctx {
                         body: Value::Null,
                     }),
                 });
+            }
+            Command::Recorder(action) => {
+                if let Some(recorder) = &self.recorder {
+                    let _ = recorder.send(action);
+                }
             }
             Command::Shutdown => self.shutdown = true,
         }
@@ -619,16 +714,505 @@ enum Handshake {
     Stop,
 }
 
+fn recorder_owner(
+    status: &crate::recorder_driver::RecorderDriverStatus,
+    recoverable: &[String],
+) -> crate::ui::RecorderOwner {
+    use crate::recorder::CaptureState;
+    use crate::recorder_view::{CapturePhase, SpoolKind};
+    let phase = match status.capture.state {
+        CaptureState::Starting => CapturePhase::Starting,
+        CaptureState::Recording => CapturePhase::Recording,
+        CaptureState::Stopping => CapturePhase::Stopping,
+        CaptureState::Stopped => CapturePhase::Stopped,
+        CaptureState::Interrupted => CapturePhase::Interrupted,
+        CaptureState::Failed => CapturePhase::Failed,
+        CaptureState::Idle => CapturePhase::Idle,
+    };
+    let spool = if status.spool_state.is_some() {
+        SpoolKind::Persistent
+    } else {
+        SpoolKind::None
+    };
+    crate::ui::RecorderOwner {
+        phase,
+        recording_id: status.capture.recording_id.clone(),
+        captured_samples: status.capture.received_samples,
+        pending_samples: status.capture.pending_samples,
+        spool,
+        recoverable: status
+            .capture
+            .recording_id
+            .as_ref()
+            .is_some_and(|id| recoverable.contains(id)),
+        reason: status.capture.last_error.clone(),
+        level: f64::from(status.capture.level.clamp(0.0, 1.0)),
+        capture_open: status.capture.capture_open,
+    }
+}
+
+fn recoverable_spools(home: &std::path::Path) -> Vec<String> {
+    let Ok(store) = crate::recorder_spool::SpoolStore::new(home) else {
+        return Vec::new();
+    };
+    let Ok(rows) = store.list() else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter(|row| {
+            matches!(
+                row.state,
+                Some(crate::recorder_spool::SpoolState::Interrupted)
+            )
+        })
+        .map(|row| row.id)
+        .collect()
+}
+
+fn recoverable_audio(home: &std::path::Path) -> Vec<RecoverableAudio> {
+    let Ok(store) = crate::recorder_spool::SpoolStore::new(home) else {
+        return Vec::new();
+    };
+    let Ok(rows) = store.list() else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .filter(|row| {
+            matches!(
+                row.state,
+                Some(crate::recorder_spool::SpoolState::Interrupted)
+            )
+        })
+        .map(|row| RecoverableAudio {
+            id: row.id,
+            accepted_samples: row.accepted_samples,
+            pending_samples: row.pending_samples,
+        })
+        .collect()
+}
+
+fn pending_start_count(home: &std::path::Path) -> usize {
+    crate::recorder_spool::SpoolStore::new(home)
+        .ok()
+        .and_then(|store| store.pending_start_ids().ok())
+        .map_or(0, |keys| keys.len())
+}
+
+/// Look up every create intent left by an earlier run. Never creates and never
+/// reuses a key; a recording it finds is sealed at its durable offset (an empty
+/// recording included) rather than being deleted.
+async fn startup_recovery(
+    driver: &mut Option<TuiRecorderDriver>,
+    home: &std::path::Path,
+) -> (
+    Result<crate::recorder_driver::RecoveryReport, String>,
+    usize,
+) {
+    let result = match driver.as_mut() {
+        Some(driver) => driver
+            .recover_pending_starts()
+            .await
+            .map_err(|error| error.to_string()),
+        None => Err("Core is not reachable".to_owned()),
+    };
+    (result, pending_start_count(home))
+}
+
+/// Why Start must stay closed until a later startup: Core needs a restart, or
+/// an intent could not be resolved and is still on disk.
+fn startup_block(
+    result: &Result<crate::recorder_driver::RecoveryReport, String>,
+    pending: usize,
+) -> Option<String> {
+    match result {
+        Err(error) => Some(error.clone()),
+        Ok(report) => {
+            if let Some(issue) = report.issues.iter().find(|issue| {
+                issue.kind == crate::recorder_driver::RecoveryIssueKind::CoreRestartRequired
+            }) {
+                return Some(issue.detail.clone());
+            }
+            if pending > 0 {
+                return Some(
+                    report
+                        .issues
+                        .first()
+                        .map(|issue| issue.detail.clone())
+                        .unwrap_or_else(|| {
+                            "A previous recording start is still being recovered.".into()
+                        }),
+                );
+            }
+            None
+        }
+    }
+}
+
+type TuiRecorderDriver = crate::recorder_driver::RecorderDriver<
+    crate::recorder_driver::CoreRecorderApi,
+>;
+
+async fn recorder_task(
+    home: std::path::PathBuf,
+    out: mpsc::UnboundedSender<SyncMsg>,
+    mut commands: mpsc::UnboundedReceiver<RecorderAction>,
+    client_id: String,
+) {
+    use std::time::Instant;
+    let started = Instant::now();
+    let mut driver: Option<TuiRecorderDriver> = None;
+    let mut last_sent = Instant::now();
+    let mut last_status: Option<crate::recorder_driver::RecorderDriverStatus> = None;
+    let mut last_rebind = Instant::now();
+    let mut startup_checked = false;
+    let mut startup_block_reason: Option<String> = None;
+    let mut tick = tokio::time::interval(Duration::from_millis(200));
+    let send = |update: RecorderUpdate| {
+        let _ = out.send(SyncMsg::Recorder(update));
+    };
+
+    let ensure_driver = |driver: &mut Option<TuiRecorderDriver>| -> Result<(), ()> {
+        if driver.is_some() {
+            return Ok(());
+        }
+        let Some(api) = crate::actions::api_for(&home) else {
+            send(RecorderUpdate::Failed {
+                kind: "connection".into(),
+                message: "Core is not reachable".into(),
+            });
+            return Err(());
+        };
+        let store = match crate::recorder_spool::SpoolStore::new(&home) {
+            Ok(store) => store,
+            Err(error) => {
+                send(RecorderUpdate::Failed {
+                    kind: "spool".into(),
+                    message: error.to_string(),
+                });
+                return Err(());
+            }
+        };
+        let controller =
+            crate::recorder::RecorderController::microphone(crate::recorder::RecorderConfig::default());
+        *driver = Some(crate::recorder_driver::RecorderDriver::new(
+            controller,
+            crate::recorder_driver::CoreRecorderApi::new(api),
+            store,
+        ));
+        Ok(())
+    };
+
+    let mut publish = |driver: &mut Option<TuiRecorderDriver>| {
+        let Some(d) = driver.as_mut() else {
+            return;
+        };
+        let mut status = d.status();
+        let warnings = d.take_warnings();
+        status.warnings.clear();
+        let recoverable = recoverable_spools(&home);
+        if last_status.as_ref() != Some(&status)
+            || last_sent.elapsed() >= Duration::from_secs(1)
+        {
+            send(RecorderUpdate::Status {
+                owner: recorder_owner(&status, &recoverable),
+                recoverable,
+                warnings,
+            });
+            last_status = Some(status);
+            last_sent = Instant::now();
+        }
+    };
+
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else { return; };
+                match command {
+                    RecorderAction::Connected => {
+                        if ensure_driver(&mut driver).is_err() {
+                            startup_checked = true;
+                            startup_block_reason = Some("Core is not reachable".into());
+                            send(RecorderUpdate::Startup {
+                                result: Err("Core is not reachable".into()),
+                                pending: 0,
+                                ready: false,
+                            });
+                            continue;
+                        }
+                        let (result, pending) = startup_recovery(&mut driver, &home).await;
+                        startup_block_reason = startup_block(&result, pending);
+                        startup_checked = true;
+                        let ready = startup_block_reason.is_none();
+                        send(RecorderUpdate::Startup { result, pending, ready });
+                        send(RecorderUpdate::Recoverable(recoverable_audio(&home)));
+                        publish(&mut driver);
+                    }
+                    RecorderAction::Start { title, idempotency_key } => {
+                        if !startup_checked {
+                            if ensure_driver(&mut driver).is_err() {
+                                continue;
+                            }
+                            let (result, pending) = startup_recovery(&mut driver, &home).await;
+                            startup_block_reason = startup_block(&result, pending);
+                            startup_checked = true;
+                            let ready = startup_block_reason.is_none();
+                            send(RecorderUpdate::Startup { result, pending, ready });
+                            send(RecorderUpdate::Recoverable(recoverable_audio(&home)));
+                            publish(&mut driver);
+                        }
+                        if let Some(reason) = &startup_block_reason {
+                            send(RecorderUpdate::Failed {
+                                kind: "startup".into(),
+                                message: reason.clone(),
+                            });
+                            continue;
+                        }
+                        if ensure_driver(&mut driver).is_err() {
+                            continue;
+                        }
+                        let Some(stream_id) = current_stream() else {
+                            send(RecorderUpdate::Failed {
+                                kind: "connection".into(),
+                                message: "Core is not connected".into(),
+                            });
+                            continue;
+                        };
+                        let Some(d) = driver.as_mut() else { continue; };
+                        let mut request = crate::recorder::StartRequest::new(
+                            stream_id,
+                            client_id.clone(),
+                            idempotency_key,
+                        );
+                        request.title = title;
+                        if let Err(error) = d.start(started.elapsed(), request) {
+                            send(RecorderUpdate::Failed {
+                                kind: "start".into(),
+                                message: format!("{error:?}"),
+                            });
+                        }
+                        let _ = d.step(started.elapsed()).await;
+                        // A create whose response was lost keeps its intent on
+                        // disk. Resolve it now: seal/find the recording (empty
+                        // ones included) before another Start is allowed.
+                        if pending_start_count(&home) > 0 {
+                            let (result, pending) = startup_recovery(&mut driver, &home).await;
+                            startup_block_reason = startup_block(&result, pending);
+                            startup_checked = true;
+                            let ready = startup_block_reason.is_none();
+                            send(RecorderUpdate::Startup { result, pending, ready });
+                            send(RecorderUpdate::Recoverable(recoverable_audio(&home)));
+                        }
+                        publish(&mut driver);
+                    }
+                    RecorderAction::Stop => {
+                        if let Some(d) = driver.as_mut() {
+                            if let Err(error) = d.stop(started.elapsed()) {
+                                send(RecorderUpdate::Failed {
+                                    kind: "stop".into(),
+                                    message: format!("{error:?}"),
+                                });
+                            }
+                            let _ = d.step(started.elapsed()).await;
+                        }
+                        publish(&mut driver);
+                    }
+                    RecorderAction::List => {
+                        let update = match crate::actions::api_for(&home) {
+                            Some(api) => match api.http.get("/api/recordings", &[("limit".into(), "50".into())]).await {
+                                Ok(value) => RecorderUpdate::List(Ok(value["recordings"].as_array().cloned().unwrap_or_default())),
+                                Err(error) => RecorderUpdate::List(Err(error.to_string())),
+                            },
+                            None => RecorderUpdate::List(Err("Core is not reachable".into())),
+                        };
+                        send(update);
+                        send(RecorderUpdate::Recoverable(recoverable_audio(&home)));
+                    }
+                    RecorderAction::Detail { id } => {
+                        let update = match crate::actions::api_for(&home) {
+                            Some(api) => match api.recorder_get(&id).await {
+                                Ok(value) => RecorderUpdate::Detail(Ok(value)),
+                                Err(error) => RecorderUpdate::Detail(Err(error.to_string())),
+                            },
+                            None => RecorderUpdate::Detail(Err("Core is not reachable".into())),
+                        };
+                        send(update);
+                    }
+                    RecorderAction::Transcript { id } => {
+                        let page = match crate::actions::api_for(&home) {
+                            Some(api) => read_transcript_pages(&api, &id).await,
+                            None => Err("Core is not reachable".to_owned()),
+                        };
+                        send(RecorderUpdate::Transcript { id, page });
+                    }
+                    RecorderAction::Retry { id } => {
+                        let result = match crate::actions::api_for(&home) {
+                            Some(api) => api.http.call(
+                                reqwest::Method::POST,
+                                &format!("/api/recordings/{id}/transcript/retry"),
+                                &[],
+                                Some(&serde_json::json!({"scope": "failed"})),
+                                None,
+                                None,
+                            ).await.map(|_| ()).map_err(|error| error.to_string()),
+                            None => Err("Core is not reachable".to_owned()),
+                        };
+                        send(RecorderUpdate::Retry(result));
+                    }
+                    RecorderAction::Delete { id } => {
+                        let result = match crate::actions::api_for(&home) {
+                            Some(api) => api.http.call(
+                                reqwest::Method::DELETE,
+                                &format!("/api/recordings/{id}"),
+                                &[],
+                                None,
+                                None,
+                                None,
+                            ).await.map(|_| ()).map_err(|error| error.to_string()),
+                            None => Err("Core is not reachable".to_owned()),
+                        };
+                        send(RecorderUpdate::Deleted { id, result });
+                    }
+                    RecorderAction::CopyTranscript { id } => {
+                        let result = copy_transcript(&home, &id).await;
+                        send(result);
+                    }
+                    RecorderAction::Recover => {
+                        if ensure_driver(&mut driver).is_err() {
+                            continue;
+                        }
+                        let result = match driver.as_mut() {
+                            Some(d) => d.recover_pending().await.map_err(|error| error.to_string()),
+                            None => Err("Core is not reachable".to_owned()),
+                        };
+                        send(RecorderUpdate::Recovered(result));
+                        send(RecorderUpdate::Recoverable(recoverable_audio(&home)));
+                        publish(&mut driver);
+                    }
+                }
+            }
+            _ = tick.tick() => {
+                if let Some(d) = driver.as_mut() {
+                    if let Some(stream_id) = current_stream() {
+                        let snapshot = d.snapshot();
+                        if snapshot.rebind_required
+                            && last_rebind.elapsed() >= Duration::from_secs(2)
+                        {
+                            let _ = d.rebind(stream_id);
+                            last_rebind = Instant::now();
+                        }
+                    }
+                    for _ in 0..16 {
+                        match d.step(started.elapsed()).await {
+                            Ok(true) => {}
+                            Ok(false) => break,
+                            Err(error) => {
+                                send(RecorderUpdate::Failed {
+                                    kind: "driver".into(),
+                                    message: error.to_string(),
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    publish(&mut driver);
+                }
+            }
+        }
+    }
+}
+
+async fn read_transcript_pages(
+    api: &CoreApi,
+    id: &str,
+) -> Result<Value, String> {
+    let mut after: i64 = -1;
+    let mut segments: Vec<Value> = Vec::new();
+    let mut provisional = Value::Null;
+    let mut state = Value::Null;
+    let mut complete = false;
+    for _ in 0..40 {
+        let page = api
+            .http
+            .get(
+                &format!("/api/recordings/{id}/transcript"),
+                &[
+                    ("after".into(), after.to_string()),
+                    ("limit".into(), "200".into()),
+                ],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let rows = page["segments"].as_array().cloned().unwrap_or_default();
+        let count = rows.len();
+        segments.extend(rows);
+        if provisional.is_null() {
+            provisional = page["live"]["provisional"].clone();
+        }
+        state = page["state"].clone();
+        complete = page["complete"].as_bool().unwrap_or(false);
+        let next = page["next_after"].as_i64().unwrap_or(after);
+        if count == 0 || next <= after {
+            break;
+        }
+        after = next;
+        if count < 200 {
+            break;
+        }
+    }
+    Ok(serde_json::json!({
+        "segments": segments,
+        "live": {"provisional": provisional},
+        "state": state,
+        "complete": complete,
+    }))
+}
+
+async fn copy_transcript(
+    home: &std::path::Path,
+    id: &str,
+) -> RecorderUpdate {
+    let Some(api) = crate::actions::api_for(home) else {
+        return RecorderUpdate::Error("Core is not reachable".into());
+    };
+    match api
+        .http
+        .get(&format!("/api/recordings/{id}/transcript.json"), &[])
+        .await
+    {
+        Ok(value) => {
+            let complete = value["complete"].as_bool().unwrap_or(false);
+            let text = value["segments"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|row| row["status"].as_str() != Some("skipped"))
+                        .filter_map(|row| row["text"].as_str())
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            RecorderUpdate::Copied { text, complete }
+        }
+        Err(error) => RecorderUpdate::Error(error.to_string()),
+    }
+}
+
 pub async fn run(
     cfg: SyncConfig,
     out: mpsc::UnboundedSender<SyncMsg>,
     cmds: mpsc::UnboundedReceiver<Command>,
 ) {
+    let home = cfg.home.clone();
+    let client_id = format!("tui-{}", uuid::Uuid::new_v4().simple());
+    let recorder_client_id = client_id.clone();
+    let (recorder, recorder_commands) = mpsc::unbounded_channel();
+    let recorder_out = out.clone();
     let mut cx = Ctx {
         cfg,
         out,
         cmds,
-        client_id: format!("tui-{}", uuid::Uuid::new_v4().simple()),
+        client_id,
         stream_id: None,
         view: None,
         view_reported: None,
@@ -655,8 +1239,16 @@ pub async fn run(
         files: None,
         complete: None,
         newest_turn: None,
+        recorder: Some(recorder),
         shutdown: false,
     };
+    // The task holds its own receiver; dropping it stops the recorder task.
+    tokio::spawn(recorder_task(
+        home,
+        recorder_out,
+        recorder_commands,
+        recorder_client_id,
+    ));
     let mut backoff = cx.cfg.backoff.clone();
     let mut identity: Option<Identity> = None;
     let mut had_live = false;
@@ -1396,6 +1988,10 @@ async fn stream(
                         // reconnect always reports the latest view again.
                         remember_stream(c.stream_id.as_deref());
                         cx.stream_id = c.stream_id;
+                        let _ = cx.send(SyncMsg::Recorder(RecorderUpdate::Reconnected));
+                        if let Some(recorder) = &cx.recorder {
+                            let _ = recorder.send(RecorderAction::Connected);
+                        }
                         cx.view_reported = None;
                         cx.view_inflight = None;
                         cx.view_retry_at = None;
@@ -1530,5 +2126,74 @@ async fn stream(
                 cx.start_view_report(api, &report_tx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recorder_startup_tests {
+    use super::*;
+    use crate::recorder_driver::{RecoveryIssue, RecoveryIssueKind, RecoveryReport};
+
+    #[test]
+    fn restart_required_blocks_start_with_the_shared_detail() {
+        let detail =
+            "Core's recorder create guard is full; restart Core before creating another recording";
+        let report = RecoveryReport {
+            attempted: 1,
+            recovered: 0,
+            truncated: false,
+            issues: vec![RecoveryIssue {
+                recording_id: None,
+                kind: RecoveryIssueKind::CoreRestartRequired,
+                detail: detail.into(),
+            }],
+        };
+        assert_eq!(startup_block(&Ok(report), 1).as_deref(), Some(detail));
+    }
+
+    #[test]
+    fn an_outstanding_create_intent_is_counted_and_blocks_start() {
+        let home = std::env::temp_dir().join(format!(
+            "nexus-recorder-startup-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        let store = crate::recorder_spool::SpoolStore::new(&home).unwrap();
+        let pending = store
+            .begin_pending_start(
+                "K1",
+                crate::recorder_spool::Secret::new("recovery-capability"),
+                "tui",
+                None,
+            )
+            .unwrap();
+        assert_eq!(pending_start_count(&home), 1);
+        let report = RecoveryReport {
+            attempted: 1,
+            recovered: 0,
+            truncated: false,
+            issues: Vec::new(),
+        };
+        assert_eq!(
+            startup_block(&Ok(report), pending_start_count(&home)).as_deref(),
+            Some("A previous recording start is still being recovered.")
+        );
+        drop(pending);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_resolved_create_intent_unblocks_start() {
+        let report = RecoveryReport {
+            attempted: 1,
+            recovered: 1,
+            truncated: false,
+            issues: Vec::new(),
+        };
+        assert!(startup_block(&Ok(report), 0).is_none());
+        assert_eq!(
+            startup_block(&Err("Core is not reachable".into()), 0).as_deref(),
+            Some("Core is not reachable")
+        );
     }
 }

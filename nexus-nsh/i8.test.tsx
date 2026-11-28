@@ -120,6 +120,9 @@ describe("waiting card (D14)", () => {
     expect(app.texts().includes("Extras?")).toBe(false);
     expect(app.texts().includes("( )")).toBe(false);
     expect(app.texts().includes("[ ]")).toBe(false);
+    await app.keyboard.press("down");
+    expect(app.texts()).toContain("•");
+    expect(app.texts()).not.toContain("[•]");
 
     await app.press("label:Which cache? mtime");
     await app.press("id:question-next");

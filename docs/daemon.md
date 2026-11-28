@@ -238,7 +238,9 @@ SQLite work must not run on the event loop. The store has **one write connection
 - **Bus.** `Bus.publish` is unchanged and synchronous (commit, then deliver, under the bus lock).
   `await Bus.apublish(...)` commits on the writer thread and delivers on the loop; events committed on the thread wait
   in `_pending`, and every loop-side delivery, `open()` and `deliver_stored` drains that first, so delivery is in
-  event-id order and a new subscriber never receives an event its replay already covers.
+  event-id order and a new subscriber never receives an event its replay already covers. Worker threads can use
+  `Bus.publish_threadsafe(loop, ...)` to commit synchronously and schedule delivery on the owning loop; durable
+  events remain replayable if that loop is already closed.
 - **Retention.** `Retention.run_once_async` runs the whole pass on the writer thread (`run_once` is the same pass on
   the calling thread, for tests); the announcements it committed are delivered on the loop afterwards.
 
@@ -464,10 +466,18 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   model (`failure_advice` in `runtime.py`). Clients' `session.error` text is unchanged.
   When the parent has `message_session`, a stopped child's report adds that it is
   idle, keeps its conversation, and should be resumed or redirected with
-  `message_session` (naming its id) rather than replaced by a new child, and that
-  its work is dropped only if the user says so. The `orchestrate` prompt says the
-  same: continue a child whose task the new work belongs to, and treat an
-  interrupted child's task as unfinished, not cancelled.
+  `message_session` (naming its id) rather than replaced by a new child unless its
+  context is already large, and that its work is dropped only if the user says so.
+  Every child report (finished, failed, interrupted, or interrupted while the
+  parent waited) ends with its size, `[Sub agent size: context 42% full, 312 steps]`:
+  the newest request's input tokens as a share of that model's catalog window, and
+  its provider requests so far (`_child_size` in `runtime.py`; omitted until a request reports usage; `context window
+  unknown` when the cached catalog does not list the model). The `orchestrate`
+  prompt says to continue a child whose task the new work belongs to, to treat an
+  interrupted child's task as unfinished, not cancelled, and, when a child is
+  already large and the next work is more than a quick follow-up, to ask it for a
+  handoff brief (or answers about the project) and start a fresh child with that.
+  No threshold is fixed, since windows differ by model.
 - **`wait: false`.** The tool returns at once. When the child finishes, its
   answer goes to the parent (`session.notified`): it is added before the
   parent's next model call if the parent is busy, or it starts a new parent turn

@@ -47,6 +47,25 @@ try {
           await page.getByTestId('settings-section-focus').waitFor();
           await page.keyboard.press(arrow(focusScenario.next_section_key));
           assert.equal(await page.getByTestId(`section-${focusScenario.next_section}`).evaluate((node) => node === document.activeElement), true, 'Heading keys work after Left');
+          // Search is a separate mode; clearing it returns to the same section and a jump only focuses a row.
+          const search = page.getByRole('textbox', { name: 'Search settings', exact: true });
+          await page.keyboard.press(focusScenario.search_key);
+          await search.fill('no such setting');
+          await page.getByTestId('settings-no-matches').waitFor();
+          await page.keyboard.press('Escape');
+          await page.getByTestId('settings-section-focus').waitFor();
+          assert.equal(await page.getByTestId(`section-${focusScenario.next_section}`).getAttribute('aria-selected'), 'true');
+          await page.keyboard.press(focusScenario.search_key);
+          assert.equal(await search.evaluate((n) => n === document.activeElement), true, 'Search key focuses the input');
+          await search.fill(focusScenario.search_query);
+          const hit = page.getByTestId(`settings-result-${focusScenario.search_row}`);
+          await hit.getByText(focusScenario.search_path, { exact: true }).waitFor();
+          if (out) await page.screenshot({ path: path.join(out, `settings-search-${width}x${height}-${colorScheme}.png`) });
+          await page.keyboard.press('Enter');
+          await row.getByTestId('settings-row-focus').waitFor();
+          assert.equal(await row.locator('[role=radio][aria-selected=true]').getAttribute('aria-label'), selected, 'Jump keeps the setting value');
+          await page.keyboard.press('Escape'); // return to the section rail
+          await page.getByTestId('settings-section-focus').waitFor();
         }
         await page.keyboard.press('Escape');
         await shell.waitFor({ state: 'hidden' });

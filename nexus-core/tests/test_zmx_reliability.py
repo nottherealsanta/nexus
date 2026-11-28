@@ -317,7 +317,7 @@ async def test_interrupted_turn_keeps_the_cli_session_id_so_the_next_prompt_resu
     for pid, attr, ref in (("claude-code", "ClaudeCodeWorker", "claude-code/claude-haiku-5-5"), ("agy", "AntigravityAcpWorker", "agy/gemini-3.8-flash-low")):
         monkeypatch.setattr(agent_module, attr, Hang)
         started.clear()
-        agent = agent_module.ExternalAgent(ref=ref, workspace=tmp_path, messages=[], instructions="", permission="allow", effort=None)
+        agent = agent_module.ExternalAgent(ref=ref, workspace=tmp_path, messages=[], permission="allow", effort=None)
         states = []
 
         async def drive(agent=agent, states=states):

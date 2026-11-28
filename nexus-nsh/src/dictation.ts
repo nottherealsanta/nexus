@@ -1,7 +1,10 @@
 import { ApiError, apiUrl, request, sleep } from "./core/transport";
 import { nativeModule } from "nsh";
 import type { MicrophoneModule } from "nexus/native";
-import { downmixChannels, hasMicrophoneCapture, MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, rmsLevel, transitionDictation } from "./dictation-logic";
+import { openRecorder } from "./audio-capture";
+import type { CaptureRecorder } from "./audio-capture";
+import { hasMicrophoneCapture, rmsLevel } from "./audio-capture-logic";
+import { MAX_RECORDING_SECONDS, MIN_RECORDING_SECONDS, PREVIEW_WINDOW_SECONDS, previewDue, recordingToWav, transitionDictation } from "./dictation-logic";
 import type { DictationEvent, DictationPhase } from "./dictation-logic";
 import { confirmDialog, toast } from "./store";
 import { dictationLevel, dictationPhase, dictationPreview, voiceDownloadProgress } from "./voice-state";
@@ -23,24 +26,7 @@ function microphone(): MicrophoneModule | null {
 type VoiceModel = { state: string; repo: string; size: number; error?: string | null; bytes_done?: number; bytes_total?: number };
 type VoiceStatus = { stt: VoiceModel; tts?: unknown };
 
-type AudioNodeLike = { connect(destination: unknown): unknown; disconnect(): void };
-type GainNodeLike = AudioNodeLike & { gain: { value: number } };
-type PortLike = { onmessage: ((event: { data: any }) => void) | null; postMessage(message: unknown): void };
-type WorkletNodeLike = AudioNodeLike & { port: PortLike };
-type ScriptProcessorLike = AudioNodeLike & { onaudioprocess: ((event: any) => void) | null };
-type AudioContextLike = {
-  sampleRate: number;
-  destination: unknown;
-  audioWorklet?: { addModule(url: string): Promise<void> };
-  createMediaStreamSource(stream: unknown): AudioNodeLike;
-  createGain(): GainNodeLike;
-  createScriptProcessor?(bufferSize?: number, inputChannels?: number, outputChannels?: number): ScriptProcessorLike;
-  resume(): Promise<void>;
-  close(): Promise<void>;
-};
-type AudioContextConstructor = new () => AudioContextLike;
-type MediaStreamLike = { getTracks(): { stop(): void }[] };
-type Recorder = { stop(): Promise<void> };
+type NavigatorLike = { mediaDevices?: { getUserMedia?: unknown } };
 type NativeCapture = { started: number; timer: ReturnType<typeof setInterval> };
 type Capture = {
   generation: number;
@@ -48,7 +34,7 @@ type Capture = {
   chunks: Float32Array[];
   sampleCount: number;
   previousPreviewCount: number;
-  recorder: Recorder;
+  recorder: CaptureRecorder;
   insert: (text: string) => void;
   active: boolean;
   cancelled: boolean;
@@ -78,15 +64,8 @@ export function microphoneAvailable(): boolean {
   return hasMicrophoneCapture(environment().navigator) || (microphone()?.available() ?? false);
 }
 
-function environment() {
-  return globalThis as unknown as {
-    navigator?: { mediaDevices?: { getUserMedia?: (constraints: unknown) => Promise<MediaStreamLike> } };
-    AudioContext?: AudioContextConstructor;
-    webkitAudioContext?: AudioContextConstructor;
-    AudioWorkletNode?: new (context: object, name: string, options?: unknown) => WorkletNodeLike;
-    Blob?: new (parts: string[], options?: { type?: string }) => unknown;
-    URL?: { createObjectURL(blob: unknown): string; revokeObjectURL(url: string): void };
-  };
+function environment(): { navigator?: NavigatorLike } {
+  return globalThis as unknown as { navigator?: NavigatorLike };
 }
 
 function sampleCount(samples: readonly Float32Array[]): number {
@@ -121,145 +100,6 @@ function allSamples(samples: readonly Float32Array[], count: number): Float32Arr
   }
   return out;
 }
-
-const WORKLET_SOURCE = `
-class NexusDictationProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.buffer = new Float32Array(2048);
-    this.used = 0;
-    this.port.onmessage = (event) => {
-      if (event.data && event.data.type === "flush") {
-        this.emit();
-        this.port.postMessage({ type: "flushed" });
-      }
-    };
-  }
-  emit() {
-    if (!this.used) return;
-    const samples = this.buffer.slice(0, this.used);
-    this.buffer = new Float32Array(2048);
-    this.used = 0;
-    this.port.postMessage({ type: "samples", samples }, [samples.buffer]);
-  }
-  process(inputs, outputs) {
-    for (const channel of (outputs[0] || [])) channel.fill(0);
-    const channels = inputs[0] || [];
-    const length = channels[0] ? channels[0].length : 0;
-    for (let i = 0; i < length; i++) {
-      let value = 0;
-      for (const channel of channels) value += channel[i] || 0;
-      this.buffer[this.used++] = value / Math.max(1, channels.length);
-      if (this.used === this.buffer.length) this.emit();
-    }
-    return true;
-  }
-}
-registerProcessor("nexus-dictation-capture", NexusDictationProcessor);
-`;
-
-async function openRecorder(onSamples: (samples: Float32Array) => void): Promise<{ rate: number; recorder: Recorder }> {
-  const root = environment();
-  const devices = root.navigator?.mediaDevices;
-  const Context = root.AudioContext ?? root.webkitAudioContext;
-  if (!devices?.getUserMedia) throw new Error("Microphone capture is not available in this client");
-  if (!Context) throw new Error("Web Audio is not available in this client");
-  const stream = await devices.getUserMedia({ audio: { channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  let context: AudioContextLike | null = null;
-  let source: AudioNodeLike | null = null;
-  let processor: AudioNodeLike | null = null;
-  let gain: GainNodeLike | null = null;
-  let workletPort: PortLike | null = null;
-  let workletUrl: string | null = null;
-  try {
-    context = new Context();
-    await context.resume();
-    source = context.createMediaStreamSource(stream);
-    gain = context.createGain();
-    gain.gain.value = 0;
-    gain.connect(context.destination);
-
-    const WorkletNode = root.AudioWorkletNode;
-    const urlApi = root.URL;
-    if (context.audioWorklet && WorkletNode && root.Blob && urlApi) {
-      try {
-        workletUrl = urlApi.createObjectURL(new root.Blob([WORKLET_SOURCE], { type: "text/javascript" }));
-        await context.audioWorklet.addModule(workletUrl);
-        urlApi.revokeObjectURL(workletUrl);
-        workletUrl = null;
-        const node = new WorkletNode(context as unknown as object, "nexus-dictation-capture", {
-          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
-        });
-        processor = node;
-        workletPort = node.port;
-        node.port.onmessage = (event) => {
-          if (event.data?.type === "samples" && event.data.samples instanceof Float32Array) onSamples(event.data.samples);
-          if (event.data?.type === "flushed") flushDone?.();
-        };
-        source.connect(node);
-        node.connect(gain);
-        return {
-          rate: context.sampleRate,
-          recorder: {
-            async stop() {
-              if (workletPort) {
-                await new Promise<void>((resolve) => {
-                  let done = false;
-                  flushDone = () => { if (!done) { done = true; clearTimeout(timer); resolve(); } };
-                  const timer = setTimeout(() => flushDone?.(), 250);
-                  workletPort!.postMessage({ type: "flush" });
-                });
-              }
-              source?.disconnect(); processor?.disconnect(); gain?.disconnect();
-              stream.getTracks().forEach((track) => track.stop());
-              await context?.close();
-              context = null;
-            },
-          },
-        };
-      } catch {
-        if (workletUrl) { try { urlApi?.revokeObjectURL(workletUrl); } catch {} workletUrl = null; }
-        try { processor?.disconnect(); } catch {}
-        processor = null;
-        workletPort = null;
-      }
-    }
-
-    if (!context.createScriptProcessor) throw new Error("Neither AudioWorklet nor ScriptProcessor capture is available");
-    const script = context.createScriptProcessor(4096, 2, 1);
-    processor = script;
-    script.onaudioprocess = (event: any) => {
-      const input = event.inputBuffer;
-      const channels: Float32Array[] = [];
-      for (let i = 0; i < input.numberOfChannels; i++) channels.push(input.getChannelData(i));
-      const mono = downmixChannels(channels);
-      const output = event.outputBuffer;
-      for (let i = 0; i < output.numberOfChannels; i++) output.getChannelData(i).fill(0);
-      onSamples(mono);
-    };
-    source.connect(script);
-    script.connect(gain);
-    return {
-      rate: context.sampleRate,
-      recorder: {
-        async stop() {
-          script.onaudioprocess = null;
-          source?.disconnect(); processor?.disconnect(); gain?.disconnect();
-          stream.getTracks().forEach((track) => track.stop());
-          await context?.close();
-          context = null;
-        },
-      },
-    };
-  } catch (error) {
-    try { source?.disconnect(); processor?.disconnect(); gain?.disconnect(); } catch {}
-    stream.getTracks().forEach((track) => track.stop());
-    if (context) { try { await context.close(); } catch {} }
-    throw error;
-  }
-}
-
-let flushDone: (() => void) | null = null;
 
 async function responseError(response: Response): Promise<ApiError> {
   const text = await response.text();
@@ -406,7 +246,7 @@ function beginCapture(insert: (text: string) => void, expectedGeneration: number
       const opened = await openRecorder((samples) => {
         const current = capture;
         if (current && current.generation === expectedGeneration) addSamples(current, samples);
-      });
+      }, "dictation");
       if (generation !== expectedGeneration || dictationPhase() !== "requesting") {
         await opened.recorder.stop();
         return;

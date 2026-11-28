@@ -71,6 +71,15 @@ Revisit if small known tasks routinely launch scouts/planners, every stage repea
 unrelated requests, or the orchestrator accepts unsupported “done” reports. The observation item remains open;
 there is no controlled before/after result yet.
 
+## Large children (11-27)
+
+Continuing a child re-sends its whole context on every step, and Nexus has no compaction. On hamming and the Mac,
+23–34% of opencode subagent input since Nov 1 came from turns that started above 200K tokens, and one child reached
+704K over 677 requests across 7 continuations. Child reports now end with the child's size (context % of its
+model's window, steps so far) and the prompt hands substantial new work for a large child to a fresh child, briefed
+from the old one. No fixed threshold. To observe: share of child input from turns starting above 50% full, and
+whether handoffs lose details (re-discovery, wrong assumptions in the fresh child).
+
 ## Activation
 
 New sessions use these built-ins unless an override replaces them. Existing sessions retain their frozen prompts;

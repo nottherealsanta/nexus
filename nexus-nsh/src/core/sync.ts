@@ -234,7 +234,7 @@ export class Sync {
         }
         if (r === "applied" && (ev.type === "session.handoff" || ev.type === "session.handoff_failed")) h.handoffEvent?.(ev);
         if (r === "applied" && ["code.cell", "kernel.deleted", "bash.started", "bash.finished"].includes(ev.type)) h.resourcesChanged?.();
-        if (r === "applied" && !ev.session_id && (ev.type.startsWith("manager.") || ["files.changed", "files.watch", "git.changed", "skills.changed", "mcp.changed", "mcp.failed", "voice.progress", "agents.changed", "extensions.changed", "config.changed", "manager.state", "manager.caption", "manager.speech", "manager.card", "manager.navigate"].includes(ev.type))) h.globalEvent?.(ev);
+        if (r === "applied" && !ev.session_id && (ev.type.startsWith("manager.") || ev.type.startsWith("recorder.") || ["files.changed", "files.watch", "git.changed", "skills.changed", "mcp.changed", "mcp.failed", "voice.progress", "agents.changed", "extensions.changed", "config.changed", "manager.state", "manager.caption", "manager.speech", "manager.card", "manager.navigate"].includes(ev.type))) h.globalEvent?.(ev);
         if (r === "applied" && ["turn.summary", "message.added", "session.updated"].includes(ev.type) && ev.session_id && ev.session_id === m.selected?.sessionId) { h.contextChanged?.(ev.session_id); if (ev.type === "turn.summary") closed = ev.session_id; }
       }
       if (closed) void this.refreshLedger(closed).catch(() => {});

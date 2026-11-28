@@ -104,7 +104,11 @@ describe("timeline scrolling", () => {
   });
 
   test("a quiet scroll bar shows while scrolling, then fades away", async () => {
-    const app = await open("./App.tsx", { network, width: 1024, height: 768 });
+    // The message rail replaces the scroll bar; this test is about the bar itself.
+    const app = await open("./App.tsx", {
+      network, width: 1024, height: 768,
+      storage: { "nexus.prefs": JSON.stringify({ turnRail: false }) },
+    });
     await app.waitFor("text:Long session");
     await app.press("id:session-ses_1");
     await app.waitFor("id:timeline-row");
@@ -119,7 +123,7 @@ describe("timeline scrolling", () => {
   test("the Scroll bar setting can keep it off", async () => {
     const app = await open("./App.tsx", {
       network, width: 1024, height: 768,
-      storage: { "nexus.prefs": JSON.stringify({ scrollBar: false }) },
+      storage: { "nexus.prefs": JSON.stringify({ scrollBar: false, turnRail: false }) },
     });
     await app.waitFor("text:Long session");
     await app.keyboard.press("mod+,");

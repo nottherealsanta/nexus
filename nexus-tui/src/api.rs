@@ -254,6 +254,9 @@ pub struct Session {
     /// The newest session started from this one's handoff.
     #[serde(default)]
     pub continued_to: Option<String>,
+    /// A handoff summary is being written: the session takes no new messages until the new session opens.
+    #[serde(default)]
+    pub handing_off: bool,
     #[serde(default)]
     pub created: f64,
     #[serde(default)]
@@ -1673,6 +1676,222 @@ impl CoreApi {
                 .await?,
         )
         .map_err(dec)
+    }
+
+    // -- Standalone recorder (plan 54). Tokens travel only in headers. ----------
+
+    pub async fn recorder_create(
+        &self,
+        stream_id: &str,
+        client_id: &str,
+        title: Option<&str>,
+        idempotency_key: &str,
+        recovery: &str,
+    ) -> Result<Value, Error> {
+        let mut body = json!({
+            "stream_id": stream_id,
+            "client_id": client_id,
+            "mode": "create",
+        });
+        if let Some(title) = title {
+            body["title"] = json!(title);
+        }
+        let headers = [
+            ("X-Recorder-Recovery", recovery.to_owned()),
+            ("Idempotency-Key", idempotency_key.to_owned()),
+        ];
+        Ok(self
+            .http
+            .call_json_with_headers(Method::POST, "/api/recordings", Some(&body), &headers)
+            .await?
+            .body)
+    }
+
+    /// Look up a persisted create by K and prove possession of the client R.
+    /// This never creates a recording; 404 `create_not_found` withdraws K.
+    pub async fn recorder_resume(
+        &self,
+        client_id: &str,
+        idempotency_key: &str,
+        recovery: &str,
+        title: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({
+            "mode": "resume",
+            "client_id": client_id,
+        });
+        if let Some(title) = title {
+            body["title"] = json!(title);
+        }
+        let headers = [
+            ("X-Recorder-Recovery", recovery.to_owned()),
+            ("Idempotency-Key", idempotency_key.to_owned()),
+        ];
+        Ok(self
+            .http
+            .call_json_with_headers(Method::POST, "/api/recordings", Some(&body), &headers)
+            .await?
+            .body)
+    }
+
+    pub async fn recorder_get(&self, recording_id: &str) -> Result<Value, Error> {
+        self.http
+            .get(&format!("/api/recordings/{recording_id}"), &[])
+            .await
+    }
+
+    /// Binary chunk upload. The four recorder headers are mandatory at Core.
+    pub async fn recorder_put_chunk(
+        &self,
+        recording_id: &str,
+        sequence: u64,
+        start: u64,
+        lease: &str,
+        stream_id: &str,
+        sha256: &str,
+        body: &[u8],
+    ) -> Result<Value, Error> {
+        let headers = [
+            ("X-Recorder-Lease", lease.to_owned()),
+            ("X-Recorder-Stream", stream_id.to_owned()),
+            ("X-Sample-Start", start.to_string()),
+            ("X-Content-SHA256", sha256.to_owned()),
+        ];
+        Ok(self
+            .http
+            .put_bytes(
+                &format!("/api/recordings/{recording_id}/chunks/{sequence}"),
+                body,
+                &headers,
+            )
+            .await?
+            .body)
+    }
+
+    pub async fn recorder_heartbeat(
+        &self,
+        recording_id: &str,
+        lease: &str,
+        stream_id: &str,
+    ) -> Result<Value, Error> {
+        let body = json!({"stream_id": stream_id});
+        let headers = [("X-Recorder-Lease", lease.to_owned())];
+        Ok(self
+            .http
+            .call_json_with_headers(
+                Method::POST,
+                &format!("/api/recordings/{recording_id}/heartbeat"),
+                Some(&body),
+                &headers,
+            )
+            .await?
+            .body)
+    }
+
+    pub async fn recorder_rebind(
+        &self,
+        recording_id: &str,
+        lease: &str,
+        stream_id: &str,
+        client_id: &str,
+    ) -> Result<Value, Error> {
+        let body = json!({"stream_id": stream_id, "client_id": client_id});
+        let headers = [("X-Recorder-Lease", lease.to_owned())];
+        Ok(self
+            .http
+            .call_json_with_headers(
+                Method::POST,
+                &format!("/api/recordings/{recording_id}/rebind"),
+                Some(&body),
+                &headers,
+            )
+            .await?
+            .body)
+    }
+
+    pub async fn recorder_stop(
+        &self,
+        recording_id: &str,
+        lease: &str,
+        stream_id: &str,
+        final_sample_count: u64,
+    ) -> Result<Value, Error> {
+        let body = json!({
+            "stream_id": stream_id,
+            "final_sample_count": final_sample_count,
+        });
+        let headers = [("X-Recorder-Lease", lease.to_owned())];
+        Ok(self
+            .http
+            .call_json_with_headers(
+                Method::POST,
+                &format!("/api/recordings/{recording_id}/stop"),
+                Some(&body),
+                &headers,
+            )
+            .await?
+            .body)
+    }
+
+    /// Seal an interrupted capture with the recovery capability. No lease.
+    pub async fn recorder_recover(
+        &self,
+        recording_id: &str,
+        recovery_token: &str,
+        client_id: &str,
+        final_sample_count: u64,
+        stream_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({
+            "client_id": client_id,
+            "final_sample_count": final_sample_count,
+        });
+        if let Some(stream_id) = stream_id {
+            body["stream_id"] = json!(stream_id);
+        }
+        let headers = [("X-Recorder-Recovery", recovery_token.to_owned())];
+        Ok(self
+            .http
+            .call_json_with_headers(
+                Method::POST,
+                &format!("/api/recordings/{recording_id}/recover"),
+                Some(&body),
+                &headers,
+            )
+            .await?
+            .body)
+    }
+
+    /// Recovery-only chunk upload; Core bounds it by the sealed final offset.
+    pub async fn recorder_recover_chunk(
+        &self,
+        recording_id: &str,
+        sequence: u64,
+        start: u64,
+        recovery_token: &str,
+        client_id: &str,
+        stream_id: Option<&str>,
+        sha256: &str,
+        body: &[u8],
+    ) -> Result<Value, Error> {
+        let mut headers = vec![
+            ("X-Recorder-Recovery", recovery_token.to_owned()),
+            ("X-Recorder-Client", client_id.to_owned()),
+            ("X-Sample-Start", start.to_string()),
+            ("X-Content-SHA256", sha256.to_owned()),
+        ];
+        if let Some(stream_id) = stream_id {
+            headers.push(("X-Recorder-Stream", stream_id.to_owned()));
+        }
+        Ok(self
+            .http
+            .put_bytes(
+                &format!("/api/recordings/{recording_id}/recover/chunks/{sequence}"),
+                body,
+                &headers,
+            )
+            .await?
+            .body)
     }
 }
 

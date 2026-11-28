@@ -29,6 +29,8 @@ use objc2_foundation::{
     NSData, NSDictionary, NSNumber, NSString, NSTemporaryDirectory, NSURL, NSUUID,
 };
 
+use crate::mic_owner::{self, MicLease, MicOwner};
+
 const SAMPLE_RATE: f64 = 16_000.0;
 const DENIED: &str =
     "Microphone permission was denied. Allow microphone access for Nexus in Settings and try again.";
@@ -37,20 +39,29 @@ struct Active {
     recorder: Retained<AVAudioRecorder>,
     url: Retained<NSURL>,
     path: String,
+    lease: MicLease,
 }
 
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
 static STARTING: AtomicBool = AtomicBool::new(false);
 static CAPTURE_EPOCH: AtomicU64 = AtomicU64::new(0);
-#[cfg(target_os = "ios")]
-pub(crate) fn capture_busy() -> bool {
-    STARTING.load(Ordering::Acquire) || ACTIVE.lock().map_or(true, |active| active.is_some())
-}
 struct StartGuard;
 impl Drop for StartGuard {
     fn drop(&mut self) {
         STARTING.store(false, Ordering::Release);
     }
+}
+
+fn dictation_busy(owner: MicOwner) -> String {
+    match owner {
+        MicOwner::Live => "Stop the Manager voice call before starting dictation".into(),
+        MicOwner::Recorder => "Stop the recorder before starting dictation".into(),
+        MicOwner::Dictation => "A dictation recording is already running".into(),
+    }
+}
+
+fn acquire_dictation() -> Result<MicLease, String> {
+    mic_owner::try_acquire(MicOwner::Dictation).map_err(dictation_busy)
 }
 
 /// Microphone capture for the composer's dictation flow.
@@ -66,14 +77,14 @@ impl Microphone {
 
     /// Starts recording after asking for microphone permission.
     pub async fn start() -> Result<(), String> {
-        #[cfg(target_os = "ios")]
-        if crate::live_ios::is_busy() {
-            return Err("Stop the Manager voice call before starting dictation".into());
-        }
         if STARTING.swap(true, Ordering::AcqRel) {
             return Err("A dictation recording is already starting".into());
         }
         let _starting = StartGuard;
+        // Held across permission and device start, then stored in `Active`
+        // until the recorder is stopped. Acquisition is atomic, so the
+        // Manager call and the recorder cannot pass the same check.
+        let lease = acquire_dictation()?;
         let epoch = CAPTURE_EPOCH.load(Ordering::Acquire);
         if ACTIVE.lock().unwrap().is_some() {
             return Err("A dictation recording is already running".into());
@@ -146,6 +157,7 @@ impl Microphone {
             recorder,
             url,
             path,
+            lease,
         });
         Ok(())
     }
@@ -161,8 +173,14 @@ impl Microphone {
         unsafe { active.recorder.stop() };
         end_session();
 
-        let data = NSData::dataWithContentsOfURL(&active.url);
-        let _ = std::fs::remove_file(&active.path);
+        // Drop the microphone lease as soon as the device is closed, before
+        // reading the file, so another capture does not wait on I/O.
+        let Active {
+            url, path, lease, ..
+        } = active;
+        drop(lease);
+        let data = NSData::dataWithContentsOfURL(&url);
+        let _ = std::fs::remove_file(&path);
         let bytes = data.ok_or("The recording could not be read")?.to_vec();
         if bytes.len() <= 44 {
             return Err("The recording was empty".into());
@@ -178,7 +196,9 @@ impl Microphone {
             // SAFETY: stopping a recording recorder closes its file.
             unsafe { active.recorder.stop() };
             end_session();
-            let _ = std::fs::remove_file(&active.path);
+            let Active { path, lease, .. } = active;
+            drop(lease);
+            let _ = std::fs::remove_file(&path);
         }
         Ok(())
     }
@@ -312,5 +332,41 @@ mod tests {
         assert!(Microphone::available());
         assert_eq!(recording_settings().len(), 6);
         assert_eq!(SAMPLE_RATE, 16_000.0);
+    }
+
+    #[test]
+    fn dictation_start_refuses_another_owner_without_opening_a_device() {
+        let _guard = mic_owner::TEST_LOCK.lock().unwrap();
+        mic_owner::reset_for_test();
+        let recorder = mic_owner::try_acquire(MicOwner::Recorder).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let error = runtime.block_on(Microphone::start()).unwrap_err();
+        assert_eq!(error, "Stop the recorder before starting dictation");
+        drop(recorder);
+        mic_owner::reset_for_test();
+    }
+
+    #[test]
+    fn dictation_claims_the_microphone_and_releases_it_on_drop() {
+        let _guard = mic_owner::TEST_LOCK.lock().unwrap();
+        mic_owner::reset_for_test();
+        let lease = acquire_dictation().unwrap();
+        assert_eq!(
+            acquire_dictation().unwrap_err(),
+            dictation_busy(MicOwner::Dictation)
+        );
+        assert_eq!(
+            mic_owner::try_acquire(MicOwner::Recorder).unwrap_err(),
+            MicOwner::Dictation
+        );
+        assert_eq!(
+            mic_owner::try_acquire(MicOwner::Live).unwrap_err(),
+            MicOwner::Dictation
+        );
+        drop(lease);
+        assert!(acquire_dictation().is_ok());
+        mic_owner::reset_for_test();
     }
 }

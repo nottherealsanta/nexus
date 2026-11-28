@@ -51,13 +51,13 @@ def usage_event(value: dict | None) -> Usage | None:
 
 
 class ExternalAgent:
-    def __init__(self, *, ref: str, workspace: Path, messages: list[Message], instructions: str,
+    def __init__(self, *, ref: str, workspace: Path, messages: list[Message],
                  permission: str, effort: str | None, worker: dict | None = None,
                  project: Path | None = None,
                  approve: Callable[[ToolCall, dict[str, Any]], Awaitable[bool]] | None = None):
         self.pid, self.model = ref.split("/", 1)
         self.model_ref, self.workspace, self.messages = ref, workspace, messages
-        self.instructions, self.reasoning_effort, self.permission = instructions, effort, permission
+        self.reasoning_effort, self.permission = effort, permission
         self.project = project
         self.approve = approve
         self.provider = ExternalProvider(self.pid)
@@ -80,7 +80,8 @@ class ExternalAgent:
             self.worker.setdefault("notes", []).append("worker record could not be written; orphan cleanup cannot be offered")
 
     def request(self) -> Request:
-        return Request(self.model, self.instructions, tuple(self.messages), reasoning_effort=self.reasoning_effort)
+        # A Nexus agent's prompt is never sent to an external CLI, so the request carries none.
+        return Request(self.model, "", tuple(self.messages), reasoning_effort=self.reasoning_effort)
 
     async def turn(self, user: str | Message | NoUserMessage, *,
                    notices: tuple[dict[str, Any], ...] = ()) -> AsyncIterator:
@@ -164,14 +165,13 @@ class ExternalAgent:
                     worker = ClaudeCodeWorker(executable, state_dir=home() / "workers")
                     result = await worker.run(prompt=prompt, model=self.model, workspace=self.workspace, emit=emit,
                                               policy=ClaudePolicy(self.worker["permission_mode"], self.reasoning_effort),
-                                              instructions=self.instructions if not resume else "", resume=resume,
+                                              resume=resume,
                                               previous_fingerprint=self.worker.get("policy_fingerprint"),
                                               previous_transcript=self.worker.get("transcript_path"), project=self.project)
                 else:
                     assert acp_policy is not None and acp_fingerprint is not None
                     worker = AntigravityAcpWorker(executable)
-                    assignment = prompt if resume or not self.instructions else "[Nexus assignment instructions]\n" + self.instructions + "\n\n[Assignment]\n" + prompt
-                    result = await worker.run(prompt=assignment, model=self.model, workspace=self.workspace,
+                    result = await worker.run(prompt=prompt, model=self.model, workspace=self.workspace,
                                               policy=acp_policy, emit=emit, resume=resume,
                                               previous_transport=self.worker.get("transport"),
                                               previous_fingerprint=self.worker.get("policy_fingerprint"),
@@ -248,7 +248,7 @@ class ExternalAgent:
                 else:
                     event = await queue.get()
                 if isinstance(event, Exception):
-                    event = WorkerResult("failed", "", DISCLOSURE, error=str(event))
+                    event = WorkerResult("failed", "", DISCLOSURE, error=str(event) or type(event).__name__)
                 if isinstance(event, WorkerResult):
                     if self.pid == "agy" and event.usage:
                         reported_usage = event.usage
@@ -278,8 +278,12 @@ class ExternalAgent:
                             yield usage
                         reported_usage = None
                     records.clear(self.turn_id)
-                    self.worker.update(status=event.status, session_id=event.session_id or resume,
-                                       transcript_path=event.transcript_path, policy_fingerprint=event.policy_fingerprint,
+                    # A result built from an exception carries no CLI identity; keep what `process`/`init` recorded
+                    # so the next turn resumes the same CLI context instead of silently starting a blank one.
+                    self.worker.update(status=event.status,
+                                       session_id=event.session_id or self.worker.get("session_id") or resume,
+                                       transcript_path=event.transcript_path or self.worker.get("transcript_path"),
+                                       policy_fingerprint=event.policy_fingerprint or self.worker.get("policy_fingerprint"),
                                        usage=event.usage, error=event.error, diagnostics=event.diagnostics,
                                        notes=list(dict.fromkeys([*self.worker.get("notes", []), *event.notes])),
                                        denied_actions=list(event.denied_actions))

@@ -752,7 +752,7 @@ your own words or to add context to a selected option. Options have the keys fir
 move, and a single-choice answer follows the highlight (Left/Right also move it on a lone
 question); Space and Enter both lock the answer and go on, so Space sends a lone question at once
 and opens the review after the last page; a number or a click chooses a single choice and goes on
-(on a multi-select it ticks). A
+(on a multi-select it ticks). Single-choice options use a bare selected dot (`•`), without square brackets. A
 multi-select shows checkboxes and "Select all that apply"; arrows move, Space ticks and stays, and
 Enter locks the ticks and goes on (with nothing ticked, Enter ticks the highlighted option and
 stays). Typing, or

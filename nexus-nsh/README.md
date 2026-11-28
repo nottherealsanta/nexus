@@ -123,7 +123,7 @@ Keyboard routing assumes the focused WebView receives keys after NSH's keymap ha
 
 ## Native hosts
 
-The native crate and CLI use NSH 0.4.0. The experimental `nexus gpui` host loads
+The native crate and CLI use NSH 0.7.0 (revision `3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359`). The experimental `nexus gpui` host loads
 `capabilities.json` alongside `bundle.js`, including the filesystem grants needed
 for local Core discovery. The AppKit `nexus macos` launcher remains separate.
 Neither native launcher starts Core automatically.
@@ -238,7 +238,18 @@ when a user message itself reaches the top. A subdued
 `interactive.scrollbar` bar appears at the timeline's right edge while the reader
 scrolls, then fades out after about a second; Settings → Appearance → Scroll bar turns
 it off. The visible row and scroll geometry are scoped to the session, so a root's band cannot place the sticky
-header over a child. Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
+header over a child.
+
+**Message rail.** Once a session has two of your messages, the timeline's right edge becomes a rail of the
+whole conversation: every message is a mark where it falls (accent while it is on screen, muted otherwise),
+the viewport is the band, and hovering a mark shows `#n · first line`. Clicking a mark jumps to its message
+at the top of the timeline, and clicking or dragging the track scrolls there. It replaces the scroll bar
+while it shows, takes no content space and is not drawn in a peer timeline. `[` / `]` in the TUI (and
+`cmd+[` / `cmd+]` in NSH), with `alt+up` / `alt+down` as the alias in both, select the previous or next
+message and scroll only as far as needed. Settings → Appearance → Message rail (default on) turns it off.
+Desktop and web only: a phone never draws the rail or binds its keys, and its Settings omits the row.
+
+Turn footers are a right-aligned meta row (`models · tools · 24.5Ki · 570o · 90r · 58%c · elapsed · finished`) with no
 status word. Outcomes sit in a non-dismissible strip above the composer instead of timeline/footer rows: latest
 error/interruption, retry or recovery, with an additional-diagnostic count. It restores on revisit, clears on busy,
 offers `/continue` when applicable and Inspect on desktop. Full HTTP/body/history stays in the inspector; model-visible
@@ -339,7 +350,7 @@ when the client first saw the request, the parameter table (at most six rows; ea
 to at most three rows, then ends in `…`), for edit, write and patch the unified diff
 capped at 12 rows with `N more rows`, and a key-chip choice list: allow once, allow
 for session (`scope: "session"`), deny, and deny with a note
-(the note is the composer's text; empty, it says so). Questions show radios or checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
+(the note is the composer's text; empty, it says so). Single-choice questions show a bare `•` for the selected option, without square brackets; multi-select questions keep checkboxes. On desktop and web a question takes the composer's slot (plan 47): the card and
 the composer's input are one dock under one rail, and the input is the answer's `Add context…` line (`Type your
 answer…` for a question without options). Options have the keys first: Up/Down move, a single choice follows the
 highlight, and Space or Enter goes on (`space/enter send`, `next` or `review`); a multi-select ticks with Space and
@@ -432,9 +443,10 @@ Shift+N or ? runs model, new session, sessions, agent, settings, sidebar, effort
 reconnect, dictation, notifications or shortcuts. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 agent, model and effort pickers carry the TUI's search field (fuzzy filtering),
-↑↓ navigation and Enter to choose. The model picker names each model, puts its
-provider and `current` at the row's end, and shows the highlighted model's ref,
-context and efforts beneath the list.
+↑↓ navigation and Enter to choose. The model picker shows favorite stars in a
+dedicated column to the left of aligned model names, puts each provider and
+`current` at the row's end, and shows the highlighted model's ref, context and
+efforts beneath the list.
 Pending steer and queued messages sit above the input. Queued rows reveal `pencil`, `arrow-up`,
 `arrow-down` and `x` at their right edge on hover or keyboard focus (a tap reveals them on touch, and
 narrow windows keep them below the line); the order is edit, move up, move down, remove. Up is disabled on
@@ -510,10 +522,12 @@ Modals share three width classes with the TUI: small 500 px, medium 600 px and l
 at 70% of window height; scrollable bodies reserve space for their title, controls and
 footer, including in short windows. Titles have no duplicate Esc chip; dismissal hints
 live in `ModalFooter`. See `interface/design-language.md` for the shared rules.
-Settings is the same square modal as the TUI's, with a compact section rail on the left
-and the selected section on the right. The same search field filters both. Keys never change a value by moving:
-Enter or Right on a section enters its settings; Left, Esc or Tab returns to the sections; Enter or Space on a row
-flips a switch or starts editing an enum in place (←/→ choose, Enter sets, Esc cancels; the footer shows the keys). MCP is a page too (`src/ui/mcp-settings.tsx`, the TUI's `app/mcp.rs`):
+Settings is the same square modal as the TUI's, with a grouped section rail on the left
+and the actual selected page on the right. Press `/` for search by setting name, description or available value.
+Enter jumps to a result without editing; Esc or **Clear** returns to the prior browse position.
+Enter or Right on the rail focuses its settings; Left, Esc or Tab returns to the sections; Enter or Space on a row
+flips a switch or starts editing an enum in place (←/→ move the draft underline, Enter sets, Esc cancels).
+The saved option stays filled while editing. MCP is a page too (`src/ui/mcp-settings.tsx`, the TUI's `app/mcp.rs`):
 *Add a remote server* takes an address only, each server opens a detail modal with Sign in (the link Core sends is opened in the browser),
 Add a header (`Name: value`, masked), Switch off/on, Restart and Remove (confirmed); it is desktop and web only. Providers and Agents are
 rendered in the right pane: each provider row opens a detail modal with one
@@ -666,6 +680,45 @@ status; choosing one focuses the window and opens it. The icon gains a dot while
 question, and the tooltip says so. Web, mobile and the TUI ignore it (a client-specific difference, see the porting ledger).
 No global shortcut is registered.
 
+## Standalone recorder
+
+The recorder (plan 54) is a desktop and web feature, separate from dictation and
+the Manager. Its `Record` entry sits in the header left of Notifications and
+Manager; the phone shell has no header or recorder modal, and the recorder
+commands are desktop-only. Opening the modal never opens the microphone: an
+explicit `Start recording` creates the Core recording and then starts capture.
+The web client uses `getUserMedia` (AudioWorklet, with a ScriptProcessor
+fallback); the native desktop app uses the `RecorderMic` module, which reports
+itself unavailable on iOS and the other mobile targets. Capture is mono 16 kHz
+PCM16 in roughly one-second chunks.
+
+The modal shows the microphone and the Core destination, separate Capture, Audio
+and Transcript rows, a level meter, the transcript with a provisional tail, and
+`Jump to live` when the reader has scrolled away. Esc or Minimize keeps capture;
+Stop releases the microphone first and finishes the audio independently of
+transcription. `Copy transcript`, `Retry transcription`, `Recover unsaved
+audio`, Recent recordings and confirmed deletion are the actions; there is no
+Save As or browser download. Unacknowledged chunks are spooled in IndexedDB for
+up to 30 seconds, or in memory with an explicit warning when durable storage is
+unavailable. A lost stream or lease interrupts capture, never restarts the
+microphone, and recovery uploads only already-spooled audio up to the sealed
+final sample count; gaps stay visible rather than being filled with silence.
+
+Recordings stay in the configured Core's Nexus home (`recordings/<id>/`),
+including when Core is remote; the destination row names a non-loopback Core
+host. They remain until explicitly deleted, including abandoned empty
+recordings. Quitting the native desktop app while this client owns a capture
+asks `Stop and exit` / `Keep recording`; closing or reloading a browser tab uses
+the browser's generic close confirmation instead, the approved client-specific
+difference recorded in the porting ledger.
+
+Core's current create contract requires a client-generated
+`X-Recorder-Recovery` capability and supports resume-by-idempotency-key; the NSH
+controller is still being adapted to it, so end-to-end recording against this
+Core is not yet verified. The recorder has deterministic controller, spool,
+view-model and UI tests, but no real microphone, real STT model, ten-minute or
+hour-long run, recovery drill or latency measurement has been performed.
+
 ## Platform notes
 
 - **Web.** Served same-origin by `scripts/serve.mjs`; the host proxies `/api`
@@ -706,7 +759,7 @@ No global shortcut is registered.
   `src/core/transport.ts` are the single place the origin changes; `localCore()`
   there reads the daemon file, and `apiUrl()` prefixes URLs the platform loads
   itself (artifact images).
-- **Native services.** `native/` registers `Microphone` and `Mermaid` in
+- **Native services.** `native/` registers `Microphone`, `RecorderMic` and `Mermaid` in
   `nexus/native`. `Mermaid.render(source, width)` compiles through the shared
   `nexus-mermaid` crate on every target. `Mermaid.renderText` returns the shared
   pie/Gantt/timeline rows, and `Mermaid.renderPng` rasterizes with the bundled
@@ -717,7 +770,7 @@ No global shortcut is registered.
   and looks the native module up with `nativeModule("nexus/native")` when it is
   first needed, so importing the timeline for a pure helper does not load
   `nexus/native` outside the app bundle. `App.tsx` therefore has a bare `import "nexus/native"`: `nsh package` links a native UI set into the web runtime only when the bundle imports it, and without that import the packaged web build (`npm run build`, `npm run serve`) fails with `unknown native module nexus/native`, so every Mermaid block falls back to source (the dev host links everything and hid this). `e2e/shots.mjs` fails if the Mermaid shot has no diagram. `src/dictation.ts` does the same for
-  `Microphone` and treats a missing module as a client without capture. The Apple native bridge records 16 kHz mono WAV for dictation and Manager pipeline voice on macOS and iOS; packaged apps need `NSMicrophoneUsageDescription` (set by `scripts/native-info.mjs`). Device permission, recording and playback on macOS remain unverified. `src/mermaid-logic.ts` holds the
+  `Microphone` and treats a missing module as a client without capture. `RecorderMic` is the recorder's continuous 16 kHz mono PCM16 capture module; it reports unavailable on iOS and other mobile targets, and only its macOS path has been exercised here. The Apple native bridge records 16 kHz mono WAV for dictation and Manager pipeline voice on macOS and iOS; packaged apps need `NSMicrophoneUsageDescription` (set by `scripts/native-info.mjs`). Device permission, recording and playback on macOS remain unverified. `src/mermaid-logic.ts` holds the
   closed-fence scan and tone classes.
 - **Type size.** Shared interface text defaults to 14 px on web and macOS and 16 px on iOS. Explicitly sized text may differ, but all timeline text (rows, tool labels, code, badges and prose) is 16 px.
 - **Safe areas and touch.** The header pads by `safeArea().top`, the composer dock and

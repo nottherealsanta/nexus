@@ -81,7 +81,10 @@ export const manifest = {
    "manager.voice",
    "manager.field",
    "manager.card_focused",
-   "manager.engaged"
+   "manager.engaged",
+   "recorder.active",
+   "recorder.owner",
+   "recorder.modal"
   ],
   "placements": [
    "palette",
@@ -128,7 +131,8 @@ export const manifest = {
    "git",
    "inspect",
    "dictation",
-   "manager"
+   "manager",
+   "recorder"
   ]
  },
  "keymap": {
@@ -165,6 +169,17 @@ export const manifest = {
     ],
     "action": "manager.header",
     "note": "Close the Manager dropdown without ending audio, the control call or model work."
+   },
+   {
+    "id": "recorder",
+    "when": [
+     "recorder.modal",
+     "!overlay.open",
+     "!dialog.open",
+     "!text_edit.active"
+    ],
+    "action": "recorder.minimize",
+    "note": "While capturing this minimises; otherwise it closes. Never stops, discards or deletes. A dialog, palette or inline edit above the modal takes Esc first."
    },
    {
     "id": "overlay",
@@ -280,14 +295,17 @@ export const manifest = {
    "centre": "title_breadcrumbs",
    "trailing": "sidebar.right.toggle",
    "manager_button": "manager.header",
+   "recorder_button": "recorder.open",
    "note": "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome.",
    "title_click": "session.rename",
    "breadcrumbs": "root title > child title; each crumb is a link; back via nav.back",
    "extra": [
+    "recorder.open",
     "manager.header",
     "manager.open_session",
     "notifications.open"
-   ]
+   ],
+   "order": "Recorder \u2192 Notifications \u2192 Manager"
   },
   "left_sidebar": {
    "default_tab": "sessions",
@@ -406,8 +424,49 @@ export const manifest = {
   "navigation": {
    "section_key": "left",
    "value_key": "right",
-   "previous_value_key": "shift+right"
+   "previous_value_key": "shift+right",
+   "search_key": "/"
   },
+  "rail": [
+   {
+    "label": "App",
+    "sections": [
+     "appearance",
+     "keybindings",
+     "notifications"
+    ]
+   },
+   {
+    "label": "Agents & models",
+    "sections": [
+     "providers",
+     "agents",
+     "workers",
+     "context"
+    ]
+   },
+   {
+    "label": "Tools & integrations",
+    "sections": [
+     "tools",
+     "browser",
+     "mcp"
+    ]
+   },
+   {
+    "label": "Assistance",
+    "sections": [
+     "manager",
+     "dictation"
+    ]
+   },
+   {
+    "label": "",
+    "sections": [
+     "about"
+    ]
+   }
+  ],
   "mobile": {
    "sections": [
     "appearance",
@@ -998,10 +1057,11 @@ export const manifest = {
     "title": "Web search",
     "lines": [
      "Nexus can search the web for you through SearXNG, a small search server that runs in a container on the machine running Nexus Core. Nothing runs on this device.",
-     "Nexus starts it now, in the background. The first start downloads its container image, which can take a few minutes, so the tour does not wait for it.",
+     "It needs a container runtime on that machine: Apple container (macOS 26 or later on Apple silicon; brew install container) or Docker. If neither is installed, install one now, then press Retry.",
+     "Nexus starts it in the background. The first start downloads its container image, which can take a few minutes, so the tour does not wait for it.",
      "If it does not start, retry here or later in Settings > Tools. You can continue without it."
     ],
-    "tip": "Core starts the container with Apple container or Docker, whichever is installed on its host. Nexus does not install or configure either."
+    "tip": "Core uses Apple container when it is installed, else Docker. Nexus does not install either; it only starts the search server."
    },
    {
     "id": "timeline",
@@ -1137,7 +1197,102 @@ export const manifest = {
   "effort.row": "effort {value}",
   "effort.no_levels": "{model} lists no effort levels",
   "effort.choose_model": "Choose a model first.",
-  "effort.settings_hint": "\u2190/\u2192 sets this model's effort; open it for every level. Changes apply to new subagents; running ones keep what they started with."
+  "effort.settings_hint": "\u2190/\u2192 sets this model's effort; open it for every level. Changes apply to new subagents; running ones keep what they started with.",
+  "recorder.title": "Recorder",
+  "recorder.header.idle": "Record",
+  "recorder.header.starting": "\u25cf Starting\u2026",
+  "recorder.header.starting_compact": "\u25cf",
+  "recorder.header.recording": "\u25cf REC {t}",
+  "recorder.header.recording_compact": "\u25cf {t}",
+  "recorder.header.elsewhere": "REC elsewhere",
+  "recorder.header.elsewhere_compact": "REC",
+  "recorder.header.saving": "Saving audio\u2026",
+  "recorder.header.saving_compact": "Saving\u2026",
+  "recorder.header.finishing": "Finishing transcript",
+  "recorder.header.finishing_compact": "Transcript\u2026",
+  "recorder.header.interrupted": "! Recording interrupted",
+  "recorder.header.interrupted_compact": "! REC",
+  "recorder.a11y.idle": "Recorder",
+  "recorder.a11y.starting": "Recorder, starting",
+  "recorder.a11y.recording": "Recorder, recording, {t}",
+  "recorder.a11y.elsewhere": "Recorder, recording on another client",
+  "recorder.a11y.saving": "Recorder, saving audio",
+  "recorder.a11y.finishing": "Recorder, finishing transcript",
+  "recorder.a11y.interrupted": "Recorder, recording interrupted",
+  "recorder.source.device": "Microphone: {device}",
+  "recorder.source.default_device": "Microphone: default input",
+  "recorder.source.destination": "Saving to {host}",
+  "recorder.capture.idle": "Not recording",
+  "recorder.capture.starting": "Starting\u2026",
+  "recorder.capture.recording": "Recording \u00b7 {t}",
+  "recorder.capture.elsewhere": "Recording on another client \u00b7 {t}. This client's microphone is off.",
+  "recorder.capture.stopping": "Stopping \u00b7 {t}",
+  "recorder.capture.stopped": "Stopped \u00b7 {t}",
+  "recorder.capture.interrupted": "Interrupted at {t}: {reason}",
+  "recorder.capture.interrupted_no_reason": "Interrupted at {t}",
+  "recorder.capture.failed": "Failed: {reason}",
+  "recorder.reason.stream_detached": "The connection to Core was lost",
+  "recorder.reason.lease_expired": "The recorder lost its connection to Core",
+  "recorder.reason.microphone": "The microphone stopped.",
+  "recorder.reason.deleted": "The recording was deleted.",
+  "recorder.audio.saved_through": "Saved to Core through {t} \u00b7 {s}s pending",
+  "recorder.audio.saved_detail": "Saved to Core through {t}",
+  "recorder.audio.all_saved": "Audio saved",
+  "recorder.audio.saved_finishing": "Audio saved \u00b7 Finishing transcript",
+  "recorder.audio.memory_only": "Unsaved audio is kept in memory only (\u226430 s)",
+  "recorder.storage.persistent_required": "Persistent storage is required for recording",
+  "recorder.audio.gaps": "{n} gaps \u00b7 {s}s missing",
+  "recorder.audio.gaps_unknown": "{n} gaps \u00b7 missing time unknown",
+  "recorder.audio.unsaved": "{s}s not saved to Core",
+  "recorder.transcript.preparing": "Preparing transcription\u2026",
+  "recorder.transcript.live": "Live",
+  "recorder.transcript.catching_up": "Catching up \u00b7 {s}s behind",
+  "recorder.transcript.complete": "Complete",
+  "recorder.transcript.unavailable": "Recording audio \u00b7 Transcription unavailable",
+  "recorder.transcript.failed": "{n} parts could not be transcribed",
+  "recorder.transcript.empty_idle": "The transcript appears here as you speak.",
+  "recorder.transcript.listening": "Listening\u2026",
+  "recorder.transcript.pending_row": "Waiting to transcribe",
+  "recorder.transcript.error_row": "Could not transcribe this part",
+  "recorder.transcript.earlier": "Earlier text is in Copy transcript.",
+  "recorder.jump_live": "Jump to live",
+  "recorder.action.start": "Start recording",
+  "recorder.action.minimize": "Minimize",
+  "recorder.action.stop": "Stop",
+  "recorder.action.copy_transcript": "Copy transcript",
+  "recorder.action.retry": "Retry transcription",
+  "recorder.action.recover": "Recover unsaved audio",
+  "recorder.action.recent": "Recent recordings",
+  "recorder.action.delete": "Delete\u2026",
+  "recorder.recent.title": "Recent recordings",
+  "recorder.recent.empty": "No recordings yet.",
+  "recorder.recent.row": "{date} \u00b7 {t} \u00b7 {status}",
+  "recorder.recent.limit": "Showing the 50 most recent.",
+  "recorder.recent.gaps": "{n} gaps",
+  "recorder.status.complete": "Complete",
+  "recorder.status.recording": "Recording",
+  "recorder.status.interrupted": "Interrupted",
+  "recorder.status.transcript_incomplete": "Transcript incomplete",
+  "recorder.delete.title": "Delete this recording?",
+  "recorder.delete.body": "Deletes its audio and transcript from Core. Copies you saved are not affected.",
+  "recorder.delete.confirm": "Delete",
+  "recorder.delete.cancel": "Cancel",
+  "recorder.delete.busy": "Wait for the save to finish, then delete.",
+  "recorder.quit.title": "Stop recording and quit?",
+  "recorder.quit.body": "Quitting closes this client's microphone. Audio saved so far stays in Core.",
+  "recorder.quit.confirm": "Stop and exit",
+  "recorder.quit.cancel": "Keep recording",
+  "recorder.busy.other_client": "Another client is recording. Only one recording can run at a time.",
+  "recorder.busy.mic": "The microphone is in use by {owner}.",
+  "recorder.toast.copied": "Transcript copied",
+  "recorder.toast.copied_partial": "Transcript copied \u00b7 incomplete",
+  "recorder.low_disk": "About {t} of space left on Core.",
+  "recorder.hint.capturing": "tab move \u00b7 enter choose \u00b7 esc minimise",
+  "recorder.hint.idle": "tab move \u00b7 enter choose \u00b7 esc close",
+  "recorder.hint.recent": "enter open \u00b7 delete\u2026 \u00b7 esc back",
+  "recorder.announce.started": "Recording started",
+  "recorder.announce.stopped": "Recording stopped. Audio saved.",
+  "recorder.announce.interrupted": "Recording interrupted"
  },
  "command": [
   {
@@ -1213,7 +1368,7 @@ export const manifest = {
     "palette",
     "menu"
    ],
-   "note": "Quit closes the client only; the daemon keeps running."
+   "note": "Quit closes the client only; the daemon keeps running. If this client is recording, confirm first (recorder.quit.*): Stop and exit or Keep recording."
   },
   {
    "id": "app.sign_in",
@@ -4901,6 +5056,129 @@ export const manifest = {
    "placement": [
     "dialog"
    ]
+  },
+  {
+   "id": "recorder.open",
+   "title": "Recorder",
+   "category": "recorder",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "header",
+    "palette"
+   ],
+   "note": "Open the recorder modal on the current or most recent recording. Never creates a recording, opens the microphone or starts the Manager. Reads GET /api/recordings (and, with an id, GET /api/recordings/{id} and \u2026/transcript)."
+  },
+  {
+   "id": "recorder.stop",
+   "title": "Stop recording",
+   "category": "recorder",
+   "when": [
+    "recorder.owner"
+   ],
+   "unavailable_reason": "This client is not recording.",
+   "placement": [
+    "palette",
+    "dialog"
+   ],
+   "note": "Releases this client's microphone immediately, then drains and stops the Core capture. Repeated Stop is a no-op. Never deletes."
+  },
+  {
+   "id": "recorder.minimize",
+   "title": "Minimize the recorder",
+   "category": "recorder",
+   "when": [
+    "recorder.modal"
+   ],
+   "unavailable_reason": "The recorder is not open.",
+   "placement": [
+    "palette",
+    "dialog"
+   ],
+   "note": "Hides the modal and keeps capture running; Esc does this while capturing. When idle or stopped, Esc closes instead. Never stops, discards or deletes."
+  },
+  {
+   "id": "recorder.start",
+   "title": "Start recording",
+   "category": "recorder",
+   "when": [
+    "!recorder.active"
+   ],
+   "unavailable_reason": "Another recording is already active.",
+   "placement": [
+    "palette",
+    "dialog"
+   ],
+   "note": "Creates a recording (POST /api/recordings) and opens the microphone only after Core grants the lease. 409 recorder_busy shows recorder.busy.other_client; a local microphone owner shows recorder.busy.mic. One idempotency key per press."
+  },
+  {
+   "id": "recorder.copy_transcript",
+   "title": "Copy transcript",
+   "category": "recorder",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "dialog",
+    "palette"
+   ],
+   "note": "Fetches the durable transcript (transcript.txt) and copies it, complete or not; the provisional tail is never included. A partial transcript says so in the toast."
+  },
+  {
+   "id": "recorder.retry",
+   "title": "Retry transcription",
+   "category": "recorder",
+   "when": [
+    "!recorder.active"
+   ],
+   "unavailable_reason": "Transcription can be retried after capture stops.",
+   "placement": [
+    "dialog",
+    "palette"
+   ],
+   "note": "POST \u2026/transcript/retry {scope:\"failed\"} after capture has ended. Refusals map to the transcript status row."
+  },
+  {
+   "id": "recorder.recover",
+   "title": "Recover unsaved audio",
+   "category": "recorder",
+   "when": [
+    "!recorder.active"
+   ],
+   "unavailable_reason": "Recovery is available after an interrupted recording.",
+   "placement": [
+    "dialog",
+    "palette"
+   ],
+   "note": "Seals an interrupted capture from this client's bounded spool through the recovery capability, then continues as stopped. Never starts a microphone or renews capture permission."
+  },
+  {
+   "id": "recorder.recent",
+   "title": "Recent recordings",
+   "category": "recorder",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "dialog",
+    "palette"
+   ],
+   "note": "Shows the Recent recordings page in the recorder modal: GET /api/recordings?limit=50. Recordings stay in Core's state home under recordings/; clients do not save copies elsewhere."
+  },
+  {
+   "id": "recorder.delete",
+   "title": "Delete recording",
+   "category": "recorder",
+   "when": [
+    "!recorder.active"
+   ],
+   "unavailable_reason": "Stop the recording before deleting it.",
+   "placement": [
+    "dialog",
+    "palette"
+   ],
+   "note": "Confirms first (recorder.delete.*), then DELETE /api/recordings/{id}. Only offered for a selected recording; 409 recording_export_active shows recorder.delete.busy. This is the only destructive action."
   }
  ]
 } as const;

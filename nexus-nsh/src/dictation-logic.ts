@@ -1,15 +1,14 @@
-export const DICTATION_SAMPLE_RATE = 16_000;
+import { CAPTURE_SAMPLE_RATE, resampleMono } from "./audio-capture-logic";
+
+// Capture primitives live in audio-capture-logic; re-exported so dictation
+// callers and tests keep one import site.
+export { downmixChannels, hasMicrophoneCapture, resampleMono, rmsLevel } from "./audio-capture-logic";
+
+export const DICTATION_SAMPLE_RATE = CAPTURE_SAMPLE_RATE;
 export const MIN_RECORDING_SECONDS = 0.2;
 export const MAX_RECORDING_SECONDS = 120;
 export const PREVIEW_INTERVAL_SECONDS = 0.4;
 export const PREVIEW_WINDOW_SECONDS = 20;
-
-type NavigatorLike = { mediaDevices?: { getUserMedia?: unknown } };
-
-/** Native NSH has no `navigator.mediaDevices`; only the web client can capture audio. */
-export function hasMicrophoneCapture(navigator: NavigatorLike | undefined): boolean {
-  return typeof navigator?.mediaDevices?.getUserMedia === "function";
-}
 
 export type DictationPhase = "idle" | "checking" | "consent" | "downloading" | "requesting" | "recording" | "stopping";
 export type DictationEvent = "start" | "consent" | "download" | "request" | "ready" | "stop" | "finish" | "cancel" | "fail";
@@ -28,39 +27,6 @@ export function transitionDictation(phase: DictationPhase, event: DictationEvent
   const next = TRANSITIONS[phase][event];
   if (!next) throw new Error(`Invalid dictation transition: ${phase} → ${event}`);
   return next;
-}
-
-/** Average channel samples into mono, clipping to the shortest channel. */
-export function downmixChannels(channels: readonly Float32Array[]): Float32Array {
-  if (!channels.length) return new Float32Array();
-  const length = Math.min(...channels.map((channel) => channel.length));
-  const mono = new Float32Array(length);
-  for (let i = 0; i < length; i++) {
-    let value = 0;
-    for (const channel of channels) value += channel[i];
-    mono[i] = value / channels.length;
-  }
-  return mono;
-}
-
-/** Linear sample-rate conversion. Output length is rounded to the nearest sample. */
-export function resampleMono(samples: Float32Array, sourceRate: number, targetRate = DICTATION_SAMPLE_RATE): Float32Array {
-  if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
-    throw new Error("Sample rates must be positive numbers");
-  }
-  if (samples.length === 0) return new Float32Array();
-  if (sourceRate === targetRate) return samples.slice();
-  const length = Math.max(1, Math.round(samples.length * targetRate / sourceRate));
-  const output = new Float32Array(length);
-  const ratio = sourceRate / targetRate;
-  for (let i = 0; i < length; i++) {
-    const position = i * ratio;
-    const left = Math.min(samples.length - 1, Math.floor(position));
-    const right = Math.min(samples.length - 1, left + 1);
-    const fraction = Math.min(1, position - left);
-    output[i] = samples[left] * (1 - fraction) + samples[right] * fraction;
-  }
-  return output;
 }
 
 /** Encode mono floating-point audio as a standards-compliant 44-byte PCM16 WAV. */
@@ -110,13 +76,6 @@ export function appendTranscript(existing: string, transcript: string): string {
   if (!text) return existing;
   const joined = existing ? `${existing}${existing.endsWith("\n") ? "" : "\n"}${text}` : text;
   return joined.startsWith(VOICE_TRANSCRIPT_NOTICE) ? joined : `${VOICE_TRANSCRIPT_NOTICE}\n\n${joined}`;
-}
-
-export function rmsLevel(samples: Float32Array): number {
-  if (!samples.length) return 0;
-  let power = 0;
-  for (const sample of samples) power += sample * sample;
-  return Math.min(1, Math.sqrt(power / samples.length));
 }
 
 export function formatBytes(bytes: number): string {

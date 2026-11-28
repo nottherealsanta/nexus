@@ -2014,6 +2014,7 @@ impl Builder<'_> {
             }
         }
         self.pending_row(view);
+        self.compacting_row(view);
         // Trim trailing blanks.
         while self.out.last().is_some_and(|l| l.spans.is_empty()) {
             self.out.pop();
@@ -2081,6 +2082,47 @@ impl Builder<'_> {
             b.line(vec![
                 Span::raw(" ".repeat(ACTIVITY_INDENT)),
                 Span::styled(format!("{spin} "), style),
+                Span::styled(text, secondary),
+            ]);
+        });
+    }
+
+    /// While the handoff summary is written the session takes nothing new: a braille wave and what comes next.
+    fn compacting_row(&mut self, view: &crate::reduce::SelectedView) {
+        if !self.app.handing_off(&view.session_id) {
+            return;
+        }
+        let moving = !self.t.opts.reduced_motion;
+        self.clocked.set(true);
+        if moving {
+            self.animated.set(true);
+        }
+        let secs = if moving {
+            self.frame as f32 * crate::theme::shimmer_motion().frame_ms as f32 / 1000.0
+        } else {
+            0.0
+        };
+        let wave: String = if self.t.opts.ascii {
+            self.t.spinner(self.frame).to_owned()
+        } else {
+            (0..crate::indicator::WIDTH as usize)
+                .map(|i| {
+                    crate::indicator::braille_cell(
+                        secs,
+                        crate::indicator::IndicatorState::Thinking,
+                        0.5,
+                        i,
+                    )
+                })
+                .collect()
+        };
+        let style = self.st(PRIMARY, CANVAS);
+        let secondary = self.secondary();
+        let text = format!("Compacting{}a new session opens soon", self.sep());
+        self.block("compacting", BlockKind::Group, self.turn, false, |b| {
+            b.line(vec![
+                Span::raw(" ".repeat(ACTIVITY_INDENT)),
+                Span::styled(format!("{wave}  "), style),
                 Span::styled(text, secondary),
             ]);
         });

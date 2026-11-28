@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 nexus-annotate = { path = "../nexus-annotate" }
 nexus-mermaid = { path = "../nexus-mermaid", default-features = false, features = ["raster"] }
+nexus-recorder-spool = { path = "../nexus-recorder-spool" }
 ratatui = "=0.29.0"
 crossterm = "=0.28.1"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "process", "signal"] }
@@ -22,6 +23,7 @@ futures-util = "=0.3.34"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 uuid = { version = "=1.29.0", features = ["v4"] }
+getrandom = "=0.4.3"
 bytes = "=1.12.1"
 toml = "=0.8.23"
 unicode-width = "=0.2.0"

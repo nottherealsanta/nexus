@@ -14,6 +14,10 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::audio_capture::{
+    acquire_mic, acquire_mic_after_dictation, MicOwner, DICTATION_RELEASE_STEP,
+    DICTATION_RELEASE_TIMEOUT,
+};
 use crate::dictation::{open_input, AudioMessage, Resampler};
 
 pub const RATE: u32 = 24_000;
@@ -368,6 +372,20 @@ pub struct LiveAudio {
     flush: Arc<AtomicBool>,
     pub levels: Levels,
     task: tokio::task::JoinHandle<()>,
+    devices: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Signal the device thread and join it on a reaper thread. Never blocks the
+/// caller/UI, and is also the failure path when readiness never arrives.
+fn stop_and_reap(stop: &Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>>) {
+    stop.store(true, Ordering::SeqCst);
+    if let Some(thread) = thread {
+        let _ = std::thread::Builder::new()
+            .name("nexus-live-reaper".into())
+            .spawn(move || {
+                let _ = thread.join();
+            });
+    }
 }
 
 impl LiveAudio {
@@ -388,21 +406,31 @@ impl LiveAudio {
         let (mic_tx, mic_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (speech_tx, speech_rx) = std_mpsc::channel::<Vec<f32>>();
         let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), String>>();
-        {
+        let devices_thread = {
             let (stop, muted, flush, levels) =
                 (stop.clone(), muted.clone(), flush.clone(), levels.clone());
-            std::thread::spawn(move || {
-                devices(
-                    stop, muted, flush, levels, headphones, mic_tx, speech_rx, ready_tx,
-                )
-            });
-        }
-        match tokio::task::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(5)))
-            .await
-        {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(e))) => return Err(e),
-            _ => return Err("The audio devices did not open in time".into()),
+            std::thread::Builder::new()
+                .name("nexus-live-devices".into())
+                .spawn(move || {
+                    devices(
+                        stop, muted, flush, levels, headphones, mic_tx, speech_rx, ready_tx,
+                    )
+                })
+                .map_err(|error| format!("Could not start the live audio thread: {error}"))?
+        };
+        let ready =
+            tokio::task::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(5)))
+                .await;
+        let failure = match ready {
+            Ok(Ok(Ok(()))) => None,
+            Ok(Ok(Err(error))) => Some(error),
+            _ => Some("The audio devices did not open in time".to_owned()),
+        };
+        if let Some(error) = failure {
+            // The thread may still be opening a device. Stop it and reap it;
+            // dropping the handle here would orphan the MicGuard it holds.
+            stop_and_reap(&stop, Some(devices_thread));
+            return Err(error);
         }
         let (lost_tx, lost) = mpsc::unbounded_channel();
         let task = tokio::spawn(socket(
@@ -420,6 +448,7 @@ impl LiveAudio {
                 flush,
                 levels,
                 task,
+                devices: Some(devices_thread),
             },
             lost,
         ))
@@ -434,16 +463,20 @@ impl LiveAudio {
         self.flush.store(true, Ordering::SeqCst);
     }
 
-    pub fn stop(self) {
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         self.task.abort();
+        stop_and_reap(&self.stop, self.devices.take());
     }
 }
 
 impl Drop for LiveAudio {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        self.task.abort();
+        self.shutdown();
     }
 }
 
@@ -504,6 +537,17 @@ fn devices(
     speech_rx: std_mpsc::Receiver<Vec<f32>>,
     ready: std_mpsc::Sender<Result<(), String>>,
 ) {
+    let _guard = match acquire_mic_after_dictation(
+        MicOwner::Manager,
+        DICTATION_RELEASE_TIMEOUT,
+        DICTATION_RELEASE_STEP,
+    ) {
+        Ok(guard) => guard,
+        Err(message) => {
+            let _ = ready.send(Err(message));
+            return;
+        }
+    };
     let (audio_tx, audio_rx) = std_mpsc::channel::<AudioMessage>();
     let input = open_input(audio_tx);
     let (input_stream, rate, channels) = match input {
@@ -587,6 +631,56 @@ fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_failure_signals_stop_and_reaps_the_device_thread() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let exited = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = stop.clone();
+            let exited = exited.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                exited.store(true, Ordering::SeqCst);
+            })
+        };
+        stop_and_reap(&stop, Some(thread));
+        for _ in 0..200 {
+            if exited.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(stop.load(Ordering::SeqCst));
+        assert!(
+            exited.load(Ordering::SeqCst),
+            "device thread was not reaped"
+        );
+    }
+
+    #[test]
+    fn manager_live_refuses_while_the_recorder_owns_the_microphone() {
+        let _test = crate::audio_capture::mic_test_guard();
+        let held = acquire_mic(MicOwner::Recorder).unwrap();
+        let (mic_tx, _mic_rx) = mpsc::unbounded_channel();
+        let (_speech_tx, speech_rx) = std_mpsc::channel();
+        let (ready_tx, ready_rx) = std_mpsc::channel();
+        devices(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Levels::default(),
+            false,
+            mic_tx,
+            speech_rx,
+            ready_tx,
+        );
+        let error = ready_rx.recv().unwrap().unwrap_err();
+        assert!(error.contains("recorder"), "{error}");
+        drop(held);
+    }
 
     #[test]
     fn voice_barge_in_crosses_the_echo_guard_as_in_nexus01() {

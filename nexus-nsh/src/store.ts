@@ -18,6 +18,9 @@ import { playNotificationCue } from "./cues";
 import { listenNotificationPresses, notifySession } from "./os-notify";
 import { splashDismiss, splashFinish, splashReach, splashStart } from "./ui/splash";
 import { mcpEvent } from "./ui/mcp-settings";
+import { emptyTranscript } from "./recorder-view";
+import type { RecorderCoreInput, RecorderPage, RecorderRecentRecording, RecorderTranscriptState } from "./recorder-view";
+import type { RecorderSnapshot } from "./recorder";
 
 export type CentreView = "session" | "new_session" | "settings" | "editor";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
@@ -275,6 +278,57 @@ export const flowSession = signal<string | null>(null);
 export const flowProject = signal<string | null>(null);
 export const picker = signal<null | { title: string; items: PickerItem[]; note?: string }>(null);
 export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; /** A third choice between Cancel and the primary action (Discard beside Save). */ alt?: { label: string; run: () => Promise<void> | void; testID?: string }; busy?: boolean; error?: string; bracketActions?: boolean; scrollBody?: boolean }>(null);
+
+// --- recorder (plan 54, desktop and web only) ----------------------------------------------
+/** This client's capture controller snapshot; null until it is created. */
+export const recorderSnapshot = signal<RecorderSnapshot | null>(null);
+/** Core's authoritative public state for the recording the client is showing. */
+export const recorderCore = signal<RecorderCoreInput | null>(null);
+/** Durable transcript state, keyed by recording and generation. */
+export const recorderTranscript = signal<RecorderTranscriptState>(emptyTranscript());
+/** `GET /api/recordings?limit=50` for the Recent page and selection. */
+export const recorderRecent = signal<RecorderRecentRecording[]>([]);
+export const recorderRecentLimit = signal(50);
+export const recorderRecentSelected = signal(0);
+export const recorderOpen = signal(false);
+export const recorderPage = signal<RecorderPage>("recorder");
+/** A button id, `recent.<n>`, `jump_live`, or null when the focused view goes away. */
+export const recorderFocus = signal<string | null>(null);
+export const recorderFollow = signal(true);
+/** A transcript offset per recording id, kept while the modal is minimised or closed. */
+export const recorderScroll = signal<Record<string, number>>({});
+/** The interrupted pill has been seen for the current recording in this client. */
+export const recorderSeenInterrupted = signal(false);
+export const recorderFailure = signal<{ kind?: string | null; reason?: string | null } | null>(null);
+export const recorderSource = signal<{ device?: string | null; host?: string | null }>({ device: null, host: "this computer" });
+/** The quit confirmation (Stop and exit / Keep recording) is open. */
+export const recorderQuitPrompt = signal(false);
+/** The recorder's live-region announcement. */
+export const recorderAnnouncement = signal("");
+/**
+ * Launch recovery of pending create intents: Start stays unavailable until it
+ * has run, and a full Core create guard keeps it unavailable until a restart.
+ */
+export const recorderStartup = signal<{
+  ready: boolean;
+  recovering: boolean;
+  restartRequired: boolean;
+  error: string | null;
+  issues: string[];
+  storagePersistent: boolean | null;
+  storageReason: string | null;
+}>({
+  ready: false, recovering: true, restartRequired: false, error: null, issues: [],
+  storagePersistent: null, storageReason: null,
+});
+/** The event stream this client is bound to, for the recorder's rebind and create calls. */
+export const recorderStreamId = signal<string | null>(null);
+/** Hooks the recorder UI installs; sync delivers global events and reconnects through them. */
+export const recorderHooks: {
+  event?: (event: { type: string; data?: any }) => void;
+  connected?: () => void;
+  closed?: () => void;
+} = {};
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
 /** Choices made before a session exists; consumed by its creation request. */
@@ -357,9 +411,8 @@ export const settingsNavFocused = signal(true);
 export const settingsEdit = signal<{ id: string; draft: string } | null>(null);
 /** The keyboard-reachable choice rows of the open Settings pane (registered by `Seg` with an `id`), by setting id. */
 export const settingsSegs = new Map<string, { options: string[]; value: () => string; pick: (value: string) => void }>();
-/** Whether a page section (Providers, Agents) is open in the pane; Esc from it returns to the rail. */
-export const settingsPageOpen = signal(false);
-/** The Settings search text; it filters the section rail and the selected pane. */
+/** Search has its own focus and results; the previous pane stays selected until a jump. */
+export const settingsSearchActive = signal(false);
 export const settingsQuery = signal("");
 /** The agent detail page drilled into (`agents/<name>`); the section rail and page content come from `settingsSection`. */
 export const settingsPage = signal<string | null>(null);
@@ -765,7 +818,7 @@ const host: SyncHost = {
   sessionFinished(id) { if (notificationSoundsOn()) playNotificationCue("finished"); void notifySession("finished", id, model.sessions.get(id)?.title ?? "", model.selected?.sessionId ?? null); },
   sessionInput(id) { if (notificationSoundsOn()) playNotificationCue("input"); void notifySession("input", id, model.sessions.get(id)?.title ?? "", model.selected?.sessionId ?? null); },
   handoffEvent(e) {
-    if (e.type === "session.handoff_failed") { toast("warning", `Automatic handoff failed: ${(e.data as any)?.error ?? "unknown error"}`); return; }
+    if (e.type === "session.handoff_failed") { if ((e.data as any)?.reason === "auto") toast("warning", `Automatic handoff failed: ${(e.data as any)?.error ?? "unknown error"}`); return; }
     const d = e.data as { reason?: string; to?: string };
     if (d?.reason === "auto" && d.to && e.session_id === viewed()?.id) {
       toast("info", "Context was nearly full: continued in a new session");
@@ -776,10 +829,11 @@ const host: SyncHost = {
   globalEvent(e) {
     if (e.type === "voice.progress") receiveVoiceProgress(e.data);
     else if (e.type.startsWith("manager.")) managerHooks.event?.(e);
+    else if (e.type.startsWith("recorder.")) recorderHooks.event?.(e);
     else handleGlobalEvent(e);
   },
-  streamConnected(streamId) { viewReporter.connected(streamId); managerHooks.connected?.(streamId); },
-  streamClosed(streamId) { viewReporter.closed(streamId); managerHooks.closed?.(streamId); },
+  streamConnected(streamId) { recorderStreamId.set(streamId); viewReporter.connected(streamId); managerHooks.connected?.(streamId); recorderHooks.connected?.(); },
+  streamClosed(streamId) { if (recorderStreamId() === streamId) recorderStreamId.set(null); viewReporter.closed(streamId); managerHooks.closed?.(streamId); recorderHooks.closed?.(); },
 };
 export const sync = new Sync(host);
 listenNotificationPresses((id) => void selectSession(id));

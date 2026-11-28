@@ -9,6 +9,12 @@ with 400, 401, 404, 409, 410, 413, 422 or 502. The table is not the whole API:
 files, git, pending inputs, draft context, provider login and the rest of voice
 are in docs/api.md.
 
+The recorder (plan 54) follows the same authentication policy: the bearer token
+when one is configured, trusted networks only otherwise. With no token and an
+all-interfaces bind, anyone on that network can list, download and delete
+recordings and read their transcripts, exactly as they can already read sessions
+and files. The recorder adds a lease capability for capture, not a second login.
+
 | method | path | what |
 | --- | --- | --- |
 | GET | /api/info | daemon identity: version, pid, home, url, log generation and head |
@@ -79,6 +85,17 @@ are in docs/api.md.
 | POST | /api/session/{id}/question/{qid} | `{answers: [...]}` → 204; 400 invalid, 404 unknown, 409 already resolved |
 | GET | /inspector | the session inspector page (static; it reads the API with the token from its URL fragment) |
 | POST | /api/client/view | ephemeral view per open event stream: `{stream_id, client_id, project, session, panel}`; there is no read route |
+| GET/POST | /api/recordings | list states / create or look up an attempt (`{stream_id, client_id, title?, mode?}`; required `Idempotency-Key` and client-generated `X-Recorder-Recovery`; 201 new, 200 replay) |
+| GET/DELETE | /api/recordings/{id} | one public recording state / delete a stopped recording (204; 409 while active or pinned by a WAV/transcript export) |
+| PUT | /api/recordings/{id}/chunks/{seq} | bounded PCM16 chunk (`application/octet-stream`, at most 64 000 B); lease in `X-Recorder-Lease`, stream in `X-Recorder-Stream` |
+| POST | /api/recordings/{id}/heartbeat | renew the lease (409 `lease_expired` tells the owner to stop its microphone) |
+| POST | /api/recordings/{id}/rebind | reconnect an event stream to a still-valid lease |
+| POST | /api/recordings/{id}/stop | idempotently seal the capture at a final sample count |
+| POST | /api/recordings/{id}/recover, PUT …/recover/chunks/{seq} | recovery token: seal an interrupted capture's final offset, then upload its spooled chunks |
+| GET | /api/recordings/{id}/audio.wav | stopped/sealed recordings only: verified contiguous PCM16 as a WAV attachment; 409 `recording_active` or `recording_not_stopped` |
+| GET | /api/recordings/{id}/transcript | paged durable transcript: `?after=&limit=`; at most one live provisional tail; no transcript text in events |
+| GET | /api/recordings/{id}/transcript.txt, /transcript.json | streamed transcript export; allowed while capturing with a `complete:false` marker |
+| POST | /api/recordings/{id}/transcript/retry | retry failed/all/explicit transcript segments after capture; never downloads a model |
 | GET | /api/manager | the Manager: `{enabled, mode, model, call}`; restores a call after a reconnect |
 | GET | /api/manager/episode | the Manager's own past conversations, newest first, so the inspector can open one by id |
 | GET | /api/manager/audit | what the Manager did on the user's words: `?limit=&tool=` |
@@ -146,6 +163,10 @@ from .mcp import manager as mcp_manager
 from .oneshot import OneshotError
 from .paths import home
 from .perf import Perf
+from .recorder.host import RecorderHost
+from .recorder.scheduler import RecorderScheduler
+from .recorder_api import MAX_RECORDER_JSON
+from .recorder_api import routes as recorder_routes
 from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
 from .skills import install as skills_install
 from .store import TURN_PAGE, TURN_PAGE_MAX, Store
@@ -184,6 +205,8 @@ def _version(name: str) -> tuple[int, ...]:
 def _body_limit(request: Request) -> int:
     if request.url.path == "/api/voice/transcribe":
         return MAX_WAV_BYTES
+    if _is_recorder_path(request.url.path):
+        return MAX_RECORDER_JSON
     if request.method == "PUT" and request.url.path.endswith("/file"):
         return MAX_FILE_BODY_BYTES
     return MAX_PROMPT_BYTES if request.url.path.endswith("/prompt") else MAX_BODY_BYTES
@@ -192,6 +215,11 @@ IDEMPOTENCY_MAX = 128
 _IDEMPOTENCY_KEY = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
 _MUTATING = frozenset({"POST", "PATCH", "DELETE"})
 _KEYED = ("/prompt", "/continue")
+
+
+def _is_recorder_path(path: str) -> bool:
+    """The recorder API owns its idempotency, so the generic mutation journal must not see it."""
+    return path == "/api/recordings" or path.startswith("/api/recordings/")
 
 Handler = Callable[[Request], Awaitable[Response]]
 
@@ -368,6 +396,11 @@ class ClientViews:
     Closing the stream drops only its view. Nothing here is durable, published
     as an event, or exposed through a read route. An in-process Manager may
     inspect `views()` but must decide which client holds the call itself.
+
+    Threading: the recorder worker calls `has_stream` and `view_for` from its own
+    thread. Both are single dict/set reads, and `report`/`_detach` replace
+    entries instead of mutating them in place, so those reads stay consistent.
+    Keep that rule if this class changes.
     """
 
     def __init__(self) -> None:
@@ -440,6 +473,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     config_revision = config.read()["revision"]
     client_views = ClientViews()
     runtime.manager.attach_views(client_views)
+    # The scheduler is loop-owned and needs the voice manager, so build both before the recorder host.
+    # Constructing these does no I/O; `lifespan` attaches the scheduler and starts the worker/sweeper.
+    voice = voice_manager or VoiceManager(lambda: config.read()["values"]["voice"]["stt_model"])
+    scheduler = RecorderScheduler(voice)
+    # One recorder worker owns every synchronous (and possibly fsyncing) recorder operation.
+    recorder = RecorderHost(runtime.bus, client_views, scheduler=scheduler)
     terminal_service = TerminalService(runtime.store.db)
     from .file_watch import FileWatches
 
@@ -649,7 +688,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                     return _error(401, "missing or wrong token (see daemon.json)")
             try:
                 key = _idempotency_key(request)
-                if key is None or request.method not in _MUTATING:
+                # The recorder has its own create idempotency and natural idempotency for chunks/stop/delete;
+                # journalling a create response would persist its raw lease/recovery tokens in `nexus.db`.
+                if key is None or request.method not in _MUTATING or _is_recorder_path(request.url.path):
                     return await inner(request)
                 raw = await request.body()
                 if len(raw) > _body_limit(request):
@@ -935,7 +976,6 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         return JSONResponse(state, status_code=202)
 
     speech = SpeechService()
-    voice = voice_manager or VoiceManager(lambda: config.read()["values"]["voice"]["stt_model"])
 
     async def voice_speak(request: Request) -> Response:
         body = await _body(request)
@@ -2362,10 +2402,12 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
         Route("/api/event", route(events)),
     ]
     routes.extend(terminal_routes(terminal_service, runtime, route, token=token, url=url))
+    routes.extend(recorder_routes(recorder, route))
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         await runtime.start_maintenance()
+        await recorder.start()
         with suppress(Exception):
             zmx_warm_agy_models()
         watcher = asyncio.create_task(watch_config())
@@ -2385,6 +2427,9 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
                 await usage_watcher
             with suppress(asyncio.CancelledError):
                 await watcher
+            # `recorder.close()` closes the scheduler first, so no recorder inference can still be queued when
+            # the voice manager closes. Then the worker drains before the store closes.
+            await recorder.close()
             await voice.close()
             await file_watches.close()
             await runtime.shutdown()
@@ -2395,6 +2440,7 @@ def build_app(runtime: Runtime, *, token: str, url: str, voice_manager: VoiceMan
     app.state.client_views = client_views
     app.state.file_watches = file_watches
     app.state.perf = perf
+    app.state.recorder = recorder
     return app
 
 

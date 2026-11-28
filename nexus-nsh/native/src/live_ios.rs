@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::live_pcm::{CaptureFrames, Playback};
 use crate::live_socket::{Input, LiveSocket, Output};
+use crate::mic_owner::{self, MicLease, MicOwner};
 
 static ACTIVE: Mutex<Option<Arc<State>>> = Mutex::new(None);
 static EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -29,10 +30,13 @@ struct State {
     lost: Mutex<Option<String>>,
     worker: AtomicBool,
     finished: AtomicBool,
+    // Released as soon as the worker closes the microphone, even when the
+    // state stays in `ACTIVE` to report a lost call.
+    microphone: Mutex<Option<MicLease>>,
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(lease: MicLease) -> Self {
         Self {
             stop: AtomicBool::new(false),
             muted: AtomicBool::new(false),
@@ -43,22 +47,39 @@ impl State {
             lost: Mutex::new(None),
             worker: AtomicBool::new(false),
             finished: AtomicBool::new(false),
+            microphone: Mutex::new(Some(lease)),
         }
+    }
+
+    fn release_microphone(&self) {
+        let mut lease = self
+            .microphone
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = lease.take();
+        drop(lease);
+        drop(held);
     }
 }
 
-pub(crate) fn is_busy() -> bool {
-    ACTIVE.lock().map_or(true, |active| active.is_some())
+fn live_busy(owner: MicOwner) -> String {
+    match owner {
+        MicOwner::Dictation => "Stop dictation before starting the Manager voice call".into(),
+        MicOwner::Recorder => "Stop the recorder before starting the Manager voice call".into(),
+        MicOwner::Live => "A Manager voice call is already running".into(),
+    }
 }
 
 fn release(state: &Arc<State>) {
-    if let Ok(mut active) = ACTIVE.lock() {
-        if active
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, state))
-        {
-            *active = None;
-        }
+    // Recover from poisoning: the lease must be droppable on every path.
+    let mut active = ACTIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if active
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, state))
+    {
+        *active = None;
     }
 }
 
@@ -79,11 +100,14 @@ impl LiveAudio {
     }
 
     pub async fn start(url: String) -> Result<(), String> {
-        let state = Arc::new(State::new());
+        // Claim the microphone before any permission prompt or device access,
+        // so dictation and the recorder cannot start underneath this call.
+        let lease = mic_owner::try_acquire(MicOwner::Live).map_err(live_busy)?;
+        let state = Arc::new(State::new(lease));
         let epoch = EPOCH.load(Ordering::Acquire);
         {
             let mut active = ACTIVE.lock().map_err(|_| "Audio state is unavailable")?;
-            if active.is_some() || crate::ios::capture_busy() {
+            if active.is_some() {
                 return Err("Another microphone recording is active".into());
             }
             *active = Some(state.clone());
@@ -126,6 +150,7 @@ impl LiveAudio {
                             let session = unsafe { AVAudioSession::sharedInstance() };
                             let _ = unsafe { session.setActive_error(false) };
                             worker_state.finished.store(true, Ordering::Release);
+                            worker_state.release_microphone();
                             if worker_state.stop.load(Ordering::Acquire) {
                                 release(&worker_state);
                             }
@@ -225,6 +250,7 @@ async fn run(
     let session = unsafe { AVAudioSession::sharedInstance() };
     let _ = unsafe { session.setActive_error(false) };
     state.finished.store(true, Ordering::Release);
+    state.release_microphone();
     if state.stop.load(Ordering::Acquire) {
         release(&state);
     }

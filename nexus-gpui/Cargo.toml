@@ -5,8 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-nsh-platform-gpui = { git = "https://github.com/longbridge/nsh", rev = "209cb8492705321315745f2745c8060816b6d378", features = ["runtime-shaders"] }
-nsh-base = { git = "https://github.com/longbridge/nsh", rev = "209cb8492705321315745f2745c8060816b6d378" }
+nsh-platform-gpui = { git = "https://github.com/longbridge/nsh", rev = "3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359", features = ["runtime-shaders"] }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359" }
 nexus-nsh-native = { path = "../nexus-nsh/native" }
 
 [profile.dev.package.quickjs-jit-sys]

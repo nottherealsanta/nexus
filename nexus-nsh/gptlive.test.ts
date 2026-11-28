@@ -43,3 +43,113 @@ describe("GPT-Live jitter schedule", () => {
     close(new Jitter().cushion, 0.12);
   });
 });
+
+// Deterministic Manager-live cancellation: no microphone or socket is left behind by a hang-up during start.
+import { microphoneOwner } from "./src/audio-capture";
+import { gptLiveOpen, startGptLive, stopGptLive } from "./src/core/gptlive";
+
+type Root = Record<string, any>;
+
+function withEnvironment<T>(env: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const root = globalThis as Root;
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    saved.set(key, Object.getOwnPropertyDescriptor(root, key));
+    Object.defineProperty(root, key, { value, configurable: true, writable: true });
+  }
+  return run().finally(() => {
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(root, key, descriptor);
+      else delete root[key];
+    }
+  });
+}
+
+function liveNodes() {
+  const node = () => ({ connect() {}, disconnect() {} });
+  let sockets: any[] = [];
+  let trackStops = 0;
+  let socketCloses = 0;
+  class Context {
+    sampleRate = 24_000;
+    destination = {};
+    currentTime = 0;
+    audioWorklet = { async addModule() {} };
+    async resume() {}
+    async close() {}
+    createAnalyser() { return { fftSize: 1024, ...node(), getFloatTimeDomainData() {} }; }
+    createGain() { return { gain: { value: 0 }, ...node() }; }
+    createMediaStreamSource() { return node(); }
+    createBuffer() { return { copyToChannel() {} }; }
+    createBufferSource() { return { buffer: null, onended: null, ...node(), start() {}, stop() {} }; }
+  }
+  class Worklet { port = { onmessage: null as any }; connect() {} disconnect() {} }
+  class Socket {
+    binaryType = "arraybuffer";
+    readyState = 0;
+    onopen: (() => void) | null = null;
+    onclose: ((e: { code: number }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((e: { data: unknown }) => void) | null = null;
+    constructor(public url: string) { sockets.push(this); }
+    send() {}
+    close() { socketCloses += 1; this.readyState = 3; }
+  }
+  const stream = {
+    getTracks: () => [{ stop() { trackStops += 1; } }],
+  };
+  return {
+    Context, Worklet, Socket, stream,
+    get sockets() { return sockets; },
+    get trackStops() { return trackStops; },
+    get socketCloses() { return socketCloses; },
+    resetSockets() { sockets = []; },
+  };
+}
+
+const liveEnv = (fake: ReturnType<typeof liveNodes>, getUserMedia: (constraints: unknown) => Promise<any>) => ({
+  navigator: { mediaDevices: { getUserMedia } },
+  AudioContext: fake.Context,
+  webkitAudioContext: undefined,
+  AudioWorkletNode: fake.Worklet,
+  WebSocket: fake.Socket,
+  Blob: class { constructor(public parts: unknown[], public options: unknown) {} },
+  URL: { createObjectURL: () => "blob:live", revokeObjectURL() {} },
+});
+
+describe("GPT-Live start cancellation", () => {
+  test("hang-up while getUserMedia is pending stops the late stream and releases the microphone", async () => {
+    const fake = liveNodes();
+    let resolveMedia: ((stream: any) => void) | null = null;
+    const media = new Promise<any>((resolve) => { resolveMedia = resolve; });
+    await withEnvironment(liveEnv(fake, () => media), async () => {
+      const start = startGptLive("stream-1", () => {});
+      stopGptLive();
+      resolveMedia!(fake.stream);
+      const error = await start.then(() => null, (e) => e);
+      expect((error as Error)?.message).toBe("Voice call cancelled.");
+    });
+    expect(fake.sockets).toHaveLength(0);
+    expect(fake.trackStops).toBe(1);
+    expect(microphoneOwner()).toBe(null);
+    expect(gptLiveOpen()).toBe(false);
+  });
+
+  test("hang-up while the audio socket is opening closes it and releases the microphone", async () => {
+    const fake = liveNodes();
+    await withEnvironment(liveEnv(fake, async () => fake.stream), async () => {
+      const start = startGptLive("stream-2", () => {});
+      const end = Date.now() + 2000;
+      while (fake.sockets.length === 0 && Date.now() < end) await new Promise((r) => setTimeout(r, 5));
+      expect(fake.sockets).toHaveLength(1);
+      stopGptLive();
+      fake.sockets[0].onopen?.();
+      const error = await start.then(() => null, (e) => e);
+      expect((error as Error)?.message).toBe("Voice call cancelled.");
+    });
+    expect(fake.trackStops).toBe(1);
+    expect(fake.socketCloses).toBe(1);
+    expect(microphoneOwner()).toBe(null);
+    expect(gptLiveOpen()).toBe(false);
+  });
+});

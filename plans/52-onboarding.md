@@ -17,7 +17,8 @@ teach the basics of Nexus like a game tutorial.
   (`build` / `orchestrate`). Unset means the agent uses its parent's model. There is no "suggest for me" button.
 - **Web search (user, 2026-11-24):** desktop onboarding has a Web search step after the agent models. Core starts the
   SearXNG behind `web_search` in the background as a container (Apple `container` when installed, else Docker), using
-  the settings packaged in the wheel and copied to `$NEXUS10_HOME/search/`. The step shows running, starting, stopped,
+  the settings packaged in the wheel and copied to `$NEXUS10_HOME/search/`. The step tells the user to install Apple `container` (macOS 26+, Apple silicon, `brew install container`) or Docker
+  when neither is present, then press Retry. It shows running, starting, stopped,
   not set up or unavailable, offers Retry, and lets the user continue without it. The first start downloads the image,
   so the tour does not wait for it. Mobile still has no tour and no search step.
 - **Mobile:** excluded (the phone connects to a Core that is already set up). No ledger row needed.

@@ -26,6 +26,7 @@ use crate::theme::{Mode, Theme, Tier};
 use crate::ui::*;
 
 pub mod mcp;
+mod recorder;
 pub mod tabs;
 
 pub use mcp::McpKey;
@@ -217,6 +218,15 @@ pub const WIRED: &[&str] = &[
     "manager.card_dismiss",
     "manager.field_open",
     "manager.card_pick",
+    "recorder.open",
+    "recorder.stop",
+    "recorder.minimize",
+    "recorder.start",
+    "recorder.copy_transcript",
+    "recorder.retry",
+    "recorder.recover",
+    "recorder.recent",
+    "recorder.delete",
     "voice.dictate",
     "search.start",
     "voice.download_stt",
@@ -321,12 +331,18 @@ const MUTATING: &[&str] = &[
     "waiting.deny_note",
     "waiting.deny",
     "waiting.submit_answers",
+    "recorder.start",
+    "recorder.stop",
+    "recorder.retry",
+    "recorder.recover",
+    "recorder.delete",
 ];
 
 const NOT_WIRED: &str = "Not available yet.";
 pub(crate) const READ_ONLY: &str = "Read-only until Core is connected again.";
 /// Why the composer cannot take text while a question waits in this session.
 pub(crate) const QUESTION_LOCK: &str = "Answer the question above";
+pub(crate) const COMPACTING_LOCK: &str = "Compacting \u{b7} a new session opens soon";
 /// A second Ctrl+C this soon after the first quits the TUI.
 const CTRL_C_QUIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 /// The timeline scroll bar stays at full strength this long after a scroll…
@@ -544,8 +560,12 @@ pub enum SettingsItem {
     },
 }
 
-fn row_matches(row: &crate::manifest::Row, query: &str) -> bool {
-    row.label.to_lowercase().contains(query) || row.note.to_lowercase().contains(query)
+#[derive(Debug, Clone)]
+pub struct SettingsSearchResult {
+    pub section: String,
+    pub section_label: String,
+    pub row: Option<String>,
+    pub label: String,
 }
 
 /// The task tools a new session can be given, in the order the Tools row lists them.
@@ -564,22 +584,6 @@ pub const TOOLS: [&str; 13] = [
     "ask",
     "code",
 ];
-
-/// The one-row entry a page section gets in the search results.
-fn page_row(section: &crate::manifest::Section) -> crate::manifest::Row {
-    crate::manifest::Row {
-        id: format!("{}.page", section.id),
-        label: section.label.clone(),
-        kind: "page".into(),
-        scope: Some("core".into()),
-        clients: "both".into(),
-        default: None,
-        options: Vec::new(),
-        command: None,
-        unavailable_reason: None,
-        note: section.note.clone(),
-    }
-}
 
 /// How a line on a Settings page is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -958,6 +962,8 @@ pub struct Ui {
     pub pending_selected: Option<usize>,
     pub settings_row: usize,
     pub settings_search: Composer,
+    pub settings_search_active: bool,
+    pub settings_search_row: usize,
     /// The Settings section shown in the right pane, and whether the left rail has focus.
     pub settings_section: String,
     pub settings_nav_focus: bool,
@@ -995,6 +1001,8 @@ pub struct Ui {
     pub dictation: crate::dictation::DictationUi,
     /// The Manager's indicator, caption and card (`manager.rs`).
     pub manager: crate::manager::ManagerUi,
+    /// The recorder's page, capture, transcript and dialogs (`app/recorder.rs`).
+    pub recorder: crate::ui::RecorderUi,
     /// Last `/api/voice` response used by Settings and download confirmations.
     pub voice_status: Option<Value>,
     pub voice_status_error: Option<String>,
@@ -1469,6 +1477,8 @@ impl App {
                 pending_selected: None,
                 settings_row: 0,
                 settings_search: Composer::new(),
+                settings_search_active: false,
+                settings_search_row: 0,
                 settings_section: "appearance".into(),
                 settings_nav_focus: true,
                 settings_edit: None,
@@ -1493,6 +1503,7 @@ impl App {
                 dialog: None,
                 dictation: crate::dictation::DictationUi::default(),
                 manager: crate::manager::ManagerUi::default(),
+                recorder: crate::ui::RecorderUi::default(),
                 voice_status: None,
                 voice_status_error: None,
                 voice_status_generation: 0,
@@ -2669,6 +2680,15 @@ impl App {
     /// The waiting card in view is a question. Its keys own the composer, which
     /// is disabled until the question is answered or cancelled. An approval
     /// stays approval-only even when a question waits behind it.
+    /// The viewed session is writing its handoff summary: it takes no new messages.
+    pub fn handing_off(&self, id: &str) -> bool {
+        self.state
+            .model
+            .sessions
+            .get(id)
+            .is_some_and(|s| s.handing_off)
+    }
+
     pub fn question_pending(&self) -> bool {
         self.wait_focused()
             .is_some_and(|w| w.kind == WaitKind::Question)
@@ -3700,6 +3720,9 @@ impl App {
             "has_notifications" => !self.ui.alerts.history.is_empty(),
             "text_edit.active" => self.ui.edit.is_some(),
             n if n.starts_with("manager.") => self.manager_term(n),
+            "recorder.active" => self.recorder_active(),
+            "recorder.owner" => self.recorder_owner_active(),
+            "recorder.modal" => self.recorder_modal(),
             _ => return None,
         })
     }
@@ -4693,12 +4716,11 @@ impl App {
                             i + self.state.models.len()
                         },
                         PaletteItem {
-                            kind: PaletteKind::Model(r.to_owned()),
-                            label: if favorite {
-                                format!("★ {label}")
-                            } else {
-                                label
+                            kind: PaletteKind::Model {
+                                reference: r.to_owned(),
+                                favorite,
                             },
+                            label,
                             hint: provider.to_owned(),
                             category: if r == current { "current" } else { "model" }.into(),
                             reason: None,
@@ -4710,7 +4732,10 @@ impl App {
                         0,
                         0,
                         PaletteItem {
-                            kind: PaletteKind::Model(String::new()),
+                            kind: PaletteKind::Model {
+                                reference: String::new(),
+                                favorite: false,
+                            },
                             label: "No models".into(),
                             hint: self.state.catalog_source.clone(),
                             category: "model".into(),
@@ -5105,7 +5130,8 @@ impl App {
         }) else {
             return;
         };
-        let Some(PaletteKind::Model(r)) = self.palette_items().get(sel).map(|i| i.kind.clone())
+        let Some(PaletteKind::Model { reference: r, .. }) =
+            self.palette_items().get(sel).map(|i| i.kind.clone())
         else {
             return;
         };
@@ -5206,7 +5232,9 @@ impl App {
                     self.patch_agent_refs(&agent, fallback, refs);
                 }
             }
-            PaletteKind::Model(model) => {
+            PaletteKind::Model {
+                reference: model, ..
+            } => {
                 if let Some(s) = self.viewed() {
                     let (session, revision) = (s.id.clone(), s.revision);
                     if self.writable() {
@@ -6187,6 +6215,11 @@ impl App {
             | CaptureEvent::Stopped { generation, .. } => *generation,
         };
         if manager_generation >= crate::manager::CAPTURE_BASE {
+            if let CaptureEvent::Failed { message, .. } = &event {
+                if let Some(text) = self.mic_busy_text(message) {
+                    self.toast(Level::Warning, text);
+                }
+            }
             return self.manager_capture(event);
         }
         let generation = match &event {
@@ -6254,7 +6287,8 @@ impl App {
             CaptureEvent::CueWarning { message, .. } => self.toast(Level::Warning, message),
             CaptureEvent::Failed { message, .. } => {
                 self.ui.dictation.cancel();
-                self.toast(Level::Error, message);
+                let text = self.mic_busy_text(&message).unwrap_or(message);
+                self.toast(Level::Error, text);
             }
         }
     }
@@ -7085,7 +7119,20 @@ impl App {
                 });
                 self.api(ApiCall::Usage);
             }
-            "app.quit" => self.effects.push(Effect::Quit),
+            "recorder.open" => self.recorder_open(),
+            "recorder.minimize" => self.recorder_minimize(),
+            "recorder.start" => self.recorder_start(),
+            "recorder.stop" => self.recorder_stop(),
+            "recorder.copy_transcript" => self.recorder_copy(),
+            "recorder.retry" => self.recorder_retry(),
+            "recorder.recover" => self.recorder_recover(),
+            "recorder.recent" => self.recorder_recent(),
+            "recorder.delete" => self.recorder_delete(),
+            "app.quit" => {
+                if !self.recorder_request_quit() {
+                    self.effects.push(Effect::Quit);
+                }
+            }
             "app.onboarding" => self.open_onboarding(),
             "onboarding.back" => {
                 self.ui.onboarding.step = self.ui.onboarding.step.saturating_sub(1);
@@ -7109,8 +7156,10 @@ impl App {
                     self.refresh_browser_status();
                     self.refresh_mcp();
                     self.ui.view = View::Settings;
-                    self.ui.settings_search = Composer::new();
+                    self.close_settings_search();
+                    self.ui.settings_nav_focus = true;
                     self.ui.settings_row = 0;
+                    self.ui.settings_page_row = 0;
                     self.ui.settings_edit = None;
                     self.ui.settings_page = None;
                     self.ui.provider_detail = None;
@@ -7466,7 +7515,6 @@ impl App {
             "session.speak_stop" => self.api(ApiCall::SpeakStop),
             "session.handoff" => {
                 if let Some(id) = self.viewed_id().map(str::to_owned) {
-                    self.toast(Level::Info, "Writing the handoff…");
                     self.api(ApiCall::Handoff { session: id });
                 }
             }
@@ -8215,6 +8263,10 @@ impl App {
     }
 
     fn send_mode_confirmed(&mut self, requested: Option<&str>, resume: bool) {
+        if self.viewed_id().is_some_and(|id| self.handing_off(id)) {
+            self.toast(Level::Info, COMPACTING_LOCK);
+            return;
+        }
         if self.question_pending() {
             // The draft is kept; the question card's answer is the only send.
             self.toast(Level::Info, QUESTION_LOCK);
@@ -8613,6 +8665,10 @@ impl App {
         }
         self.timeline_revision
             .set(self.timeline_revision.get().wrapping_add(1));
+        if let SyncMsg::Recorder(update) = msg {
+            self.recorder_update(update);
+            return;
+        }
         if let SyncMsg::SkillMcp {
             project,
             skills,
@@ -8770,7 +8826,9 @@ impl App {
                     }
                 }
             }
-            if event.kind == "session.handoff_failed" {
+            if event.kind == "session.handoff_failed"
+                && event.data["reason"].as_str() == Some("auto")
+            {
                 let error = event.data["error"].as_str().unwrap_or("unknown error");
                 self.toast(Level::Warning, format!("Automatic handoff failed: {error}"));
             }
@@ -9083,6 +9141,9 @@ impl App {
                         ),
                     ),
                     "voice.progress" => self.apply_voice_progress(&data),
+                    "recorder.state" | "recorder.segment" | "recorder.deleted" => {
+                        self.recorder_event(&kind, &data);
+                    }
                     _ => {}
                 }
             }
@@ -10675,6 +10736,9 @@ impl App {
                 self.ui.scroll_mark = None;
             }
         }
+        if self.recorder_tick(now) {
+            changed = true;
+        }
         // A running session shows everything: its older pages load without Enter.
         let auto_older = self.state.model.selected.as_ref().is_some_and(|v| {
             v.messages_more
@@ -10704,7 +10768,7 @@ impl App {
                     .model
                     .sessions
                     .values()
-                    .any(|s| s.status.as_deref() == Some("busy"))
+                    .any(|s| s.status.as_deref() == Some("busy") || s.handing_off)
                 || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
@@ -11490,7 +11554,10 @@ impl App {
                 });
                 if again {
                     self.ctrl_c = None;
-                    return self.effects.push(Effect::Quit);
+                    if !self.recorder_request_quit() {
+                        self.effects.push(Effect::Quit);
+                    }
+                    return;
                 }
                 self.ctrl_c = Some(self.clock);
                 self.toast(Level::Info, "Press Ctrl+C again to quit");
@@ -11500,7 +11567,9 @@ impl App {
         if self.blocking().is_some() {
             // Esc is consumed by the dialog rule and does nothing; ctrl+q quits.
             if name == "ctrl+q" {
-                self.effects.push(Effect::Quit);
+                if !self.recorder_request_quit() {
+                    self.effects.push(Effect::Quit);
+                }
             }
             return;
         }
@@ -11530,6 +11599,10 @@ impl App {
             && self.ui.edit.is_none()
             && self.pending_key(&name)
         {
+            return;
+        }
+        if name == "esc" && self.recorder_modal() {
+            self.recorder_key("esc");
             return;
         }
         if name == "esc" {
@@ -11998,6 +12071,9 @@ impl App {
     }
 
     fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        if self.recorder_modal() {
+            return self.recorder_key(name);
+        }
         if matches!(name, "i" | "c") {
             if let Some(btw) = self.ui.btw.as_mut() {
                 if name == "i" {
@@ -12378,6 +12454,7 @@ impl App {
             Some(OverlayKind::ImagePreview { .. })
             | Some(OverlayKind::Projects(_))
             | Some(OverlayKind::Annotate(_))
+            | Some(OverlayKind::Recorder)
             | None => {}
         }
     }
@@ -13892,39 +13969,27 @@ impl App {
 
     // ---- settings view ---------------------------------------------------------------------
 
-    /// Sections shown in Settings' left rail, filtered by the search text.
+    /// Sections in shared rail order; headings do not take focus.
     pub fn settings_sections(&self) -> Vec<crate::manifest::Section> {
-        let query = self.ui.settings_search.text().to_lowercase();
-        let query = query.trim();
+        let sections = self.manifest.settings_for_tui();
         self.manifest
-            .settings_for_tui()
-            .into_iter()
+            .settings
+            .rail
+            .iter()
+            .flat_map(|group| &group.sections)
+            .filter_map(|id| sections.iter().find(|s| &s.id == id))
             .filter(|section| section.page || !section.row.is_empty())
-            .filter(|section| {
-                query.is_empty()
-                    || section.label.to_lowercase().contains(query)
-                    || section.note.to_lowercase().contains(query)
-                    || section.row.iter().any(|row| row_matches(row, query))
-                    || self
-                        .page_search_terms(section)
-                        .iter()
-                        .any(|term| term.to_lowercase().contains(query))
-            })
+            .cloned()
             .collect()
     }
 
-    /// The section the right pane shows. A filtered-away selection falls back to
-    /// the first visible section until the search is cleared.
     pub fn settings_section(&self) -> Option<crate::manifest::Section> {
-        let sections = self.settings_sections();
-        sections
-            .iter()
-            .find(|section| section.id == self.ui.settings_section)
-            .or_else(|| sections.first())
-            .cloned()
+        self.settings_sections()
+            .into_iter()
+            .nth(self.settings_section_index())
     }
 
-    /// The selected row of `settings_sections`; 0 when the selection is filtered out.
+    /// The selected section's position in the rail.
     pub fn settings_section_index(&self) -> usize {
         self.settings_sections()
             .iter()
@@ -13935,7 +14000,7 @@ impl App {
     /// The open page, if the right pane is showing one: an Agents detail page,
     /// or a section marked `page = true`. Search results always win.
     pub fn settings_open_page(&self) -> Option<String> {
-        if !self.ui.settings_search.text().trim().is_empty() {
+        if self.ui.settings_search_active {
             return None;
         }
         self.ui
@@ -13944,14 +14009,116 @@ impl App {
             .or_else(|| self.settings_section().filter(|s| s.page).map(|s| s.id))
     }
 
-    /// The settings rows in the right pane: the selected section, or every
-    /// section that matches when the search is active.
-    pub fn settings_items(&self) -> Vec<SettingsItem> {
+    /// Search destinations in relevance order (ties follow rail and row order).
+    pub fn settings_search_results(&self) -> Vec<SettingsSearchResult> {
         let query = self.ui.settings_search.text().to_lowercase();
         let query = query.trim();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let matches = |value: &str| value.to_lowercase().contains(query);
+        let mut results = Vec::new();
+        for section in self.settings_sections() {
+            for row in &section.row {
+                let rank = if matches(&row.label) {
+                    0
+                } else if row.options.iter().any(|option| matches(option)) {
+                    1
+                } else if matches(&row.note) {
+                    3
+                } else {
+                    continue;
+                };
+                results.push((
+                    rank,
+                    SettingsSearchResult {
+                        section: section.id.clone(),
+                        section_label: section.label.clone(),
+                        row: Some(row.id.clone()),
+                        label: row.label.clone(),
+                    },
+                ));
+            }
+            let rank = if matches(&section.label) {
+                0
+            } else if matches(&section.note)
+                || (section.page
+                    && self
+                        .page_search_terms(&section)
+                        .iter()
+                        .any(|term| matches(term)))
+            {
+                2
+            } else {
+                continue;
+            };
+            results.push((
+                rank,
+                SettingsSearchResult {
+                    section: section.id,
+                    section_label: section.label.clone(),
+                    row: None,
+                    label: section.label,
+                },
+            ));
+        }
+        results.sort_by_key(|(rank, _)| *rank);
+        results.into_iter().map(|(_, result)| result).collect()
+    }
+
+    fn open_settings_search(&mut self) {
+        self.ui.settings_search_active = true;
+    }
+
+    fn close_settings_search(&mut self) {
+        self.ui.settings_search_active = false;
+        self.ui.settings_search = Composer::new();
+        self.ui.settings_search_row = 0;
+    }
+
+    fn jump_to_setting(&mut self, index: usize) {
+        let Some(result) = self.settings_search_results().into_iter().nth(index) else {
+            return;
+        };
+        let Some(section) = self
+            .settings_sections()
+            .iter()
+            .position(|s| s.id == result.section)
+        else {
+            return;
+        };
+        self.close_settings_search();
+        self.select_settings_section(section);
+        self.ui.settings_nav_focus = false;
+        let Some(id) = result.row else {
+            return;
+        };
+        if self.settings_open_page().is_some() {
+            self.ui.settings_page_row = self
+                .settings_page_lines()
+                .iter()
+                .filter_map(|line| match line {
+                    PageLine::Item { action, .. } => Some(action),
+                    _ => None,
+                })
+                .position(|action| matches!(action, PageAction::Setting(row) if row.id == id))
+                .unwrap_or(0);
+        } else {
+            self.ui.settings_row = self
+                .settings_items()
+                .iter()
+                .filter_map(|item| match item {
+                    SettingsItem::Row { row, .. } => Some(row),
+                    _ => None,
+                })
+                .position(|row| row.id == id)
+                .unwrap_or(0);
+        }
+    }
+
+    /// Rows in the selected section; search renders separately without disturbing this pane's selection.
+    pub fn settings_items(&self) -> Vec<SettingsItem> {
         let mut out = Vec::new();
-        // Configuration problems belong where Core's other state is explained,
-        // not in a transient toast on every launch.
         let problems: Vec<String> = self
             .state
             .config_error
@@ -13966,52 +14133,14 @@ impl App {
                     .flatten()
                     .filter_map(|error| error.as_str().map(str::to_owned)),
             )
-            .filter(|error| query.is_empty() || error.to_lowercase().contains(query))
             .collect();
         if !problems.is_empty() {
             out.push(SettingsItem::Heading("Configuration".into()));
             out.extend(problems.into_iter().map(SettingsItem::Note));
         }
-        if query.is_empty() {
-            if let Some(section) = self.settings_section().filter(|s| !s.page) {
-                for row in section.row {
-                    out.push(SettingsItem::Row {
-                        row: Box::new(row),
-                        section_reason: section.unavailable_reason.clone(),
-                    });
-                }
-            }
-            return out;
-        }
-        for section in self.manifest.settings_for_tui() {
-            let section_hit = section.label.to_lowercase().contains(query);
-            if section.page {
-                let hit = section_hit
-                    || section.note.to_lowercase().contains(query)
-                    || self
-                        .page_search_terms(&section)
-                        .iter()
-                        .any(|t| t.to_lowercase().contains(query));
-                if hit {
-                    out.push(SettingsItem::Heading(section.label.clone()));
-                    out.push(SettingsItem::Row {
-                        row: Box::new(page_row(&section)),
-                        section_reason: section.unavailable_reason.clone(),
-                    });
-                }
-                continue;
-            }
-            let rows: Vec<_> = section
-                .row
-                .iter()
-                .filter(|row| section_hit || row_matches(row, query))
-                .cloned()
-                .collect();
-            if rows.is_empty() {
-                continue;
-            }
-            out.push(SettingsItem::Heading(section.label.clone()));
-            for row in rows {
+        if let Some(section) = self.settings_section().filter(|s| !s.page) {
+            out.push(SettingsItem::Heading(section.label));
+            for row in section.row {
                 out.push(SettingsItem::Row {
                     row: Box::new(row),
                     section_reason: section.unavailable_reason.clone(),
@@ -14021,7 +14150,7 @@ impl App {
         out
     }
 
-    /// Move the left rail to section `index` (in `settings_sections`), clearing search.
+    /// Move the left rail to section `index` (in `settings_sections`).
     pub fn select_settings_section(&mut self, index: usize) {
         if let Some(section) = self.settings_sections().get(index) {
             self.ui.settings_section = section.id.clone();
@@ -14029,7 +14158,6 @@ impl App {
             self.ui.settings_page = None;
             self.ui.settings_page_row = 0;
             self.ui.settings_row = 0;
-            self.ui.settings_search = Composer::new();
         }
     }
 
@@ -14043,13 +14171,38 @@ impl App {
             .collect()
     }
 
-    /// Keys while the settings modal is open. Two panes: the section rail and
-    /// the section's rows. Enter/Right (rail) go into the rows; Esc/Left/Tab
-    /// (rows) go back; navigation never changes a value. Enter/Space change
-    /// one: a switch flips, an enum edits in place (←→ choose, Enter sets, Esc
-    /// cancels). Typing filters both. Esc clears the search, steps back to the
-    /// rail, then closes. Returns false for keys the shell
-    /// should still handle (palette, quit).
+    fn settings_search_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
+        let last = self.settings_search_results().len().saturating_sub(1);
+        let selected = self.ui.settings_search_row.min(last);
+        match name {
+            "esc" => self.close_settings_search(),
+            "up" => self.ui.settings_search_row = selected.saturating_sub(1),
+            "down" => self.ui.settings_search_row = (selected + 1).min(last),
+            "enter" => self.jump_to_setting(selected),
+            "left" => self.ui.settings_search.left(),
+            "right" => self.ui.settings_search.right(),
+            "home" => self.ui.settings_search.home(),
+            "end" => self.ui.settings_search.end(),
+            "backspace" => {
+                self.ui.settings_search.backspace();
+                self.ui.settings_search_row = 0;
+            }
+            "delete" => {
+                self.ui.settings_search.delete();
+                self.ui.settings_search_row = 0;
+            }
+            _ => match code {
+                KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => {
+                    self.ui.settings_search.insert_char(c);
+                    self.ui.settings_search_row = 0;
+                }
+                _ => return false,
+            },
+        }
+        true
+    }
+
+    /// Navigation never changes a setting. Search keeps its own selection until a jump.
     fn settings_key(&mut self, name: &str, code: KeyCode, mods: KeyModifiers) -> bool {
         if self.ui.provider_detail.is_some() {
             return self.provider_detail_key(name, code);
@@ -14057,104 +14210,57 @@ impl App {
         if self.ui.mcp_detail.is_some() {
             return self.mcp_detail_key(name);
         }
+        if self.ui.settings_search_active {
+            return self.settings_search_key(name, code, mods);
+        }
+        if self.ui.settings_edit.is_some() {
+            return self.settings_edit_key(name, code);
+        }
+        if name == self.manifest.settings.navigation.search_key {
+            self.open_settings_search();
+            return true;
+        }
         if name == self.manifest.settings.navigation.section_key
             && (self.ui.settings_nav_focus || self.settings_open_page().is_some())
         {
             self.ui.settings_nav_focus = true;
             return true;
         }
-        if !self.ui.settings_nav_focus
-            && self.settings_open_page().is_some()
-            && name == self.manifest.settings.navigation.previous_value_key
-        {
-            return self.settings_page_key("left", code);
-        }
         if !self.ui.settings_nav_focus && self.settings_open_page().is_some() {
+            if name == self.manifest.settings.navigation.previous_value_key {
+                return self.settings_page_key("left", code);
+            }
             return self.settings_page_key(name, code);
         }
         if self.ui.settings_nav_focus {
-            let sections = self.settings_sections();
-            let last = sections.len().saturating_sub(1);
+            let last = self.settings_sections().len().saturating_sub(1);
             let sel = self.settings_section_index().min(last);
             match name {
-                "esc" => {
-                    if self.ui.settings_search.text().is_empty() {
-                        self.execute("app.settings");
-                    } else {
-                        self.ui.settings_search = Composer::new();
-                        self.ui.settings_row = 0;
-                    }
-                }
-                "up" => {
-                    self.select_settings_section(sel.saturating_sub(1));
-                }
-                "down" => {
-                    self.select_settings_section((sel + 1).min(last));
-                }
-                "tab" => {
-                    self.ui.settings_nav_focus = false;
-                    self.ui.settings_page_row = 0;
-                }
+                "esc" => self.execute("app.settings"),
+                "up" => self.select_settings_section(sel.saturating_sub(1)),
+                "down" => self.select_settings_section((sel + 1).min(last)),
                 "home" => self.select_settings_section(0),
                 "end" => self.select_settings_section(last),
-                "enter" | "right" => {
+                "enter" | "right" | "tab" | "shift+tab" => {
                     self.ui.settings_nav_focus = false;
-                    self.ui.settings_row = 0;
-                    self.ui.settings_page_row = 0;
                 }
-                "left" => {}
-                "backspace" => {
-                    self.ui.settings_search.backspace();
-                    self.ui.settings_row = 0;
-                }
-                _ => match code {
-                    KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => {
-                        self.ui.settings_search.insert_char(c);
-                        self.ui.settings_row = 0;
-                        self.ui.settings_nav_focus = false;
-                    }
-                    _ => return false,
-                },
+                _ => return false,
             }
             return true;
         }
-        if self.ui.settings_edit.is_some() {
-            return self.settings_edit_key(name, code);
-        }
-        let rows = self.settings_rows();
-        let last = rows.len().saturating_sub(1);
+        let last = self.settings_rows().len().saturating_sub(1);
         let sel = self.ui.settings_row.min(last);
         match name {
-            "esc" => {
-                if !self.ui.settings_search.text().is_empty() {
-                    self.ui.settings_search = Composer::new();
-                    self.ui.settings_row = 0;
-                } else {
-                    self.ui.settings_nav_focus = true;
-                }
-            }
+            "esc" | "tab" | "shift+tab" | "left" => self.ui.settings_nav_focus = true,
             "up" => self.ui.settings_row = sel.saturating_sub(1),
             "down" => self.ui.settings_row = (sel + 1).min(last),
-            "tab" | "shift+tab" | "left" => self.ui.settings_nav_focus = true,
-            // Navigation never changes a value: Right on a row does nothing.
             "right" => {}
             "pageup" => self.ui.settings_row = sel.saturating_sub(8),
             "pagedown" => self.ui.settings_row = (sel + 8).min(last),
             "home" => self.ui.settings_row = 0,
             "end" => self.ui.settings_row = last,
-            "enter" => self.settings_change_begin(sel),
-            "space" if self.ui.settings_search.text().is_empty() => self.settings_change_begin(sel),
-            "backspace" => {
-                self.ui.settings_search.backspace();
-                self.ui.settings_row = 0;
-            }
-            _ => match code {
-                KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => {
-                    self.ui.settings_search.insert_char(c);
-                    self.ui.settings_row = 0;
-                }
-                _ => return false,
-            },
+            "enter" | "space" => self.settings_change_begin(sel),
+            _ => return false,
         }
         true
     }
@@ -14992,15 +15098,6 @@ impl App {
 
     fn settings_activate_row(&mut self, row: crate::manifest::Row) {
         match row.id.as_str() {
-            "providers.page" | "agents.page" | "mcp.page" => {
-                self.ui.settings_section = row.id.trim_end_matches(".page").to_owned();
-                self.ui.settings_page = None;
-                self.ui.settings_page_row = 0;
-                self.ui.settings_search = Composer::new();
-                self.ui.settings_nav_focus = false;
-                self.effects
-                    .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
-            }
             "tools.defaults" => self.toggle_default_tool(),
             "appearance.theme" => self.execute("app.theme"),
             "appearance.monochrome" => self.toggle_monochrome(),
@@ -15052,16 +15149,22 @@ impl App {
 
     // ---- settings pages (Providers, Agents) ----------------------------------------------------
 
-    /// What settings search matches inside a page: its rows, providers, agents and refs.
+    /// What settings search matches inside a page besides its manifest rows.
     fn page_search_terms(&self, section: &crate::manifest::Section) -> Vec<String> {
-        let mut terms: Vec<String> = section.row.iter().map(|r| r.label.clone()).collect();
+        let mut terms = Vec::new();
         match section.id.as_str() {
-            "providers" => terms.extend(self.state.providers.iter().flat_map(|p| {
-                [p["id"].as_str(), p["label"].as_str()]
-                    .into_iter()
-                    .flatten()
-                    .map(str::to_owned)
-            })),
+            "providers" => terms.extend(
+                self.state
+                    .providers
+                    .iter()
+                    .filter(|p| p["id"] != "mock")
+                    .flat_map(|p| {
+                        [p["id"].as_str(), p["label"].as_str()]
+                            .into_iter()
+                            .flatten()
+                            .map(str::to_owned)
+                    }),
+            ),
             "mcp" => {
                 terms.extend(["servers", "remote", "sign in", "oauth", "header"].map(String::from));
                 for row in self
@@ -16886,6 +16989,8 @@ impl App {
                     // A stray click must not throw the drawing away.
                 } else if self.ui.manager.context.is_some() {
                     self.ui.manager.context = None;
+                } else if self.recorder_modal() {
+                    self.recorder_minimize();
                 } else if self.ui.overlay.is_some() {
                     self.close_overlay();
                 } else if self.ui.drawer.is_some() {
@@ -16929,6 +17034,24 @@ impl App {
             Target::RemoveProject(id) => self.ask_remove_project_id(id),
             Target::Notifications => self.run_command("notifications.open"),
             Target::ManagerSession => self.run_command("manager.header"),
+            Target::Recorder => self.run_command("recorder.open"),
+            Target::RecorderButton(id) => self.run_command(&id),
+            Target::RecorderRecent(index) => {
+                self.ui.recorder.focus = format!("recent.{index}");
+                self.recorder_activate_focus();
+            }
+            Target::RecorderJumpLive => {
+                self.ui.recorder.focus = "jump_live".into();
+                self.recorder_activate_focus();
+            }
+            Target::RecorderDialogButton(index) => {
+                match self.ui.recorder.dialog.as_mut() {
+                    Some(crate::ui::RecorderDialog::Quit { button }) => *button = index,
+                    Some(crate::ui::RecorderDialog::Delete { button, .. }) => *button = index,
+                    None => {}
+                }
+                self.recorder_dialog_activate();
+            }
             Target::Tab(tab) => {
                 let id = match tab {
                     Tab::Sessions => "sidebar.tab.sessions",
@@ -17262,6 +17385,9 @@ impl App {
                 self.select_settings_section(i);
                 self.ui.settings_nav_focus = true;
             }
+            Target::SettingsSearch => self.open_settings_search(),
+            Target::SettingsSearchClear => self.close_settings_search(),
+            Target::SettingsSearchResult(i) => self.jump_to_setting(i),
             Target::SettingsPageRow(i) => {
                 self.ui.settings_nav_focus = false;
                 self.ui.settings_page_row = i;
@@ -17366,6 +17492,16 @@ impl App {
         }
         if let Some(e) = self.ui.edit.as_mut() {
             e.buf.insert_str(&text.replace('\n', " "));
+            return;
+        }
+        if self.ui.view == View::Settings
+            && self.ui.settings_search_active
+            && self.ui.dialog.is_none()
+        {
+            self.ui
+                .settings_search
+                .insert_str(&text.replace(['\n', '\r'], " "));
+            self.ui.settings_search_row = 0;
             return;
         }
         if let (Some(edit), true) = (self.ui.file_edit.as_mut(), self.ui.file_open) {

@@ -1,0 +1,363 @@
+{
+  "name": "Recorder interaction flow",
+  "notes": [
+    "Shared contract for the TUI and NSH recorder UI tests; plan 54 D0. Steps run in order against one mocked Core and one fake microphone.",
+    "do.action runs a command or view action. do.event delivers one global event (recorder.state, recorder.segment, recorder.deleted). Commands use their manifest ids; view-only actions are esc, session.switch, composer.type, transcript.scroll_up and dialog.cancel.",
+    "expect.requests is the ordered request delta issued during that step, each {method, path}; an empty list means the step makes no request. Opening the recorder never POSTs and never opens the microphone.",
+    "expect.mic_open is this client's microphone; modal_open and page are the recorder modal; header is the exact header label or pill after the step; focus is a command id, the jump_live chip, composer, a dialog button id, a recent row id (recent.<n>), or previous (the target focused before the recorder opened: the header button in NSH when opened there, the prior target in the TUI).",
+    "expect.transcript lists the rendered durable rows in order; a provisional tail is the last row and ends with an ellipsis. follow is auto-follow; jump_to_live is the chip. The harness may assert a subset, but every field present here must match.",
+    "Recordings stay in Core's state home (recordings/): there is no Save As or browser download action. Recorder.delete is the only destructive action and it always asks first.",
+    "Quitting while this client records asks Stop and exit / Keep recording. A browser tab/window close uses the browser's generic confirmation instead (approved client-specific difference)."
+  ],
+  "recording_id": "0123456789abcdef0123456789abcdef",
+  "initial": {
+    "mic_open": false,
+    "modal_open": false,
+    "page": "recorder",
+    "header": "Record",
+    "focus": null
+  },
+  "steps": [
+    {
+      "name": "open from the header",
+      "do": { "action": "recorder.open", "source": "header" },
+      "expect": {
+        "requests": [{ "method": "GET", "path": "/api/recordings?limit=50" }],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "Record",
+        "focus": "recorder.start",
+        "buttons": ["recorder.start", "recorder.recent"]
+      }
+    },
+    {
+      "name": "start recording",
+      "do": { "action": "recorder.start" },
+      "expect": {
+        "requests": [{ "method": "POST", "path": "/api/recordings" }],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:00",
+        "focus": "recorder.minimize",
+        "buttons": ["recorder.minimize", "recorder.stop"]
+      }
+    },
+    {
+      "name": "live provisional segment",
+      "do": {
+        "event": {
+          "type": "recorder.segment",
+          "data": {
+            "id": "0123456789abcdef0123456789abcdef", "generation": 1,
+            "segment_id": 0, "revision": 1, "start": 0, "end": 3360,
+            "status": "provisional", "text": "Hello there"
+          }
+        }
+      },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:00",
+        "focus": "recorder.minimize",
+        "transcript": ["00:00–  Hello there…"],
+        "follow": true,
+        "jump_to_live": false
+      }
+    },
+    {
+      "name": "quit while recording asks first",
+      "do": { "action": "app.quit" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:00",
+        "focus": "keep_recording",
+        "dialog": {
+          "title": "Stop recording and quit?",
+          "body": "Quitting closes this client's microphone. Audio saved so far stays in Core.",
+          "buttons": ["Stop and exit", "Keep recording"],
+          "focus": "keep_recording"
+        }
+      }
+    },
+    {
+      "name": "keep recording cancels the quit",
+      "do": { "action": "dialog.cancel" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:00",
+        "focus": "recorder.minimize",
+        "dialog": null
+      }
+    },
+    {
+      "name": "final segment replaces the provisional tail",
+      "do": {
+        "event": {
+          "type": "recorder.segment",
+          "data": {
+            "id": "0123456789abcdef0123456789abcdef", "generation": 1,
+            "segment_id": 0, "revision": 2, "start": 0, "end": 112000,
+            "status": "final", "text": "Hello there."
+          }
+        }
+      },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": "recorder.minimize",
+        "transcript": ["00:00–00:07  Hello there."],
+        "follow": true,
+        "jump_to_live": false
+      }
+    },
+    {
+      "name": "esc minimises while recording",
+      "do": { "action": "esc" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": false,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": "previous"
+      }
+    },
+    {
+      "name": "switching sessions keeps capture",
+      "do": { "action": "session.switch" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": false,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": null
+      }
+    },
+    {
+      "name": "typing in the composer keeps capture",
+      "do": { "action": "composer.type", "text": "a note for later" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": false,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": "composer"
+      }
+    },
+    {
+      "name": "reopen reads the snapshot and transcript again",
+      "do": { "action": "recorder.open", "source": "header" },
+      "expect": {
+        "requests": [
+          { "method": "GET", "path": "/api/recordings?limit=50" },
+          { "method": "GET", "path": "/api/recordings/0123456789abcdef0123456789abcdef" },
+          { "method": "GET", "path": "/api/recordings/0123456789abcdef0123456789abcdef/transcript?after=-1&limit=200" }
+        ],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": "recorder.minimize",
+        "transcript": ["00:00–00:07  Hello there."],
+        "follow": true,
+        "jump_to_live": false
+      }
+    },
+    {
+      "name": "scroll up shows jump to live",
+      "do": { "action": "transcript.scroll_up" },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:07",
+        "focus": "recorder.minimize",
+        "follow": false,
+        "jump_to_live": true
+      }
+    },
+    {
+      "name": "a new final segment does not yank the scroll",
+      "do": {
+        "event": {
+          "type": "recorder.segment",
+          "data": {
+            "id": "0123456789abcdef0123456789abcdef", "generation": 1,
+            "segment_id": 1, "revision": 1, "start": 112000, "end": 240000,
+            "status": "final", "text": "This is still recording."
+          }
+        }
+      },
+      "expect": {
+        "requests": [],
+        "mic_open": true,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "● REC 00:15",
+        "focus": "recorder.minimize",
+        "transcript": ["00:00–00:07  Hello there.", "00:07–00:15  This is still recording."],
+        "follow": false,
+        "jump_to_live": true
+      }
+    },
+    {
+      "name": "stop releases the microphone and drains",
+      "do": { "action": "recorder.stop" },
+      "expect": {
+        "requests": [{ "method": "POST", "path": "/api/recordings/0123456789abcdef0123456789abcdef/stop" }],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "Saving audio…",
+        "focus": "recorder.minimize",
+        "buttons": ["recorder.minimize"]
+      }
+    },
+    {
+      "name": "Core reports stopped, transcript catching up",
+      "do": {
+        "event": {
+          "type": "recorder.state",
+          "data": {
+            "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 5,
+            "capture_state": "stopped", "transcription_state": "catching_up",
+            "transcription_progress": { "lag_samples": 112000, "pending_finals": 1, "failed": 0, "transcript_revision": 2 },
+            "transcript_revision": 2, "active": false, "durable_offset": 240000,
+            "final_sample_count": 240000, "complete": true, "holes": 0, "lag_seconds": 7,
+            "reason": "stopped"
+          }
+        }
+      },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "Finishing transcript",
+        "focus": "recorder.copy_transcript",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "capture": "Stopped · 00:15",
+        "audio": "Audio saved · Finishing transcript",
+        "transcript_status": "Catching up · 7s behind"
+      }
+    },
+    {
+      "name": "Core reports the transcript complete",
+      "do": {
+        "event": {
+          "type": "recorder.state",
+          "data": {
+            "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 6,
+            "capture_state": "stopped", "transcription_state": "complete",
+            "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 4 },
+            "transcript_revision": 4, "active": false, "durable_offset": 240000,
+            "final_sample_count": 240000, "complete": true, "holes": 0, "lag_seconds": 0,
+            "reason": "transcription"
+          }
+        }
+      },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "Record",
+        "focus": "recorder.copy_transcript",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "capture": "Stopped · 00:15",
+        "audio": "Audio saved",
+        "transcript_status": "Complete"
+      }
+    },
+    {
+      "name": "open recent recordings",
+      "do": { "action": "recorder.recent" },
+      "expect": {
+        "requests": [{ "method": "GET", "path": "/api/recordings?limit=50" }],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recent",
+        "header": "Recorder",
+        "focus": "recent.0",
+        "buttons": ["recorder.start", "recorder.delete"],
+        "recent": {
+          "empty": null,
+          "notice": null,
+          "rows": ["26 Nov 14:02 · 00:15 · Complete"]
+        }
+      }
+    },
+    {
+      "name": "delete asks first",
+      "do": { "action": "recorder.delete" },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recent",
+        "header": "Recorder",
+        "focus": "cancel",
+        "dialog": {
+          "title": "Delete this recording?",
+          "body": "Deletes its audio and transcript from Core. Copies you saved are not affected.",
+          "buttons": ["Delete", "Cancel"],
+          "focus": "cancel"
+        }
+      }
+    },
+    {
+      "name": "cancel delete keeps the recording",
+      "do": { "action": "dialog.cancel" },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recent",
+        "header": "Recorder",
+        "focus": "recent.0",
+        "dialog": null
+      }
+    },
+    {
+      "name": "esc returns to the recorder page",
+      "do": { "action": "esc" },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": true,
+        "page": "recorder",
+        "header": "Record",
+        "focus": "recorder.copy_transcript",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"]
+      }
+    },
+    {
+      "name": "esc closes when nothing is capturing",
+      "do": { "action": "esc" },
+      "expect": {
+        "requests": [],
+        "mic_open": false,
+        "modal_open": false,
+        "page": "recorder",
+        "header": "Record",
+        "focus": "previous"
+      }
+    }
+  ]
+}

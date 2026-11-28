@@ -12,7 +12,7 @@ use ratatui::text::Span;
 use ratatui::Frame;
 use serde_json::Value;
 
-use crate::app::{now_secs, App, GitGroup, GitSideRow, WaitKind, QUESTION_LOCK};
+use crate::app::{now_secs, App, GitGroup, GitSideRow, WaitKind, COMPACTING_LOCK, QUESTION_LOCK};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
 use crate::paint;
 use crate::state::ConnectionState;
@@ -187,6 +187,9 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
     }
     // The tree of groups follows the project, the sessions and the focused tab.
     app.groups_reconcile();
+    let (recorder_wide, recorder_compact, recorder_active) = app.recorder_header_labels();
+    let recorder_width = width(&recorder_wide) as u16 + 2;
+    let recorder_compact_width = width(&recorder_compact) as u16 + 2;
     let flags = Flags {
         left_open: app.ui.left_open,
         right_open: app.ui.right_open,
@@ -194,6 +197,9 @@ fn render_frame(frame: &mut Frame, app: &mut App) {
         left_width: app.ui.left_width,
         session_child: app.viewed().is_some_and(|s| s.parent_id.is_some())
             && app.ui.view == View::Session,
+        recorder_width,
+        recorder_compact_width,
+        recorder_active,
     };
     let mut regions = {
         let a: &App = app;
@@ -1172,6 +1178,39 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         let x = g.manager.x;
         put(buf, x, g.manager.y, label, style, g.manager.width);
         hits.add(g.manager, Target::ManagerSession);
+    }
+
+    // The recorder entry, left of the bell. `●` dots stay red while text is primary.
+    if g.recorder.width > 0 {
+        let (wide, compact, _) = cx.app.recorder_header_labels();
+        let label = if width(&wide) as u16 + 2 == g.recorder.width {
+            wide
+        } else {
+            compact
+        };
+        let tone = cx.app.recorder_header_tone();
+        let style = match tone {
+            crate::recorder_view::Tone::Error => cx.st("status.error", SIDEBAR),
+            crate::recorder_view::Tone::Warning => cx.st("status.warning", SIDEBAR),
+            crate::recorder_view::Tone::Secondary => cx.st(SECONDARY, SIDEBAR),
+        };
+        let x = g.recorder.x + 1;
+        let room = g.recorder.width.saturating_sub(1);
+        if label.starts_with('\u{25cf}') {
+            let x = put(buf, x, g.recorder.y, "\u{25cf}", style, room);
+            let rest = &label['\u{25cf}'.len_utf8()..];
+            put(
+                buf,
+                x,
+                g.recorder.y,
+                rest,
+                cx.st(PRIMARY, SIDEBAR),
+                g.recorder.right().saturating_sub(x),
+            );
+        } else {
+            put(buf, x, g.recorder.y, &label, style, room);
+        }
+        hits.add(g.recorder, Target::Recorder);
     }
 
     // bell: only with unread notices
@@ -5285,16 +5324,18 @@ fn wait_rows(app: &App, w: u16, limit: usize, ell: &str) -> Vec<WRow> {
                             format!("Select all that apply \u{00b7} {ticked} ticked")
                         }));
                     }
+                    let option_indent = if c.multiple() { 6 } else { 4 };
                     for (i, option) in c.options().iter().enumerate() {
                         let label = json_str(&option["label"]);
-                        for (n, line) in ask_lines(&label, inner.saturating_sub(6), ell)
+                        for (n, line) in ask_lines(&label, inner.saturating_sub(option_indent), ell)
                             .into_iter()
                             .enumerate()
                         {
                             rows.push(WRow::Opt(i, line, n == 0, false));
                         }
                         if let Some(preview) = option["preview"].as_str() {
-                            for line in ask_lines(preview, inner.saturating_sub(6), ell) {
+                            for line in ask_lines(preview, inner.saturating_sub(option_indent), ell)
+                            {
                                 rows.push(WRow::Opt(i, line, false, true));
                             }
                         }
@@ -5692,17 +5733,18 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     }
                 } else if on {
                     if cx.t.opts.ascii {
-                        "(*) "
+                        "* "
                     } else {
-                        "(\u{2022}) "
+                        "\u{2022} "
                     }
                 } else {
-                    "( ) "
+                    "  "
                 };
                 let line = if *first {
                     format!("{mark}{} {text}", (i + 1) % 10)
                 } else {
-                    format!("      {text}")
+                    let indent = if c.multiple() { "      " } else { "    " };
+                    format!("{indent}{text}")
                 };
                 let mut st = if on {
                     if c.multiple() {
@@ -6660,6 +6702,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 "Add context\u{2026}"
             };
             text.replace('\u{2026}', cx.ell())
+        } else if a.viewed_id().is_some_and(|id| a.handing_off(id)) {
+            COMPACTING_LOCK.to_owned()
         } else if a.question_pending() {
             QUESTION_LOCK.to_owned()
         } else if a.viewed().is_none() {
@@ -7461,6 +7505,7 @@ fn on_off(on: bool) -> String {
 struct Segments {
     labels: Vec<String>,
     selected: usize,
+    draft: Option<usize>,
     total: u16,
 }
 
@@ -7472,14 +7517,17 @@ fn segment_view(cx: &Cx, row: &crate::manifest::Row, room: u16) -> Option<Segmen
     if options.len() < 2 {
         return None;
     }
-    let mut selected = options
+    let selected = options
         .iter()
         .position(|option| *option == current)
         .unwrap_or(0);
-    // The row being edited shows its draft choice, not the saved value.
-    if let Some(edit) = cx.app.ui.settings_edit.as_ref().filter(|e| e.row == row.id) {
-        selected = edit.draft.min(options.len() - 1);
-    }
+    let draft = cx
+        .app
+        .ui
+        .settings_edit
+        .as_ref()
+        .filter(|edit| edit.row == row.id)
+        .map(|edit| edit.draft.min(options.len() - 1));
     for padded in [true, false] {
         let labels: Vec<String> = options
             .iter()
@@ -7496,6 +7544,7 @@ fn segment_view(cx: &Cx, row: &crate::manifest::Row, room: u16) -> Option<Segmen
             return Some(Segments {
                 labels,
                 selected,
+                draft,
                 total: total as u16,
             });
         }
@@ -7516,16 +7565,32 @@ fn draw_segments(
     let mut x = x;
     for (option, label) in seg.labels.iter().enumerate() {
         let w = width(label) as u16;
-        let (token, bg) = if option == seg.selected {
-            (PRIMARY, SELECTED)
-        } else {
-            (SECONDARY, PANEL)
-        };
-        let mut style = cx.st(token, bg);
-        if option == seg.selected {
+        let selected = option == seg.selected;
+        let draft = seg.draft == Some(option);
+        let mut style = cx.st(
+            if selected || draft {
+                PRIMARY
+            } else {
+                SECONDARY
+            },
+            if selected { SELECTED } else { PANEL },
+        );
+        if selected {
             style = style.add_modifier(Modifier::BOLD);
         }
         put(buf, x, y, label, style, w);
+        if draft {
+            let text = label.trim();
+            let offset = width(label) - width(label.trim_start());
+            put(
+                buf,
+                x + offset as u16,
+                y,
+                text,
+                style.add_modifier(Modifier::UNDERLINED),
+                width(text) as u16,
+            );
+        }
         hits.add(
             Rect::new(x, y, w, 1),
             Target::SettingsSegment { row, option },
@@ -7777,19 +7842,50 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     let m = modal(cx, buf, area, r, &title, hits);
     let (x, w) = (m.x, m.w);
     let query = a.ui.settings_search.text();
+    let search = a.ui.settings_search_active;
     let sy = m.body.y;
-    put(buf, x, sy, "\u{2315}", cx.st(MUTED, RAISED), 1);
-    if query.is_empty() {
-        put(
-            buf,
-            x + 2,
-            sy,
-            "Filter settings\u{2026}",
-            cx.st(MUTED, RAISED),
-            w,
+    let shortcut = &a.manifest.settings.navigation.search_key;
+    let action = if search { "Clear" } else { shortcut };
+    let action_w = width(action) as u16;
+    let text_w = w.saturating_sub(action_w + 4);
+    hits.add(Rect::new(x, sy, w, 1), Target::SettingsSearch);
+    if search {
+        hits.add(
+            Rect::new(x + w - action_w, sy, action_w, 1),
+            Target::SettingsSearchClear,
         );
+    }
+    put(buf, x, sy, "\u{2315}", cx.st(MUTED, RAISED), 1);
+    put(
+        buf,
+        x + w - action_w,
+        sy,
+        action,
+        cx.st(SECONDARY, RAISED),
+        action_w,
+    );
+    let (label, token) = if query.is_empty() {
+        ("Search settings\u{2026}", MUTED)
     } else {
-        put(buf, x + 2, sy, &query, cx.st(PRIMARY, RAISED), w);
+        (query.as_str(), PRIMARY)
+    };
+    let before = a.ui.settings_search.before_cursor();
+    let leading = text::truncate_start(before, text_w.saturating_sub(1) as usize, cx.ell());
+    let label = if query.is_empty() || !search {
+        truncate(label, text_w as usize, cx.ell())
+    } else {
+        truncate(
+            &format!("{leading}{}", &query[before.len()..]),
+            text_w as usize,
+            cx.ell(),
+        )
+    };
+    put(buf, x + 2, sy, &label, cx.st(token, RAISED), text_w);
+    if search && text_w > 0 {
+        let at = x + 2 + width(&leading).min(text_w as usize - 1) as u16;
+        if let Some(cell) = buf.cell_mut((at, sy)) {
+            cell.set_style(cx.st(PRIMARY, RAISED).add_modifier(Modifier::REVERSED));
+        }
     }
     for hx in x..x + w {
         put(
@@ -7797,9 +7893,67 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
             hx,
             sy + 1,
             cx.t.structure("rule"),
-            cx.st("border.default", RAISED),
+            cx.st(if search { PRIMARY } else { "border.default" }, RAISED),
             1,
         );
+    }
+    if search {
+        let results = a.settings_search_results();
+        let list_y = sy + 3;
+        let rows = usize::from(m.hint_y.saturating_sub(list_y + 1));
+        let selected =
+            a.ui.settings_search_row
+                .min(results.len().saturating_sub(1));
+        let top = (selected + 1).saturating_sub(rows);
+        let heading = if query.trim().is_empty() {
+            "Type a setting or value to search."
+        } else if results.is_empty() {
+            "No settings match."
+        } else {
+            "Search results"
+        };
+        put(buf, x, list_y - 1, heading, cx.st(MUTED, RAISED), w);
+        for (i, result) in results.iter().enumerate().skip(top).take(rows) {
+            let y = list_y + (i - top) as u16;
+            let rect = Rect::new(x, y, w, 1);
+            let style = if i == selected {
+                row_band(cx, buf, rect, PRIMARY, true)
+            } else {
+                cx.st(PRIMARY, RAISED)
+            };
+            let path = if result.row.is_some() {
+                &result.section_label
+            } else {
+                "Section"
+            };
+            let path_w = (width(path) as u16).min(w / 3);
+            let label_w = w.saturating_sub(path_w + 5);
+            put(
+                buf,
+                x + 2,
+                y,
+                &truncate(&result.label, label_w as usize, cx.ell()),
+                style,
+                label_w,
+            );
+            let path_style = cx.st(SECONDARY, if i == selected { SELECTED } else { RAISED });
+            put(
+                buf,
+                x + w - path_w - 1,
+                y,
+                &truncate(path, path_w as usize, cx.ell()),
+                path_style,
+                path_w,
+            );
+            hits.add(rect, Target::SettingsSearchResult(i));
+        }
+        hint_row(
+            cx,
+            buf,
+            &m,
+            &[(updown(cx), "result"), ("enter", "jump"), ("esc", "back")],
+        );
+        return;
     }
 
     let main_top = sy + 2;
@@ -7847,52 +8001,52 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     let list = Rect::new(m.x, main_top, m.w, detail_start.saturating_sub(main_top));
     let list_h = list.height as usize;
 
-    // Left: the section rail.
+    // Left: group headings are visual only; hit targets keep the section index.
     let sections = a.settings_sections();
-    let nav_sel = a
-        .settings_section_index()
-        .min(sections.len().saturating_sub(1));
-    let nav_visible = list_h.max(1);
-    let nav_top = (nav_sel + 1).saturating_sub(nav_visible);
-    if sections.is_empty() {
-        put(buf, x, list.y, "No sections", cx.st(MUTED, RAISED), nav_w);
+    let nav_sel = a.settings_section_index();
+    let mut rail = Vec::new();
+    for group in &a.manifest.settings.rail {
+        let members: Vec<_> = sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| group.sections.contains(&s.id))
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        if !group.label.is_empty() {
+            rail.push((None, group.label.to_uppercase()));
+        }
+        rail.extend(members.into_iter().map(|(i, s)| (Some(i), s.label.clone())));
     }
-    for (i, section) in sections.iter().enumerate().skip(nav_top).take(nav_visible) {
-        let y = list.y + (i - nav_top) as u16;
-        let selected = i == nav_sel;
-        let style = if selected {
-            row_band(
-                cx,
-                buf,
-                Rect::new(x, y, nav_w, 1),
-                PRIMARY,
-                a.ui.settings_nav_focus,
-            )
-        } else {
-            cx.st(SECONDARY, RAISED)
+    let selected_line = rail
+        .iter()
+        .position(|(i, _)| *i == Some(nav_sel))
+        .unwrap_or(0);
+    let nav_top = (selected_line + 1).saturating_sub(list_h);
+    for (line, (index, label)) in rail.iter().enumerate().skip(nav_top).take(list_h) {
+        let y = list.y + (line - nav_top) as u16;
+        let rect = Rect::new(x, y, nav_w, 1);
+        let (indent, style) = match index {
+            Some(i) if *i == nav_sel && a.ui.settings_nav_focus => {
+                (2, row_band(cx, buf, rect, PRIMARY, true))
+            }
+            Some(i) if *i == nav_sel => (2, cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD)),
+            Some(_) => (2, cx.st(SECONDARY, RAISED)),
+            None => (0, cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD)),
         };
+        let room = nav_w.saturating_sub(indent);
         put(
             buf,
-            x + 2,
+            x + indent,
             y,
-            &truncate(&section.label, nav_w.saturating_sub(4) as usize, cx.ell()),
+            &truncate(label, room as usize, cx.ell()),
             style,
-            nav_w.saturating_sub(2),
+            room,
         );
-        hits.add(Rect::new(x, y, nav_w, 1), Target::SettingsSection(i));
-    }
-    let below = sections
-        .len()
-        .saturating_sub(nav_top.saturating_add(nav_visible));
-    if below > 0 && list_h > 0 {
-        put(
-            buf,
-            x + 2,
-            list.y + list.height.saturating_sub(1),
-            &format!("\u{2193} {below} more"),
-            cx.st(MUTED, RAISED),
-            nav_w.saturating_sub(2),
-        );
+        if let Some(i) = index {
+            hits.add(rect, Target::SettingsSection(*i));
+        }
     }
     // A rule between the rail and the pane.
     let border = cx.t.border_set();
@@ -8021,7 +8175,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     tone: t,
                     action,
                 } => {
-                    let selected = Some(*i) == sel;
+                    let selected = !a.ui.settings_nav_focus && Some(*i) == sel;
                     let position = items.iter().position(|p| p == i).unwrap_or(0);
                     let (value, disabled) = match action {
                         crate::app::PageAction::Setting(row) => {
@@ -8149,7 +8303,7 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
                     section_reason,
                 } => {
                     let position = rows.iter().position(|p| p == i).unwrap_or(0);
-                    let selected = Some(*i) == sel_item;
+                    let selected = !a.ui.settings_nav_focus && Some(*i) == sel_item;
                     let disabled = a.settings_reason(row, section_reason.as_deref()).is_some();
                     let (value, wired) = settings_value(cx, row);
                     let token = if disabled || !wired { MUTED } else { PRIMARY };
@@ -8253,7 +8407,11 @@ fn draw_settings(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     };
     let left = if cx.t.opts.ascii { "<" } else { "\u{2190}" };
     let hints: Vec<(&str, &str)> = if a.ui.settings_nav_focus {
-        vec![(updown(cx), "section"), ("enter", "open"), ("esc", "close")]
+        vec![
+            (updown(cx), "section"),
+            ("enter", "focus"),
+            ("esc", "close"),
+        ]
     } else if let Some(edit) = a.ui.settings_edit.as_ref() {
         if edit.tools {
             vec![(both, "tool"), ("enter", "toggle"), ("esc", "done")]
@@ -8779,6 +8937,7 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
     hits.add(area, Target::Scrim);
     match &o.kind {
         OverlayKind::Inspector(i) => draw_inspector(cx, buf, area, i, hits),
+        OverlayKind::Recorder => draw_recorder(cx, buf, area, hits),
         OverlayKind::Palette(p) => {
             let anchor = match p.mode {
                 PaletteMode::RowMenu => {
@@ -9612,6 +9771,9 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         }
         let mark = match &it.kind {
             PaletteKind::Session(id) => Some(session_glyph(cx, id, RAISED)),
+            PaletteKind::Model { favorite, .. } => {
+                Some((if *favorite { "★" } else { " " }.into(), style))
+            }
             _ => None,
         };
         let hw = width(&it.hint) as u16;
@@ -9666,7 +9828,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         );
         clear(buf, panel, cx.st(PRIMARY, RAISED));
         if let Some(PaletteItem {
-            kind: PaletteKind::Model(reference),
+            kind: PaletteKind::Model { reference, .. },
             ..
         }) = items.get(p.selected)
         {
@@ -9751,6 +9913,408 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         &count,
         cx.st(MUTED, RAISED),
         width(&count) as u16,
+    );
+}
+
+/// The recorder modal: source and three independent status rows, the durable
+/// transcript with one provisional tail, then the action row and key hints.
+/// The Recent page replaces the status block and transcript in the same modal.
+fn draw_recorder(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
+    use crate::recorder_view::{Page, TranscriptRowKind};
+
+    let max_height = area.height.saturating_sub(2).max(8);
+    let height = ((u32::from(area.height) * 7 / 10) as u16).clamp(8, max_height);
+    let b = modal_box(area, MODAL_LARGE, height);
+    let title = cx.app.manifest.ui_text("recorder.title", &[]);
+    let m = modal(cx, buf, area, b, &title, hits);
+    let tier = if m.w >= 72 {
+        crate::recorder_view::Width::Wide
+    } else {
+        crate::recorder_view::Width::Compact
+    };
+    let view = cx.app.recorder_view(tier);
+    let page = cx.app.ui.recorder.page;
+
+    let value = cx.st(PRIMARY, RAISED);
+    let muted = cx.st(MUTED, RAISED);
+    let action_y = m.hint_y.saturating_sub(2);
+
+    if page == Page::Recent {
+        if let Some(recent) = view.recent.as_ref() {
+            let heading = cx.app.manifest.ui_text("recorder.recent.title", &[]);
+            put(
+                buf,
+                m.x,
+                m.body.y,
+                &truncate(&heading, m.w as usize, cx.ell()),
+                cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD),
+                m.w,
+            );
+            let mut y = m.body.y + 2;
+            let rows_bottom = action_y.saturating_sub(1);
+            let visible = rows_bottom.saturating_sub(y) as usize;
+            let selected_index = cx
+                .app
+                .ui
+                .recorder
+                .focus
+                .strip_prefix("recent.")
+                .and_then(|n| n.parse::<usize>().ok());
+            let mut top = (selected_index.unwrap_or(0) + 1).saturating_sub(visible);
+            if let Some(selected) = selected_index {
+                if selected < top {
+                    top = selected;
+                }
+            }
+            for (i, row) in recent.rows.iter().enumerate().skip(top) {
+                if y >= rows_bottom {
+                    break;
+                }
+                let selected = cx.app.ui.recorder.focus == format!("recent.{i}");
+                if selected {
+                    let style = band(cx, buf, &m, y, "interactive.row_selected");
+                    put(buf, m.x, y, &truncate(row, m.w as usize, cx.ell()), style, m.w);
+                } else {
+                    put(buf, m.x, y, &truncate(row, m.w as usize, cx.ell()), value, m.w);
+                }
+                hits.add(Rect::new(m.x, y, m.w, 1), Target::RecorderRecent(i));
+                y += 1;
+            }
+            if let Some(empty) = recent.empty.as_deref() {
+                put(buf, m.x, y.max(m.body.y + 2), empty, muted, m.w);
+            }
+            if let Some(notice) = recent.notice.as_deref() {
+                put(
+                    buf,
+                    m.x,
+                    action_y.saturating_sub(1),
+                    notice,
+                    muted,
+                    m.w,
+                );
+            }
+        }
+    } else {
+        let mut y = m.body.y;
+        if let Some(source) = view.source.as_deref() {
+            put(buf, m.x, y, &truncate(source, m.w as usize, cx.ell()), muted, m.w);
+            y += 1;
+        }
+        let label_w = 12.min(m.w);
+        status_line(cx, buf, &m, y, label_w, "Capture", view.capture.as_deref(), value);
+        if let Some(level) = view.level {
+            draw_level(cx, buf, &m, y, level);
+        }
+        y += 1;
+        status_line(cx, buf, &m, y, label_w, "Audio", view.audio.as_deref(), value);
+        y += 1;
+        if let Some(detail) = view.audio_detail.as_deref() {
+            put(
+                buf,
+                m.x + label_w,
+                y,
+                &truncate(detail, m.w.saturating_sub(label_w) as usize, cx.ell()),
+                muted,
+                m.w.saturating_sub(label_w),
+            );
+            y += 1;
+        }
+        if let Some(warning) = view.audio_warning.as_deref() {
+            put(
+                buf,
+                m.x + label_w,
+                y,
+                &truncate(warning, m.w.saturating_sub(label_w) as usize, cx.ell()),
+                cx.st("status.warning", RAISED),
+                m.w.saturating_sub(label_w),
+            );
+            y += 1;
+        }
+        status_line(
+            cx,
+            buf,
+            &m,
+            y,
+            label_w,
+            "Transcript",
+            view.transcript_status.as_deref(),
+            value,
+        );
+        y += 1;
+        if let Some(detail) = view.transcript_detail.as_deref() {
+            put(
+                buf,
+                m.x + label_w,
+                y,
+                &truncate(detail, m.w.saturating_sub(label_w) as usize, cx.ell()),
+                muted,
+                m.w.saturating_sub(label_w),
+            );
+            y += 1;
+        }
+
+        // Divider, transcript viewport, then the action row's divider.
+        let rule = cx.st("border.default", RAISED);
+        let transcript_top = (y + 1).min(action_y.saturating_sub(2));
+        put(
+            buf,
+            m.x,
+            transcript_top.saturating_sub(1),
+            &cx.t.structure("separator").repeat(m.w as usize),
+            rule,
+            m.w,
+        );
+        put(
+            buf,
+            m.x,
+            action_y.saturating_sub(1),
+            &cx.t.structure("separator").repeat(m.w as usize),
+            rule,
+            m.w,
+        );
+        let viewport = action_y
+            .saturating_sub(1)
+            .saturating_sub(transcript_top) as usize;
+        let id = cx.app.ui.recorder.shown_id().unwrap_or_default();
+        let back = cx
+            .app
+            .ui
+            .recorder
+            .scroll_back
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        let max_top = view.rows.len().saturating_sub(viewport);
+        let top = if back == 0 {
+            max_top
+        } else {
+            max_top.saturating_sub(back)
+        };
+        for (line, row) in view.rows.iter().skip(top).take(viewport).enumerate() {
+            let style = match row.kind {
+                TranscriptRowKind::Final => value,
+                TranscriptRowKind::Provisional => {
+                    cx.st(MUTED, RAISED).add_modifier(Modifier::ITALIC)
+                }
+                TranscriptRowKind::Pending | TranscriptRowKind::Earlier => muted,
+                TranscriptRowKind::Error => cx.st("status.warning", RAISED),
+            };
+            put(
+                buf,
+                m.x,
+                transcript_top + line as u16,
+                &truncate(&row.label, m.w as usize, cx.ell()),
+                style,
+                m.w,
+            );
+        }
+        if view.rows.is_empty() {
+            let capturing = cx
+                .app
+                .ui
+                .recorder
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.active());
+            let text = if capturing {
+                cx.app
+                    .manifest
+                    .ui_text("recorder.transcript.listening", &[])
+            } else {
+                String::new()
+            };
+            if !text.is_empty() {
+                put(
+                    buf,
+                    m.x,
+                    transcript_top,
+                    &truncate(&text, m.w as usize, cx.ell()),
+                    muted,
+                    m.w,
+                );
+            }
+        }
+        if view.jump_live && viewport > 0 {
+            let chip = format!(
+                "[ {} ]",
+                cx.app.manifest.ui_text("recorder.jump_live", &[])
+            );
+            let chip_w = width(&chip) as u16;
+            let focused = cx.app.ui.recorder.focus == "jump_live";
+            let style = if focused {
+                cx.st(PRIMARY, SELECTED).add_modifier(Modifier::BOLD)
+            } else {
+                cx.st(SECONDARY, RAISED)
+            };
+            let y = transcript_top + viewport as u16 - 1;
+            let x = m.x + m.w.saturating_sub(chip_w);
+            put(buf, x, y, &chip, style, chip_w);
+            hits.add(Rect::new(x, y, chip_w, 1), Target::RecorderJumpLive);
+        }
+    }
+
+    // Action row: enabled buttons first, then disabled ones (muted, no focus).
+    let mut x = m.x;
+    let mut draw_button = |x: u16, button: &crate::recorder_view::RecorderButton| {
+        let label = format!("[ {} ]", button.label);
+        let w = width(&label) as u16;
+        if x + w > m.x + m.w {
+            return x;
+        }
+        let focused = button.enabled && cx.app.ui.recorder.focus == button.id;
+        let token = if button.enabled { PRIMARY } else { MUTED };
+        let style = if focused {
+            cx.st(token, SELECTED).add_modifier(Modifier::BOLD)
+        } else if button.enabled {
+            cx.st(token, RAISED)
+        } else {
+            muted
+        };
+        put(buf, x, action_y, &label, style, w);
+        if button.enabled {
+            hits.add(
+                Rect::new(x, action_y, w, 1),
+                Target::RecorderButton(button.id.clone()),
+            );
+        }
+        x + w + 1
+    };
+    for button in &view.buttons {
+        x = draw_button(x, button);
+    }
+    for button in &view.disabled {
+        x = draw_button(x, button);
+    }
+    put(
+        buf,
+        m.x,
+        m.hint_y,
+        &truncate(&view.hint, m.w as usize, cx.ell()),
+        muted,
+        m.w,
+    );
+
+    if let Some(dialog) = cx.app.ui.recorder.dialog.as_ref() {
+        draw_recorder_dialog(cx, buf, area, dialog, hits);
+    }
+}
+
+fn status_line(
+    cx: &Cx,
+    buf: &mut Buffer,
+    m: &Modal,
+    y: u16,
+    label_w: u16,
+    name: &str,
+    text: Option<&str>,
+    style: Style,
+) {
+    put(buf, m.x, y, name, cx.st(MUTED, RAISED), label_w);
+    if let Some(text) = text {
+        put(
+            buf,
+            m.x + label_w,
+            y,
+            &truncate(text, m.w.saturating_sub(label_w) as usize, cx.ell()),
+            style,
+            m.w.saturating_sub(label_w),
+        );
+    }
+}
+
+/// The compact 8-cell level meter; it is drawn only while this client records.
+fn draw_level(cx: &Cx, buf: &mut Buffer, m: &Modal, y: u16, level: f64) {
+    const CELLS: [&str; 8] = ["\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}", "\u{2588}"];
+    const ASCII: [&str; 8] = [".", ":", "-", "=", "+", "*", "#", "%"];
+    let glyphs = if cx.t.opts.ascii { &ASCII } else { &CELLS };
+    let lit = (level.clamp(0.0, 1.0) * 8.0).ceil() as usize;
+    let s: String = (0..8)
+        .map(|i| if i < lit { glyphs[i] } else { glyphs[0] })
+        .collect();
+    let style = cx.st("status.error", RAISED);
+    let w = width(&s) as u16;
+    put(buf, m.x + m.w.saturating_sub(w), y, &s, style, w);
+}
+
+fn draw_recorder_dialog(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    dialog: &crate::ui::RecorderDialog,
+    hits: &mut HitMap,
+) {
+    let (title, body, buttons, focus) = match dialog {
+        crate::ui::RecorderDialog::Quit { button } => (
+            cx.app.manifest.ui_text("recorder.quit.title", &[]),
+            cx.app.manifest.ui_text("recorder.quit.body", &[]),
+            vec![
+                (
+                    cx.app.manifest.ui_text("recorder.quit.confirm", &[]),
+                    true,
+                ),
+                (
+                    cx.app.manifest.ui_text("recorder.quit.cancel", &[]),
+                    false,
+                ),
+            ],
+            *button,
+        ),
+        crate::ui::RecorderDialog::Delete { button, .. } => (
+            cx.app.manifest.ui_text("recorder.delete.title", &[]),
+            cx.app.manifest.ui_text("recorder.delete.body", &[]),
+            vec![
+                (
+                    cx.app.manifest.ui_text("recorder.delete.confirm", &[]),
+                    true,
+                ),
+                (
+                    cx.app.manifest.ui_text("recorder.delete.cancel", &[]),
+                    false,
+                ),
+            ],
+            *button,
+        ),
+    };
+    let b = modal_box(area, MODAL_SMALL, 10.min(area.height.saturating_sub(2)));
+    let m = modal(cx, buf, area, b, &title, hits);
+    // A stray click outside the confirmation must not dismiss the recorder.
+    hits.add(area, Target::Swallow);
+    let rows = text::wrap(&body, m.w as usize);
+    for (i, line) in rows.iter().take(3).enumerate() {
+        put(
+            buf,
+            m.x,
+            m.body.y + i as u16,
+            &truncate(line, m.w as usize, cx.ell()),
+            cx.st(PRIMARY, RAISED),
+            m.w,
+        );
+    }
+    let by = m.body.y + 3;
+    let total: u16 = buttons
+        .iter()
+        .map(|(label, _)| width(label) as u16 + 6)
+        .sum::<u16>()
+        .saturating_sub(2);
+    let mut x = m.x + m.w.saturating_sub(total);
+    for (i, (label, danger)) in buttons.iter().enumerate() {
+        let s = format!("[ {label} ]");
+        let w = width(&s) as u16;
+        let token = if *danger { "status.error" } else { PRIMARY };
+        let style = if i == focus {
+            cx.st(token, SELECTED).add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(token, RAISED)
+        };
+        let x1 = put(buf, x, by, &s, style, w);
+        hits.add(Rect::new(x, by, x1 - x, 1), Target::RecorderDialogButton(i));
+        x = x1 + 2;
+    }
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[("left/right", "choose"), ("enter", "confirm"), ("esc", "cancel")],
     );
 }
 

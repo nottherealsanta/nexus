@@ -390,6 +390,7 @@ class Runtime:
         self.background: set[asyncio.Future[None]] = set()  # titles and automatic handoffs
         self.vision: dict[str, bool] = {}  # model id -> takes image input; set when a turn starts, absent means yes
         self.window_for = self._catalog_window  # model ref -> context window; replaceable in tests
+        self.cached_window_for = self._cached_catalog_window  # the same from the cache only, for sync callers
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
@@ -717,6 +718,7 @@ class Runtime:
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
             "permission": s.permission, "status": "busy" if self._session_busy(s) else "idle",
+            "handing_off": s.id in self.handoffs,
             "archived": bool(s.archived), "revision": s.revision, "continued_from": s.continued_from,
             "continued_to": self.store.continuation_of(s.id),
             "created": s.created, "updated": s.updated,
@@ -2240,6 +2242,16 @@ class Runtime:
             return None
 
     @staticmethod
+    def _cached_catalog_window(model: str) -> int | None:
+        """`_catalog_window` from the cached catalog only (no download), for sync callers; None when unknown."""
+        try:
+            provider, model_id = split_ref(model)
+            infos = catalog.models_for(catalog._read_cache(catalog.cache_path()), provider)
+            return next((item.context for item in infos if item.id == model_id), None)
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    @staticmethod
     def _in_catalog(ref: str) -> bool:
         """Whether the cached catalog lists this model (plan 34: a fallback the account cannot use is skipped).
 
@@ -2509,17 +2521,18 @@ class Runtime:
             raise Conflict("External workers cannot hand off CLI-owned context; start a new child instead")
         if session.parent_id is not None:
             raise ValueError("only a root session can be handed off")
+        if session_id in self.handoffs:
+            raise Busy(f"session {session_id} is already being handed off")
         self._check_turn_start(session)
         if not self.store.messages(session_id):
             raise ValueError("this session has no context to hand off")
-        if session_id in self.handoffs:
-            raise Busy(f"session {session_id} is already being handed off")
         self.handoffs.add(session_id)
+        self.bus.publish("session.handoff_started", {"session_id": session_id, "reason": reason}, session_id=session_id)
         try:
             provider, request = self._oneshot_request(session, oneshot.HANDOFF_INSTRUCTION)
             result = await oneshot.ask(provider, request)
             self._record_oneshot(session_id, "handoff", result)
-            self._check_turn_start(self.session(session_id))  # a turn may have started while the model wrote
+            self._check_turn_start(self.session(session_id), handing_off=True)  # a turn may have started while the model wrote
             project = self.project(session.project_id)
             created = await self.create_session_ready(
                 project, title=session.title, model=session.model or None, permission=session.permission,
@@ -2531,7 +2544,18 @@ class Runtime:
             self._publish_message(created.id, stored)
             data = {"from": session_id, "to": created.id, "reason": reason, "usage": result["usage"]}
             self.bus.publish("session.handoff", data, session_id=session_id)
+            try:
+                self.continue_session(created.id)  # the new session starts working from the summary at once
+            except (Busy, Conflict, ValueError) as exc:
+                self.bus.publish("session.handoff_failed", {"session_id": created.id, "reason": reason,
+                                                            "error": f"the new session did not start: {exc}"},
+                                 session_id=created.id)
             return {**data, "session": self.session_json(created), "summary": result["text"]}
+        except BaseException as exc:
+            self.handoffs.discard(session_id)
+            self.bus.publish("session.handoff_failed", {"session_id": session_id, "reason": reason, "error": str(exc)},
+                             session_id=session_id)
+            raise
         finally:
             self.handoffs.discard(session_id)
 
@@ -2549,8 +2573,8 @@ class Runtime:
             await self.handoff(session_id, reason="auto")
         except (Busy, Conflict, NotFound):
             pass  # a turn started or the session went away: the next completed turn checks again
-        except (ProviderError, AuthError, CredentialError, oneshot.OneshotError, ValueError) as exc:
-            self.bus.publish("session.handoff_failed", {"session_id": session_id, "error": str(exc)}, session_id=session_id)
+        except (ProviderError, AuthError, CredentialError, oneshot.OneshotError, ValueError):
+            pass  # `handoff` announced session.handoff_failed
 
     # -- turns ---------------------------------------------------------------
 
@@ -2651,7 +2675,7 @@ class Runtime:
             if session.parent_id is None or session.fork:
                 raise ValueError("External workers are only available to ordinary child sessions, never roots or read-only forks")
             return ExternalAgent(ref=ref, workspace=Path(session.directory), messages=[m.message for m in self.store.messages(session.id)],
-                                 instructions=spec["prompt"], permission=session.permission,
+                                 permission=session.permission,
                                  effort=self.resolve_effort(session, snapshot, ref)[0], worker=snapshot.get("worker"),
                                  project=Path(self.project(session.project_id).path),
                                  approve=lambda call, args: self._approve_external(session.id, call, args))
@@ -3205,8 +3229,24 @@ class Runtime:
         if parent is None or agent_files.MESSAGE_TOOL not in self.snapshot_for(parent).get("tools", ()):
             return ""
         return (f" It is idle and keeps its conversation. To resume or redirect this work, send it a message "
-                f"with `message_session` (session {child_id}) instead of starting a new sub agent; drop the work "
-                "only if the user says so.")
+                f"with `message_session` (session {child_id}) instead of starting a new sub agent, unless its "
+                "context is already large; drop the work only if the user says so.")
+
+    def _child_size(self, child_id: str) -> str:
+        """How full a child's context is and how many steps it has taken, so the parent can judge whether to
+        continue it or hand its work to a fresh child. Empty until a request has reported its input tokens."""
+        row = self.store.db.execute(
+            "select count(*) steps, (select model from turn_request where session_id = ?1 and input_tokens is not null"
+            " order by started desc, rowid desc limit 1) model, (select input_tokens from turn_request where"
+            " session_id = ?1 and input_tokens is not null order by started desc, rowid desc limit 1) used"
+            " from turn_request where session_id = ?1", (child_id,)).fetchone()
+        if not row or row["used"] is None:
+            return ""
+        steps = f"{row['steps']} step{'s' if row['steps'] != 1 else ''}"
+        window = self.cached_window_for(row["model"])
+        if not window:
+            return f"\n\n[Sub agent size: {steps}; context window unknown]"
+        return f"\n\n[Sub agent size: context {min(100, round(row['used'] * 100 / window))}% full, {steps}]"
 
     def _child_report(self, child_id: str) -> str:
         child = self.session(child_id)
@@ -3216,7 +3256,8 @@ class Runtime:
                        else f"failed: {error.rstrip('.')}")
             reason, advice = failure_advice(self.error_details.get(child_id) or {})
             return (f"Sub agent {child_id} ({self._child_label(child)}) {outcome}{reason}." + advice
-                    + self._resume_hint(child.parent_id, child_id) + self._attention(child_id))
+                    + self._resume_hint(child.parent_id, child_id) + self._child_size(child_id)
+                    + self._attention(child_id))
         answer = ""
         for stored in reversed(self.store.messages(child_id)):
             if stored.message.role == "assistant":
@@ -3226,7 +3267,7 @@ class Runtime:
         if len(answer) > CHILD_RESULT_CHARS:
             answer = answer[:CHILD_RESULT_CHARS] + f"\n[… answer clipped at {CHILD_RESULT_CHARS} of {len(answer)} characters]"
         return (f"Sub agent {child_id} ({self._child_label(child)}) finished.\n\n{answer or '(no text answer)'}"
-                + self._attention(child_id))
+                + self._child_size(child_id) + self._attention(child_id))
 
     def _deliver(self, child_id: str) -> None:
         """A wait: false child finished: hand its report to the parent."""
@@ -3273,7 +3314,9 @@ class Runtime:
             "duration": max(0.0, round(child.updated - child.created, 3)),
         }
 
-    def _check_turn_start(self, session: Session) -> None:
+    def _check_turn_start(self, session: Session, *, handing_off: bool = False) -> None:
+        if session.id in self.handoffs and not handing_off:
+            raise Conflict(f"session {session.id} is being handed off; a new session opens when the summary is ready")
         if ref := self._worker_ref(session):
             self._guard_worker_model(ref, child=session.parent_id is not None and not session.fork)
         if session.id in self.closing_sessions:
@@ -3895,7 +3938,7 @@ class Runtime:
                 results.append(ToolResult(
                     call.id,
                     f"{cause} while sub agent {child.id} ({self._child_label(child)}) was working; {stopped}."
-                    + self._resume_hint(session_id, child.id),
+                    + self._resume_hint(session_id, child.id) + self._child_size(child.id),
                     is_error=True,
                 ))
             elif call.id in started:

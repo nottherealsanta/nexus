@@ -387,6 +387,11 @@ export class Model {
         else { this.running.delete(sid); this.streaming.delete(sid); this.partials.delete(sid); }
         break;
       }
+      case "session.handoff_started": case "session.handoff": case "session.handoff_failed": {
+        const s = sid ? this.sessions.get(sid) : undefined;
+        if (s) s.handing_off = e.type === "session.handoff_started";
+        break;
+      }
       case "session.error": if (sid && d.kind !== "interrupted") this.failedSessions.add(sid); break;
       case "turn.recovered":
         if (sid) { this.running.delete(sid); this.streaming.delete(sid); this.partials.delete(sid); }

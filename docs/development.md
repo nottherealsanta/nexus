@@ -246,7 +246,7 @@ Then, from any directory:
 | `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
 | `nexus dev web` | Start Core and the hot-reloading NSH web app, then open it through the API proxy; Ctrl-C stops both web servers (not Core). Use `--no-open`, `--port N` for the proxy, and `--dev-port N` for NSH (defaults 4820 and 8790). NSH's development host may also be reachable on the local network. |
 | `nexus macos` | Run the NSH app in a macOS (AppKit) window with hot reload (`nsh run App.tsx --target macos`; flags pass through). It needs the address of a Core on the network — see [the NSH README](../nexus-nsh/README.md#platform-notes) |
-| `nexus gpui` | Experimental additive GPUI host: generate and build the same NSH app, then `cargo run` the Rust host. Requires NSH 0.4.0, Node and Rust; it does not start Core. Uses the same native Core discovery as the AppKit app. Runtime rendering and connectivity are not yet verified; the AppKit launcher is unchanged. |
+| `nexus gpui` | Experimental additive GPUI host: generate and build the same NSH app, then `cargo run` the Rust host. Requires the pinned NSH 0.7.0 revision, Node and Rust; it does not start Core. Uses the same native Core discovery as the AppKit app. Runtime rendering and connectivity are not yet verified; the AppKit launcher is unchanged. |
 | `nexus pixel` | Experimental, not shipped (like `nexus gpui`): the NSH web app inside the current terminal pane through [PixelGUI](https://github.com/zenbu-labs/terminal-browser/tree/main/pixel) (kitty graphics; Ghostty or kitty). Installs `nexus-pixel/` on first run (downloads PixelGUI's Electron runtime), builds the web app if needed, starts Core and its own NSH host on 4821, or the next free port when another pane holds it (`--port N` insists on N), and stops it on exit. Ctrl-Q quits. See [nexus-pixel/README.md](../nexus-pixel/README.md). |
 | `nexus ios` | Run the same app in an iOS simulator (`nsh run App.tsx --target ios`), or in an iPhone-sized Mac Catalyst window (`--target catalyst`) when no iOS runtime is installed. `npm run ios` in `nexus-nsh/` packages, patches and launches the simulator app instead. A physical iPhone needs signing: see [Install on an iPhone](../nexus-nsh/README.md#install-on-an-iphone) |
 | `nexus restart` | Stop and start the Core daemon |
@@ -284,7 +284,8 @@ web="${PREFIX:-$HOME/.local}/share/nexus/web"
 node "$web/serve.mjs" --static "$web/Nexus"
 ```
 
-The host can discover or start local Core. The release build pins the same NSH revision used in local validation;
+The host can discover or start local Core. The release build pins NSH revision `3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359`, matching the native crate and CLI. The web build needs the `wasm32-unknown-unknown` Rust target (`rustup target add wasm32-unknown-unknown`). If the default compiler lacks it, the web wrapper uses rustup's compiler when its target is installed; an explicit `RUSTC` is left alone.
+The release build pins the same NSH revision used in local validation;
 it type-checks the app, runs the host tests, and packages the built client and host together. The full browser suite
 is not a release gate.
 

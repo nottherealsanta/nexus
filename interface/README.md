@@ -56,9 +56,10 @@ the other form a terminal or browser reports.
 
 ### `[[settings.section]]` and `[[settings.section.row]]`
 
-Section order is fixed: Appearance, Providers, Agents, Tools, MCP, Context,
-Voice and speech, Keybindings, Notifications, About. Both clients draw Settings
-as a left section rail plus the selected section in the right pane. Row fields: `id`
+`[[settings.rail]]` groups the desktop section list and defines browse order. Its headings
+do not receive focus. Both clients show the actual selected section in the right pane.
+`settings.navigation.search_key` opens a separate search view: matches show their destination,
+Enter focuses it without editing, and Esc restores the browse position. Row fields: `id`
 (prefixed by the section id), `label`, `kind` (`choice toggle number text list
 action info keymap`), `scope` (`core`: read/written through the Core API;
 `client`: per-client view state), `clients` (`both`, `tui`, `nsh`), optional

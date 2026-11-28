@@ -41,6 +41,12 @@ pub struct Flags {
     pub left_width: u16,
     /// A subagent is viewed: reserve a four-cell root-back strip at the centre's left.
     pub session_child: bool,
+    /// Cells the wide recorder label needs (the idle `Record` entry included).
+    pub recorder_width: u16,
+    /// Cells the compact recorder pill needs.
+    pub recorder_compact_width: u16,
+    /// A capture is active somewhere: the pill shows even below 60 columns.
+    pub recorder_active: bool,
 }
 
 /// Width of the docked left sidebar, bounded so the centre keeps `MIN_CENTRE`.
@@ -104,6 +110,8 @@ pub struct Regions {
     pub bell: Rect,
     /// The header's Manager button, left of the right toggle (and the bell).
     pub manager: Rect,
+    /// The recorder entry, left of the bell. Zero width when hidden.
+    pub recorder: Rect,
     pub title: Rect,
 }
 
@@ -234,7 +242,7 @@ impl Regions {
         let (heading, banner, timeline, waiting, composer) =
             session_rects(body, heights(body.width));
 
-        // Header: [ toggle ] [ title ............ ] [ bell ] [ toggle ]
+        // Header: [ toggle ] [ title .... ] [ recorder ] [ bell ] [ Manager ] [ toggle ]
         let toggle_width = if rail.is_some() { RAIL_WIDTH } else { 3 };
         let toggle_left = r(
             header.x,
@@ -248,8 +256,9 @@ impl Regions {
             4.min(header.width),
             header.height,
         );
-        // [ title ] [ bell ] [ Manager ] [ toggle ]: the Manager button sits against the toggle, and the bell
-        // (only with unread notices) moves left of it. Too narrow to fit beside a title: no button.
+        // [ title ] [ recorder ] [ bell ] [ Manager ] [ toggle ]: the Manager button sits against the
+        // toggle and the bell (only with unread notices) moves left of it. Too narrow to fit beside a
+        // title: no Manager button. The recorder keeps a compact pill below 60 columns while capturing.
         let wide = header.width >= 60;
         let manager = r(
             toggle_right.x.saturating_sub(MANAGER_BUTTON),
@@ -264,10 +273,28 @@ impl Regions {
             6.min(bell_right.saturating_sub(header.x)),
             header.height,
         );
+        let recorder_width = if wide {
+            flags.recorder_width
+        } else if flags.recorder_active {
+            flags.recorder_compact_width
+        } else {
+            0
+        };
+        let recorder = r(
+            bell.x.saturating_sub(recorder_width),
+            header.y,
+            recorder_width.min(bell.x.saturating_sub(toggle_left.x + toggle_left.width)),
+            header.height,
+        );
+        let title_right = if recorder.width > 0 {
+            recorder.x
+        } else {
+            bell.x
+        };
         let title = r(
             toggle_left.x + toggle_left.width,
             header.y,
-            bell.x.saturating_sub(toggle_left.x + toggle_left.width),
+            title_right.saturating_sub(toggle_left.x + toggle_left.width),
             header.height,
         );
 
@@ -292,6 +319,7 @@ impl Regions {
             toggle_right,
             bell,
             manager,
+            recorder,
             title,
         }
     }

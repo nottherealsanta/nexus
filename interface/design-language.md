@@ -35,21 +35,16 @@ Titles use the full content width, without a duplicate Esc chip. Key hints occup
 last row: navigation, primary action, then dismissal. Use **close** to leave a modal,
 **back** to return one level, and **cancel** to discard input. The TUI uses `hint_row`,
 NSH `ModalFooter`; input dialogs use the same footer as other modals. Settings selection uses `interactive.row_selected`: a neutral gray band across the
-whole section or setting row (including its value). No left bar marks the focused
-pane; inactive selections retain their gray background. NSH uses
-the same fill for selected sections and hovered or keyboard-focused setting rows.
-Settings values are segmented controls, as NSH draws them: the options sit in a quiet
-well at the row's end, with the current one on `interactive.selection`. The two bands are deliberately different:
-`interactive.selection` is the warm selected band (a deeper sand in the light theme, so it stands off the panel,
-sidebar and raised surfaces), while `interactive.row_selected` stays neutral gray, so a current value and the
-keyboard focus are told apart. In the TUI
-Left/Right move the focused segment (wrapping at the ends, as the old cycling did) and
-Tab or Esc returns focus to the section heading; in a detail page Left still returns to
-its heading. Shift+Right also steps a value backward, and model effort cycles back to
-default after the final level. The search field retains normal caret movement. Settings uses a compact section rail with no empty rows between sections and keeps
-its search and section rail visible while its rows scroll. This first pass establishes
-the shared geometry; a complete footer, focus and provider/tool-grid review is still
-tracked in PLAN.md 8.0.
+whole section, setting or search result. No left bar marks focus. When focus moves into
+the settings pane, the current section stays bold but drops the gray fill so the
+keyboard position is unambiguous.
+Settings values are segmented controls: the options sit in a quiet well, and the saved
+option keeps its gray fill. While editing, Left/Right move an underline across the options
+without moving that fill. Enter applies the draft, and Esc cancels it. Model effort on an agent
+detail page has its own controls; it cycles back to default after the final level.
+Settings has a grouped section rail with non-interactive headings.
+Search replaces both panes with a destination list, leaving the input above it; a result names
+the setting and its section. Enter jumps without editing; Esc restores the previous browse focus.
 
 Working uses the shared `[motion.shimmer]` recipe: a 12-frame pass at 125 ms per
   A turn the user starts (`/continue`, a send) shows a pending working row at once (`Waiting for Core · Ns`, then `Waiting for the model · Ns`, or `Waiting for network · retrying in Ns`), driven by real events; a refusal shows its reason in the status strip, and 10 s without an answer adds `Retry`. Both clients, and mobile.
@@ -161,7 +156,8 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
   12 rows and the choices as key chips on `surface.raised` (the selected row on the
   selection band; a choice Core does not offer is muted with its reason). A multi-select
-  question's card uses the violet `interactive.multi` rail and ticks. A single-question ask
+  question's card uses the violet `interactive.multi` rail and ticks. Single-choice options use
+  square-bracket marks (`[ ]` and `[•]`). A single-question ask
   submits a single choice or free-text answer immediately; multi-select keeps one submit
   action, without a review page. Multi-question asks retain their step-through and review
   page (listing every question and answer), using the `text.primary` rail. Options

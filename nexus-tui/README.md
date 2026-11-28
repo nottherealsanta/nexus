@@ -247,7 +247,8 @@ tests `shell.rs` `the_mcp_page_…`. NSH: `src/ui/mcp-settings.tsx`.
 Settings keys: two panes, the section list and the section's settings. Enter or Right on a section enters its
 settings; Left, Esc or Tab returns (Esc on the sections closes). Moving never changes a value. Enter or Space on a row
 flips a switch, or edits an enum, number or the tools grid in place (←/→ choose, Enter sets, Esc cancels); the footer
-shows the keys of the current mode. Tests: `behaviour.rs` `an_enum_edits_in_place_…`, `shell.rs` `settings_segments_…`.
+shows the keys of the current mode. In an enum, the saved option stays filled while the draft is underlined.
+Tests: `behaviour.rs` `an_enum_edits_in_place_…`, `shell.rs` `settings_segments_…`.
 
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
 square modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
@@ -264,14 +265,12 @@ inside its picker above the footer. Long confirmations retain the existing heigh
 fallback until their bodies can scroll. See `interface/design-language.md` for the
 shared rules.
 
-Settings is that modal, 88 cells wide, with a search field and two panes. The
-left rail lists every section on consecutive rows; the right pane shows the selected section, a
-provider list or an agent page. ↑/↓ stays inside the focused pane, Enter or →
-leaves the rail, Tab swaps panes and Esc steps back to the rail and then closes.
-Choice and switch rows draw the same segmented control as NSH; ←/→ move the
-focused segment (wrapping at the ends, so Enter still cycles a switch). Typing
-filters both the rail and the rows. Rows that cannot be changed are not shipped
-rather than shown disabled.
+Settings is that modal, 88 cells wide, with a grouped section rail and the actual selected page
+on the right. ↑/↓ moves within the focused pane, Enter or → focuses the settings, Tab swaps
+panes and Esc steps back to the rail and then closes. Press `/` to search settings by name,
+description or available value. ↑/↓ selects a result; Enter jumps to its row without changing it,
+and Esc or **Clear** returns to the prior browse position. Choice and switch rows retain the
+same segmented controls as NSH.
 `/login` opens Providers. Providers: Enter opens that provider's detail modal;
 its connection actions live there, one row per method Core lists (`Sign in with
 browser`, `Sign in with a device code`, the provider's CLI or local server). A
@@ -490,7 +489,18 @@ scroll per session and adopts it after a sync-driven selection, so a root's pinn
 band never appears over a child. A new session stays at the top of its timeline when the first message is confirmed, keeping the context header in view instead of pinning the message or adding a spacer. While the reader scrolls, a subdued
 `interactive.scrollbar` bar shows in the timeline's right gutter and fades out after
 about a second; Settings → Appearance → Scroll bar turns it off. It never takes
-content space or shifts the layout. The turn footer is
+content space or shifts the layout.
+
+**Message rail.** Once a session has two of your messages, the timeline's right edge becomes a rail of the
+whole conversation: every message is a mark where it falls (accent while it is on screen, muted otherwise),
+the viewport is the band, and hovering a mark shows `#n · first line`. Clicking a mark jumps to its message
+at the top of the timeline, and clicking or dragging the track scrolls there. It replaces the scroll bar
+while it shows, takes no content space and is not drawn in a peer timeline. `[` / `]` in the TUI (and
+`cmd+[` / `cmd+]` in NSH), with `alt+up` / `alt+down` as the alias in both, select the previous or next
+message and scroll only as far as needed. Settings → Appearance → Message rail (default on) turns it off.
+Desktop and web only: a phone never draws the rail or binds its keys, and its Settings omits the row.
+
+The turn footer is
 the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
 row with no end status or continue hint: a failed turn puts its first error line
 (`✕`) above, and the usage units (`i`, `o`, `r`, `c`) are fainter than their
@@ -688,6 +698,44 @@ key stops the capture and the key still applies. The final transcript replaces
 the preview at the position where recording began, ahead of anything typed
 since. Capture is capped at 120 seconds.
 
+## Standalone recorder
+
+The TUI's recorder (plan 54) is separate from dictation and the Manager. A
+`Record` entry sits in the header left of the bell and Manager button; while
+capturing it shows the elapsed time, and another client's capture reads
+`REC elsewhere`. Opening the modal never opens the microphone: `Start recording`
+creates the Core recording first, then opens the default input device with
+`cpal` on its own thread. The modal shows the microphone and `Saving to this
+computer`, separate Capture, Audio and Transcript rows, a level meter and the
+transcript with a provisional tail. Esc or Minimize hides the modal without
+stopping; Stop releases the microphone and drains the final audio independently
+of transcription. Auto-follow only holds while the reader is at the bottom;
+otherwise `Jump to live` appears. `Copy transcript`, `Retry transcription`,
+`Recover unsaved audio`, Recent recordings and confirmed deletion are the
+available actions.
+
+Capture is mono 16 kHz PCM16 in roughly one-second chunks. Unacknowledged audio
+is spooled durably under `<Nexus home>/recorder-spool/<recording-id>/` with the
+recovery capability, bounded to 30 seconds; only Core-acknowledged chunks are
+shown as saved. The same process-wide microphone owner is shared with dictation
+and the Manager's live call, so only one of them can hold the device. If the
+stream or lease is lost, capture stops and the recording is `Interrupted`; the
+microphone is never restarted automatically, and recovery uploads only the
+already-spooled chunks up to the sealed final sample count. Missing audio is
+shown as a gap, never filled with silence.
+
+Recordings stay in the configured Core's Nexus home (`recordings/<id>/`); the
+TUI offers no Save As or download. They remain until explicitly deleted, and an
+abandoned empty recording is kept the same way. Quitting while this client owns
+a capture asks `Stop and exit` / `Keep recording`.
+
+Core's current create contract requires a client-generated
+`X-Recorder-Recovery` capability and supports resume-by-idempotency-key; the TUI
+driver is still being adapted to it, so an end-to-end recording against this
+Core is not yet verified. The recorder has deterministic controller, spool,
+view-model and UI tests, but no real microphone, real STT model, ten-minute or
+hour-long run, recovery drill or latency measurement has been performed.
+
 Settings → **Tools** lists `firecrawl` in the grid of tools (the local Firecrawl; install with `nexus firecrawl init`, no start button, it starts with the first call). It shows as `Firecrawl` in the timeline with its action and URL. It also shows the **Web search service** (the local SearXNG behind
 `web_search`: running, stopped, not set up or unavailable, with its address and
 runtime) and a **Start web search** row, also in the palette as `search.start`.
@@ -721,6 +769,11 @@ Lower layers know nothing of higher ones.
 | `manifest`, `theme` | `interface/manifest.toml` and `interface/theme.toml` embedded with `include_str!` and parsed into typed structs: commands, keys, Esc chain, navigation, settings; colour tokens per mode and tier (truecolor, 256, ANSI-16, monochrome), glyph tables (Unicode/ASCII). No command list, key, reason, colour or glyph is copied by hand. |
 | `completion` | Ranking (`rank_menu`, typo distance), acceptance text and the per-token reply cache for the composer's completion popup, copied from old Nexus. |
 | `dictation` | Local `cpal` capture on its own thread, mono conversion, streaming resampling, PCM16 WAV encoding, cue tones, waveform levels and preview pacing. No device handle crosses threads. |
+| `audio_capture` | Shared continuous `cpal` capture primitives and the process-wide microphone owner used by dictation, the Manager's live call and the recorder. |
+| `recorder` | The standalone recorder's I/O-free capture controller: one-second chunks with integer sample offsets, bounded spool hand-off, heartbeat/stop/retry commands, explicit loss reporting and lease-loss interruption. |
+| `recorder_driver` | Executes the recorder controller's commands over Core's HTTP API, persists recovery material and drives recovery uploads to Core. |
+| `recorder_spool` | Durable 30-second client spool under `<Nexus home>/recorder-spool/`, private files, crash reconciliation and recovery planning. |
+| `recorder_view` | Pure recorder view-model: header, status rows, actions, focus, Esc outcome and Recent list, shared with NSH through `interface/scenarios/recorder-view.json`. |
 | `text`, `keys`, `composer`, `editor` | Display-width helpers, key names, and the multi-line composer. The grapheme editor and visual layout are adapted from old Nexus; composer movement and deletion respect grapheme boundaries. The composer uses the editor
 for selection, undo/redo and collapsed large pastes; a send keeps the marker and sends the full text separately, and the message renders the marker as a clickable chip. |
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
@@ -806,7 +859,8 @@ and previews wrap fully, and Page Up/Page Down scroll the card. **A question rep
 composer** (plan 47): the card and the composer's input are one dock under one rail, and the
 composer's input line is the answer's "add context" line (`Add context…`, or `Type your
 answer…` when the question has no options), with its own text per question. The options have
-the keys first: Up/Down move, and a single-choice answer follows the highlight; Space and Enter
+the keys first: Up/Down move, and a single-choice answer follows the highlight, using a bare
+`•` for the selected option and no square brackets; Space and Enter
 both go on (`space/enter send`, `next` or `review`). A multi-select draws checkboxes and `Select all that apply`: arrows
 move, Space ticks and stays, and Enter with nothing ticked ticks the highlight and stays (the next
 Enter goes on). Left/Right also move a lone question's options. A number key (1-9, 0 for the tenth)
@@ -949,7 +1003,8 @@ TUI can be driven by hand in a browser.
   inline content; clicking it opens the full text in a modal. A failed send
   restores the marker. Smaller pastes stay inline.
 - The top header omits the busy spinner, working label and elapsed time.
-- The model picker shows model names on the left and providers on the right;
+- The model picker shows favorite stars in a dedicated column to the left of
+  aligned model names, with providers on the right;
   `m` toggles details below the picker (they follow the selection) and is
   reserved for that while the picker is open.
 - The startup draft shows its estimated starting context under the same Context

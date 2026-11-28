@@ -1,6 +1,9 @@
 # 54 — Standalone audio recorder with near-real-time transcription
 
-Status: **planned, not implemented**. Written 2026-11-26. This change adds only this plan.
+Status: **in progress (2026-11-27): B and C done; A, D, E, F open**. Written 2026-11-26. Core recorder storage,
+service, scheduler, HTTP surface and both clients' recorder controllers/UI exist in the working
+tree, but no milestone is ticked, no real-hardware check has run and the client create/recovery
+adapter is still being updated. See section 8.
 
 ## 1. User request and scope
 
@@ -57,8 +60,10 @@ Modal contents:
 - Separate capture, durability, and transcription statuses; elapsed **captured audio** duration.
 - A compact microphone level, scrollable transcript with stable segments and a distinct provisional tail.
 - During capture: `Minimize` and `Stop`. No destructive discard alongside Stop.
-- After capture: `Save audio…`, `Copy transcript`, `Save transcript…`, `Retry transcription` when needed,
-  and access to recent/recovered recordings. Saving uses desktop Save As or browser download as appropriate.
+- After capture: `Copy transcript`, `Retry transcription` when needed, and access to recent/recovered
+  recordings. The user chose to keep recordings in Core's Nexus home, so the clients have no
+  client-specific Save As or download action in V1; the WAV and transcript export routes remain
+  available for later use.
 - Transcript rows show recording-relative segment ranges, not invented word timestamps or speaker IDs.
 
 Minimized example: `[● REC 12:34] [Notifications 3] [Manager]`. Clicking the recorder reopens the same
@@ -72,8 +77,8 @@ Typing/Enter elsewhere, switching sessions/workspaces, opening notifications, an
 not stop capture. Do not inherit dictation's stop-on-typing or send semantics.
 
 Stop releases the microphone immediately and drains the last audio chunk independently of STT.
-Show `Audio saved · Finishing transcript` if appropriate; downloading/playback of saved audio must
-not wait for transcript catch-up. A finished recording can have an incomplete transcript.
+Show `Audio saved · Finishing transcript` if appropriate; saving the final audio must not wait for
+transcript catch-up. A finished recording can have an incomplete transcript.
 
 Use auto-follow only while the user is at the transcript bottom; otherwise show `Jump to live`.
 Do not flood screen readers with every provisional replacement. Match wording, controls, states,
@@ -132,7 +137,8 @@ At this format, one hour is 115,200,000 PCM bytes (about 115 MB / 110 MiB), plus
   then advance the metadata checkpoint. Acknowledge only committed data. Define ordering so a crash
   cannot leave metadata claiming audio that is missing; reconcile orphaned committed chunks on restart.
 - Client keeps a bounded pending spool until acknowledgement (native protected local spool; browser
-  IndexedDB where supported). Detect unavailable/quota-limited browser storage before claiming recovery.
+  IndexedDB where supported). The user chose to require persistent browser storage: if it is unavailable
+  or persistence is not granted, explain the refusal and do not create a recording or open the mic.
   Never fall back silently to a one-hour RAM buffer. Local and Core copies are distinct durability levels.
 - Retry uploads by recording ID + sequence + content hash. Identical retries are idempotent; conflicting
   duplicates or noncontiguous offsets are rejected. Reconnect queries the highest contiguous durable
@@ -255,6 +261,10 @@ license/runtime review and benchmark. Do not silently replace the configured mod
 
 Add a dedicated recorder service/control API, not an agent task tool and not a Manager endpoint.
 Names below are proposed; follow current daemon routing/storage conventions when implementing.
+Core now implements this surface; [docs/api.md](../docs/api.md#recorder) is the wire reference. In
+particular, create now requires a client-generated recovery capability (`X-Recorder-Recovery`) that
+the client persists before the call, stores only its hash, and offers a lookup-only `resume` mode;
+the client controllers are still being adapted to that contract.
 
 - `POST /api/recordings`: create capture with idempotency key, input format and owner identity; return
   opaque ID, lease token and initial state. Starting requires an explicit user action.
@@ -286,28 +296,83 @@ No change to session context/timeline semantics: only an explicit later user act
 
 ## 8. Implementation sequence and completion criteria
 
-All boxes are open. No implementation or performance claim is implied by merging this plan.
+B and C are ticked (deterministic tests pass, 2026-11-27); A, D, E and F remain open. The partial implementation was committed on 2026-11-28 at the user's request to commit all outstanding work; this is a checkpoint, not completion:
+Core recorder storage under the configured Nexus home, checksummed chunk commits, leases/heartbeats/
+rebind, recovery, one active capture and the HTTP event surface; the windowed transcription scheduler,
+segmentation, durable transcript log and retries; and TUI and NSH recorder controllers, capture
+spools, modal/header view models and shared scenarios. These do not establish real-hardware
+performance, native capture support, end-to-end recovery guarantees, full test health or completion of
+the recorder. The feasibility and parity gates remain outstanding.
+
+Core's create wire requires a client-generated recovery capability in `X-Recorder-Recovery`,
+persisted by the client before the call; Core stores only its hash and supports lookup-only `resume`
+by idempotency key. Both client controllers have been adapted, but end-to-end recovery is not verified.
+Implementation was **paused at the user's request**. Preserve the working tree and resume only when
+asked; do not tick milestones or treat the partial changes as landed.
+
+Resume blockers and handoff:
+
+- `nexus-recorder-spool/` now compiles (2026-11-27: `LOCK_PATHS` is a `LazyLock`) and its 23 unit tests
+  pass. Platform review is still open before building the native NSH bridge; the migration plan is
+  `/tmp/nexus-plan-54-native-spool-20261126.md`.
+- NSH web spool recovery does not hold its per-recording cross-tab lock during live capture. An expired
+  lease can race recovery and ongoing local writes. Also fix mismatched recording IDs on IndexedDB
+  writes and paginate discovery beyond the first 50 spools; add concurrent expiry/recovery tests.
+- Native NSH has capture plumbing but no protected native spool bridge; persistent-storage refusal
+  currently prevents claiming native support. The browser must also refuse Start when persistence is
+  unavailable, as explicitly chosen by the user.
+- TUI pending-start recovery was wired into startup, and NSH UI reports pending/spool recovery wiring;
+  both need a fresh integration pass after the shared spool and cross-tab fixes. Core create withdrawals
+  are bounded for the process lifetime; exhausting the guard refuses new starts until Core restarts.
+- `recorder.low_disk` is now wired in both clients: a warning toast at Start when Core's create reports
+  under ten minutes of free space (`free_seconds`). The manifest checker passes. Unrelated, pre-existing
+  failures remain: `nexus-tui/tests/behaviour.rs` does not compile (`PaletteKind::Model` is now a struct
+  variant) and `tests/shell.rs::system_theme_can_be_selected_and_restored` fails.
+- Paired synthetic screenshots are at `/private/tmp/rec-parity-shots.EBeMI2/`; they exposed interrupted
+  header/reason and recording-elsewhere differences. Fixes were in progress and need fresh paired
+  screenshots. The matching integration plans are `/tmp/nexus-plan-54-standalone-recorder-20261126.md`,
+  `/tmp/nexus-plan-54-b3-integration-20261126.md`, `/tmp/nexus-plan-54-c3-scheduler-20261126.md`,
+  `/tmp/nexus-plan-54-create-crash-20261126.md`, and `/tmp/nexus-plan-54-paired-ui-20261126.md`.
+
+Deterministic storage, service, scheduler, transcript-log and client tests exist; earlier focused
+checks passed, but no final combined validation was completed. They are not evidence of real capture,
+a real model, long runs or recovery on hardware.
+
+The reference machine selected for performance acceptance is the current Mac (Apple M6, 32 GiB RAM,
+macOS 27.0). No measurement has been taken there; real-audio benchmarking and microphone tests are
+deferred at the user's request, and Linux/Windows native capture is compile-time parity work. Mobile
+stays excluded: the phone has no recorder surface and the iOS capture module reports unavailable.
+
+User decisions: recorder API access follows the existing daemon trusted-network policy, including its
+unauthenticated network binding when configured that way; WAV downloads are available after capture
+stops, not during an active recording; recordings remain in Core's Nexus home (`recordings/`) rather
+than a client-specific save destination, and the clients offer only `Copy transcript` as an export;
+an abandoned empty recording (for example, the microphone never opened) is kept in Recent until
+explicitly deleted; both desktop clients confirm quitting an active capture with `Stop and exit` /
+`Keep recording`, while a browser tab/window close uses the browser's generic confirmation, an
+approved client-specific difference recorded in the porting ledger.
 
 - [ ] **A — Feasibility and runtime audit.** Re-read current voice/capture code; benchmark windowed STT
   and identify reference hardware; validate native continuous capture. Document measured latency,
   memory and quality here. Resolve platform blockers before claiming desktop parity.
-- [ ] **B — Durable recorder service.** Implement metadata, chunk commit/ack protocol, ownership/leases,
+- [x] **B — Durable recorder service.** Implement metadata, chunk commit/ack protocol, ownership/leases,
   auth, bounded transport and recovery, streaming WAV export, recent recordings and deletion.
   Fake audio can complete a one-hour recording without loading any STT runtime.
-- [ ] **C — Windowed STT scheduler.** Add VAD/segmentation, coalesced previews, durable final jobs,
+- [x] **C — Windowed STT scheduler.** Add VAD/segmentation, coalesced previews, durable final jobs,
   revisioned results, conservative overlap handling and fair sharing of the existing worker.
   Prove stale-result rejection, bounded memory, and audio independence with fake inference.
 - [ ] **D — Both desktop clients together.** Implement separate recorder capture controllers, pending
   spools, shared modal/header semantics and commands in TUI + NSH. Include failure/degraded states,
-  save/copy/retry and accessibility. Keep ordinary dictation behavior unchanged.
+  copy/retry/recovery and accessibility. Keep ordinary dictation behavior unchanged.
 - [ ] **E — End-to-end hardening.** Execute ten-minute and sixty-minute real capture runs with consent;
   worker crash, Core restart, reconnect, disk-full, device removal and client-close recovery. Compare
   audio sample counts/checksums and transcript coverage against the source. Record actual latency
   percentiles, gaps, lag, memory and limitations; don't pass on a fast synthetic-only test.
 - [ ] **F — Documentation and paired verification.** Update `docs/voice.md`, API/event docs, both client
   READMEs, and a porting-ledger row if behavior differs from old Nexus. Add this plan to `plans/README.md`
-  and record landed implementation in `plans/landed.md` when it actually lands. Keep this planning-only
-  change to the single requested file. Follow the screenshot skills and shared scenario conventions.
+  and record landed implementation in `plans/landed.md` when it actually lands. Documentation currently
+  records the partial implementation and the create-wire client adaptation; finish it when the
+  hardware and parity gates pass. Follow the screenshot skills and shared scenario conventions.
 
 Likely code boundaries: new recorder package/service and daemon routes near existing voice routes;
 reusable audio helpers under `nexus-core/nexus/voice/`; dedicated recorder controllers/UI in
@@ -356,6 +421,8 @@ measured gate; label other configurations as degraded, not as lossless or gaples
 ## 10. Deferred choices
 
 - MP3 export with an explicit encoder/dependency decision; WAV alone satisfies V1 audio persistence.
+- Client Save As/browser download and audio playback UI; V1 keeps audio in Core's Nexus home and
+  offers transcript copy only.
 - Higher-quality/stereo originals, system audio, pause/resume, speaker labels and transcript editing.
 - A true streaming model/adapter if measurements show repeated inference cannot meet the target.
 - Multiple simultaneous recorders and active capture handoff between clients.

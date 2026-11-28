@@ -25,6 +25,7 @@ class Fake:
     def __init__(self):
         self.requests = []
         self.input_tokens = 10
+        self.after_handoff: int | None = None
 
     def body(self, req):
         return {"model": req.model, "messages": len(req.messages), "tools": [t.name for t in req.tools]}
@@ -36,12 +37,15 @@ class Fake:
             reply = '"Fix The Login Bug."'
         elif "handoff now" in last or "Write that handoff" in last:
             reply = "## Goal\nFix login\n## Next steps\nRun the tests"
+            self.after_handoff = 40  # the summary is short: the new session starts under the threshold
         elif "side question" in last:
             reply = "It is blue."
         else:
             reply = "done"
         yield TextDelta(reply)
         yield PartDone(Text(reply))
+        if self.after_handoff is not None and not reply.startswith("## Goal"):
+            self.input_tokens = self.after_handoff
         yield Usage(input_tokens=self.input_tokens, output_tokens=5)
         yield Done("end_turn")
 
@@ -146,7 +150,7 @@ async def test_handoff_starts_a_continued_root_session(env):
     assert new["id"] != sid and new["continued_from"] == sid and new["parent_id"] is None
     assert new["agent"] == "orchestrate" and new["directory"] == str(workspace)
     messages = (await client.get(f"/api/session/{new['id']}/message")).json()
-    assert len(messages) == 1 and messages[0]["delivery"] == "handoff"
+    assert messages[0]["delivery"] == "handoff"
     assert messages[0]["parts"][0]["text"].startswith(f"[Handoff from session {sid}]")
     assert "## Next steps" in messages[0]["parts"][0]["text"]
     assert (await client.get(f"/api/session/{sid}/message")).json() == before  # sent context is never edited
@@ -156,6 +160,8 @@ async def test_handoff_starts_a_continued_root_session(env):
     assert (await client.get(f"/api/session/{sid}")).json()["continued_to"] == new["id"]
     assert new["continued_to"] is None
     assert (await client.get(f"/api/session/{new['id']}/turn")).json()["floor"] is None  # the summary is not a lost turn
+    await _until(lambda: new["id"] not in rt.turns, "the new session's first turn did not finish")
+    assert [m.message.role for m in rt.store.messages(new["id"])] == ["user", "assistant"]  # it started from the summary
     await _turn(rt, client, new["id"], "carry on")
     assert (await client.get(f"/api/session/{new['id']}/turn")).json()["floor"] is None
 
@@ -167,6 +173,32 @@ async def test_handoff_refusals(env):
     rt.turns[sid] = asyncio.ensure_future(asyncio.sleep(5))
     assert (await client.post(f"/api/session/{sid}/handoff")).status_code == 409  # busy
     rt.turns.pop(sid).cancel()
+
+
+async def test_a_session_takes_no_messages_while_its_handoff_is_written(env, monkeypatch):
+    rt, client, provider, workspace = env
+    sid = await _session(client, workspace)
+    await _turn(rt, client, sid)
+    gate = asyncio.Event()
+    original = provider.stream
+
+    async def slow(req):
+        await gate.wait()
+        async for item in original(req):
+            yield item
+
+    monkeypatch.setattr(provider, "stream", slow)
+    task = asyncio.ensure_future(client.post(f"/api/session/{sid}/handoff"))
+    await _until(lambda: sid in rt.handoffs, "the handoff did not start")
+    assert (await client.get(f"/api/session/{sid}")).json()["handing_off"] is True
+    assert (await client.post(f"/api/session/{sid}/prompt", json={"text": "more"})).status_code == 409
+    assert (await client.post(f"/api/session/{sid}/handoff")).status_code == 409
+    gate.set()
+    assert (await task).status_code == 201
+    assert (await client.get(f"/api/session/{sid}")).json()["handing_off"] is False
+    events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
+    assert [e["type"] for e in events if e["type"].startswith("session.handoff")] == [
+        "session.handoff_started", "session.handoff"]
 
 
 async def test_first_prompt_gets_a_generated_title(env, monkeypatch):
@@ -215,7 +247,9 @@ async def test_auto_handoff_after_a_turn_that_fills_the_window(env, monkeypatch)
     await _until(lambda: len(rt.store.sessions()) == 2, "no handoff session appeared")
     new = next(s for s in rt.store.sessions() if s.id != sid)
     assert new.continued_from == sid
-    assert [m.delivery for m in rt.store.messages(new.id)] == ["handoff"]
+    assert rt.store.messages(new.id)[0].delivery == "handoff"
+    await _until(lambda: [m.message.role for m in rt.store.messages(new.id)] == ["user", "assistant"],
+                 "the new session did not start from the summary")
 
     provider.input_tokens = 40  # under the threshold: no further handoff from the new session
     await _turn(rt, client, new.id)

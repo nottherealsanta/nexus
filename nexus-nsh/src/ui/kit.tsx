@@ -6,6 +6,7 @@ import { icons, type IconName } from "../icons";
 import panelClosed from "../icons/panel-closed.svg";
 import { attention as attentionGlyphs, controlGlyphs, fold, sidebarGlyphs, structure, verbGlyphs } from "../gen/theme";
 import { statusGlyphs, attention, spinner as spinnerFrames, shimmerColors, shimmerMotion } from "../gen/theme";
+import { brailleField } from "./manager/braille";
 import { config, isNarrow, phone, settingsEdit, settingsSegs } from "../store";
 
 // Screen typography keeps metadata quieter.
@@ -186,6 +187,14 @@ export function Spinner(p: { class?: string; label?: string; testID?: string }) 
   return <Text class={p.class} testID={p.testID} accessibilityLabel={p.label ?? statusGlyphs.running.label}>{glyph()}</Text>;
 }
 
+/** The Compacting mark: the Manager's braille wave on the spinner clock (the TUI's `compacting_row`), still under reduced motion. */
+export function CompactingWave(p: { class?: string }) {
+  const reduced = () => !!config()?.values?.ui?.reduced_motion;
+  effect(() => { if (!reduced()) return holdSpinner(); });
+  const field = () => brailleField(reduced() ? 0 : spinnerFrame() * shimmerMotion.frame_ms / 1000, "thinking", 0.5);
+  return <Text class={`font-mono text-[13px] leading-[18px] ${TONE[statusGlyphs.running.token]} ${p.class ?? ""}`} style={{ numberOfLines: 1 }} testID="compacting-wave" accessibilityLabel="Compacting">{field()}</Text>;
+}
+
 export function Status(p: { kind: keyof typeof statusGlyphs; word?: boolean; class?: string; text?: string }) {
   const g = statusGlyphs[p.kind];
   const label = p.text ?? g.label;
@@ -225,7 +234,7 @@ export function StatusRail(p: { color?: string; testID?: string; join?: "top" | 
 
 /** The one segmented control: a square muted well with square options and the selected one on the selection band. */
 /** A segmented choice. With an `id` (a Settings row) it is driven from the keyboard by the row, not by its own focus stops:
- * Enter flips a switch or edits an enum in place (the draft shows here until Enter sets it). */
+ * Enter flips a switch or edits an enum in place; the underline shows the draft without moving the saved fill. */
 export function Seg(p: { id?: string; onFocus?: () => void; options: string[]; value: string; onPick?: (v: string) => void; disabled?: boolean; label: string; format?: (v: string) => string }) {
   const keyed = () => !!p.id && !phone && !p.disabled;
   effect(() => {
@@ -234,17 +243,19 @@ export function Seg(p: { id?: string; onFocus?: () => void; options: string[]; v
     settingsSegs.set(id, { options: p.options, value: () => p.value, pick: (v) => p.onPick?.(v) });
     return () => { settingsSegs.delete(id); };
   });
-  const shown = () => { const e = settingsEdit(); return keyed() && e && e.id === p.id ? e.draft : p.value; };
+  const draft = () => { const e = settingsEdit(); return keyed() && e && e.id === p.id ? e.draft : null; };
   return (
     <View class="flex-row gap-0.5 rounded-(--radius) bg-muted p-0.5" role="radiogroup" accessibilityLabel={p.label}>
       <Each of={p.options} key={(o) => o}>
-        {(o) => (
-          <View focusable={!keyed()} onFocus={p.onFocus} role="radio" accessibilityState={{ selected: shown() === o() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}`}
+        {(o) => {
+          const selected = () => p.value === o();
+          const preview = () => draft() === o();
+          return <View focusable={!keyed()} onFocus={p.onFocus} role="radio" accessibilityState={{ selected: selected() }} disabled={p.disabled} onPress={() => p.onPick?.(o())} accessibilityLabel={`${p.label}: ${(p.format ?? identity)(o())}${preview() && !selected() ? ", preview" : ""}`}
             testID={p.id ? `seg-${p.id}-${o()}` : undefined}
-            class={`rounded-(--radius) px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center hover:bg-accent disabled:opacity-50 ${shown() === o() ? "bg-row-selected" : ""} ${FOCUS}`}>
-            <Text class={`${TS.base} ${shown() === o() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{(p.format ?? identity)(o())}</Text>
-          </View>
-        )}
+            class={`rounded-(--radius) px-3 min-w-12 ${isNarrow() ? "min-h-11" : "min-h-7"} items-center justify-center disabled:opacity-50 ${selected() ? "bg-row-selected" : "hover:bg-accent"} ${FOCUS}`}>
+            <Text testID={preview() ? "settings-option-draft" : undefined} class={`${TS.base} ${selected() ? "text-foreground font-medium" : preview() ? "text-foreground" : "text-foreground-secondary"} ${preview() ? "underline" : ""}`}>{(p.format ?? identity)(o())}</Text>
+          </View>;
+        }}
       </Each>
     </View>
   );

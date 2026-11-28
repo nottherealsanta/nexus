@@ -313,6 +313,111 @@ impl Http {
         Err(last.unwrap_or_else(|| Error::Network("no attempt made".into())))
     }
 
+    /// One JSON API call with caller-supplied headers. Unlike `call`, this is
+    /// sent once: the recorder driver owns command retry/idempotency so a
+    /// heartbeat or stop is never independently replayed behind its back.
+    pub async fn call_json_with_headers(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        headers: &[(&str, String)],
+    ) -> Result<Reply, Error> {
+        let mut req = self
+            .calls
+            .request(method.clone(), format!("{}{}", self.base, path));
+        req = self.authorized(req);
+        for (name, value) in headers {
+            req = req.header(*name, value);
+        }
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let trace = crate::perf::trace_id();
+        req = req.header("x-nexus-trace", &trace);
+        let started = std::time::Instant::now();
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let server = crate::perf::server_ms(
+                    resp.headers()
+                        .get("server-timing")
+                        .and_then(|v| v.to_str().ok()),
+                );
+                let (reply, bytes) = read_reply_sized(resp).await;
+                crate::perf::request(
+                    method.as_str(),
+                    path,
+                    &trace,
+                    started.elapsed(),
+                    Some(status),
+                    server,
+                    bytes,
+                );
+                reply
+            }
+            Err(error) => {
+                crate::perf::request(
+                    method.as_str(),
+                    path,
+                    &trace,
+                    started.elapsed(),
+                    None,
+                    None,
+                    None,
+                );
+                Err(Error::from(error))
+            }
+        }
+    }
+
+    /// One octet-stream PUT with caller-supplied headers. The body is bounded by
+    /// the caller; a recorder chunk is at most 64 000 bytes. It is sent once for
+    /// the same reason as `call_json_with_headers`.
+    pub async fn put_bytes(
+        &self,
+        path: &str,
+        body: &[u8],
+        headers: &[(&str, String)],
+    ) -> Result<Reply, Error> {
+        let mut req = self.calls.put(format!("{}{}", self.base, path));
+        req = self.authorized(req);
+        for (name, value) in headers {
+            req = req.header(*name, value);
+        }
+        req = req
+            .header("content-type", "application/octet-stream")
+            .header("content-length", body.len().to_string());
+        let trace = crate::perf::trace_id();
+        req = req.header("x-nexus-trace", &trace);
+        let started = std::time::Instant::now();
+        match req.body(body.to_vec()).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let server = crate::perf::server_ms(
+                    resp.headers()
+                        .get("server-timing")
+                        .and_then(|v| v.to_str().ok()),
+                );
+                let (reply, bytes) = read_reply_sized(resp).await;
+                crate::perf::request(
+                    "PUT",
+                    path,
+                    &trace,
+                    started.elapsed(),
+                    Some(status),
+                    server,
+                    bytes,
+                );
+                reply
+            }
+            Err(error) => {
+                crate::perf::request("PUT", path, &trace, started.elapsed(), None, None, None);
+                Err(Error::from(error))
+            }
+        }
+    }
+
     pub async fn get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, Error> {
         Ok(self
             .call(Method::GET, path, query, None, None, None)

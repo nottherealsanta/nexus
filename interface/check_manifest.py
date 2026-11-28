@@ -281,6 +281,9 @@ def main() -> int:
 
     mobile = m.get("settings", {}).get("mobile", {})
     by_section = {s.get("id"): s for s in secs}
+    rail = [sid for group in m.get("settings", {}).get("rail", []) for sid in group.get("sections", [])]
+    if len(rail) != len(by_section) or set(rail) != set(by_section):
+        err("settings.rail must list every settings section exactly once")
     for sid in mobile.get("sections", []):
         if sid not in by_section:
             err(f"settings.mobile: unknown section {sid!r}")

@@ -210,7 +210,7 @@ Bad view/limit/cursor/session/filter is 400; an unknown session is 404.
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | POST | `/api/session/{id}/btw` | `{question, request_id?}` | 200 `{session, request_id, inherited, inherited_context}` immediately starts a hidden read-only fork, even while the parent is busy. `inherited_context` is the frozen inherited request prefix as JSON text. Follow the child's ordinary SSE events; nothing enters the parent. 400 empty/invalid question, 409 archived |
 | GET | `/api/session/{id}/btw` | child session id | `{session, head, inherited, calls, running, error, messages, partial, events}`: reconnect checkpoint for a side run. Messages exclude the inherited prefix; events are compact tool/nested-call progress. 400 for a non-btw session |
-| POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The old session is not changed. 409 busy/archived, 400 child or empty session |
+| POST | `/api/session/{id}/handoff` | `{}` | 201 `{from, to, reason, session, summary}`. Writes a summary with one tool-free request, then starts a new root session of the same agent, model, directory and switches whose first message (`delivery: "handoff"`) is that summary; `continued_from` links back. Like any new root session it reloads the global and project MCP configuration and connects enabled project servers; explicit MCP switches carry over, but servers that were only automatically switched off after a failed connect are retried. The new session then starts a turn at once, as `/continue` does, so the agent works from the summary without waiting for a message (`session.handoff_failed` on the new session if that start was refused). The old session is not changed, but takes no new messages while the summary is written (`handing_off`; both clients show a braille-wave "Compacting · a new session opens soon" row and lock the composer). 409 busy/archived/already handing off, 400 child or empty session |
 | POST | `/api/draft/context` | session-creation fields | the first request a new session would send, with nothing stored ([Configuration](#configuration-provider-login-and-context-budget)) |
 | GET | `/api/session/{id}/context` | `?summary=1` | the provider request body plus `used`, `window`, `exact` context budget; with `summary` only `{used, window, exact}` (and `context_complete` for an external worker child), a few bytes instead of the whole request (about 500 KB on a long session) |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
@@ -932,8 +932,12 @@ data: {"version": "0.10.0.dev0", "generation": "log_1a2b3c4d5e6f7a8b", "head": 4
        "session": null, "floor": 0, "stream_id": "stream_…"}
 ```
 
-Every later frame is one durable log row (the one exception, `bus.overflow`, is
-stream control and described below), and the SSE `id:` line is its cursor:
+Every later frame is normally one durable log row, and the SSE `id:` line is its
+cursor. Two kinds of frame break that shape: `bus.overflow` is stream control,
+and live-only events (today: `recorder.segment`) have `id: null` and no `id:`
+line, so they are never replayed. Both are described below.
+
+A durable event looks like this:
 
 ```
 id: log_1a2b3c4d5e6f7a8b:4201
@@ -944,7 +948,7 @@ data: {"id": 4201, "cursor": "log_1a2b3c4d5e6f7a8b:4201", "seq": 77, "time": 179
 
 | Field | Meaning |
 | --- | --- |
-| `id` | The durable row id in this database's event log. Stable across daemon restarts. |
+| `id` | The durable row id in this database's event log. Stable across daemon restarts. `null` for a live-only event, which has no `id:` line and is not replayed. |
 | `cursor` | `<log generation>:<event id>`. Ordering is ascending event id. |
 | `generation` | Identifies this database's log. In `/api/info` as `log.generation`. A new or replaced database has a new generation; a copied database keeps the same one. |
 | `seq` | The publishing daemon's own counter. It restarts at 1 on every daemon start. **Not** a cursor; after a replayed range it can jump backwards. |
@@ -1121,7 +1125,8 @@ Older Cores omit both fields; clients then fall back to creation order and `curr
 | `oneshot` | `{kind: "handoff" or "title", request, text, usage, model?}`: a tool-free request and reply, stored, never model context. Historical `btw` events remain readable |
 | `btw.started` | On the parent: `{session, request_id, question, inherited}` correlates a modal with its hidden child, without adding a message |
 | `btw.budget` | On the child: `{calls}` includes outer and nested code calls, up to 10. Further calls are refused |
-| `session.handoff` / `session.handoff_failed` | `{from, to, reason}` on the old session, or `{session_id, error}` when an automatic handoff failed |
+| `session.handoff_started` | `{session_id, reason}` on the session whose summary is being written. Until `session.handoff` or `session.handoff_failed`, session JSON has `handing_off: true` and every turn start, prompt, queue or second handoff is refused with 409 |
+| `session.handoff` / `session.handoff_failed` | `{from, to, reason}` on the old session, or `{session_id, reason, error}` when a handoff (manual or automatic) failed |
 | loop and stream events | from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end`, `hook_fired` |
 
 `wire_request` carries the exact request body and headers, with credentials
@@ -1170,6 +1175,247 @@ A view is a UI hint, not authority: it is never an approval, a claim on a
 session, or a navigation request. Screen contents, scroll position and drafts
 are not accepted. The daemon still validates the referenced ids, and a Manager
 must treat the rest as untrusted labels.
+
+### Recorder
+
+The standalone recorder captures microphone audio as checksummed PCM16 (mono,
+16 kHz) outside the workspace and the session log. There is one active capture
+per Core. These routes are under the daemon's usual authentication: the bearer
+token when one is configured, and the trusted-network policy when the daemon is
+bound without one.
+
+> **Security: no-token LAN bind.** With the default all-interfaces bind and no
+> token, anyone on that network can list, download and delete recordings and
+> read their transcripts — as they can already read sessions and files.
+> Recordings are raw voice and transcripts are its text, so bind
+> loopback or configure a token if the network is not trusted. The recorder has
+> no second login and no per-recording authorization beyond the lease and
+> recovery capabilities below.
+
+`{id}` is 32 lowercase hex characters. Tokens travel only in headers, never in a
+path or query string. `client_id` is a self-reported consistency label (the same
+one reported at `POST /api/client/view`), not authentication; a different client
+cannot take over a capture without both the lease token and its bound
+`stream_id`. The `stream_id` is a per-connection capability from that stream's
+own `server.connected` frame.
+
+| Method and path | Request | Success |
+| --- | --- | --- |
+| `POST /api/recordings` | JSON `{mode?: "create" \| "resume", stream_id, client_id, title?}`, a required `Idempotency-Key` (`[A-Za-z0-9._:-]{1,128}`) and `X-Recorder-Recovery` (43–512 printable ASCII characters) | `201` new; `200` create replay or resume. The public state plus `lease_token`/`lease` while the lease is active, `recovery_token: null`, `recovery: "client"`, `free_seconds`, `idempotent`, `replay_state`, `recoverable` and `tokens_reissued`. `no-store` |
+| `GET /api/recordings` | `?limit=1..50` (default 50) | `{recordings: [public state…]}`, newest first |
+| `GET /api/recordings/{id}` | – | the authoritative public state: `durable_offset`, `durable_bytes`, `chunks`, `holes`, `complete`, `missing_samples`, `event_revision`, `active`, `stream_detached`, `lease_expires_in`, `transcription_state`, `transcription`, `transcription_progress`, `transcript_revision` |
+| `DELETE /api/recordings/{id}` | – | `204` for a stopped/interrupted recording; `404` unknown; `409 recording_active` while capturing; `409 recording_export_active` while a WAV or transcript export is reading it |
+| `PUT /api/recordings/{id}/chunks/{seq}` | body `application/octet-stream`, 1–64 000 bytes of even-length PCM16; headers `X-Recorder-Lease`, `X-Recorder-Stream`, `X-Sample-Start`, `X-Content-SHA256` | `200 {recording, chunk}`. An identical retry is also `200` |
+| `POST /api/recordings/{id}/heartbeat` | JSON `{stream_id}` and `X-Recorder-Lease` | `200` public state. Nominal interval 5 s; expiry 20 s |
+| `POST /api/recordings/{id}/rebind` | JSON `{stream_id, client_id}` and `X-Recorder-Lease` | `200` public state for the same lease on a new event stream |
+| `POST /api/recordings/{id}/stop` | JSON `{stream_id?, final_sample_count?}` and `X-Recorder-Lease` | `200` public state; idempotent |
+| `POST /api/recordings/{id}/recover` | JSON `{client_id, final_sample_count?, stream_id?}` and `X-Recorder-Recovery` | `200` public state; seals an interrupted capture's final offset |
+| `PUT /api/recordings/{id}/recover/chunks/{seq}` | as a chunk `PUT`, with `X-Recorder-Recovery` and `X-Recorder-Client` | `200 {recording, chunk}`; bounded by the sealed final offset |
+| `GET /api/recordings/{id}/audio.wav` | – | stopped recordings only: the hash-verified contiguous prefix as a WAV attachment |
+| `GET /api/recordings/{id}/transcript` | `?after=-1&limit=1..200` (default 50) | one bounded page: `{segments, next_after, live, transcript_revision, state, complete}` |
+| `GET /api/recordings/{id}/transcript.txt`, `/transcript.json` | – | streamed durable transcript export; allowed during capture with a `complete:false` marker |
+| `POST /api/recordings/{id}/transcript/retry` | JSON `{scope?: "failed" \| "all" \| [segment ids]}` | `202 {accepted, scope}`; only after capture has ended |
+
+The recovery capability is generated by the client and persisted by it before
+the create call; Core only stores its SHA-256 hash in the recording metadata and
+lease sidecar. Core never generates, returns or logs it, so `recovery_token` is
+always `null` and `recovery` is `"client"` in responses. Missing or malformed
+`X-Recorder-Recovery` is `400 recovery_required`.
+
+`mode` defaults to `"create"`. `"resume"` is a lookup only and can never create:
+an unknown key is `404 create_not_found`, and the key is withdrawn so a create
+already in flight for it fails with `409 create_withdrawn` rather than producing
+a second recording. Withdrawals last for the Core process lifetime. If the bounded
+guard fills, new creates and unknown-key lookups fail closed with `503 create_guard_full`
+until Core restarts; clients must retain their pending intent on 503 and never reuse a
+key after 404. In trusted-network mode, any network peer can fill this guard and deny
+new recorder starts. A create or resume must prove the same recovery
+capability, client label and title as the original; a mismatch is
+`409 idempotency_conflict`.
+
+The lease token appears in a response only while its lease is still active, and
+only to a caller that proved the same recovery capability. A replay after the
+lease ended returns `lease_token: null` with `tokens_reissued: false`;
+recovery then uses the capability the client already holds with
+`POST /api/recordings/{id}/recover`. The daemon does **not** write create to the
+generic mutation journal, so no lease or recovery material is stored in the
+SQLite mutation table.
+
+A create whose microphone never opened, or that never received audio, is kept
+as an empty recording and remains in the recent list until explicitly deleted.
+Stopping it with `final_sample_count: 0` seals a complete, valid empty WAV.
+
+Chunk errors are `409 chunk_conflict` (same sequence, different hash),
+`409 noncontiguous` (carries `durable_offset`), `409 recording_sealed`,
+`409 stream_detached` and `409 lease_expired`; `403 invalid_lease`/`not_owner`;
+`400` for an odd length, bad header or bad sequence; `413` for an oversized body.
+A chunk `PUT` is rejected by Content-Length before its body is read and again by
+a 64 000-byte streaming cap, so a lying Content-Length cannot buffer more.
+At most four chunk uploads (body read through commit) are in flight at once; a
+fifth gets `503 recorder_backpressure` with `Retry-After: 1`. Heartbeat, stop and
+read requests do not take that budget.
+
+`stream_detached` or `lease_expired` from a heartbeat or chunk is the same
+signal as the event below: the owner must stop its microphone. A lost stream can
+`rebind` with the still-valid lease; after expiry only recovery remains.
+
+**WAV downloads are stopped-only.** A WAV request while a lease is active is
+`409 recording_active`, and an interrupted capture that recovery has not sealed
+is `409 recording_not_stopped`; there is no partial/live snapshot in this
+version. Call `recover` (with the recovery token) to seal an interrupted
+capture's final offset, then download it. The prefix is verified before the
+first audio byte, so a damaged chunk is `409 recording_corrupt` before a `200`
+body starts. Response headers include
+`content-disposition: attachment; filename="recording-<id8>.wav"`,
+`x-content-type-options: nosniff`, `x-recording-complete`, `x-recording-holes`,
+`x-recording-samples`, `cache-control: no-store` and
+`content-encoding: identity` (PCM is never gzipped). Holes beyond the contiguous
+prefix are reported in the state, not filled with silence.
+
+A WAV response pins the recording until the stream completes, errors or the
+client disconnects; `DELETE` during that window is `409 recording_export_active`.
+WAV downloads and transcript exports share the same pin and a budget of four
+concurrent exports per recording. A WAV that exceeds the budget gets
+`503 recording_export_busy` with `Retry-After: 1`; a transcript export gets
+`503 transcript_export_busy`.
+
+The public state's transcription fields are read-only in this API.
+`transcription_state` is one of `preparing`, `live`, `catching_up`, `failed`,
+`complete` or `unavailable`; `transcription` is
+`{state, progress}`; and `transcription_progress` holds bounded non-negative
+counters — `processed_through`, `lag_samples`, `preview_through`,
+`pending_finals`, `failed`, `transcript_revision` — plus an optional short
+`reason`. `transcript_revision` mirrors `transcription_progress.transcript_revision`
+and is `null` when none has been reported. No recorder route sets transcription
+state or progress; transcript text is available only through the transcript
+read and export routes below.
+
+Recorder events are global (`session_id: null`) and therefore reach every
+event stream, including a session-filtered one:
+
+- `recorder.state` (durable, coalesced to at most 2/s). `data` carries `id`,
+  `generation`, `revision`, `capture_state`, `transcription_state`,
+  `transcription` (`{state, progress}`), `transcription_progress`,
+  `transcript_revision`, `active`, `durable_offset`, `durable_bytes`, `chunks`,
+  `final_sample_count`, `complete`, `holes` (count), `lag_seconds` and, for a
+  transition, `reason` (`created`, `stopped`, `lease_expired`, `rebound`,
+  `recovered`, …). `lag_seconds` is currently always `null`; clients derive
+  lag from `transcription_progress.lag_samples`.
+- `recorder.deleted` (durable): `{id, generation}`.
+- `recorder.segment` (**live-only**, `id: null`): `data` carries the recording
+  `id`, `generation`, an integer `segment_id` (0–2 147 483 647), `revision`,
+  `start`, `end`, `status` (`provisional`, `final`, `error` or `skipped`) and
+  `text`. Every revision is live-only and never replayed. This is deliberate: the event contains
+  transcript text, so persisting it would leave the text in the durable event
+  log after the recording — and the user's audio — was deleted. A client applies
+  increasing `(segment_id, revision)` per recording and ignores revisions it has
+  already seen.
+
+Delivery of durable events is **at least once**, not exactly once. Deduplicate
+`recorder.state` by `(id, generation, revision)` (keep the greatest revision per
+id) and `recorder.deleted` by `(id, generation)`. A crash can republish the same
+event. Recovered state after a lost stream or cursor: subscribe, then read
+`GET /api/recordings` (and `GET /api/recordings/{id}`) and apply only events with
+`revision > snapshot.event_revision`; the snapshot is authoritative at read
+time. Live-only segments have no replay path: a disconnected or restarted
+client misses those events, and nothing is stored to catch it up.
+
+**Durability limitation.** The store state is authoritative, but an individual
+`recorder.state` announcement is not fully transactional: if both the service's
+sidecar outbox write and the bus publish fail, that event can be lost across a
+restart (startup reconciliation still announces the recovered state). The
+deletion tombstone is stricter — `delete` refuses with `503 delete_not_durable`
+if it cannot be written. The recorder does not add a store-backed transactional outbox for state announcements.
+
+#### Transcript
+
+Transcription runs independently of capture. Chunks are acknowledged before any
+inference, and the durable transcript lives at
+`recordings/<id>/transcript/log.jsonl` inside the recording directory. It is
+removed with the recording; transcript text is never written to the shared
+event log. `recorder.segment` events are the live notification, not the durable
+store.
+
+The daemon may resume an incomplete transcript in the background at startup,
+one recording at a time. It never downloads a model: if the model is not cached
+(or the runtime is missing), the transcript state becomes `unavailable` and
+audio capture, WAV export and deletion continue normally.
+
+`GET /api/recordings/{id}/transcript` returns one bounded page:
+
+```json
+{"segments": [{"segment_id": 0, "revision": 3, "start": 0, "end": 9600,
+               "status": "final", "text": "…", "join": "none", "uncertain_join": false}],
+ "next_after": 0,
+ "live": {"provisional": null},
+ "transcript_revision": 4,
+ "state": "complete",
+ "complete": true}
+```
+
+- `after` is the last segment id already applied (`-1` to start) and `limit` is
+  `1..200`. `segments` carries the latest **durable** revision per segment. A
+  segment that has a durable range but no revision has
+  `{segment_id, status: "pending", start, end}`. `next_after` is the cursor for
+  the next page (a follow-up page may be empty).
+- `live` carries at most one `provisional` tail from the live scheduler view;
+  it is not durable and is replaced by the paged snapshot after a reconnect.
+  `live.provisional` is `null` when there is none.
+- `state` is `preparing`, `live`, `catching_up`, `failed`, `complete` or
+  `unavailable`. `complete` is true only when the transcription state is
+  `complete` and capture has ended; it is false while capturing, while work is
+  pending or unavailable, and after a terminal transcription error.
+- `transcript_revision` counts accepted durable transcript records and does not
+  include the live provisional tail. `segments` and the revision are read from
+  the durable log, so they survive a daemon restart.
+- All transcript responses are `cache-control: no-store`.
+
+`GET …/transcript.txt` streams the same durable text in segment order with a
+single space between non-empty, non-skipped segments.
+`GET …/transcript.json` streams `{"segments": [<durable documents>],
+"complete": <bool>}`. Both set `X-Recorder-Transcript-Complete: true|false`, are
+downloads, and are allowed while capture is active with `complete: false`; they
+do not include the live provisional tail. Exports read bounded pages rather
+than materialising the whole transcript.
+
+A transcript export pins the recording like a WAV download until the response
+completes, errors or the client disconnects; `DELETE` during that window is
+`409 recording_export_active`. Retry deletion after the export ends. WAV and
+transcript exports share the four-export pin budget; a transcript export that
+exceeds it gets `503 transcript_export_busy` with `Retry-After: 1`. The pin is
+loop-local and does not hold the recorder service lock; it prevents deletion
+only, so live transcription may still append later pages.
+
+A later page can meet transient recorder admission backpressure after the
+response has started. The export waits for up to about ten seconds per page with
+bounded backoff (never a busy spin) and retries the page; the pin stays held, and
+a client disconnect during the wait cancels the wait and releases it. If
+backpressure lasts longer, or transcript/disk I/O fails after the `200` has
+started, the HTTP stream is aborted rather than turning into a clean error
+response: a started stream cannot send a JSON error or rewrite its completion
+header. Reconnect and request the transcript again; the durable log is still
+authoritative.
+
+`POST …/transcript/retry` retries after capture has ended. `scope` defaults to
+`"failed"`, can be `"all"`, or a list of at most 100 segment ids. `202` returns
+`{accepted, scope}`; a new revision is created and earlier text is never
+rewritten. Refusals are `409 retry_while_active`, `retry_in_progress`,
+`not_ready`, `transcript_corrupt` or `not_found`. Retry never downloads a
+model; a missing or uncached model leaves the transcript `unavailable` rather
+than fetching it.
+
+The transcription state in `recorder.state` and the public recording state is
+the client's signal to fetch this endpoint. A reconnect treats the paged
+transcript as authoritative and discards `live.provisional`; the live segment
+events have no replay path.
+
+Recorder audio and transcripts are personal data. Core stores them only under
+its configured Nexus home (`recordings/<id>/`); it never inserts them into a
+session, model prompt or Manager context, and transcript text never enters the
+shared durable event log. Nothing is uploaded anywhere beyond the configured
+Core — when that Core is remote, the audio is saved there, not on the client.
+Deleting a recording removes its stored audio and transcript together; a WAV or
+transcript copy already downloaded is outside Nexus's control.
 
 ### The Manager
 

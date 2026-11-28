@@ -26,7 +26,7 @@ Space on the review does nothing.
 ## Interaction now (both clients)
 
 - **Single choice:** the answer follows the highlight; Up/Down and (on a lone question) Left/Right
-  move it and fill the radio. On the options Space and Enter are the same key: they lock the answer
+  move it and show a bare selected dot (`•`), without square brackets (user follow-up, 2026-11-28). On the options Space and Enter are the same key: they lock the answer
   and move to the next page, open the review after the last page, or send a lone question at once.
   The hint reads `space/enter send|next|review`. Typing before any arrow leaves the choice empty, so
   a free-text-only answer still works.
@@ -55,6 +55,8 @@ Space on the review does nothing.
   `docs/porting-ledger.md`.
 
 ## Verification
+
+2026-11-28 marker follow-up: the focused TUI question-card test passes, including bare selected-dot and unchanged multi-select checkbox assertions. Full TUI `cargo test` is blocked by the existing `PaletteKind::Model` compile error in `tests/behaviour.rs:115`. The updated NSH two-question rendering test also passes; `i8.test.tsx` finishes with 18 passed and 2 failed, reporting failures for Space on the review page and context-line typing (not changed by this marker-only follow-up; baseline was not rerun). NSH `session-controls.test.tsx` finishes with 21 passed and 5 failed: the lone single-choice arrow/Space test passes; failures cover context-line typing, text-only submission, queued-row keys, and answer retry. Paired screenshots for this follow-up were not captured.
 
 - TUI `cargo test`: the whole suite passes, including new Space tests (single advancement, lone
   submission, final review, free text, multi-select) in session-controls. `rustfmt --check` on the

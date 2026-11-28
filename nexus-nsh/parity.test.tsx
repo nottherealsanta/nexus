@@ -23,6 +23,7 @@ const network = {
   "GET */api/session/ses_1/turn*": { body: { turns: [], more_before: false, more_after: false, floor: null, usage: { since: null, models: {} } } },
   "GET */api/session/ses_1/worktrees": { body: { worktrees: [] } },
   "GET */api/session/*": { body: session },
+  "GET */api/recordings?limit=50": { body: { recordings: [] } },
 };
 
 describe("timeline parity", () => {
@@ -36,5 +37,19 @@ describe("timeline parity", () => {
     expect(shown.includes("Research")).toBe(true);
     expect(shown.join("\n").includes("last line")).toBe(false);
     expect(app.shows("id:child-result-toggle")).toBe(false);
+  });
+});
+
+describe("recorder parity", () => {
+  test("the header entry opens the shared modal without a recording or a POST", async () => {
+    const app = await open("./App.tsx", { network, width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:open-recorder");
+    await app.press("id:open-recorder");
+    await app.waitFor("id:recorder-modal");
+    expect(app.shows("id:recorder.start")).toBe(true);
+    expect(app.shows("id:recorder.recent")).toBe(true);
+    expect(app.requests().some((r: any) => r.method === "POST" && r.url.includes("/api/recordings"))).toBe(false);
+    await app.keyboard.press("escape");
+    await app.waitFor("id:recorder-modal", { state: "gone" });
   });
 });

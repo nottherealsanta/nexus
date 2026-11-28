@@ -85,6 +85,7 @@ work unchanged. One CLI process per Nexus turn; the next turn resumes the CLI's 
 | argv | `--model M --session-id S` (first turn) or `--resume S`, `--permission-mode`, `--settings <hooks>`, `--disallowedTools AskUserQuestion`, `--effort` when set, `-- <prompt>` | `agy acp`; the prompt, model and mode travel as ACP requests, not flags |
 | Completion | The `Stop` hook (an isolated `python -I` script) after the transcript is read to the end | `session/prompt` returns `stopReason == "end_turn"` and a non-empty answer |
 | Events from | The CLI's own transcript (`~/.claude/projects/…/<session>.jsonl`), which must resolve under the CLI's config directory | `session/update` notifications and the prompt result |
+| Hung requests | A main-thread `api-request` transcript entry with no later transcript line (main or subagent) and no hook for `STALL_SECONDS` (10 min) ends the turn `failed` ("no model response … appears hung") and stops the CLI; the session is kept, so a follow-up resumes it. A running tool never counts as a stall. The PTY is not evidence: its spinner keeps drawing while a request hangs | No stall watchdog |
 | Text | Arrives per block (the transcript is written per block), not per token | `agent_message_chunk` text deltas stream live |
 | Permission requests | None are answered; a prompt ends the turn as `needs_attention` | In `auto`, Nexus rejects or cancels without a card. In ACP `default`, requests go to the existing approval card; only per-call allow/deny is returned |
 | Nexus `ask` / `allow` session permission | `ask` → `dontAsk`; `allow` → `auto` (the CLI's classifier) | `ask` → ACP `default` (prompting); `allow` → ACP `auto` (the default). Applied every turn, so a resumed child created in `default` moves to `auto` under `allow` |
@@ -114,8 +115,8 @@ sees the assignment.
 5. **Effort.** When Nexus resolved an effort (and the model id is not already suffixed `-low`, `-medium` or `-high`), the
    agent must advertise exactly one `thought_level` option that allows it; it is set with
    `session/set_config_option`, and a different reported value fails.
-6. `session/prompt` sends one text block. `prompt` has no images; images are refused before launch. The first turn
-   prefixes the Nexus agent instructions with `[Nexus assignment instructions]`; later turns send the user text alone.
+6. `session/prompt` sends one text block. `prompt` has no images; images are refused before launch. Every turn sends
+   the user text alone: the child's Nexus agent prompt (for example the `plan` agent's) is never sent to an external CLI.
 
 The policy fingerprint covers the transport, model, mode, effort, resolved directory, empty MCP server list and the
 absent system prompt. A resume with a different fingerprint is refused with "start a new child session".
@@ -246,7 +247,10 @@ normally. After a daemon crash:
 - The turn reconciles as usual, but the recovery text says the CLI ran the tool and **may still be running**; nothing
   is retried.
 - For Claude Code, the rest of the transcript is read once and added as labelled recovered output.
-- The CLI session id is kept, so the next prompt resumes the CLI session. For Antigravity ACP there is no transcript to
+- The CLI session id is kept, so the next prompt resumes the CLI session. This holds for any failed turn, including one
+  that ended in an exception rather than a worker result: the id, transcript path and policy fingerprint recorded when
+  the process started stay on the row, so a follow-up never silently starts a blank CLI context. A CLI that is slow to
+  exit after its `Stop` hook keeps its completed answer; the failed cleanup is a worker note. For Antigravity ACP there is no transcript to
   finish from, and resume needs the `session/resume` capability and the same policy fingerprint; otherwise the next
   prompt is refused and the user starts a new child.
 - A process that outlived the daemon is never killed automatically. `nexus doctor` lists it, and `nexus workers clean`

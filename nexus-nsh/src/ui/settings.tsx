@@ -1,12 +1,12 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View, effect, keymap, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
+import { Scroll, Text, View, computed, effect, keymap, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, CursorMark, Icon, T, TS, FOCUS, Seg } from "./kit";
 import { Heading, Modal, ModalFooter, ModalTitle } from "./modal";
 import { manifest } from "../gen/manifest";
 import { mobileSettings } from "../mobile";
 import { byId, commands, copyText, escape, keyLabel, loadProviders, run } from "../commands";
-import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, connection, coreUrl, isNarrow, live, m, model, reloadModelCatalog, savePrefs, scrollBarOn, setScrollBar, turnRailOn, setTurnRail, setTimelineDetail, settingsEdit, settingsSegs, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds, phone } from "../store";
+import { archivedFilter, leftOpen, rightOpen, scopeAll, catalogSource, info, compat, connection, coreUrl, isNarrow, live, m, model, reloadModelCatalog, savePrefs, scrollBarOn, setScrollBar, turnRailOn, setTurnRail, setTimelineDetail, settingsEdit, settingsSegs, settingsNavFocused, settingsPage, settingsSearchActive, settingsQuery, settingsReload, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject, config, loadConfig, patchConfig, picker, providerDetail, providerLogins, confirmDialog, notificationSoundsOn, setNotificationSounds, phone } from "../store";
 import { timeFormat } from "../time";
 import { coreEditing } from "./connect";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
@@ -23,6 +23,9 @@ import type { VoiceTarget } from "../voice-state";
 interface Row { id: string; label: string; kind: string; scope: string; clients?: string; default?: unknown; options?: string[]; command?: string; note?: string; unavailable_reason?: string }
 interface Section { id: string; label: string; unavailable_reason?: string; page?: boolean; note?: string; row?: Row[] }
 const sections = phone ? mobileSettings(manifest.settings.section as unknown as Section[]) : manifest.settings.section as unknown as Section[];
+const rowsOf = (s: Section) => (s.row ?? []).filter((r) => r.clients !== "tui" || r.id === "appearance.timeline_detail");
+const rail = manifest.settings.rail.map((group) => ({ label: group.label, sections: group.sections.flatMap((id) => sections.filter((s) => s.id === id && (s.page || rowsOf(s).length))) }));
+const railSections = rail.flatMap((group) => group.sections);
 const focusedSetting = signal<string | null>(null);
 const focusSetting = (id: string) => { settingsNavFocused.set(false); focusedSetting.set(id); };
 const settingRowRefs = new Map<string, { focus: () => void }>();
@@ -328,7 +331,7 @@ function ProviderRow(p: { p: any }) {
   const pending = () => login()?.status === "pending";
   const failed = () => login()?.status === "failed";
   return <View testID={`provider-${id}`}>
-    <Button onPress={() => { keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }} testID={`provider-open-${id}`}
+    <Button onPress={() => { settingsNavFocused.set(false); keyEntry.set(null); providerKey.set(""); providerDetail.set(id); }} testID={`provider-open-${id}`}
       accessibilityLabel={`${p.p.label ?? id}: connection and sign-in`}
       class={`flex-row items-center gap-3 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
       <View class="flex-1">
@@ -340,12 +343,12 @@ function ProviderRow(p: { p: any }) {
   </View>;
 }
 
-function ProvidersPage(p: { sec: Section }) {
+function ProvidersPage(p: { sec: Section; firstRef?: (node: any) => void }) {
   const shown = () => (data().providers ?? []).filter((x: any) => x.id !== "mock");
   return <View class="gap-1" testID="providers-page">
     <View class="flex-row items-center gap-3 px-3 pb-1">
       <Text class={`flex-1 ${T.meta}`}>{data().models ? `Model catalog: ${data().models.source || catalogSource() || "models.dev"}` : "Loading models…"}</Text>
-      <Btn label="Refresh models" kind="ghost" onPress={() => void refreshCatalog()} testID="setting-model-refresh" />
+      <Btn ref={p.firstRef} label="Refresh models" kind="ghost" onPress={() => void refreshCatalog()} testID="setting-model-refresh" />
     </View>
     <If when={!data().providers}><Text class={`px-3 ${T.meta}`}>Loading providers…</Text></If>
     <Each of={shown()} key={(x: any) => x.id}>{(x) => <ProviderRow p={x()} />}</Each>
@@ -480,7 +483,7 @@ function AgentsPage(p: { sec: Section }) {
     <Each of={data().agents?.problems ?? []} key={(problem: any) => JSON.stringify(problem)}>{(problem) => <Text class={`px-3 ${TS.base} text-error`}>{typeof problem() === "string" ? problem() : `${problem().path}: ${problem().error}`}</Text>}</Each>
     <View>
       <Each of={agents()} key={(a: any) => a.name}>{(a) => (
-        <Button onPress={() => { settingsNavFocused.set(false); settingsPageOpen.set(true); settingsPage.set(`agents/${a().name}`); }} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
+        <Button onPress={() => { settingsNavFocused.set(false); settingsPage.set(`agents/${a().name}`); }} testID={`agent-row-${a().name}`} accessibilityLabel={`${a().name}: ${agentSummary(a()).text}`}
           class={`flex-row items-center gap-6 rounded-(--radius) px-3 py-2 hover:bg-accent ${FOCUS}`}>
           <View class="flex-1"><Text class={T.base}>{a().name}</Text><Text class={T.meta} style={{ numberOfLines: 1 }}>{a().description}</Text></View>
           <Text class={`${TS.base} ${agentSummary(a()).warn ? "text-warning" : "text-foreground-secondary"}`}>{agentSummary(a()).text}</Text>
@@ -600,7 +603,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
   return (
     <View focusable onFocus={() => focusSetting(r.id)} ref={(n: any) => { if (n) settingRowRefs.set(r.id, n); else settingRowRefs.delete(r.id); }}
       onPress={() => { settingsNavFocused.set(false); focusedSetting.set(r.id); }}
-      class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-(--radius) hover:bg-row-selected focus-within:bg-row-selected ${focusedSetting() === r.id ? "bg-row-selected" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+      class={`relative ${isNarrow() ? "gap-2" : "flex-row gap-3 items-center"} px-3 py-2 rounded-(--radius) hover:bg-row-selected focus-within:bg-row-selected ${!settingsNavFocused() && focusedSetting() === r.id ? "bg-row-selected" : ""}`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <If when={!settingsNavFocused() && focusedSetting() === r.id}><CursorMark testID="settings-row-focus" /></If>
       <View class={isNarrow() ? "" : "w-[56%] pr-2"}>
         <View class="flex-row items-center gap-2">
@@ -632,55 +635,109 @@ export function SettingsView(p: { inline?: boolean }) {
   });
   const query = () => settingsQuery().trim().toLowerCase();
   const pageTerms = (s: Section): string[] => {
-    if (s.id === "providers") return (data().providers ?? []).flatMap((p: any) => [p.id ?? "", p.label ?? ""]);
+    if (s.id === "providers") return (data().providers ?? []).filter((p: any) => p.id !== "mock").flatMap((p: any) => [p.id ?? "", p.label ?? ""]);
     if (s.id === "mcp") return ["servers", "remote", "sign in", "oauth", "header", ...(mcpServers()?.servers ?? []).map((row) => row.server)];
     if (s.id === "agents") {
-      const names = (data().agents?.agents ?? []).filter((a: any) => a.mode !== "primary").map((a: any) => a.name);
-      const pools = Object.values(config()?.values?.agents?.models ?? {}).flat();
-      const fallbacks = Object.values(config()?.values?.agents?.fallbacks ?? {}).flat();
-      return [...names, ...pools, ...fallbacks].filter((x): x is string => typeof x === "string");
+      const agents = (data().agents?.agents ?? []).filter((a: any) => a.mode === "all" || a.mode === "subagent");
+      const values = config()?.values?.agents;
+      return ["models", "fallbacks", "subagents", ...agents.flatMap(({ name }: { name: string }) => [name, ...(values?.models?.[name] ?? []), ...(values?.fallbacks?.[name] ?? [])])];
     }
     return [];
   };
-  const hit = (s: Section) => {
+  type Result = { section: Section; row?: Row; rank: number };
+  const results = computed(() => {
     const q = query();
-    if (!q) return true;
-    return s.label.toLowerCase().includes(q) || (s.note ?? "").toLowerCase().includes(q)
-      || (s.row ?? []).some((r) => r.label.toLowerCase().includes(q) || (r.note ?? "").toLowerCase().includes(q))
-      || pageTerms(s).some((term) => term.toLowerCase().includes(q));
+    if (!q || !settingsSearchActive()) return [];
+    const matches = (value?: string) => !!value?.toLowerCase().includes(q);
+    const hits: Result[] = [];
+    for (const section of railSections) {
+      for (const row of rowsOf(section)) {
+        const rank = matches(row.label) ? 0 : row.options?.some(matches) ? 1 : matches(row.note) ? 3 : -1;
+        if (rank >= 0) hits.push({ section, row, rank });
+      }
+      const rank = matches(section.label) ? 0 : matches(section.note) || (section.page && pageTerms(section).some(matches)) ? 2 : -1;
+      if (rank >= 0) hits.push({ section, rank });
+    }
+    return hits.sort((a, b) => a.rank - b.rank);
+  });
+  const cur = () => railSections.find((s) => s.id === settingsSection()) ?? railSections[0];
+  const list = () => rowsOf(cur());
+  const page = () => cur().page ? cur().id : null;
+  const overlayOpen = () => !!(providerDetail() || mcpDetail() || picker() || confirmDialog());
+  type FocusNode = { focus: () => void };
+  const sectionRefs = new Map<string, FocusNode>();
+  const pageStarts = new Map<string, FocusNode>();
+  const setPageStart = (id: string, node: FocusNode | null) => { if (node) pageStarts.set(id, node); else pageStarts.delete(id); };
+  const focusContent = (row: string | null) => {
+    focusedSetting.set(row);
+    (row ? settingRowRefs.get(row) : pageStarts.get(cur().id))?.focus();
   };
-  const shown = () => sections.filter(hit);
-  const cur = () => shown().find((s) => s.id === settingsSection()) ?? shown()[0] ?? sections[0];
-  const sectionRefs = new Map<string, { focus: () => void }>();
-  const list = () => (cur().row ?? []).filter((r) => (r.clients !== "tui" || r.id === "appearance.timeline_detail") && (!query() || r.label.toLowerCase().includes(query()) || (r.note ?? "").toLowerCase().includes(query())));
-  const page = () => (query() ? null : (settingsPage() || settingsPageOpen()) && cur().page ? cur().id : null);
-  const overlayOpen = () => !!(providerDetail() || mcpDetail() || picker());
+  const resumeContent = (row: string | null) => {
+    if (!settingsNavFocused() && !settingsSearchActive()) focusContent(row);
+  };
   const focusSection = () => {
     if (overlayOpen()) return;
     settingsEdit.set(null);
     settingsNavFocused.set(true);
-    settingsPageOpen.set(false);
     effortTarget.set(null);
     sectionRefs.get(cur().id)?.focus();
   };
+  const selectSection = (section: Section) => {
+    settingsNavFocused.set(true);
+    settingsEdit.set(null);
+    settingsPage.set(null);
+    settingsSection.set(section.id);
+    focusedSetting.set(null);
+    effortTarget.set(null);
+    sectionRefs.get(section.id)?.focus();
+  };
+  const firstRow = () => page() && page() !== "agents" ? null : list()[0]?.id ?? null;
+  const searchIndex = signal(0);
+  const selectedResult = () => Math.min(searchIndex(), Math.max(0, results().length - 1));
+  const bodyHeight = () => Math.max(64, Math.min(520, Math.floor(windowSize().height * 0.70) - 180));
+  let searchInput: FocusNode | null = null;
+  let searchScroll: any = null;
+  let resumeFocus: (() => void) | null = null;
+  const beginSearch = () => {
+    if (settingsSearchActive() || overlayOpen() || settingsEdit()) return;
+    const row = focusedSetting();
+    resumeFocus = settingsNavFocused() ? () => { if (settingsNavFocused()) focusSection(); } : () => resumeContent(row);
+    searchIndex.set(0);
+    settingsSearchActive.set(true);
+  };
+  const clearSearch = () => { settingsQuery.set(""); settingsSearchActive.set(false); };
+  const jump = (hit = results()[selectedResult()]) => {
+    if (!hit) return;
+    settingsSection.set(hit.section.id);
+    settingsPage.set(null);
+    settingsNavFocused.set(false);
+    const row = hit.row?.id ?? firstRow();
+    focusedSetting.set(row);
+    resumeFocus = () => resumeContent(row);
+    clearSearch();
+  };
+  effect(() => {
+    if (settingsSearchActive() || !resumeFocus) return;
+    const restore = resumeFocus;
+    resumeFocus = null;
+    const timer = setTimeout(restore, 0);
+    return () => clearTimeout(timer);
+  });
   const cycleDraft = (by: number) => {
     const e = settingsEdit(); const seg = e && settingsSegs.get(e.id);
     if (!e || !seg) { settingsEdit.set(null); return; }
     const at = Math.max(0, seg.options.indexOf(e.draft));
     settingsEdit.set({ id: e.id, draft: seg.options[(at + by + seg.options.length) % seg.options.length] });
   };
-  /** Right or Enter on the section rail: focus moves into the section's settings. Nothing changes. */
+  /** Right or Enter transfers focus; moving through the rail already shows the real page. */
   const enterRows = () => {
     if (overlayOpen()) return;
     settingsEdit.set(null);
     settingsNavFocused.set(false);
-    if (cur().page && !query()) { settingsPageOpen.set(true); return; }
-    const first = list()[0];
-    if (first) { focusedSetting.set(first.id); settingRowRefs.get(first.id)?.focus(); }
+    focusContent(list().some((row) => row.id === focusedSetting()) ? focusedSetting() : firstRow());
   };
-  /** The Settings keys, as the TUI's: navigation never changes a value; Enter or Space on a row does. */
   const settingsKey = (key: string): boolean => {
-    if (overlayOpen()) return false;
+    if (overlayOpen() || settingsSearchActive()) return false;
     const edit = settingsEdit();
     if (edit) {
       if (key === "left" || key === "right") cycleDraft(key === "left" ? -1 : 1);
@@ -693,12 +750,21 @@ export function SettingsView(p: { inline?: boolean }) {
     }
     if (key === "left") { focusSection(); return true; }
     if (settingsNavFocused()) {
-      if (key === "right" || key === "tab" || key === "shift+tab" || key === "enter") { enterRows(); return true; }
-      return false;
+      if (["right", "tab", "shift+tab", "enter"].includes(key)) { enterRows(); return true; }
+      const i = railSections.indexOf(cur());
+      const next = key === "home" ? 0 : key === "end" ? railSections.length - 1 : key === "up" ? i - 1 : key === "down" ? i + 1 : i;
+      if (next !== i && railSections[next]) selectSection(railSections[next]);
+      return true;
     }
-    if (page()) return false;
+    if (page() && (key !== "enter" && key !== "space")) return false;
     if (key === "right") return true;
     if (key === "tab" || key === "shift+tab") { focusSection(); return true; }
+    if (key === "up" || key === "down") {
+      const i = list().findIndex((r) => r.id === focusedSetting());
+      const row = list()[Math.max(0, Math.min(list().length - 1, i + (key === "up" ? -1 : 1)))];
+      if (row) focusContent(row.id);
+      return true;
+    }
     if (key === "enter" || key === "space") {
       const id = focusedSetting(); const seg = id ? settingsSegs.get(id) : undefined;
       const row = list().find((r) => r.id === id);
@@ -709,73 +775,88 @@ export function SettingsView(p: { inline?: boolean }) {
     }
     return false;
   };
-  settingsKeys = settingsKey;
-  effect(() => () => { settingsKeys = null; settingsEdit.set(null); });
-  keymap.bind(manifest.settings.navigation.section_key, () => { settingsKey("left"); }, { when: "notEditing" });
-  effect(() => {
-    if (overlayOpen()) return;
-    const keys = settingsNavFocused() || !page() ? ["right", "tab", "shift+tab"] : [];
-    const offs = keys.map((key) => keymap.bind(key, () => { settingsKey(key); }, { when: "notEditing" }));
-    // Enter and Space also reach the focused control, so a button row still presses.
-    for (const key of ["enter", "space"]) offs.push(keymap.bind(key, () => { settingsKey(key); }, { when: "notEditing", passThrough: true }));
-    return () => offs.forEach((off) => off());
-  });
-  effect(() => {
-    if (!settingsNavFocused() || overlayOpen()) return;
-    const offs = ([ ["up", -1], ["down", 1] ] as const).map(([key, by]) => keymap.bind(key, () => {
-      const index = shown().findIndex((s) => s.id === cur().id);
-      const next = shown()[Math.max(0, Math.min(shown().length - 1, index + by))];
-      if (next) { settingsNavFocused.set(true); settingsSection.set(next.id); settingsPage.set(null); settingsPageOpen.set(false); settingsEdit.set(null); sectionRefs.get(next.id)?.focus(); }
-    }, { when: "notEditing" }));
-    return () => offs.forEach((off) => off());
-  });
-  const agent = () => !query() && settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
+  const agent = () => settingsPage()?.startsWith("agents/") ? settingsPage()!.slice("agents/".length) : null;
   const agentDef = () => (data().agents?.agents ?? []).find((a: any) => a.name === agent());
   const phoneDetail = signal(false);
-  /** The TUI's hint row for the current pane, one key/verb pair at a time. */
+  if (!phone) {
+    settingsKeys = settingsKey;
+    effect(() => () => { settingsKeys = null; settingsEdit.set(null); });
+    effect(() => {
+      if (overlayOpen()) return;
+      if (settingsSearchActive()) {
+        const move = (by: number) => {
+          const previous = selectedResult();
+          const next = Math.max(0, Math.min(results().length - 1, previous + by));
+          searchIndex.set(next);
+          // Keep the input focused while revealing the keyboard-selected result.
+          if (next !== previous) {
+            const visible = Math.max(1, Math.floor((bodyHeight() - 40) / 32));
+            if (next < previous || next >= visible) searchScroll?.scrollTo({ y: 32 * Math.max(0, next - visible + 1), animated: false });
+          }
+        };
+        const offs = [["up", -1], ["down", 1]].map(([key, by]) => keymap.bind(String(key), () => move(Number(by)), { when: "always" }));
+        return () => offs.forEach((off) => off());
+      }
+      const bind = (key: string, passThrough = false) => keymap.bind(key, () => settingsKey(key), { when: "notEditing", passThrough });
+      const offs = [bind(manifest.settings.navigation.section_key)];
+      if (!settingsEdit()) offs.push(keymap.bind(manifest.settings.navigation.search_key, () => { beginSearch(); searchInput?.focus(); }, { when: "notEditing" }));
+      const onRail = settingsNavFocused();
+      if (onRail || !page()) offs.push(...["right", "tab", "shift+tab", "up", "down"].map((key) => bind(key)));
+      if (onRail) offs.push(bind("home"), bind("end"));
+      for (const key of ["enter", "space"]) offs.push(bind(key, !onRail));
+      return () => offs.forEach((off) => off());
+    });
+    effect(() => {
+      if (!settingsNavFocused() || settingsSearchActive()) return;
+      const id = cur().id;
+      const timer = setTimeout(() => sectionRefs.get(id)?.focus(), 0);
+      return () => clearTimeout(timer);
+    });
+  }
   const footerHints = (): string[] => {
-    if (settingsNavFocused()) return ["↑↓ section", "enter open", "esc close"];
+    if (settingsSearchActive()) return ["↑↓ result", "enter jump", "esc back"];
+    if (settingsNavFocused()) return ["↑↓ section", "enter focus", "esc close"];
     if (settingsEdit()) return ["←→ choose", "enter set", "esc cancel"];
     if (agent()) return ["enter select", "→ effort", "d remove", "K/J reorder", "← sections", "esc back"];
-    if (page() === "providers" || page() === "agents" || page() === "mcp") return ["enter open", "esc back"];
-    if (page()) return ["enter select", "esc back"];
+    if (page()) return ["enter open", "esc back"];
     return ["↑↓ move", "enter change", "esc back"];
   };
-  effect(() => { focusedSetting.set(list()[0]?.id ?? null); });
   void m; void model; void compat; void colorScheme; void byId; void keyLabel;
-  const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-3 p-4" : "gap-3"}>
+  const content = () => <View class={p.inline ? "flex-1 min-h-0 gap-2 p-4" : "gap-2"}>
         <If when={!p.inline}><ModalTitle title="Settings" /></If>
-        <View class="flex-row items-center gap-2 px-3">
+        <View class={`flex-row items-center gap-2 rounded-(--radius) border px-3 ${settingsSearchActive() ? "border-ring" : "border-border"}`}>
           <Icon name="search" size={14} class="tint-muted-foreground" />
-          <Input value={settingsQuery()} placeholder="Filter settings…" accessibilityLabel="Filter settings" testID="settings-search"
-            onChange={({ value }) => settingsQuery.set(value)}
-            class={`h-8 min-w-0 flex-1 rounded-(--radius) bg-background px-2 ${TS.base} text-foreground`} />
-          <If when={settingsQuery()}>{() => <Btn label="Clear" kind="ghost" onPress={() => settingsQuery.set("")} testID="settings-search-clear" />}</If>
+          <Input ref={(n: any) => { searchInput = n; }} value={settingsQuery()} placeholder="Search settings…" accessibilityLabel="Search settings" testID="settings-search"
+            onFocus={beginSearch} onChange={({ value }) => { beginSearch(); settingsQuery.set(value); searchIndex.set(0); searchScroll?.scrollTo({ y: 0, animated: false }); }}
+            onSubmit={() => jump()} submitBehavior="submit"
+            class={`h-8 min-w-0 flex-1 ${TS.base} text-foreground placeholder:text-muted-foreground`} />
+          <If when={settingsSearchActive()} else={<Text class={T.meta}>{manifest.settings.navigation.search_key}</Text>}>
+            <Btn label="Clear" kind="ghost" onPress={clearSearch} testID="settings-search-clear" />
+          </If>
         </View>
-        <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0 ${p.inline ? "flex-1" : ""}`} style={p.inline ? {} : { height: Math.max(64, Math.min(520, Math.floor(windowSize().height * 0.70) - 180)) }}>
-          <View class={isNarrow() ? "pb-2" : "w-[180px]"}>
-            <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"}>
-              <View class={isNarrow() ? "flex-row gap-2" : "gap-0"}>
-              <Each of={shown()} key={(s) => s.id}>
-                {(s) => (
-                  <View role="button" focusable ref={(n: any) => { if (n) sectionRefs.set(s().id, n); else sectionRefs.delete(s().id); }}
-                    onPress={() => { settingsNavFocused.set(!s().page); settingsPageOpen.set(!!s().page); settingsSection.set(s().id); settingsPage.set(null); settingsQuery.set(""); }} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
-                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-row-selected ${cur().id === s().id ? "bg-row-selected" : ""} ${isNarrow() ? "min-h-10" : "min-h-8"}`}>
-                    <If when={cur().id === s().id && settingsNavFocused()}><CursorMark testID="settings-section-focus" /></If>
-                    <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
-                  </View>
-                )}
-              </Each>
+        <View class={p.inline ? "flex-1 min-h-0" : "min-h-0"} style={p.inline ? {} : { height: bodyHeight() }}>
+          <If when={settingsSearchActive()} else={<View class="flex-1 min-h-0 flex-row gap-4">
+            <Scroll scrollbar={false} class={`${isNarrow() ? "w-[148px]" : "w-[180px]"} shrink-0 border-r border-border pr-2`}>
+              <View>
+                <Each of={rail} key={(group) => group.label}>{(group, i) => <View class={i() > 0 ? "mt-2" : ""}>
+                  <If when={group().label}><Text class={`px-3 py-0.5 ${T.section} uppercase`}>{group().label}</Text></If>
+                  <Each of={group().sections} key={(s) => s.id}>{(s) => (
+                    <View role="button" focusable ref={(n: any) => { if (n) sectionRefs.set(s().id, n); else sectionRefs.delete(s().id); }}
+                      onPress={() => selectSection(s())} accessibilityState={{ selected: cur().id === s().id }} testID={`section-${s().id}`} accessibilityLabel={s().label}
+                      class={`relative flex-row items-center rounded-(--radius) min-h-7 px-4 hover:bg-row-selected ${cur().id === s().id && settingsNavFocused() ? "bg-row-selected" : ""}`}>
+                      <If when={cur().id === s().id && settingsNavFocused()}><CursorMark testID="settings-section-focus" /></If>
+                      <Text class={`flex-1 ${TS.base} ${cur().id === s().id ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().label}</Text>
+                    </View>
+                  )}</Each>
+                </View>}</Each>
               </View>
             </Scroll>
-          </View>
-          <View class="flex-1 min-h-0" testID={`settings-page-${page() ?? cur().id}`}>
-            <Scroll class="flex-1 min-h-0">
+            <Scroll class="flex-1 min-h-0" testID={`settings-page-${cur().id}`}>
               <View class="pb-4 w-full">
                 <Each of={config()?.errors ?? []} key={(e: string) => e}>{(e) => <Text class={`px-3 ${T.meta}`}>{e()}</Text>}</Each>
-                <If when={!shown().length}><Text class={`px-3 ${T.meta}`} testID="settings-no-matches">No settings match.</Text></If>
-                <If when={page() === "providers"}>{() => <ProvidersPage sec={cur()} />}</If>
-                <If when={page() === "mcp"}>{() => <McpPage><Each of={cur().row ?? []} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></McpPage>}</If>
+                <If when={!agent()}><View class="px-3 pt-1 pb-2"><Heading text={cur().label} first /></View></If>
+                <If when={page() === "providers"}>{() => <ProvidersPage sec={cur()} firstRef={(node) => setPageStart("providers", node)} />}</If>
+                <If when={page() === "mcp"}>{() => <McpPage firstRef={(node) => setPageStart("mcp", node)}><Each of={cur().row ?? []} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each></McpPage>}</If>
                 <If when={page() === "agents" && !agent()}>{() => <AgentsPage sec={cur()} />}</If>
                 <If when={page() === "agents" && agent()}>{() => <View class="gap-2 pb-2">
                   <View class="flex-row items-center gap-2 px-3">
@@ -790,22 +871,39 @@ export function SettingsView(p: { inline?: boolean }) {
                   <If when={agentDef()}>{() => <AgentCard a={agentDef()} />}</If>
                 </View>}</If>
                 <If when={!page()}>
-                  <View class="px-3"><Heading text={cur().label} first /></View>
-                  <If when={query() && cur().page}>{() => <View class="px-3 pb-1">
-                    <Btn label={`Open ${cur().label}`} onPress={() => settingsQuery.set("")} testID={`open-page-${cur().id}`} />
-                  </View>}</If>
                   <If when={cur().note}><Text class={`px-3 ${T.meta}`}>{cur().note!}</Text></If>
                   <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
                 </If>
               </View>
             </Scroll>
-          </View>
+          </View>}>
+            <View class="flex-1 min-h-0" testID="settings-results">
+              <Text class={`px-3 h-8 ${T.meta}`} testID={query() && !results().length ? "settings-no-matches" : undefined}>
+                {!query() ? "Type a setting or value to search." : !results().length ? "No settings match." : "Search results"}
+              </Text>
+              <Scroll ref={(node: any) => { searchScroll = node; }} class="flex-1 min-h-0">
+                <View>
+                  <Each of={results()} key={(hit) => hit.row?.id ?? hit.section.id}>{(hit, i) => {
+                    const label = () => hit().row?.label ?? hit().section.label;
+                    const path = () => hit().row ? hit().section.label : "Section";
+                    const selected = () => selectedResult() === i();
+                    return <View role="button" focusable onPress={() => jump(hit())} accessibilityLabel={`${label()} · ${path()}`} accessibilityState={{ selected: selected() }} testID={`settings-result-${hit().row?.id ?? hit().section.id}`}
+                      class={`relative h-8 flex-row items-center gap-3 px-4 rounded-(--radius) hover:bg-row-selected ${selected() ? "bg-row-selected" : ""}`}>
+                      <If when={selected()}><CursorMark testID="settings-result-focus" /></If>
+                      <Text class={`flex-1 ${selected() ? T.label : T.base}`} style={{ numberOfLines: 1 }}>{label()}</Text>
+                      <Text class={T.meta} style={{ numberOfLines: 1 }}>{path()}</Text>
+                    </View>;
+                  }}</Each>
+                </View>
+              </Scroll>
+            </View>
+          </If>
         </View>
         <If when={!p.inline}><ModalFooter hints={footerHints()} right={`Core ${info()?.version ?? "—"}`} /></If>
       </View>;
   const phoneContent = () => <View class="flex-1 min-h-0" testID="phone-settings">
     <If when={!phoneDetail()} else={<View class="flex-1 min-h-0">
-      <Button onPress={() => { phoneDetail.set(false); settingsPageOpen.set(false); settingsPage.set(null); }} accessibilityLabel="Back to Settings" testID="phone-settings-back" class={`flex-row items-center gap-2 min-h-11 px-4 ${FOCUS}`}>
+      <Button onPress={() => { phoneDetail.set(false); settingsPage.set(null); }} accessibilityLabel="Back to Settings" testID="phone-settings-back" class={`flex-row items-center gap-2 min-h-11 px-4 ${FOCUS}`}>
         <Icon name="arrow-left" size={16} class="tint-foreground" /><Text style={{ fontFamily: "Google Sans" }} class="text-[16px] text-foreground">Settings</Text>
       </Button>
       <Scroll class="flex-1" testID={`settings-page-${page() ?? cur().id}`}>
@@ -826,7 +924,7 @@ export function SettingsView(p: { inline?: boolean }) {
             <Text style={{ numberOfLines: 2 }} class={`${T.sec}`}>{coreUrl() ?? "No address configured"}</Text>
           </Button>
           <View class="gap-1 rounded-(--radius-card) bg-raised overflow-hidden">
-            <Each of={sections} key={(s) => s.id}>{(s) => <Button onPress={() => { settingsQuery.set(""); settingsSection.set(s().id); settingsPage.set(null); settingsPageOpen.set(!!s().page); phoneDetail.set(true); }} testID={`section-${s().id}`} accessibilityLabel={s().label} class={`flex-row items-center min-h-14 px-4 gap-2 ${FOCUS}`}>
+            <Each of={sections} key={(s) => s.id}>{(s) => <Button onPress={() => { settingsSection.set(s().id); settingsPage.set(null); phoneDetail.set(true); }} testID={`section-${s().id}`} accessibilityLabel={s().label} class={`flex-row items-center min-h-14 px-4 gap-2 ${FOCUS}`}>
               <Text style={{ fontFamily: "Google Sans" }} class="flex-1 text-[16px] leading-6 font-medium text-foreground">{s().label}</Text><Icon name="chevron-right" size={16} class="tint-muted-foreground" />
             </Button>}</Each>
           </View>

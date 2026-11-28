@@ -41,6 +41,10 @@ from .base import (
 from .claude_transcript import SubagentReader, TranscriptReader
 
 RECONCILE_SECONDS = 2.0
+# A main-thread model request with no transcript line (main or subagent) and no hook for this long is treated as
+# hung. A long answer or a big Write is one transcript line written when the block ends, so this stays generous;
+# a running tool never counts (the CLI enforces its own tool timeouts).
+STALL_SECONDS = 600.0
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _DSR = re.compile(rb"\x1b\[(\??)6n")
 
@@ -240,24 +244,23 @@ class ClaudeCodeWorker:
         return match.group(0)
 
     def build_argv(self, *, prompt: str, model: str, session: str, settings: Path, policy: ClaudePolicy,
-                   resume: bool, instructions: str = "") -> list[str]:
+                   resume: bool) -> list[str]:
         argv = [self.executable, "--model", model, "--resume" if resume else "--session-id", session,
                 "--permission-mode", policy.permission_mode, "--settings", str(settings), "--disallowedTools", "AskUserQuestion"]
         if policy.effort:
             argv += ["--effort", policy.effort]
-        # Appending through a labelled user prompt works on older tested CLIs too.
-        assignment = ("[Nexus assignment instructions]\n" + instructions + "\n\n[Assignment]\n" + prompt) if instructions else prompt
-        return argv + ["--", assignment]
+        # The assignment alone: a Nexus agent's own prompt is never sent to an external CLI.
+        return argv + ["--", prompt]
 
     async def run(self, *, prompt: str, model: str, workspace: Path, policy: ClaudePolicy | None = None,
                   emit: Emit | None = None, resume: str | None = None, previous_fingerprint: str | None = None,
-                  previous_transcript: str | None = None, instructions: str = "",
+                  previous_transcript: str | None = None,
                   project: Path | None = None) -> WorkerResult:
         policy = policy or ClaudePolicy()
         workspace = workspace.resolve(strict=True)
         if not workspace.is_dir() or not _ID.fullmatch(model):
             raise ValueError("The Claude Code external worker needs a workspace directory and exact model ID")
-        if "\0" in prompt + instructions or len((prompt + instructions).encode()) + 100 > MAX_PROMPT_BYTES:
+        if "\0" in prompt or len(prompt.encode()) + 100 > MAX_PROMPT_BYTES:
             raise ValueError("The Claude Code assignment exceeds 64 KiB or contains NUL; refusing to truncate")
         fingerprint = policy.fingerprint(model, workspace)
         if resume and (str(UUID(resume)) != resume or previous_fingerprint != fingerprint):
@@ -269,6 +272,7 @@ class ClaudeCodeWorker:
         baseline = expected.stat().st_size if resume and expected.exists() else 0
         reader = TranscriptReader(expected, session, offset=baseline)
         sidechains = SubagentReader(expected)
+        progress_at = time.monotonic()
         notes: list[str] = []
         if trusted := self.ensure_trust(workspace, project):
             notes.append(trusted)
@@ -319,7 +323,7 @@ class ClaudeCodeWorker:
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
                 os.set_blocking(master, False)
                 argv = self.build_argv(prompt=prompt, model=model, session=session, settings=settings, policy=policy,
-                                       resume=bool(resume), instructions=instructions)
+                                       resume=bool(resume))
                 process = await asyncio.create_subprocess_exec(*argv, cwd=workspace, env=self.env,
                                                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
                 os.close(slave)
@@ -365,6 +369,7 @@ class ClaudeCodeWorker:
                         if actual != session:
                             raise WorkerError("foreign Claude hook session")
                         seen_hooks.add(event)
+                        progress_at = time.monotonic()
                         await send(WorkerEvent("wire", raw=raw))
                         supplied = value.get("transcript_path")
                         selected = transcript_path(supplied, self.config_dir) if supplied else derived_transcript(self.config_dir, workspace, session)
@@ -375,7 +380,12 @@ class ClaudeCodeWorker:
                             stop = value
                             ended_at = time.monotonic()
                     for event in (*reader.poll(), *sidechains.poll()):
+                        progress_at = time.monotonic()
                         await send(event)
+                    if not stop and reader.awaiting_model and time.monotonic() - progress_at >= STALL_SECONDS:
+                        error = (f"Claude Code got no model response for {STALL_SECONDS / 60:g} min (its API request "
+                                 "appears hung), so Nexus stopped the CLI. Its session is kept: send a follow-up to resume it.")
+                        break
                     if stop and stop["event"] == "StopFailure":
                         error = "Claude Code StopFailure: " + diagnostic_text(str(stop.get("error") or stop.get("reason") or "unknown failure").encode("utf-8", "replace"))
                     if not stop:
@@ -398,10 +408,17 @@ class ClaudeCodeWorker:
                     if not text:
                         attention = "Claude Code stopped without an answer. Run `claude` interactively to review its permissions."
             except (WorkerError, OSError, ValueError) as exc:
-                error = str(exc)
+                error = str(exc) or type(exc).__name__
             finally:
                 if process is not None:
-                    await protected_cleanup(stop_process(process))
+                    try:
+                        await protected_cleanup(stop_process(process))
+                    except (OSError, TimeoutError) as exc:
+                        # A CLI slow to exit after its Stop hook must not turn a finished answer into a bare failure.
+                        notes.append(f"Claude Code process {process.pid} did not stop cleanly "
+                                     f"({str(exc) or type(exc).__name__}); it may still be running")
+                        if not stop:
+                            error = error or "Claude Code could not be stopped: " + (str(exc) or type(exc).__name__)
                 for fd in (master, slave):
                     if fd is not None:
                         with suppress(OSError):

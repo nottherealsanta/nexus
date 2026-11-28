@@ -11,13 +11,14 @@ import {
   fileDirty, fileFindOpen, fileSource, markdownFile, openFile, reloadFile, saveFile,
   firstPrompts, pendingInputs, contextDetail, subagentDone, imagePreview, annotating, addProjectOpen, alertDetail, usageDialog, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, beginOwnSkillInstall, currentWorktree, draft, rememberedModel, failOwnSkillInstall, finishOwnSkillInstall, isNarrow, leftOpen, leftTab, railShown, learnChecklist, live, loadComposerData, loadInputs, loadProjectWorktrees, loadSessionWorktrees, loadStartingInventory, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
-  composerFocused, questionLine, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsEdit, settingsNavFocused, settingsPage, settingsPageOpen, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, sidebarRowMenuAt, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen,
+  composerFocused, questionLine, promptHistory, flowProject, flowSession, flowStage, phonePage, projectsOverview, focusedSidebarRow, focusedTool, railDrag, picker, rootOf, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, settingsEdit, settingsNavFocused, settingsPage, settingsSearchActive, settingsQuery, settingsSection, providerDetail, sidebarRowMenu, sidebarRowMenuAt, switcherOpen, switcherQuery, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, visibleTabIds, waitIndex, resourcesOpen, resourcesKind, loadResources, worktreeInfoOpen, recorderOpen, recorderQuitPrompt,
 } from "./store";
 import { ApiError, apiBase, newKey, request } from "./core/transport";
 import { MESSAGE_PAGE } from "./core/sync";
 import { Message } from "./core/api";
 import { normalizeSession } from "./core/reduce";
 import { imageDrafts } from "./images";
+import { askDeleteRecorder, cancelRecorderQuit, copyRecorderTranscript, minimizeRecorder, openRecorder, recoverRecorder, recorderIsActive, recorderOwnsCapture, recorderStartBlockReason, requestRecorderQuit, retryRecorderTranscription, showRecentRecordings, startRecorder, stopRecorder } from "./ui/recorder";
 import { pasteDrafts } from "./pastes";
 import type { InventoryKind } from "./skills-mcp";
 import { disabledKey, selectedSkillCounts, setDisabledTool, shouldInstallRequestedDirectly, toggleDisabledTool } from "./skills-mcp";
@@ -49,7 +50,7 @@ export interface Cmd {
   leader?: string[];
   key_context?: string; when: string[]; unavailable_reason?: string; placement: string[]; status?: string; clients?: string; note?: string;
 }
-export const commands: Cmd[] = (manifest.command as unknown as Cmd[]).filter((c) => (c.clients ?? "both") !== "tui" && !(!terminalAvailable && c.id.startsWith("terminal.")));
+export const commands: Cmd[] = (manifest.command as unknown as Cmd[]).filter((c) => (c.clients ?? "both") !== "tui" && !(!terminalAvailable && c.id.startsWith("terminal.")) && !(phone && c.id.startsWith("recorder.")));
 export const byId = new Map(commands.map((c) => [c.id, c]));
 
 // --- context terms ----------------------------------------------------------------------
@@ -150,13 +151,16 @@ function evalTerm(t: string): boolean {
     case "editor.dirty": return fileDirty();
     case "editor.markdown": return openFile() !== null && markdownFile();
     case "overlay.open": return !!btw() || !!inspector() || !!projectsOverview() || paletteOpen() || switcherOpen() || !!picker() || !!learnChecklist() || !!alertDetail() || !!usageDialog() || !!imagePreview() || !!annotating() || worktreeInfoOpen();
-    case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
+    case "dialog.open": return !!confirmDialog() || addProjectOpen() || recorderQuitPrompt() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
     case "layout.narrow": return isNarrow();
     case "text_edit.active": return textEdit.active();
     case "connection.lost": return ["reconnecting", "offline", "auth_failed"].includes(connection().kind);
     case "connection.no_daemon": { const c = connection(); return c.kind === "offline" && c.noDaemon; }
+    case "recorder.active": return recorderIsActive();
+    case "recorder.owner": return recorderOwnsCapture();
+    case "recorder.modal": return recorderOpen();
     case "provider.signed_in": return providersSignedIn();
     case "has_notifications": return notifications().length > 0;
     case "focus.tool": return !!focusedTool();
@@ -226,13 +230,13 @@ export function toggleRight(w: number) {
 export function openSettings() {
   if (onboardingOpen()) return;
   if (centre() === "settings") { centre.set(previousCentre()); return; }
-  previousCentre.set(centre()); centre.set("settings"); settingsQuery.set(""); providerDetail.set(null); settingsNavFocused.set(true); settingsPageOpen.set(false); if (isNarrow()) drawer.set(null);
+  previousCentre.set(centre()); settingsSearchActive.set(false); settingsQuery.set(""); settingsPage.set(null); providerDetail.set(null); settingsNavFocused.set(true); centre.set("settings"); if (isNarrow()) drawer.set(null);
   refreshVoiceOnSettingsOpen();
   void refreshSearchService();
   void refreshBrowserStatus();
 }
-on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
-on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsPageOpen.set(true); settingsNavFocused.set(false); providerDetail.set(null); }, true);
+on("app.sign_in", () => { if (centre() !== "settings") openSettings(); settingsSearchActive.set(false); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsNavFocused.set(false); providerDetail.set(null); }, true);
+on("app.sign_out", () => { if (centre() !== "settings") openSettings(); settingsSearchActive.set(false); settingsQuery.set(""); settingsSection.set("providers"); settingsPage.set(null); settingsNavFocused.set(false); providerDetail.set(null); }, true);
 function tab(t: "sessions" | "files" | "git") {
   if (t === "files") void loadFiles(); if (t === "git") void loadGitPage(); leftTab.set(t);
   // As in the TUI, the sidebar tab holds the keys: Esc and Right step back, Left goes further in.
@@ -278,7 +282,9 @@ export function stepTab(step: number) {
   if (next !== ids[at]) void selectSession(next);
 }
 
+export const COMPACTING_LOCK = "Compacting · a new session opens soon";
 export async function sendPrompt(rawText: string, images: import("./images").DraftImage[] = [], mode: "send" | "steer" | "queue" | "interrupt" = "send"): Promise<boolean> {
+  if (viewed()?.handing_off) { toast("info", COMPACTING_LOCK); return false; }
   if (questionLocked()) { toast("info", "Answer the question above"); return false; }
   const source = draftKey();
   const raw = rawText.trim();
@@ -659,7 +665,6 @@ flushQueuedContinues.fn = () => {
 
 export async function handoff() {
   const s = viewed(); if (!s) return;
-  toast("info", "Writing the handoff…");
   try {
     const r = await request<{ to: string }>("POST", `/api/session/${s.id}/handoff`, { body: {}, key: newKey() });
     await selectSession(r.to);
@@ -690,8 +695,18 @@ on("app.reconnect", () => sync.retryNow());
 on("app.start_daemon", async () => { try { await fetch(`${apiBase()}/__nexus/start`, { method: "POST" }); } catch {} sync.retryNow(); });
 on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
+on("recorder.open", () => openRecorder());
+on("recorder.stop", () => stopRecorder());
+on("recorder.minimize", () => minimizeRecorder());
+on("recorder.start", () => startRecorder());
+on("recorder.copy_transcript", () => void copyRecorderTranscript());
+on("recorder.retry", () => retryRecorderTranscription());
+on("recorder.recover", () => recoverRecorder());
+on("recorder.recent", () => showRecentRecordings());
+on("recorder.delete", () => askDeleteRecorder());
+on("app.quit", () => requestRecorderQuit());
 on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
-on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
+on("alert.cancel", () => { if (recorderQuitPrompt()) { cancelRecorderQuit(); return; } const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
 on("overlay.close", () => { if (btw()) { closeBtw(); return; } if (annotating()) { annotating.set(null); return; } if (imagePreview()) { imagePreview.set(null); return; } if (usageDialog()) { usageDialog.set(null); return; } if (alertDetail()) { alertDetail.set(null); return; } if (learnChecklist()) { closeLearnChecklist(); return; } if (worktreeInfoOpen()) { worktreeInfoOpen.set(false); return; } if (switcherOpen()) { switcherOpen.set(false); return; } if (projectsOverview()) { projectsOverview.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
@@ -1124,6 +1139,11 @@ on("model.effort", () => void pickOne("Reasoning effort", async () => {
 export const jump = { fn: () => {} };
 /** The timeline's previous/next message (`turn.prev` / `turn.next`), set by the mounted timeline. */
 export const turnNav = { fn: (_delta: number) => {} };
+/** The turn keys act on the timeline, never while typing, in a terminal, an open file, the sidebar
+ * (alt+up/down moves projects there), Settings or any other overlay. */
+export const timelineKeysActive = () => !composerFocused() && !terminalFocused() && !openFile() && !focusedSidebarRow()
+  && centre() === "session" && !picker() && !confirmDialog() && !paletteOpen() && !switcherOpen()
+  && !resourcesOpen() && !settingsEdit() && !settingsPage() && !settingsSearchActive();
 export const focusWaiting = { fn: () => {} };
 /** The question's context line (the composer's input while a question waits, plan 47): put the caret in it, or hand the keys back to the options. */
 export const questionLineFocus = { fn: (_end?: boolean) => {}, leave: () => {} };
@@ -1141,6 +1161,10 @@ export function availability(c: Cmd): Availability {
   if (phone && desktopOnly(c.id)) return { ok: false, reason: PHONE_UNAVAILABLE };
   if (c.status === "blocked_core") return { ok: false, reason: BLOCKED[c.id] ?? c.unavailable_reason ?? "Not available yet." };
   if (c.status === "deferred") return { ok: false, reason: `Deferred: ${c.unavailable_reason ?? "not built yet"}` };
+  if (c.id === "recorder.start") {
+    const recorderReason = recorderStartBlockReason();
+    if (recorderReason) return { ok: false, reason: recorderReason };
+  }
   const voiceReason = voiceCommandReason(c.id);
   if (voiceReason) return { ok: false, reason: voiceReason };
   if (c.id === "search.start") { const why = searchStartReason(); if (why) return { ok: false, reason: why }; }
@@ -1218,10 +1242,9 @@ export function escape() {
   // detail, then a page's content, then the section rail, then the view.
   if (centre() === "settings" && settingsEdit()) { settingsEdit.set(null); return "settings_edit"; }
   if ((centre() === "settings" || onboardingOpen()) && providerDetail()) { providerDetail.set(null); return "provider_detail"; }
-  if (centre() === "settings" && settingsQuery()) { settingsQuery.set(""); return "settings_search"; }
+  if (centre() === "settings" && settingsSearchActive()) { settingsQuery.set(""); settingsSearchActive.set(false); return "settings_search"; }
   if (centre() === "settings" && settingsPage()) { settingsPage.set(null); return "settings_page"; }
   if (centre() === "settings" && !settingsNavFocused()) {
-    settingsPageOpen.set(false);
     settingsNavFocused.set(true);
     return "settings_rail";
   }
@@ -1291,12 +1314,11 @@ export function bindKeys(): () => void {
     const k = byId.get("composer.paste")?.keys?.nsh;
     if (k) try { offs.push(keymap.bind(toKeystroke(k), () => { if (composerFocused() && !terminalFocused()) void run("composer.paste"); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
   }
-  // Previous/next message act on the timeline: never while typing, in a terminal or in an open file.
   if (!phone) for (const id of ["turn.prev", "turn.next"]) {
     const c = byId.get(id);
     for (const k of new Set([c?.keys?.nsh, ...(c?.key_aliases?.nsh ?? [])])) {
       if (!k) continue;
-      try { offs.push(keymap.bind(toKeystroke(k), () => { if (!composerFocused() && !terminalFocused() && !openFile()) void run(id); }, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ }
+      try { offs.push(keymap.bind(toKeystroke(k), () => { if (timelineKeysActive()) void run(id); }, { when: "notEditing" })); } catch { /* the platform keeps this keystroke */ }
     }
   }
   for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {

@@ -136,12 +136,10 @@ async def test_child_runs_stores_standard_records_and_resumes(env, permission, m
     # A client rebuilding from the state snapshot (start, reconnect) gets the same facts as `session.updated`.
     rows = {r["id"]: r for r in rt.store.state_snapshot()["sessions"]}
     assert rows[child.id]["worker"] == data["worker"] and rows[root.id]["worker"] is None
-    instructions = rt.snapshot_for(rt.session(child.id))["agent"]["prompt"]
     log = [json.loads(line) for line in (workspace / "acp-log.jsonl").read_text().splitlines()]
     first_prompt = next(entry["params"]["prompt"][0]["text"] for entry in log if entry.get("method") == "session/prompt")
-    assert first_prompt.endswith("first request")
-    if instructions:
-        assert first_prompt.startswith("[Nexus assignment instructions]\n")
+    # The child's Nexus agent prompt is never sent to the CLI: the first prompt is the assignment alone.
+    assert first_prompt == "first request"
     rt.prompt(child.id, "second request")
     await idle(rt)
     log = [json.loads(line) for line in (workspace / "acp-log.jsonl").read_text().splitlines()]

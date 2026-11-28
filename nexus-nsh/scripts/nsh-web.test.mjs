@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { webEnvironment } from './nsh-web.mjs';
+import { webEnvironment, webRustEnvironment } from './nsh-web.mjs';
+
+test('prefers the active compiler when its wasm target is installed', () => {
+  const env = { PATH: '/tools' };
+  assert.equal(webRustEnvironment(env, () => '/rust/wasm\n', path => path === '/rust/wasm'), env);
+});
+
+test('uses rustup rustc when PATH rustc lacks the wasm target', () => {
+  const env = { PATH: '/tools' };
+  const run = command => command === 'rustup' ? '/rustup/rustc\n' : `${command}/wasm\n`;
+  assert.deepEqual(webRustEnvironment(env, run, path => path === '/rustup/rustc/wasm'), { ...env, RUSTC: '/rustup/rustc' });
+});
+
+test('does not override an explicitly selected rustc', () => {
+  const env = { RUSTC: '/custom/rustc' };
+  assert.equal(webRustEnvironment(env, () => assert.fail('must not probe')), env);
+});
 
 test('preserves explicit archiver configuration without probing Rust', () => {
   for (const name of ['AR_wasm32-unknown-unknown', 'AR_wasm32_unknown_unknown', 'AR']) {

@@ -740,6 +740,11 @@ impl Model {
                     }
                 }
             }
+            "session.handoff_started" | "session.handoff" | "session.handoff_failed" => {
+                if let Some(s) = sid.as_deref().and_then(|sid| self.sessions.get_mut(sid)) {
+                    s.handing_off = e.kind == "session.handoff_started";
+                }
+            }
             "session.status" => {
                 let Some(sid) = sid else { return };
                 let status = str_field(&e.data, "status").unwrap_or_default();

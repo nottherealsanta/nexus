@@ -109,3 +109,7 @@ the new-session view has none; dismissing it keeps the composer's "Select a mode
 
 The chosen model id is not checked against the catalog; the provider rejects an
 unknown one.
+
+In the **Change model** picker, Tab toggles the highlighted model's favorite
+star. Stars occupy a dedicated column to the left so favorite and non-favorite
+model names start at the same position in both clients.

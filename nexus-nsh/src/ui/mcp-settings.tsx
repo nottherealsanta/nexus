@@ -170,12 +170,12 @@ function ServerRow(p: { row: McpRow }) {
 }
 
 /** The MCP page: add, then every server with its state. */
-export function McpPage(p: { children?: any }) {
+export function McpPage(p: { children?: any; firstRef?: (node: any) => void }) {
   const rows = (scope: string) => (mcpServers()?.servers ?? []).filter((row) => row.scope === scope);
   const project = () => currentProject();
   return <View class="gap-1" testID="mcp-page">
     <View class="flex-row items-center gap-2 px-3 pb-1">
-      <Btn label="Add a remote server" kind="primary" disabled={!live()} onPress={() => { addressText.set(""); adding.set({ project: null }); }} testID="mcp-add" />
+      <Btn ref={p.firstRef} label="Add a remote server" kind="primary" disabled={!live()} onPress={() => { addressText.set(""); adding.set({ project: null }); }} testID="mcp-add" />
       <If when={!!project()}><Btn label="Add to this project" disabled={!live()} onPress={() => { addressText.set(""); adding.set({ project: project() }); }} testID="mcp-add-project" /></If>
     </View>
     <If when={!mcpServers()}><Text class={`px-3 ${T.meta}`}>Loading servers…</Text></If>

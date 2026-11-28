@@ -1,0 +1,849 @@
+{
+  "name": "Recorder view-model",
+  "notes": [
+    "Shared contract for the TUI (nexus-tui/src/recorder_view.rs) and NSH (nexus-nsh/src/recorder-view.ts); plan 54 D0.",
+    "input.owner is this client's local controller snapshot, or null when this client does not capture. phase is idle|starting|recording|stopping|stopped|interrupted|failed; captured_samples and pending_samples are integer 16 kHz samples; spool is persistent|best-effort|memory|none; recoverable means the local spool can seal an interrupted recording.",
+    "input.core is the authoritative Core public state (GET /api/recordings/{id}), or null when no recording exists. Fields are a subset of docs/api.md: id, generation, revision, capture_state, active, durable_offset, final_sample_count, complete, holes, missing_samples, owner.client_id, transcription_state, transcription_progress, reason. reason is display text (clients map Core codes to words).",
+    "input.transcript is the durable transcript page plus at most one provisional tail; it never affects the status rows in this fixture.",
+    "input.view is modal_open, page (recorder|recent), transcript_follow and seen_interrupted. input.width is wide or compact (narrow header). input.recent is the GET /api/recordings list for the Recent page.",
+    "expect.buttons and expect.focus use command ids for actions; jump_live is the one view-only chip id. expect.disabled maps a button id to its reason. null means no value or no row. expect.hint is the last-row key hint.",
+    "The audio warning (expect.audio_warning) is a second persistence line; it never replaces the saved-through text.",
+    "expect.recent.rows is the expected visible prefix (the list is virtualised); expect.recent.notice is the 50-recording limit row. A recent row uses the Final/Recording/Interrupted/Transcript incomplete status keys plus the gaps suffix.",
+    "Recordings stay in Core's state home (recordings/): there is no Save As and no browser download action. Copy transcript is the only export in V1."
+  ],
+  "cases": [
+    {
+      "name": "idle wide",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Not recording",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "The transcript appears here as you speak.",
+        "buttons": ["recorder.start", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.start",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "idle compact",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Not recording",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "The transcript appears here as you speak.",
+        "buttons": ["recorder.start", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.start",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "starting owner wide",
+      "input": {
+        "owner": { "phase": "starting", "recording_id": null, "captured_samples": 0, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.0 },
+        "core": null,
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "● Starting…",
+        "header_tone": "error",
+        "a11y": "Recorder, starting",
+        "capture": "Starting…",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "Preparing transcription…",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "starting owner compact",
+      "input": {
+        "owner": { "phase": "starting", "recording_id": null, "captured_samples": 0, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.0 },
+        "core": null,
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "●",
+        "header_tone": "error",
+        "a11y": "Recorder, starting",
+        "capture": "Starting…",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "Preparing transcription…",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "recording owner wide",
+      "input": {
+        "owner": { "phase": "recording", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.42 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 12,
+          "capture_state": "recording", "active": true, "durable_offset": 12064000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "created"
+        },
+        "transcript": {
+          "segments": [
+            { "segment_id": 0, "revision": 2, "start": 0, "end": 112000, "status": "final", "text": "Hello there." }
+          ],
+          "provisional": { "segment_id": 1, "start": 112000, "text": "and this is" }
+        },
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "● REC 12:34",
+        "header_tone": "error",
+        "a11y": "Recorder, recording, 12:34",
+        "capture": "Recording · 12:34",
+        "audio": "Saved to Core through 12:34 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "recording owner compact",
+      "input": {
+        "owner": { "phase": "recording", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.42 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 12,
+          "capture_state": "recording", "active": true, "durable_offset": 12064000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "created"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "● 12:34",
+        "header_tone": "error",
+        "a11y": "Recorder, recording, 12:34",
+        "capture": "Recording · 12:34",
+        "audio": "Saved to Core through 12:34 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "recording owner past one hour",
+      "input": {
+        "owner": { "phase": "recording", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 59568000, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.1 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 30,
+          "capture_state": "recording", "active": true, "durable_offset": 59568000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 410 },
+          "reason": "created"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "● REC 1:02:03",
+        "header_tone": "error",
+        "a11y": "Recorder, recording, 1:02:03",
+        "capture": "Recording · 1:02:03",
+        "audio": "Saved to Core through 1:02:03 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "recording elsewhere wide",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 14,
+          "capture_state": "recording", "active": true, "durable_offset": 12064000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "nsh" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "created"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "REC elsewhere",
+        "header_tone": "secondary",
+        "a11y": "Recorder, recording on another client",
+        "capture": "Recording on another client · 12:34. This client's microphone is off.",
+        "audio": "Saved to Core through 12:34 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.copy_transcript", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "recording elsewhere compact",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 14,
+          "capture_state": "recording", "active": true, "durable_offset": 12064000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "nsh" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "created"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "REC",
+        "header_tone": "secondary",
+        "a11y": "Recorder, recording on another client",
+        "capture": "Recording on another client · 12:34. This client's microphone is off.",
+        "audio": "Saved to Core through 12:34 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.copy_transcript", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "stopping owner wide",
+      "input": {
+        "owner": { "phase": "stopping", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 32000, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.0 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 18,
+          "capture_state": "recording", "active": true, "durable_offset": 12032000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 16000, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "chunk"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Saving audio…",
+        "header_tone": "secondary",
+        "a11y": "Recorder, saving audio",
+        "capture": "Stopping · 12:34",
+        "audio": "Saved to Core through 12:32 · 2s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize"],
+        "disabled": { "recorder.stop": "Saving audio…" },
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "stopping owner compact",
+      "input": {
+        "owner": { "phase": "stopping", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 32000, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.0 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 18,
+          "capture_state": "recording", "active": true, "durable_offset": 12032000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 16000, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "chunk"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "Saving…",
+        "header_tone": "secondary",
+        "a11y": "Recorder, saving audio",
+        "capture": "Stopping · 12:34",
+        "audio": "Saved to Core through 12:32 · 2s pending",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize"],
+        "disabled": { "recorder.stop": "Saving audio…" },
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "stopped finishing transcript",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 20,
+          "capture_state": "stopped", "active": false, "durable_offset": 12064000,
+          "final_sample_count": 12064000, "complete": true, "holes": 0, "missing_samples": 0,
+          "owner": { "client_id": "tui" }, "transcription_state": "catching_up",
+          "transcription_progress": { "lag_samples": 112000, "pending_finals": 1, "failed": 0, "transcript_revision": 4 },
+          "reason": "stopped"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Finishing transcript",
+        "header_tone": "secondary",
+        "a11y": "Recorder, finishing transcript",
+        "capture": "Stopped · 12:34",
+        "audio": "Audio saved · Finishing transcript",
+        "audio_warning": null,
+        "transcript_status": "Catching up · 7s behind",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "stopped finishing transcript compact",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 20,
+          "capture_state": "stopped", "active": false, "durable_offset": 12064000,
+          "final_sample_count": 12064000, "complete": true, "holes": 0, "missing_samples": 0,
+          "owner": { "client_id": "tui" }, "transcription_state": "catching_up",
+          "transcription_progress": { "lag_samples": 112000, "pending_finals": 1, "failed": 0, "transcript_revision": 4 },
+          "reason": "stopped"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "Transcript…",
+        "header_tone": "secondary",
+        "a11y": "Recorder, finishing transcript",
+        "capture": "Stopped · 12:34",
+        "audio": "Audio saved · Finishing transcript",
+        "audio_warning": null,
+        "transcript_status": "Catching up · 7s behind",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "stopped complete",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 24,
+          "capture_state": "stopped", "active": false, "durable_offset": 12064000,
+          "final_sample_count": 12064000, "complete": true, "holes": 0, "missing_samples": 0,
+          "owner": { "client_id": "tui" }, "transcription_state": "complete",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 7 },
+          "reason": "transcription"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Stopped · 12:34",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "Complete",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "stopped with failed transcription parts",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 24,
+          "capture_state": "stopped", "active": false, "durable_offset": 12064000,
+          "final_sample_count": 12064000, "complete": true, "holes": 0, "missing_samples": 0,
+          "owner": { "client_id": "tui" }, "transcription_state": "failed",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 2, "transcript_revision": 5 },
+          "reason": "transcription"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Stopped · 12:34",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "2 parts could not be transcribed",
+        "buttons": ["recorder.copy_transcript", "recorder.retry", "recorder.recent", "recorder.start"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "recording with transcription unavailable",
+      "input": {
+        "owner": { "phase": "recording", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 0, "spool": "persistent", "recoverable": false, "reason": null, "level": 0.42 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 12,
+          "capture_state": "recording", "active": true, "durable_offset": 12064000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "unavailable",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": null, "reason": "model_not_cached" },
+          "reason": "created"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "● REC 12:34",
+        "header_tone": "error",
+        "a11y": "Recorder, recording, 12:34",
+        "capture": "Recording · 12:34",
+        "audio": "Saved to Core through 12:34 · 0s pending",
+        "audio_warning": null,
+        "transcript_status": "Recording audio · Transcription unavailable",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "recording with memory-only spool",
+      "input": {
+        "owner": { "phase": "recording", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12064000, "pending_samples": 16000, "spool": "memory", "recoverable": false, "reason": null, "level": 0.42 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 12,
+          "capture_state": "recording", "active": true, "durable_offset": 12048000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "chunk"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "● REC 12:34",
+        "header_tone": "error",
+        "a11y": "Recorder, recording, 12:34",
+        "capture": "Recording · 12:34",
+        "audio": "Saved to Core through 12:33 · 1s pending",
+        "audio_warning": "Unsaved audio is kept in memory only (≤30 s)",
+        "transcript_status": "Live",
+        "buttons": ["recorder.minimize", "recorder.stop"],
+        "disabled": {},
+        "focus": "recorder.minimize",
+        "esc": "minimize",
+        "hint": "tab move · enter choose · esc minimise"
+      }
+    },
+    {
+      "name": "interrupted owner with recoverable spool",
+      "input": {
+        "owner": { "phase": "interrupted", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12032000, "pending_samples": 192000, "spool": "persistent", "recoverable": true, "reason": "Microphone disconnected", "level": 0.0 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 16,
+          "capture_state": "interrupted", "active": false, "durable_offset": 11840000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 192000, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "lease_expired"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "! Recording interrupted",
+        "header_tone": "warning",
+        "a11y": "Recorder, recording interrupted",
+        "capture": "Interrupted at 12:32: Microphone disconnected",
+        "audio": "12s not saved to Core",
+        "audio_detail": "Saved to Core through 12:20",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.recover"],
+        "disabled": {},
+        "focus": "recorder.recover",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "interrupted owner already seen",
+      "input": {
+        "owner": { "phase": "interrupted", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12032000, "pending_samples": 192000, "spool": "persistent", "recoverable": true, "reason": "Microphone disconnected", "level": 0.0 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 16,
+          "capture_state": "interrupted", "active": false, "durable_offset": 11840000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 192000, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "lease_expired"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": true },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Interrupted at 12:32: Microphone disconnected",
+        "audio": "12s not saved to Core",
+        "audio_detail": "Saved to Core through 12:20",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.recover"],
+        "disabled": {},
+        "focus": "recorder.recover",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "interrupted owner compact",
+      "input": {
+        "owner": { "phase": "interrupted", "recording_id": "0123456789abcdef0123456789abcdef", "captured_samples": 12032000, "pending_samples": 192000, "spool": "persistent", "recoverable": true, "reason": "Microphone disconnected", "level": 0.0 },
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 16,
+          "capture_state": "interrupted", "active": false, "durable_offset": 11840000,
+          "final_sample_count": null, "complete": false, "holes": 0, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 192000, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "lease_expired"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "compact"
+      },
+      "expect": {
+        "header": "! REC",
+        "header_tone": "warning",
+        "a11y": "Recorder, recording interrupted",
+        "capture": "Interrupted at 12:32: Microphone disconnected",
+        "audio": "12s not saved to Core",
+        "audio_detail": "Saved to Core through 12:20",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.recover"],
+        "disabled": {},
+        "focus": "recorder.recover",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "interrupted viewer with unknown loss sizes",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 17,
+          "capture_state": "interrupted", "active": false, "durable_offset": 11840000,
+          "final_sample_count": null, "complete": false, "holes": 2, "missing_samples": null,
+          "owner": { "client_id": "tui" }, "transcription_state": "live",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 3 },
+          "reason": "stream_detached"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "! Recording interrupted",
+        "header_tone": "warning",
+        "a11y": "Recorder, recording interrupted",
+        "capture": "Interrupted at 12:20: The connection to Core was lost",
+        "audio": "2 gaps · missing time unknown",
+        "audio_warning": null,
+        "transcript_status": "Live",
+        "buttons": ["recorder.copy_transcript", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "stopped viewer with gaps",
+      "input": {
+        "owner": null,
+        "core": {
+          "id": "0123456789abcdef0123456789abcdef", "generation": 1, "revision": 22,
+          "capture_state": "stopped", "active": false, "durable_offset": 12064000,
+          "final_sample_count": 12064000, "complete": false, "holes": 2, "missing_samples": null,
+          "owner": { "client_id": "nsh" }, "transcription_state": "complete",
+          "transcription_progress": { "lag_samples": 0, "pending_finals": 0, "failed": 0, "transcript_revision": 6 },
+          "reason": "stopped"
+        },
+        "transcript": null,
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Stopped · 12:34",
+        "audio": "2 gaps · missing time unknown",
+        "audio_warning": null,
+        "transcript_status": "Complete",
+        "buttons": ["recorder.copy_transcript", "recorder.recent", "recorder.start"],
+        "disabled": {},
+        "focus": "recorder.copy_transcript",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "failed before create because the microphone is busy",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "failure": { "kind": "mic_busy", "reason": "The microphone is in use by dictation." },
+        "view": { "modal_open": true, "page": "recorder", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Record",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": "Failed: The microphone is in use by dictation.",
+        "audio": "Audio saved",
+        "audio_warning": null,
+        "transcript_status": "The transcript appears here as you speak.",
+        "buttons": ["recorder.start", "recorder.recent"],
+        "disabled": {},
+        "focus": "recorder.start",
+        "esc": "close",
+        "hint": "tab move · enter choose · esc close"
+      }
+    },
+    {
+      "name": "recent empty",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "recent": { "recordings": [], "limit": 50 },
+        "view": { "modal_open": true, "page": "recent", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Recorder",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": null,
+        "audio": null,
+        "audio_warning": null,
+        "transcript_status": null,
+        "buttons": ["recorder.start"],
+        "disabled": {},
+        "focus": "recorder.start",
+        "esc": "back",
+        "hint": "enter open · delete… · esc back",
+        "recent": { "empty": "No recordings yet.", "notice": null, "rows": [] }
+      }
+    },
+    {
+      "name": "recent one",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "recent": {
+          "limit": 50,
+          "recordings": [
+            { "id": "0123456789abcdef0123456789abcdef", "capture_state": "stopped", "created_at": "2026-11-26T14:02:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 }
+          ]
+        },
+        "view": { "modal_open": true, "page": "recent", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Recorder",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": null,
+        "audio": null,
+        "audio_warning": null,
+        "transcript_status": null,
+        "buttons": ["recorder.start", "recorder.delete"],
+        "disabled": {},
+        "focus": "recent.0",
+        "esc": "back",
+        "hint": "enter open · delete… · esc back",
+        "recent": { "empty": null, "notice": null, "rows": ["26 Nov 14:02 · 12:34 · Complete"] }
+      }
+    },
+    {
+      "name": "recent at the 50 recording limit",
+      "input": {
+        "owner": null,
+        "core": null,
+        "transcript": null,
+        "recent": {
+          "limit": 50,
+          "recordings": [
+            { "id": "0123456789abcdef0123456789abc000", "capture_state": "stopped", "created_at": "2026-11-26T14:02:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc001", "capture_state": "stopped", "created_at": "2026-11-26T13:40:00", "final_sample_count": 57792000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc002", "capture_state": "interrupted", "created_at": "2026-11-26T09:40:00", "final_sample_count": 57792000, "transcription_state": "complete", "holes": 2 },
+            { "id": "0123456789abcdef0123456789abc003", "capture_state": "stopped", "created_at": "2026-11-25T18:03:00", "final_sample_count": 12064000, "transcription_state": "failed", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc004", "capture_state": "stopped", "created_at": "2026-11-25T17:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc005", "capture_state": "stopped", "created_at": "2026-11-25T16:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc006", "capture_state": "stopped", "created_at": "2026-11-25T15:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc007", "capture_state": "stopped", "created_at": "2026-11-25T14:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc008", "capture_state": "stopped", "created_at": "2026-11-25T13:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc009", "capture_state": "stopped", "created_at": "2026-11-25T12:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc010", "capture_state": "stopped", "created_at": "2026-11-25T11:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc011", "capture_state": "stopped", "created_at": "2026-11-25T10:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc012", "capture_state": "stopped", "created_at": "2026-11-25T09:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc013", "capture_state": "stopped", "created_at": "2026-11-25T08:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc014", "capture_state": "stopped", "created_at": "2026-11-25T07:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc015", "capture_state": "stopped", "created_at": "2026-11-25T06:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc016", "capture_state": "stopped", "created_at": "2026-11-25T05:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc017", "capture_state": "stopped", "created_at": "2026-11-25T04:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc018", "capture_state": "stopped", "created_at": "2026-11-25T03:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc019", "capture_state": "stopped", "created_at": "2026-11-25T02:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc020", "capture_state": "stopped", "created_at": "2026-11-25T01:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc021", "capture_state": "stopped", "created_at": "2026-11-25T00:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc022", "capture_state": "stopped", "created_at": "2026-11-24T23:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc023", "capture_state": "stopped", "created_at": "2026-11-24T22:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc024", "capture_state": "stopped", "created_at": "2026-11-24T21:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc025", "capture_state": "stopped", "created_at": "2026-11-24T20:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc026", "capture_state": "stopped", "created_at": "2026-11-24T19:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc027", "capture_state": "stopped", "created_at": "2026-11-24T18:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc028", "capture_state": "stopped", "created_at": "2026-11-24T17:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc029", "capture_state": "stopped", "created_at": "2026-11-24T16:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc030", "capture_state": "stopped", "created_at": "2026-11-24T15:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc031", "capture_state": "stopped", "created_at": "2026-11-24T14:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc032", "capture_state": "stopped", "created_at": "2026-11-24T13:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc033", "capture_state": "stopped", "created_at": "2026-11-24T12:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc034", "capture_state": "stopped", "created_at": "2026-11-24T11:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc035", "capture_state": "stopped", "created_at": "2026-11-24T10:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc036", "capture_state": "stopped", "created_at": "2026-11-24T09:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc037", "capture_state": "stopped", "created_at": "2026-11-24T08:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc038", "capture_state": "stopped", "created_at": "2026-11-24T07:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc039", "capture_state": "stopped", "created_at": "2026-11-24T06:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc040", "capture_state": "stopped", "created_at": "2026-11-24T05:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc041", "capture_state": "stopped", "created_at": "2026-11-24T04:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc042", "capture_state": "stopped", "created_at": "2026-11-24T03:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc043", "capture_state": "stopped", "created_at": "2026-11-24T02:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc044", "capture_state": "stopped", "created_at": "2026-11-24T01:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc045", "capture_state": "stopped", "created_at": "2026-11-24T00:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc046", "capture_state": "stopped", "created_at": "2026-11-23T23:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc047", "capture_state": "stopped", "created_at": "2026-11-23T22:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc048", "capture_state": "stopped", "created_at": "2026-11-23T21:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 },
+            { "id": "0123456789abcdef0123456789abc049", "capture_state": "stopped", "created_at": "2026-11-23T20:01:00", "final_sample_count": 12064000, "transcription_state": "complete", "holes": 0 }
+          ]
+        },
+        "view": { "modal_open": true, "page": "recent", "transcript_follow": true, "seen_interrupted": false },
+        "width": "wide"
+      },
+      "expect": {
+        "header": "Recorder",
+        "header_tone": "secondary",
+        "a11y": "Recorder",
+        "capture": null,
+        "audio": null,
+        "audio_warning": null,
+        "transcript_status": null,
+        "buttons": ["recorder.start", "recorder.delete"],
+        "disabled": {},
+        "focus": "recent.0",
+        "esc": "back",
+        "hint": "enter open · delete… · esc back",
+        "recent": {
+          "empty": null,
+          "notice": "Showing the 50 most recent.",
+          "rows": [
+            "26 Nov 14:02 · 12:34 · Complete",
+            "26 Nov 13:40 · 1:00:12 · Complete",
+            "26 Nov 09:40 · 1:00:12 · Interrupted · 2 gaps",
+            "25 Nov 18:03 · 12:34 · Transcript incomplete"
+          ]
+        }
+      }
+    }
+  ]
+}

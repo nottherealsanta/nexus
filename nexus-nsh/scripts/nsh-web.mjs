@@ -1,8 +1,22 @@
 // NSH's web runtime compiles C dependencies and needs a WebAssembly-aware ar.
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
+
+export function webRustEnvironment(env = process.env, run = execFileSync, exists = existsSync) {
+  if (env.RUSTC) return env;
+  const hasTarget = rustc => {
+    const dir = run(rustc, ['--print', 'target-libdir', '--target', 'wasm32-unknown-unknown'], { env, encoding: 'utf8' }).trim();
+    return exists(dir);
+  };
+  try { if (hasTarget('rustc')) return env; } catch { /* Try rustup below. */ }
+  try {
+    const rustc = run('rustup', ['which', 'rustc'], { env, encoding: 'utf8' }).trim();
+    if (hasTarget(rustc)) return { ...env, RUSTC: rustc };
+  } catch { /* Let the build report the missing target. */ }
+  return env;
+}
 
 export function webEnvironment(env = process.env, run = execFileSync, executable = path => {
   try { accessSync(path, constants.X_OK); return true; } catch { return false; }
@@ -38,7 +52,7 @@ export function webEnvironment(env = process.env, run = execFileSync, executable
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    const child = spawn('nsh', process.argv.slice(2), { env: webEnvironment(), stdio: 'inherit' });
+    const child = spawn('nsh', process.argv.slice(2), { env: webEnvironment(webRustEnvironment()), stdio: 'inherit' });
     const forward = signal => child.kill(signal);
     const stop = () => forward('SIGTERM');
     const interrupt = () => forward('SIGINT');

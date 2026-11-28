@@ -1,0 +1,11 @@
+[package]
+name = "nexus-recorder-spool"
+version = "0.10.0"
+edition = "2021"
+description = "Shared durable recorder spool for Nexus clients: bounded chunks, crash repair, locks and recovery plans"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.97"
+
+[dependencies]
+libc = "=0.2.191"

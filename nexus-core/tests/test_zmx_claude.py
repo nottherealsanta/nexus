@@ -96,6 +96,19 @@ elif mode == "badhook":
     start(); write(entry("assistant", [{"type": "text", "text": "x"}])); hook("Stop", transcript_path="/etc/passwd"); time.sleep(30)
 elif mode == "exit":
     sys.exit(3)
+elif mode == "hang":
+    # The CLI's model request never answers: the request line is the last transcript entry; the spinner keeps drawing.
+    start(); write({"type": "api-request", "sessionId": session, "querySource": "repl_main_thread", "id": "r1"})
+    for _ in range(300): os.write(1, b"\r* Thinking..."); time.sleep(.1)
+elif mode == "slowtool":
+    # A long-running tool writes nothing to the transcript; that is not a hung model request.
+    start(); write({"type": "api-request", "sessionId": session, "querySource": "repl_main_thread", "id": "r1"})
+    write(entry("assistant", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep"}}]))
+    time.sleep(cfg.get("sleep", 1.5))
+    write(entry("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}], mid=None))
+    write({"type": "api-request", "sessionId": session, "querySource": "repl_main_thread", "id": "r2"})
+    write(entry("assistant", [{"type": "text", "text": "slow ok"}], mid="msg_2"))
+    hook("Stop", transcript_path=tpath, last_assistant_message="slow ok"); time.sleep(30)
 '''
 
 
@@ -167,6 +180,56 @@ async def test_completion_is_never_inferred(fake, monkeypatch, mode, status, mat
     result, _ = await run(configure(mode=mode, sleep=1), workspace)
     assert result.status == status and match in result.error
     assert "sk-ant-abcdefghijklmnop1234" not in result.error + result.diagnostics
+
+
+async def test_a_hung_model_request_ends_the_turn_and_keeps_the_session(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    monkeypatch.setattr(claude_code, "STALL_SECONDS", 1.0)
+    configure, workspace, *_ = fake
+    result, _ = await run(configure(mode="hang"), workspace)
+    assert result.status == "failed" and "no model response" in result.error and "resume" in result.error
+    assert result.session_id and result.policy_fingerprint and result.transcript_path
+
+
+async def test_a_long_tool_is_not_a_stall(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    monkeypatch.setattr(claude_code, "STALL_SECONDS", .5)
+    configure, workspace, *_ = fake
+    result, _ = await run(configure(mode="slowtool", sleep=1.5), workspace)
+    assert result.status == "completed" and result.text == "slow ok"
+
+
+async def test_a_cli_slow_to_exit_after_stop_keeps_the_answer(fake, monkeypatch):
+    fix_fast(monkeypatch)
+    configure, workspace, *_ = fake
+    real = claude_code.stop_process
+
+    async def slow(process):
+        await real(process)
+        raise TimeoutError  # what stop_process raises when the group outlives SIGKILL's grace period
+
+    monkeypatch.setattr(claude_code, "stop_process", slow)
+    result, _ = await run(configure(), workspace)
+    assert result.status == "completed" and result.text == "All done for nment"
+    assert any("did not stop cleanly (TimeoutError)" in n for n in result.notes)
+
+
+def test_transcript_reader_tracks_an_open_model_request(tmp_path):
+    path = tmp_path / "t.jsonl"
+    reader = TranscriptReader(path, "s")
+    lines = [{"type": "api-request", "sessionId": "s", "querySource": "repl_main_thread"},
+             {"type": "last-prompt", "sessionId": "s"}]
+    path.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    reader.poll()
+    assert reader.awaiting_model
+    with path.open("a") as f:
+        f.write(json.dumps({"type": "assistant", "sessionId": "s", "uuid": "u1", "message": {"role": "assistant", "content": []}}) + "\n")
+    reader.poll()
+    assert not reader.awaiting_model
+    with path.open("a") as f:
+        f.write(json.dumps({"type": "api-request", "sessionId": "s", "querySource": "side_query"}) + "\n")
+    reader.poll()
+    assert not reader.awaiting_model
 
 
 async def test_prompt_echo_does_not_cause_false_attention(fake, monkeypatch):
@@ -337,12 +400,38 @@ async def test_external_agent_attaches_the_sidechain_to_the_agent_call_result(tm
             return WorkerResult("completed", "ok", "x", session_id="s")
 
     monkeypatch.setattr(agent_module, "ClaudeCodeWorker", Stub)
-    agent = agent_module.ExternalAgent(ref="claude-code/claude-haiku-5-5", workspace=tmp_path, messages=[], instructions="",
+    agent = agent_module.ExternalAgent(ref="claude-code/claude-haiku-5-5", workspace=tmp_path, messages=[],
                                        permission="allow", effort=None)
     ends = [e async for e in agent.turn("go") if isinstance(e, ToolEnd)]
     assert len(ends) == 1 and ends[0].result.raw == {"sidechain": {
         "agent_id": "x", "agent_type": "general-purpose", "description": "d", "finished": True, "clipped": False,
         "entries": [{"kind": "text", "text": "inner"}]}}
+
+
+async def test_a_worker_exception_keeps_the_recorded_cli_session(tmp_path, monkeypatch):
+    """An exception (no WorkerResult) must not wipe the session id, or the next turn silently starts a blank CLI."""
+    from nexus.llmhub.types import ProviderError
+    from nexus.workers import agent as agent_module
+    from nexus.workers.base import WorkerEvent
+    monkeypatch.setenv("NEXUS10_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(agent_module, "require", lambda pid: None)
+    monkeypatch.setattr(agent_module, "cli_path", lambda pid: "/bin/true")
+    session = str(uuid4())
+
+    class Stub:
+        def __init__(self, *a, **k): ...
+
+        async def run(self, *, emit, **k):
+            await emit(WorkerEvent("process", {"pid": os.getpid(), "session_id": session, "transcript_path": "/t.jsonl",
+                                               "policy_fingerprint": "fp"}))
+            raise TimeoutError
+
+    monkeypatch.setattr(agent_module, "ClaudeCodeWorker", Stub)
+    agent = agent_module.ExternalAgent(ref="claude-code/claude-haiku-5-5", workspace=tmp_path, messages=[],
+                                       permission="allow", effort=None)
+    with pytest.raises(ProviderError, match="TimeoutError"):
+        [e async for e in agent.turn("go")]
+    assert (agent.worker["session_id"], agent.worker["transcript_path"], agent.worker["policy_fingerprint"]) == (session, "/t.jsonl", "fp")
 
 
 def write_claude_config(home, projects):

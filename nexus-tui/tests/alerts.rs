@@ -181,7 +181,12 @@ fn question_card_marks_single_and_multiple_choice_and_offers_free_text() {
     let all = joined(&rows);
     assert!(all.contains("Nexus asks"), "{all}");
     assert!(all.contains("question 1 of 2"), "{all}");
-    assert!(all.contains("( ) 1 PostgreSQL"), "{all}");
+    assert!(all.contains("  1 PostgreSQL"), "{all}");
+    assert!(!all.contains("[ ]"), "{all}");
+    press(&mut app, &["down"]);
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("• 2 SQLite"), "{all}");
+    assert!(!all.contains("[•]"), "{all}");
     assert!(!all.contains("waiting on you · 0:00"), "{all}");
     // The composer's slot is the context line now.
     assert!(all.contains("Add context"), "{all}");

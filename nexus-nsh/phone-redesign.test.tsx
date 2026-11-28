@@ -595,3 +595,13 @@ describe("phone settings and pairing", () => {
     expect(app.shows("id:connect-retry")).toBe(true);
   });
 });
+
+describe("phone has no recorder surface", () => {
+  test("no header entry and no recorder command reaches the palette", async () => {
+    const app = await openPhone();
+    expect(app.shows("id:open-recorder")).toBe(false);
+    expect(app.texts().join("\n").includes("Recorder")).toBe(false);
+    const { commands } = await import("./src/commands");
+    expect(commands.some((command: { id: string }) => command.id.startsWith("recorder."))).toBe(false);
+  });
+});

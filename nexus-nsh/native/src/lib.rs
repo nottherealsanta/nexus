@@ -4,16 +4,19 @@
 use nsh_core::prelude::*;
 
 mod discovery;
+#[cfg(target_os = "ios")]
+mod live_ios;
 pub mod live_pcm;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod live_socket;
-#[cfg(target_os = "ios")]
-mod live_ios;
+mod mic_owner;
+mod recorder_capture;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod ios;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use ios::Microphone;
+pub use recorder_capture::RecorderMic;
 
 /// Microphone capture for the composer's dictation flow.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
@@ -285,10 +288,12 @@ impl Annotate {
     }
 }
 
-/// The crate's UI set: `Microphone`, `Mermaid` and `Annotate` from `nexus/native`.
+/// The crate's UI set: `Microphone`, `RecorderMic`, `Mermaid` and `Annotate`
+/// from `nexus/native`.
 #[native_module("nexus/native")]
 fn native(registry: &mut Registry) {
     registry.module::<Microphone>();
+    registry.module::<RecorderMic>();
     #[cfg(target_os = "ios")]
     registry.module::<live_ios::LiveAudio>();
     registry.module::<discovery::Discovery>();

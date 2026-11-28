@@ -6,6 +6,8 @@
 // the real service. Browsers allow the microphone on HTTPS or localhost only.
 import { socketUrl } from "./transport";
 import { nativeModule, platform } from "nsh";
+import { acquireMicrophone } from "../audio-capture";
+import type { MicrophoneLease } from "../audio-capture";
 
 type NativeLive = {
   available(): boolean;
@@ -86,6 +88,7 @@ interface Call {
   sources: Set<SourceLike>;
   jitter: Jitter;
   muted: boolean;
+  microphone: MicrophoneLease;
 }
 let call: Call | null = null;
 
@@ -179,11 +182,20 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
   }
   if (!gptLiveSupported()) throw new Error("This client cannot capture audio for a voice call.");
   const e = env();
+  const current = ++generation;
+  const cancelled = () => current !== generation;
+  const microphone = acquireMicrophone("manager");
   let stream: StreamLike;
   try {
     stream = await e.navigator!.mediaDevices!.getUserMedia!({ audio: { channelCount: { ideal: 1 }, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch {
+    microphone.release();
     throw new Error("The microphone is blocked. Allow it for this page (it needs HTTPS or localhost) and try again.");
+  }
+  if (cancelled()) {
+    microphone.release();
+    for (const track of stream.getTracks()) { try { track.stop(); } catch {} }
+    throw new Error("Voice call cancelled.");
   }
   const Context = (e.AudioContext ?? e.webkitAudioContext)!;
   let context: ContextLike | null = null;
@@ -191,8 +203,10 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
   try {
     context = new Context({ sampleRate: RATE });
     await context.resume();
+    if (cancelled()) throw new Error("Voice call cancelled.");
     const url = e.URL!.createObjectURL(new e.Blob!([WORKLET], { type: "text/javascript" }));
     try { await context.audioWorklet!.addModule(url); } finally { e.URL!.revokeObjectURL(url); }
+    if (cancelled()) throw new Error("Voice call cancelled.");
     const source = context.createMediaStreamSource(stream);
     const inLevel = context.createAnalyser(); inLevel.fftSize = 1024;
     const outLevel = context.createAnalyser(); outLevel.fftSize = 1024;
@@ -210,7 +224,9 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
       ws.onerror = () => reject(new Error("Could not open the call's audio connection to Core."));
       ws.onclose = (ev) => reject(new Error(ev.code === 4403 || ev.code === 4404 ? "The voice call is not open on Core." : "Core refused the call's audio connection."));
     });
+    if (cancelled()) throw new Error("Voice call cancelled.");
     const next: Call = { socket: ws, stream, context, capture, inLevel, outLevel, sources: new Set(), jitter: new Jitter(), muted: false,
+      microphone,
       samples: { in: new Float32Array(inLevel.fftSize), out: new Float32Array(outLevel.fftSize) } };
     call = next;
     capture.port!.onmessage = (m) => { if (!next.muted && ws.readyState === 1 && isBinary(m.data)) ws.send(m.data); };
@@ -219,7 +235,8 @@ export async function startGptLive(streamId: string, onLost: (why: string) => vo
     ws.onclose = () => { if (call === next) { stopGptLive(); onLost("The voice connection to Core closed."); } };
   } catch (error) {
     call = null;
-    for (const track of stream.getTracks()) track.stop();
+    microphone.release();
+    for (const track of stream.getTracks()) { try { track.stop(); } catch {} }
     if (socket) { socket.onclose = null; socket.onerror = null; try { socket.close(); } catch {} }
     void context?.close().catch(() => {});
     throw error;
@@ -256,7 +273,8 @@ export function stopGptLive() {
   if (c.capture.port) c.capture.port.onmessage = null;
   try { c.socket.close(); } catch {}
   for (const source of c.sources) { source.onended = null; try { source.stop(); } catch {} }
-  for (const track of c.stream.getTracks()) track.stop();
+  for (const track of c.stream.getTracks()) { try { track.stop(); } catch {} }
   try { c.capture.disconnect(); } catch {}
   void c.context.close().catch(() => {});
+  c.microphone.release();
 }

@@ -19,6 +19,8 @@ export interface Session {
   effort?: string | null; tools?: string[]; disabled_tools?: string[]; skills?: SessionSkill[]; mcp?: SessionMcp[]; permission?: string;
   status?: string; revision: number; created: number; updated: number; archived?: boolean;
   continued_from?: string | null; continued_to?: string | null;
+  /** A handoff summary is being written: no new messages until the new session opens. */
+  handing_off?: boolean;
   /** A fork child (the `fork` agent): its parent and how many of its first messages were copied from it. */
   fork?: SessionFork | null;
   worker?: SessionWorker | null;

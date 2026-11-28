@@ -56,7 +56,7 @@ export function mobileSettings<S extends { id: string; page?: boolean; row?: rea
 }
 
 /** Commands that reach a desktop surface (files, editor, Git, inspector, terminal, overview, project management, tool detail). */
-const DESKTOP_PREFIXES = ["terminal.", "inspector.", "editor.", "git.", "file.", "files.", "tool.", "copy.tool_", "layout."];
+const DESKTOP_PREFIXES = ["terminal.", "inspector.", "editor.", "git.", "file.", "files.", "tool.", "copy.tool_", "layout.", "recorder."];
 const DESKTOP_IDS = new Set([
   "app.open_inspector", "session.open_inspector", "app.usage", "app.help_keys", "palette.open",
   "sidebar.left.toggle", "sidebar.right.toggle", "sidebar.tab.files", "sidebar.tab.git", "sidebar.focus",

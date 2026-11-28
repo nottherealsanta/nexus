@@ -1,16 +1,16 @@
 import { agentColor } from "../agent-color";
-import { List, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
+import { List, PanResponder, Scroll, computed, effect, signal, Text, untracked, View } from "nsh";
 import { activityCountsText, phoneRow, phoneActivityStatus, type GroupCount } from "../mobile";
 import { Image } from "nsh";
 import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
-import { Btn, FOCUS, Icon, IconButton, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
+import { Btn, CompactingWave, FOCUS, Icon, IconButton, PROSE as KitPROSE, Shimmer, Status, StatusRail, T as KitT, TS as KitTS } from "./kit";
 import { DiffView } from "./diff";
 import { disabledOf, startingSections, StartingContext, worktreeStatus, zmxSections, type WorktreeStatus } from "./newsession";
 import type { CtxSection } from "./newsession";
 import { activityIconSize, ACTIVITY_CHEVRON, CARD_INSET, TEXT_INDENT, TURN_INSET, USER_BAND_INSET, TimelineColumn } from "./reading-column";
-import { byId, copyText, jump, keyLabel, openLinked, run } from "../commands";
-import { pendingTurns, stickyShown, tick, config, contextDetail, firstPin, firstPrompts, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, viewed, phone } from "../store";
+import { byId, copyText, jump, keyLabel, openLinked, run, turnNav } from "../commands";
+import { pendingTurns, stickyShown, tick, config, contextDetail, firstPin, firstPrompts, focusedTool, imagePreview, isNarrow, m, model, modelCatalog, scrolledUp, scrollBarOn, selectSession, streamRev, subagentDone, timelineDetail, timelineOpen, toolOutputAll, touch, turnRailOn, viewed, phone } from "../store";
 import { clockTime } from "../time";
 import type { CoreEvent, Message, Part, SubagentNotice, TurnSummary } from "../core/api";
 import { floorIndex, groupRequests, sumUsage, toolTimes, turnsIn } from "../core/turns";
@@ -22,6 +22,7 @@ import { keepIdentity } from "./keep-identity";
 import { openMarkdownLink } from "../markdown-links";
 import { listSlots } from "./list-slots";
 import { END_SLOP, followsAfterScroll, mayFollowQueued } from "../scroll-follow";
+import { adjacentUser, railLabel, railLayout, railScrubTop, revealTop, rowGeometry, type RailLayout } from "../turn-rail";
 import { closedFenceSources, mermaidImage, mermaidText, toneClass } from "../mermaid";
 import { WORDS } from "../manager";
 import { Modal, ModalTitle, modalBodyHeight } from "./modal";
@@ -101,6 +102,7 @@ type RowKind =
     }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone; count?: number }
   | { key: string; kind: "pending"; text: string }
+  | { key: string; kind: "compacting"; text: string }
   /** A fork's inherited prefix: one foldable row over the messages copied from its parent. */
   | { key: string; kind: "fork"; parent: string; count: number; open: boolean }
   | { key: string; kind: "older"; text: string; action?: "load-older" }
@@ -159,6 +161,8 @@ const heightKey = (sid: string, key: string) => `${sid}\u0000${key}`;
 const scrollOf = (sid: string) => scrollY()[sid] ?? 0;
 const setScroll = (sid: string, y: number) => scrollY.update((all) => all[sid] === y ? all : { ...all, [sid]: y });
 const focusedBand = signal<string | null>(null);
+/** The user message the rail marks and turn.prev/turn.next act from, per session. */
+const selectedTurn = signal<Record<string, string | null>>({});
 /** A phone's user message whose time, number, copy and fold controls a long press revealed. */
 const revealedBand = signal<string | null>(null);
 const LIST_PAD = 12; // the list's `py-3`
@@ -1103,6 +1107,12 @@ function RowView(p: { r: () => Row; sid: string; peer?: () => void }) {
             <Text style={{ numberOfLines: 1 }} class={T.secondary} testID="pending-turn-text">{(r() as Extract<Row, { kind: "pending" }>).text}</Text>
           </View>
         </If>
+        <If when={r().kind === "compacting"}>
+          <View class={`flex-row items-center gap-2 py-1.5 ${phone ? "" : TURN_INSET}`} testID="compacting-row" accessible accessibilityLabel={(r() as Extract<Row, { kind: "compacting" }>).text}>
+            <CompactingWave />
+            <Text style={{ numberOfLines: 1 }} class={T.secondary} testID="compacting-text">{(r() as Extract<Row, { kind: "compacting" }>).text}</Text>
+          </View>
+        </If>
         <If when={r().kind === "diag"}>
           {() => {
             const d = r() as Extract<Row, { kind: "diag" }>;
@@ -1708,6 +1718,35 @@ function newBelow(rows: Row[], sid: string): number {
   return n;
 }
 
+/**
+ * The rail overlay. It reads its own layout so a scroll, resize or newly measured row moves the band
+ * and recolours marks: capturing `rail()` once in the parent's `If` callback froze them at mount.
+ */
+function TurnRail(p: { layout: () => RailLayout | null; pan: any; onJump: (key: string) => void; onScrub: (y: number) => void }) {
+  const layout = p.layout;
+  return (
+    <View testID="turn-rail" accessible={false} style={{ zIndex: 2 }} class="absolute right-0 top-0 bottom-0 w-3">
+      <View {...p.pan.panHandlers} onPress={(event: any) => p.onScrub(event?.position?.y ?? event?.locationY ?? 0)}
+        testID="turn-rail-track" role="button" accessibilityLabel="Message rail" class="absolute inset-0">
+        <View class="absolute right-0 top-0 bottom-0 w-px bg-border" />
+        <View testID="turn-rail-band" class="absolute right-0 w-1 bg-scrollbar" style={{ top: layout()?.band.top ?? 0, height: layout()?.band.height ?? 0 }} />
+      </View>
+      <Each of={layout()?.marks ?? []} key={(m) => m.key}>
+        {(m) => {
+          const label = () => railLabel(m().n, m().text);
+          return (
+            <View role="button" focusable onPress={() => p.onJump(m().key)} accessibilityLabel={label()} testID="turn-rail-mark"
+              tooltip={<Text class={`${TS.base} text-popover-foreground bg-popover rounded-(--radius) px-2 py-1`}>{label()}</Text>}
+              style={{ top: m().top, right: 0, zIndex: 1 }} class={`absolute w-3 h-2 items-center justify-end ${FOCUS}`}>
+              <View testID={`turn-rail-mark-bar-${m().n}`} class={`h-[3px] w-2 rounded-full ${m().seen ? "bg-primary" : "bg-muted-foreground"}`} />
+            </View>
+          );
+        }}
+      </Each>
+    </View>
+  );
+}
+
 export function Timeline() {
   let ref: any;
   const firstVisible = signal<{ sid: string; key: string; index: number } | null>(null);
@@ -1733,7 +1772,8 @@ export function Timeline() {
     const base = rows();
     const sel = model.selected;
     const text = sel ? pendingText(sel.sessionId) : null;
-    return text ? [...base, { key: `pending-${sel!.sessionId}`, kind: "pending" as const, text }] : base;
+    const compacting = sel && model.sessions.get(sel.sessionId)?.handing_off ? [{ key: `compacting-${sel.sessionId}`, kind: "compacting" as const, text: "Compacting · a new session opens soon" }] : [];
+    return text ? [...base, { key: `pending-${sel!.sessionId}`, kind: "pending" as const, text }, ...compacting] : compacting.length ? [...base, ...compacting] : base;
   });
   const slots = listSlots<Row>();
   const listRows = computed(() => slots(withPending()));
@@ -1762,6 +1802,65 @@ export function Timeline() {
     setTimeout(() => { endQueued = false; if (mayFollowQueued(sid, viewId(), following)) toEnd(); }, 0);
   };
   jump.fn = () => { firstHold = false; follow(true); toEnd(); };
+  const selectTurn = (key: string) => {
+    const sid = viewId();
+    selectedTurn.update((all) => ({ ...all, [sid]: key }));
+    focusedBand.set(key);
+    firstHold = false;
+    restoringSid = null;
+  };
+  /** A rail mark: select the message and put it at the top, as the TUI's `rail_jump`. */
+  const jumpToTurn = (key: string) => {
+    const sid = viewId();
+    const geo = rowGeometry({ rows: rows(), heights: rowHeights(), sid });
+    selectTurn(key);
+    const box = geo.boxes.find((b) => b.row.key === key);
+    if (box) try { ref?.scrollToIndex({ index: box.index, viewOffset: 0, animated: false }); } catch {}
+  };
+  /** `turn.prev` / `turn.next`: select the adjacent message and scroll the least distance that shows it. */
+  const navigateTurn = (delta: number) => {
+    const sid = viewId();
+    const key = adjacentUser(rows(), selectedTurn()[sid] ?? focusedBand(), delta);
+    if (!key) return;
+    const geo = rowGeometry({ rows: rows(), heights: rowHeights(), sid });
+    const at = geo.boxes.findIndex((b) => b.row.key === key);
+    if (at < 0) return;
+    const box = geo.boxes[at];
+    selectTurn(key);
+    const top = revealTop(box.top, box.height, scrollOf(sid), viewHOf(sid), geo.total);
+    try { ref?.scrollToIndex({ index: at, viewOffset: box.top - top, animated: false }); } catch {}
+  };
+  effect(() => {
+    turnNav.fn = navigateTurn;
+    return () => { if (turnNav.fn === navigateTurn) turnNav.fn = () => {}; };
+  });
+  // The rail's track: press or drag to centre the conversation at that height (the TUI's rail scrub).
+  let scrubFrom: number | null = null;
+  const scrubTo = (y: number) => {
+    const sid = viewId();
+    const trackH = viewHOf(sid);
+    const total = rowGeometry({ rows: rows(), heights: rowHeights(), sid }).total;
+    const top = railScrubTop(y, trackH, total, trackH);
+    if (top === null) return;
+    firstHold = false;
+    restoringSid = null;
+    try { ref?.scrollToOffset({ offset: top, animated: false }); } catch {}
+  };
+  const railPan = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (event: any) => { scrubFrom = event?.locationY ?? event?.nativeEvent?.locationY ?? 0; scrubTo(scrubFrom!); },
+    onPanResponderMove: (_event: any, g: any) => { if (scrubFrom !== null) scrubTo(scrubFrom + g.dy); },
+    onPanResponderRelease: () => { scrubFrom = null; },
+    onPanResponderTerminate: () => { scrubFrom = null; },
+  });
+  const rail = computed(() => {
+    if (phone || !turnRailOn()) return null;
+    const sid = viewId();
+    const trackH = viewHOf(sid);
+    return railLayout({ rows: rows(), heights: rowHeights(), sid, scrollY: scrollOf(sid), viewH: trackH, trackH });
+  });
+  effect(() => { if (rail()) hideScrollBar(); });
   // Follow state is per view: a scroll position from the session just left must
   // not keep the next one pinned or count its unseen rows. A session opens at its
   // latest message the first time; afterwards it opens where it was left.
@@ -1772,6 +1871,7 @@ export function Timeline() {
     const sid = sessionId();
     if (sid === scopedSession) return;
     scopedSession = sid;
+    untracked(() => selectedTurn.update((all) => all[sid] ? { ...all, [sid]: null } : all));
     lastY = 0;
     openedAt = Date.now();
     const first = !seenSessions.has(sid);
@@ -1902,7 +2002,8 @@ export function Timeline() {
           {(slot) => <RowView r={() => slot().value()} sid={viewId()} />}
         </List>
       </If>
-      <If when={scrollBar()}>
+      <If when={rail()}><TurnRail layout={rail} pan={railPan} onJump={jumpToTurn} onScrub={scrubTo} /></If>
+      <If when={scrollBar() && !rail()}>
         {() => {
           const b = scrollBar()!;
           return <View testID="timeline-scrollbar" accessible={false} class="absolute right-0 w-1 bg-scrollbar" style={{ top: b.top, height: b.height, pointerEvents: "none", opacity: scrollBarFading() ? 0.35 : 1 }} />;

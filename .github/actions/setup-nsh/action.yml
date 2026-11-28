@@ -1,10 +1,10 @@
 name: Set up nsh
 description: >-
-  Build the NSH 0.4.0 revision used to validate Nexus web and put it on PATH.
+  Build the NSH 0.7.0 revision used to validate Nexus web and put it on PATH.
 inputs:
   commit:
     description: Full SHA of longbridge/nsh to build
-    default: 209cb8492705321315745f2745c8060816b6d378
+    default: 3f8ecd8b3c55ad6274c6babbf7ee55c4cd4ae359
 runs:
   using: composite
   steps:

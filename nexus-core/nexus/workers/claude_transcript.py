@@ -22,6 +22,9 @@ class TranscriptReader:
         self.total = 0
         self.identity: tuple[int, int] | None = None
         self.seen: set[str] = set()
+        # True between a main-thread `api-request` entry and the next assistant/user/system entry: the CLI is
+        # waiting for the model. Only transcript lines are evidence; the PTY spinner keeps drawing while a request hangs.
+        self.awaiting_model = False
 
     def poll(self) -> list[WorkerEvent]:
         try:
@@ -68,6 +71,10 @@ class TranscriptReader:
                 return events
             self.seen.add(key)
         kind = entry.get("type")
+        if kind == "api-request" and entry.get("querySource") == "repl_main_thread":
+            self.awaiting_model = True
+        elif kind in ("assistant", "user", "system"):
+            self.awaiting_model = False
         message = entry.get("message")
         if kind in ("assistant", "user") and isinstance(message, dict):
             content = message.get("content")
